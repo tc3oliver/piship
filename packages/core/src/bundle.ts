@@ -3,16 +3,26 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, sep } from "node:path";
+import {
+  AUTHORING_SNAPSHOT,
+  authoringBuildInput,
+  writeAuthoringSnapshot,
+} from "./authoring-input.js";
 import { removeTree } from "./parallel-files.js";
 import { inventory, isRuntimeIrrelevant } from "./payload.js";
+import {
+  renameWithRetry,
+  TRANSIENT_ATTEMPTS,
+  TRANSIENT_RETRY_MS,
+} from "./rename-retry.js";
 import {
   bundleEntryKey,
   lookupBundle,
@@ -20,13 +30,8 @@ import {
   type RuntimeCache,
   storeBundle,
 } from "./runtime-cache.js";
-import {
-  renameWithRetry,
-  TRANSIENT_ATTEMPTS,
-  TRANSIENT_RETRY_MS,
-} from "./rename-retry.js";
-import { listPayloadPackages, type PayloadPackage } from "./supply-chain.js";
 import { workspacePackages } from "./runtime-dependencies.js";
+import { listPayloadPackages, type PayloadPackage } from "./supply-chain.js";
 
 const posix = (path: string) => path.split(sep).join("/");
 
@@ -165,7 +170,7 @@ export function bundleDistribution(
       "image-resize-worker.js",
     ),
   );
-  const load = createRequire(import.meta.url);
+  const load = createRequire(join(payload, "package.json"));
   const key = options.cache
     ? bundleEntryKey(options.cache, load("esbuild/package.json").version)
     : undefined;
@@ -315,8 +320,12 @@ rmSync(mainSource); rmSync(bootSource);`;
         );
       }
       // Installed management commands still need the exact dependency metadata,
-      // but do not ship a second copy of every JS source in build-input.
+      // while authoring sources travel as one compressed file, expanded only for builds.
       const input = "@piship/core/dist/build-input";
+      writeAuthoringSnapshot(
+        authoringBuildInput(),
+        join(payload, "node_modules", input, AUTHORING_SNAPSHOT),
+      );
       keep(`${input}/package.json`);
       keep(`${input}/package-lock.json`);
       for (const name of workspacePackages)

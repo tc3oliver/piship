@@ -40,14 +40,15 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   rmdirSync,
+  rmSync,
   statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { releaseOptions } from "@piship/schema";
+import { authoringBuildInput } from "./authoring-input.js";
 import { buildInputDigest, safePath } from "./build-cache.js";
 import { canonicalJson, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
@@ -618,6 +619,7 @@ export function publishFrameworkTree(
  * snapshot that management commands read.
  */
 export function writeFrameworkFiles(root: string): void {
+  const buildInput = authoringBuildInput();
   for (const name of ROOT_FILES)
     copyFileSync(join(buildInput, name), inside(root, name));
   for (const name of workspacePackages) {
