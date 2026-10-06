@@ -188,16 +188,35 @@ export class ContentStore {
     const layout = storeLayout(root);
     try {
       mkdirSync(root, { recursive: true, mode: 0o700 });
-      if (existsSync(layout.marker)) {
-        const record = JSON.parse(readFileSync(layout.marker, "utf8")) as {
-          schema?: unknown;
-        } | null;
-        if (record?.schema !== STORE_SCHEMA) return undefined;
-      } else
+      // A marker is written whole or not at all: another install may open the
+      // same new store at once, and a half-written marker would read as a
+      // layout this PiShip does not know and turn the store off for it. An
+      // empty one (an earlier PiShip that stopped between creating and
+      // writing it) is not a layout of anybody's and is written again.
+      const marker = existsSync(layout.marker)
+        ? readFileSync(layout.marker, "utf8")
+        : "";
+      if (marker.trim() === "") {
+        mkdirSync(layout.temporary, { recursive: true, mode: 0o700 });
+        const temporary = join(layout.temporary, `marker-${randomUUID()}`);
         writeFileSync(
-          layout.marker,
+          temporary,
           `${JSON.stringify({ schema: STORE_SCHEMA })}\n`,
         );
+        try {
+          renameSync(temporary, layout.marker);
+        } catch (error) {
+          // Where a rename cannot replace a marker another install just
+          // published, its marker is the same: read it below.
+          if (!existsSync(layout.marker)) throw error;
+        } finally {
+          rmSync(temporary, { force: true });
+        }
+      }
+      const record = JSON.parse(readFileSync(layout.marker, "utf8")) as {
+        schema?: unknown;
+      } | null;
+      if (record?.schema !== STORE_SCHEMA) return undefined;
       for (const directory of [
         layout.objects,
         layout.refs,
