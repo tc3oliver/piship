@@ -11,7 +11,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError, systemError } from "@piship/contracts";
+import { PiShipError, stopwatch, systemError } from "@piship/contracts";
 import { extractArchive } from "../archive.js";
 import {
   assertDisjointRoots,
@@ -48,7 +48,6 @@ import {
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree, renameWithRetry } from "./files.js";
 import { launcherSource } from "./launcher.js";
-import { stopwatch } from "./timing.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 

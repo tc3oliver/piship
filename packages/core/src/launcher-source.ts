@@ -25,8 +25,8 @@ export function launcherBuildOf(text: string): string | undefined {
 
 /**
  * Phase marks for `PISHIP_DEBUG_TIMING=1`, written to the store
- * `@piship/contracts` reports from (startup-timing.ts) before any payload
- * module has loaded. With the variable unset `timing` is undefined and a
+ * `@piship/contracts` reports from (timing.ts) before any payload module has
+ * loaded. With the variable unset `timing` is undefined and a
  * mark does nothing.
  */
 export const LAUNCHER_TIMING_SNIPPET = `const timing = process.env.PISHIP_DEBUG_TIMING === "1" ? (globalThis[Symbol.for("piship.startup-timing")] ??= { marks: [], counters: {}, notes: {} }) : undefined;

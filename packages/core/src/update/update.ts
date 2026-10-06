@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { extractArchive } from "../archive.js";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, stopwatch } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
 import {
   currentTarget,
@@ -24,7 +24,6 @@ import {
 } from "../install/receipt.js";
 import { renameWithRetry } from "../install/files.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
-import { stopwatch } from "../install/timing.js";
 import {
   advanceTrustState,
   damagedTrustState,

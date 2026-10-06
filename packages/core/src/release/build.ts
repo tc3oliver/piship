@@ -14,7 +14,7 @@ import {
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createTemporaryDirectory } from "@piship/contracts";
+import { createStageTimer, createTemporaryDirectory } from "@piship/contracts";
 import {
   RELEASE_CHANNELS,
   type ReleaseManifest,
@@ -29,7 +29,6 @@ import {
 } from "../index.js";
 import { STATE_SCHEMAS } from "../migration.js";
 import { downloadLockedSearchTools } from "../search-tools/index.js";
-import { createStageTimer } from "../timing.js";
 import { workspacePackages } from "../runtime-dependencies.js";
 import {
   formatChecksums,
