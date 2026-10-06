@@ -6,7 +6,7 @@ The evidence stays with the organization. The project never sees the company's s
 
 ## Before you start
 
-- Pin one exact qualified artifact; do not track `main`. The status page names the [baseline](status.md#v091-production-validation-baseline), v0.9.1, and the Release qualification run behind it. Install that release's archive, and compare its SHA-256 and its pinned update keys with the values the distribution owner published ([distribution bootstrap](release/trust-root.md#distribution-bootstrap)).
+- Pin one exact qualified artifact; do not track `main`. The status page names the [baseline](status.md#v0110-production-validation-baseline), v0.11.0, and the Release qualification run behind it. Install that release's archive, and compare its SHA-256 and its pinned update keys with the values the distribution owner published ([distribution bootstrap](release/trust-root.md#distribution-bootstrap)).
 - Use a supported platform: `linux-x64`, `darwin-arm64`, or `win32-x64` with Node.js 22.19.0 or later ([compatibility](compatibility.md)). Native Windows has no sandbox adapter, so a distribution that requires the sandbox fails closed there with `SANDBOX_UNAVAILABLE` ([troubleshooting](troubleshooting.md#prerequisites)).
 - Start from a machine that has nothing of the distribution: no install, no state directory, no secret-store entry.
 - If the organization prohibits public session export, close the [`/share` gap](#share-and-public-session-export) before the first step.
