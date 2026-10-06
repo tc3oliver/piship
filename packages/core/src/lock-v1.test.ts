@@ -121,7 +121,7 @@ updates: { channel: stable, channels: [stable] }
     const text = readFileSync(lockManifest(path), "utf8");
     expect(text).not.toContain("sentinel");
     // The reference is locked as written, never its value.
-    expect(text).toContain("${ACME_GATEWAY_URL}");
+    expect(text).toContain(`\${ACME_GATEWAY_URL}`);
     const keys = new Set<string>();
     const walk = (value: unknown): void => {
       if (Array.isArray(value)) value.forEach(walk);
