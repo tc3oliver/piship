@@ -19,7 +19,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.0.3",
     "pishipVersion": "0.10.0",
-    "npmLockSha256": "6d704053385d4e6534b59532b45ddfda3bd37670295747df2b540dd563367fc0",
+    "npmLockSha256": "f069554f447ed86ac5c2411a6daa94d2176eaa79c1fa7c43bb073e2577b6cd6e",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
