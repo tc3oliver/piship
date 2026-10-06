@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha6",
+  "schema": "piship-lock/v1",
   "manifest": {
-    "schema": "piship/v1alpha6",
-    "sha256": "sha256-df471532b48f399a76fb7188ef2efd8459605a56f0fce0ac5d1cf2e3457c44d3"
+    "schema": "piship/v1",
+    "sha256": "sha256-8051b1cc48715d9474879b8f3ba24e2426e9f97953105a2708f0420037777947"
   },
   "app": {
     "id": "mypi-local",
