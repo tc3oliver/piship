@@ -2820,6 +2820,24 @@ describe("release stages", () => {
     expect(built.metadata.vulnerabilities.verdict).toBe("passed");
   });
 
+  it("starts the tests while the signature check is still running when nothing is bundled", async () => {
+    const { path } = project();
+    let tested = false;
+    const built = await build(path, {
+      // The check ends only once a test has started: it never would if the
+      // tests waited for it.
+      signatureAuditor: async () => {
+        await until(() => tested, "started a test");
+        return signatureOutput();
+      },
+      runTest: (payload, command, args) => {
+        tested = true;
+        return fakeRun(payload, command, args);
+      },
+    });
+    expect(built.metadata.signatures?.verdict).toBe("passed");
+  });
+
   it("runs the required tests side by side, each in its own state directory", async () => {
     const { path } = project();
     const states = new Map<string, string>();

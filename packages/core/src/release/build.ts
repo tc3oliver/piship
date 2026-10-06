@@ -389,14 +389,24 @@ export async function buildRelease(
     );
     writeJson(join(root, "licenses", "index.json"), notices.index);
     noticesWritten();
-    // The signature check reads the installed packages, which bundling
-    // replaces, so it is the one scan bundling has to wait for.
+    const startTests = () => {
+      const run = outcome(
+        timer.run("smoke tests", () =>
+          runReleaseTests(payload, lock, options.runTest ?? runPayloadCommand),
+        ),
+      );
+      inFlight.push(run);
+      return run;
+    };
+    // Both only read the installed packages, so without bundling the tests
+    // run beside the signature check. Bundling replaces those packages: the
+    // signature check, which reads them, has to finish first, and the tests
+    // run on what bundling leaves.
+    const unbundledTests = release.bundle === true ? undefined : startTests();
     const signatures = evaluateSignatures(unwrap(await signatureScan));
     if (release.bundle === true)
       await timer.run("bundle", () => bundleDistribution(payload));
-    const tests = await timer.run("smoke tests", () =>
-      runReleaseTests(payload, lock, options.runTest ?? runPayloadCommand),
-    );
+    const tests = unwrap(await (unbundledTests ?? startTests()));
     const report = evaluateVulnerabilities(
       unwrap(await vulnerabilityScan),
       release.vulnerabilities,
