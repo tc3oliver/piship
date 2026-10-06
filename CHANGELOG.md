@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. Each section is
 - **Behavior change:** exclude live Chrome startup from Release qualification while retaining it in nightly and standalone manual Portable E2E. Qualification continues to run all other developer and release checks and does not certify browser availability.
 
 - Fix release notices to include bundled fd and ripgrep and their shipped licenses, matching the SBOM so `verify-release` accepts distributions with bundled search tools.
+- Update the development-only transitive dependency source-map-js to 1.2.2 to fix CVE-2026-93749 (indexed source-map denial of service).
 
 ## v0.10.0 (candidate)
 
