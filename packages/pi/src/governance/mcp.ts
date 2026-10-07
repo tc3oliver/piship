@@ -1,14 +1,37 @@
 import { join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, redact } from "@piship/contracts";
 import {
   type McpAuditEvent,
   McpGovernor,
   type McpServerConfig,
+  type McpServerReport,
 } from "@piship/mcp";
 import { trustDecision } from "@piship/policy";
 import { defaultMcpServerClass } from "@piship/schema";
 import type { GovernanceSession } from "../governance-session.js";
 import { mcpToolExposure } from "./exposure.js";
+
+/** The longest reason a session notice carries. */
+const NOTICE_REASON_MAX = 200;
+
+/**
+ * One notice line per optional MCP server that failed to start: the cause,
+ * and where the detail is. A server the policy denied is the policy's
+ * decision, not a failure, and a required one fails the launch instead.
+ */
+export function failedServerNotices(
+  reports: readonly McpServerReport[],
+  command: string,
+): string[] {
+  return reports
+    .filter((report) => report.state === "failed" && !report.required)
+    .map((report) => {
+      const reason = redact((report.reason ?? "it did not start").trim())
+        .replace(/\s+/g, " ")
+        .slice(0, NOTICE_REASON_MAX);
+      return `MCP server ${report.id} did not start (${reason}), so its tools are unavailable. Run ${command} doctor for details.`;
+    });
+}
 
 /** Start the declared and admitted project MCP servers under policy. */
 export async function startMcp(
@@ -126,6 +149,13 @@ export async function startMcp(
   session.mcp = governor;
   try {
     session.mcpReports = await governor.start();
+    // A required server that fails stops the launch above. An optional one
+    // only loses its tools, which nothing else in the session would say.
+    for (const notice of failedServerNotices(
+      session.mcpReports,
+      session.options.lock.app.command,
+    ))
+      session.notice(notice);
   } finally {
     for (const report of governor.health())
       if (report.state !== "denied")

@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   approvedNetworkEnvironment,
   DEFAULT_NETWORK_POLICY,
@@ -11,6 +11,7 @@ import {
   sanitizeStderr,
   stripCredentials,
   withApprovedNetwork,
+  withCacheEnvironment,
 } from "./environment.js";
 
 describe("filterEnvironment", () => {
@@ -184,5 +185,35 @@ describe("sanitizeStderr", () => {
   it("never splits a multi-byte character", () => {
     const output = sanitizeStderr("é".repeat(50), 11);
     expect(output.split("\n")[1]).toBe("é".repeat(5));
+  });
+});
+
+describe("withCacheEnvironment", () => {
+  it("points the package caches into the session temp", () => {
+    const env = withCacheEnvironment({ PATH: "/usr/bin" }, "/tmp/session/tmp");
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      XDG_CACHE_HOME: join("/tmp/session/tmp", "cache"),
+      npm_config_cache: join("/tmp/session/tmp", "cache", "npm"),
+      PIP_CACHE_DIR: join("/tmp/session/tmp", "cache", "pip"),
+      GOCACHE: join("/tmp/session/tmp", "cache", "go-build"),
+    });
+  });
+
+  it("keeps a cache variable the user already set, whatever its case", () => {
+    const env = withCacheEnvironment(
+      { NPM_CONFIG_CACHE: "/work/.npm", GOCACHE: "/work/go" },
+      "/tmp/session/tmp",
+    );
+    expect(env.NPM_CONFIG_CACHE).toBe("/work/.npm");
+    expect(env.npm_config_cache).toBeUndefined();
+    expect(env.GOCACHE).toBe("/work/go");
+    expect(env.PIP_CACHE_DIR).toBeDefined();
+  });
+
+  it("leaves CARGO_HOME and GOMODCACHE alone", () => {
+    const env = withCacheEnvironment({}, "/tmp/session/tmp");
+    expect(Object.keys(env)).not.toContain("CARGO_HOME");
+    expect(Object.keys(env)).not.toContain("GOMODCACHE");
   });
 });

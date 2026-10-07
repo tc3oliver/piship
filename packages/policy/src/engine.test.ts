@@ -570,6 +570,25 @@ describe("headless ask", () => {
       message: "m",
     });
     expect(approved.outcome).toBe("allow");
+    // A session scope is remembered only when it was offered; a channel that
+    // answers it unasked approves this one action.
+    const unasked = await resolveDecision(
+      decision,
+      async () => "approved-session",
+      { title: "t", message: "m" },
+    );
+    expect(unasked).toMatchObject({ outcome: "allow", approval: "approved" });
+    expect(unasked.remember).toBeUndefined();
+    const offered = await resolveDecision(
+      decision,
+      async () => "approved-session",
+      { title: "t", message: "m", scopes: ["once", "session"] },
+    );
+    expect(offered).toMatchObject({
+      outcome: "allow",
+      approval: "approved",
+      remember: "session",
+    });
   });
 });
 

@@ -273,7 +273,12 @@ export interface AgentFilesResult {
   readonly reports: readonly AgentFileReport[];
   /** Undo the session override; idempotent, and a no-op without one. */
   readonly restore: () => void;
-  readonly endAutoApprove?: () => void;
+  /**
+   * End the session's own auto-approval (`/auto off`). Returns a notice when
+   * the provider's approvals cannot be switched off yet because another
+   * `--yolo` session shares them.
+   */
+  readonly endAutoApprove?: () => string | undefined;
 }
 
 /**
@@ -291,6 +296,12 @@ function applyAgentFilesLocked(
     readonly sessionAutoApprove?: boolean;
     readonly session?: boolean;
     readonly owner?: string;
+    /**
+     * Another live `--yolo` session already switched the provider's key on:
+     * this one shares it, takes no override of its own, and leaves the
+     * hand-over to the session that owns it.
+     */
+    readonly share?: boolean;
   } = {},
 ): AgentFilesResult {
   const files = declaredFiles(lock);
@@ -299,19 +310,23 @@ function applyAgentFilesLocked(
   let state = readSeedState(agentDir);
   if (state.override) {
     // A launch that never reached its end left the override on.
-    if (state.override.pid && liveProcess(state.override.pid))
+    const live = state.override.pid && liveProcess(state.override.pid);
+    if (live && !options.share)
       throw new PiShipError(
         "CONFIG_INVALID",
-        "Another live session owns the permission provider auto-approval; close it before starting this session",
+        "Another live session owns the permission provider auto-approval",
+        { userAction: SHARED_PROVIDER_ACTION },
       );
-    if (
-      target &&
-      state.override.path === target.path &&
-      state.override.key === target.key
-    )
-      takeBack(agentDir, state.override);
-    state = { schema: SEED_SCHEMA, files: state.files };
-    writeSeedState(agentDir, state);
+    if (!live) {
+      if (
+        target &&
+        state.override.path === target.path &&
+        state.override.key === target.key
+      )
+        takeBack(agentDir, state.override);
+      state = { schema: SEED_SCHEMA, files: state.files };
+      writeSeedState(agentDir, state);
+    }
   }
   const reports: AgentFileReport[] = [];
   const recorded = { ...state.files };
@@ -338,7 +353,29 @@ function applyAgentFilesLocked(
     reports.push({ package: owner, path: file.path, mode: file.mode, outcome });
   }
   let override: SessionOverride | undefined;
-  if (options.sessionAutoApprove) {
+  if (options.sessionAutoApprove && options.share && state.override) {
+    // The owner's override stays as it is. A file this launch just rewrote
+    // (an enforced one) loses the switched-on key, so it is put back.
+    if (!target)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "This distribution's permission provider declares no session auto-approval (the permissions capability needs the settings autoApproveFile and autoApproveKey)",
+        { userAction: "Start the distribution without the option" },
+      );
+    const path = filePath(agentDir, target.path);
+    const current = readJsonObject(path);
+    if (current && current[target.key] !== true)
+      writeFileAtomic(
+        path,
+        agentFileContent({ ...current, [target.key]: true }),
+        { directoryMode: 0o700 },
+      );
+    writeSeedState(agentDir, {
+      schema: SEED_SCHEMA,
+      files: recorded,
+      override: state.override,
+    });
+  } else if (options.sessionAutoApprove) {
     if (!target)
       throw new PiShipError(
         "CONFIG_INVALID",
@@ -388,6 +425,38 @@ function applyAgentFilesLocked(
       restored = true;
     },
   };
+}
+
+/** What to do about a session that cannot share the permission provider. */
+const SHARED_PROVIDER_ACTION =
+  "Close the other session, or start this one the same way (both with --yolo, or neither): the permission provider reads one settings file";
+
+/**
+ * The live `--yolo` sessions other than `except` that still want the
+ * provider's auto-approval: not one that already ran `/auto off`.
+ */
+function liveYoloSessions(
+  agentDir: string,
+  except: string,
+): { owner: string; pid: number }[] {
+  const dir = filePath(agentDir, ".piship-provider-sessions");
+  if (!existsSync(dir)) return [];
+  const sessions: { owner: string; pid: number }[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === except) continue;
+    const lease = readJsonObject(
+      filePath(agentDir, `.piship-provider-sessions/${entry}`),
+    );
+    if (
+      lease &&
+      typeof lease.pid === "number" &&
+      lease.yolo === true &&
+      lease.ended !== true &&
+      liveProcess(lease.pid)
+    )
+      sessions.push({ owner: entry, pid: lease.pid });
+  }
+  return sessions;
 }
 
 function liveProcess(pid: number): boolean {
@@ -484,6 +553,7 @@ export function applyAgentFiles(
   let registered = false;
   const result = agentFilesTransaction(agentDir, () => {
     const target = sessionAutoApproveTarget(lock);
+    let share = false;
     if (target && (options.session || options.sessionAutoApprove)) {
       mkdirSync(leases, { recursive: true, mode: 0o700 });
       for (const entry of readdirSync(leases)) {
@@ -493,21 +563,31 @@ export function applyAgentFiles(
           throw new PiShipError(
             "CONFIG_INVALID",
             "Invalid permission provider session ownership record",
+            { userAction: SHARED_PROVIDER_ACTION },
           );
         if (!liveProcess(lease.pid)) {
           rmSync(path);
           continue;
         }
-        if (options.sessionAutoApprove || lease.yolo === true)
-          throw new PiShipError(
-            "CONFIG_INVALID",
-            "Concurrent sessions cannot share the permission provider while --yolo is active; close the other session or start without --yolo",
-          );
+        // The provider reads one file, so a `--yolo` session and an ordinary
+        // one cannot both have what they asked for. Two `--yolo` sessions
+        // want the same thing and share the key.
+        const wants = options.sessionAutoApprove === true;
+        if (wants && lease.yolo === true) share = true;
+        if (wants === (lease.yolo === true)) continue;
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          options.sessionAutoApprove
+            ? "Another session is using the permission provider, whose own approvals --yolo switches on for every session"
+            : "A --yolo session is using the permission provider, whose own approvals it switched on for every session",
+          { userAction: SHARED_PROVIDER_ACTION },
+        );
       }
     }
     const applied = applyAgentFilesLocked(lock, agentDir, {
       ...options,
       owner,
+      share,
     });
     if (target && (options.session || options.sessionAutoApprove)) {
       writeFileSync(
@@ -523,25 +603,58 @@ export function applyAgentFiles(
     return applied;
   });
   let ended = false;
+  const leasePath = () =>
+    filePath(agentDir, `.piship-provider-sessions/${owner}`);
+  /**
+   * Give the key to the next live `--yolo` session that still wants it, and
+   * report whether there was one; without one, the key is put back.
+   */
+  const handOverOrTakeBack = (): boolean => {
+    const state = readSeedState(agentDir);
+    const target = sessionAutoApproveTarget(lock);
+    if (
+      state.override?.owner !== owner ||
+      !target ||
+      state.override.path !== target.path ||
+      state.override.key !== target.key
+    )
+      return false;
+    const heir = liveYoloSessions(agentDir, owner)[0];
+    if (heir) {
+      writeSeedState(agentDir, {
+        ...state,
+        override: { ...state.override, owner: heir.owner, pid: heir.pid },
+      });
+      return true;
+    }
+    takeBack(agentDir, state.override);
+    return false;
+  };
   return {
     reports: result.reports,
     endAutoApprove: () => {
-      if (ended) return;
-      agentFilesTransaction(agentDir, () => {
-        const state = readSeedState(agentDir);
-        const target = sessionAutoApproveTarget(lock);
-        if (
-          state.override?.owner === owner &&
-          target &&
-          state.override.path === target.path &&
-          state.override.key === target.key
-        )
-          takeBack(agentDir, state.override);
+      if (ended) return undefined;
+      return agentFilesTransaction(agentDir, () => {
+        const handedOver = handOverOrTakeBack();
+        // The lease stays, so a provider's stale save is still restored at
+        // exit; it stops counting as a session that wants the key.
+        if (registered)
+          writeFileSync(
+            leasePath(),
+            JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
+            { mode: 0o600 },
+          );
+        // A session that shares the key, or hands it on, cannot switch the
+        // provider's approvals off for itself without ending the other's.
+        return handedOver || liveYoloSessions(agentDir, owner).length > 0
+          ? "The permission provider's own approvals stay on until the other --yolo session ends."
+          : undefined;
       });
     },
     restore: () => {
       if (ended) return;
       agentFilesTransaction(agentDir, () => {
+        handOverOrTakeBack();
         result.restore();
         if (registered)
           rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {

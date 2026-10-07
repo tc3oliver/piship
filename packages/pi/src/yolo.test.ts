@@ -77,7 +77,7 @@ interface Setup {
   readonly yolo?: boolean;
   /** Switch the stored auto mode on before the session opens. */
   readonly stored?: boolean;
-  readonly onYoloEnd?: () => void;
+  readonly onYoloEnd?: () => string | undefined;
 }
 
 /**
@@ -186,6 +186,10 @@ function context(confirm?: () => Promise<boolean>) {
     sessionManager: SessionManager.inMemory(tmpdir()),
     ui: {
       confirm: confirm ?? (async () => false),
+      // The approval prompt offers three answers through `select`; the test's
+      // `confirm` still decides, and counts each prompt.
+      select: async (_title: string, options: string[]) =>
+        (await (confirm ?? (async () => false))()) ? options[0] : "Deny",
       setStatus: (_key: string, text: string | undefined) => status.push(text),
       notify: (message: string, level: string) =>
         notices.push({ message, level }),
@@ -451,6 +455,22 @@ describe("--yolo in a managed session", () => {
     expect(
       events().filter((event) => event.event === "policy.auto_enabled"),
     ).toEqual([expect.objectContaining({ detail: { source: "yolo" } })]);
+  });
+
+  it("auto off passes on that the provider's approvals stay on for a session that shares them", async () => {
+    const { session } = await open({
+      mode: "managed",
+      userAuto: "allowed",
+      yolo: true,
+      onYoloEnd: () =>
+        "The permission provider's own approvals stay on until the other --yolo session ends.",
+    });
+    const off = await session.switchUserAuto(false);
+    expect(session.yolo).toBe(false);
+    expect(off.warning).toContain(
+      "approvals stay on until the other --yolo session ends",
+    );
+    await session.close();
   });
 
   it("auto off clears stored mode and audits even if provider restoration fails", async () => {

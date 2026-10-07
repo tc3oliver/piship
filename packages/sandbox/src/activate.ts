@@ -37,9 +37,11 @@ import {
   workspaceDeclaration,
 } from "./backend.js";
 import {
+  CACHE_VARIABLES,
   filterEnvironment,
   stripCredentials,
   withApprovedNetwork,
+  withCacheEnvironment,
 } from "./environment.js";
 import { NativeBackend } from "./native.js";
 import { type ProbeTarget, probeSandbox } from "./probe.js";
@@ -227,9 +229,12 @@ function sessionEnvironment(
 ): Record<string, string> {
   const env = { ...approved };
   delete env.TMPDIR;
-  if (profile.writeAllow.some((path) => isWithin(profile.tmpDir, path)))
-    env.TMPDIR = profile.tmpDir;
-  return env;
+  if (!profile.writeAllow.some((path) => isWithin(profile.tmpDir, path)))
+    return env;
+  env.TMPDIR = profile.tmpDir;
+  // The package tools' caches live under the home directory, which a
+  // contained command cannot write: keep them in the writable session temp.
+  return withCacheEnvironment(env, profile.tmpDir);
 }
 
 function nodeDirectory(): string | undefined {
@@ -1148,6 +1153,7 @@ export async function activateSandbox(
           env,
           injected: [
             ...INJECTED_VARIABLES,
+            ...Object.keys(CACHE_VARIABLES),
             ...platformInjectedVariables(platform),
           ],
           ...(ctx.probeTimeoutMs ? { timeoutMs: ctx.probeTimeoutMs } : {}),

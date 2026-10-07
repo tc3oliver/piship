@@ -118,7 +118,10 @@ export class ProjectAsk {
         offerRemember: digest !== undefined && this.channel !== undefined,
       },
     );
-    if (resolved.remember && digest) {
+    if (
+      (resolved.remember === "allow" || resolved.remember === "deny") &&
+      digest
+    ) {
       try {
         rememberProjectTrust(
           stateDir,

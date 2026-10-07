@@ -498,7 +498,12 @@ describe("Pi tool definitions route through their operations overrides", () => {
             workflowMode: "build",
             currentChannel: () => undefined,
             decide: async () => ({ outcome: "allow" }),
-            sandbox: { report: { level: "enforced" }, exec },
+            options: { lock: { deployment: { mode: "personal" } } },
+            sandbox: {
+              report: { level: "enforced" },
+              profile: { readDeny: [], writeAllow: [], network: "allow" },
+              exec,
+            },
             outputStore: store,
             withChannel: (_channel: unknown, fn: () => unknown) => fn(),
             mcp: null,
@@ -536,7 +541,12 @@ describe("Pi tool definitions route through their operations overrides", () => {
         workflowMode: "build",
         currentChannel: () => undefined,
         decide: async () => ({ outcome: "allow" }),
-        sandbox: { report: { level: "enforced" }, exec },
+        options: { lock: { deployment: { mode: "personal" } } },
+        sandbox: {
+          report: { level: "enforced" },
+          profile: { readDeny: [], writeAllow: [], network: "allow" },
+          exec,
+        },
         outputStore: store,
         withChannel: (_channel: unknown, fn: () => unknown) => fn(),
         mcp: null,
@@ -2055,7 +2065,10 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       open -= 1;
       return answer;
     };
-    const ui = new Proxy({ confirm } as Record<string, unknown>, {
+    // The approval prompt offers three answers through `select`.
+    const select = async (title: string, options: string[]) =>
+      (await confirm(title, "")) ? options[0] : "Deny";
+    const ui = new Proxy({ confirm, select } as Record<string, unknown>, {
       get: (target, key) =>
         key in target ? target[key as string] : () => undefined,
     });

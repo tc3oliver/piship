@@ -30,7 +30,9 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  type ApprovalAnswer,
   type ApprovalChannel,
+  type ApprovalDetail,
   type PolicyAction,
   processNetworkEnvironment,
   redact,
@@ -52,6 +54,7 @@ import {
 import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
+import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
 /** True when `path` is `root` or below it. */
@@ -67,6 +70,13 @@ export const PLAN_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "ask_user",
 ]);
 export const PLAN_RULE = "piship-workflow.plan";
+/**
+ * PiShip has no way to tell a read-only shell command from one that changes
+ * things, and Pi's own `grep`, `find`, and `ls` are excluded from a governed
+ * session, so Plan mode explores with `read` and leaves the shell to Build.
+ */
+const PLAN_SHELL_REFUSAL =
+  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool, or switch to Build mode with /build to run it.";
 
 /**
  * Record a tool refused by Plan mode and return the refusal, or undefined
@@ -93,7 +103,9 @@ export function planRefusal(
     enforcement: "control-plane",
     detail: { action: "tool.execute" },
   });
-  return `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
+  return tool === "bash"
+    ? PLAN_SHELL_REFUSAL
+    : `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
 }
 
 /**
@@ -106,11 +118,47 @@ export function uiChannel(ctx: ExtensionContext): ApprovalChannel | undefined {
   return async (_decision, detail) => {
     const signal = ctx.signal;
     if (signal?.aborted) return "denied";
+    const options = approvalOptions(detail.scopes);
+    // Only when more than yes/no is offered: Pi's `select` shows the choices,
+    // its `confirm` only two.
+    if (options.length > 2) {
+      const choice = await ctx.ui.select(
+        `${detail.title}\n${detail.message}`,
+        options.map((option) => option.label),
+        signal ? { signal } : undefined,
+      );
+      if (choice === undefined) return signal?.aborted ? "denied" : "cancelled";
+      return (
+        options.find((option) => option.label === choice)?.answer ?? "denied"
+      );
+    }
     const approved = signal
       ? await ctx.ui.confirm(detail.title, detail.message, { signal })
       : await ctx.ui.confirm(detail.title, detail.message);
     return approved ? "approved" : "denied";
   };
+}
+
+/**
+ * The answers a prompt shows, in order, for the scopes it offers. A scope
+ * that stores its answer (a persistent "always") is one more entry here and a
+ * matching `ApprovalAnswer`; the prompt itself does not change.
+ */
+function approvalOptions(
+  scopes: ApprovalDetail["scopes"],
+): { label: string; answer: ApprovalAnswer }[] {
+  return [
+    { label: "Allow once", answer: "approved" },
+    ...(scopes?.includes("session")
+      ? [
+          {
+            label: "Allow for this session",
+            answer: "approved-session" as const,
+          },
+        ]
+      : []),
+    { label: "Deny", answer: "denied" },
+  ];
 }
 
 class BlockedError extends Error {}
@@ -280,8 +328,8 @@ export async function gatePath(
       });
       throw blocked(
         hidden
-          ? `${path} is outside what this distribution lets tools read.`
-          : `${path} is outside the directories this distribution lets tools write.`,
+          ? `${path} is outside what this distribution lets tools read. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.read.deny")}`
+          : `${path} is outside the directories this distribution lets tools write. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.write.allow")}`,
       );
     }
   }
@@ -467,7 +515,7 @@ async function gateCommand(
       enforcement: "control-plane",
       detail: { action: "shell.execute" },
     });
-    return "Plan mode does not run commands. Switch to Build mode (/build) first.";
+    return PLAN_SHELL_REFUSAL;
   }
   const decision = await gov.decide(
     "shell.execute",
@@ -577,13 +625,32 @@ export function governedBashOperations(
           ? lowDiskNotice(budget)
           : OUTPUT_LIMIT_NOTICE,
       );
+      // A command the sandbox contained that fails on a denied path or host
+      // gets one line saying which setting decides it, after its own output.
+      const scanner =
+        gov.sandbox.report.level === "enforced"
+          ? new SandboxFailureScanner({
+              profile: gov.sandbox.profile,
+              mode: gov.options.lock.deployment.mode,
+            })
+          : undefined;
       try {
         const result = await run(command, cwd, {
           ...options,
-          onData: output.onData,
+          onData: scanner
+            ? (data) => {
+                scanner.feed(data);
+                output.onData(data);
+              }
+            : output.onData,
           signal: output.signal,
         });
-        return output.exceeded() ? { exitCode: null } : result;
+        if (output.exceeded()) return { exitCode: null };
+        if (scanner && result.exitCode) {
+          const hint = scanner.hint();
+          if (hint) options.onData(Buffer.from(`\n${hint}\n`));
+        }
+        return result;
       } catch (error) {
         // Stopped at the limit: the notice is in the output, and no exit
         // code is reported. A caller's own abort stays an abort.
