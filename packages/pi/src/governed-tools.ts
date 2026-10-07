@@ -68,6 +68,13 @@ export const PLAN_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "ask_user",
 ]);
 export const PLAN_RULE = "piship-workflow.plan";
+/**
+ * PiShip has no way to tell a read-only shell command from one that changes
+ * things, and Pi's own `grep`, `find`, and `ls` are excluded from a governed
+ * session, so Plan mode explores with `read` and leaves the shell to Build.
+ */
+const PLAN_SHELL_REFUSAL =
+  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool, or switch to Build mode with /build to run it.";
 
 /**
  * Record a tool refused by Plan mode and return the refusal, or undefined
@@ -94,7 +101,9 @@ export function planRefusal(
     enforcement: "control-plane",
     detail: { action: "tool.execute" },
   });
-  return `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
+  return tool === "bash"
+    ? PLAN_SHELL_REFUSAL
+    : `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
 }
 
 /**
@@ -468,7 +477,7 @@ async function gateCommand(
       enforcement: "control-plane",
       detail: { action: "shell.execute" },
     });
-    return "Plan mode does not run commands. Switch to Build mode (/build) first.";
+    return PLAN_SHELL_REFUSAL;
   }
   const decision = await gov.decide(
     "shell.execute",

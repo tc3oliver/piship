@@ -698,6 +698,20 @@ describe("governed built-in tools", () => {
     });
   });
 
+  it("says why Plan mode refuses the shell and what to do instead", async () => {
+    const { session } = await open();
+    session.workflowMode = "plan";
+    const call = load(governanceHooks(session)).handlers.get("tool_call");
+    const refusal = (await call?.(
+      { toolName: "bash", input: { command: "ls" } },
+      context(),
+    )) as { block: boolean; reason: string };
+    expect(refusal.block).toBe(true);
+    expect(refusal.reason).toMatch(/read-only command/);
+    expect(refusal.reason).toMatch(/read tool/);
+    expect(refusal.reason).toMatch(/\/build/);
+  });
+
   it("blocks writes and commands in Plan mode even when policy allows them", async () => {
     const { session, workspace } = await open();
     session.workflowMode = "plan";
@@ -933,8 +947,10 @@ describe("governed shell output bounds", () => {
       workflowMode: "build",
       currentChannel: () => undefined,
       decide: async () => ({ outcome: "allow" }),
+      options: { lock: { deployment: { mode: "personal" } } },
       sandbox: {
         report: { level: "enforced" },
+        profile: { readDeny: [], writeAllow: [], network: "allow" },
         exec: async (
           _command: string,
           _cwd: string,
