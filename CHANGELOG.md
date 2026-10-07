@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Added
+
+- `login` accepts the OAuth redirect URL (or the bare `code`) pasted into the terminal, so a machine with no browser, such as a remote shell, signs in without an SSH port forward ([identity](docs/identity.md#remote-shells), [security](docs/security.md#pasted-redirect-url)). It is offered with `PISHIP_NO_BROWSER=1`, in a remote shell, on a display-less Linux session, or in a container, and races the loopback listener there; the pasted address must be this sign-in's redirect with its `state`; the code exchange and the error mapping are the same. `LoginContext` gains the optional `readRedirectUrl`. No manifest, lock, or schema change. In those cases the waiting hint says to paste the address and no longer suggests an SSH port forward; the hint is now printed in English and Traditional Chinese, and with a local browser it adds nothing about pasting.
+
 ## v0.11.0
 
 Released 2026-10-07. Minor milestone on Pi 1.0.3 with the stable `piship/v1` and `piship-lock/v1` contracts (`piship/v1alpha6` and `piship-lock/v1alpha6` stay accepted for the migration window). Tag `v0.11.0` is commit `d4f740f0ce7c1b7bebc244e0d4cfa471ede81813`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target). [Release qualification run 37538011406](https://github.com/tc3oliver/piship/actions/runs/37538011406) passed on that exact commit, every job on its first attempt. v0.11.0 is the production-validation baseline and replaces v0.9.1 ([status](docs/status.md#v0110-production-validation-baseline)).

@@ -1427,6 +1427,7 @@ export class DistributionAccess {
   async login(ctx: {
     openUrl: LoginContext["openUrl"];
     readSecret?: (prompt: string) => Promise<string>;
+    readRedirectUrl?: LoginContext["readRedirectUrl"];
     signal?: AbortSignal;
   }): Promise<{
     identity: IdentitySession | null;
@@ -1442,6 +1443,9 @@ export class DistributionAccess {
           ? this.#obtainWorkload(provider, ctx.signal)
           : provider.login({
               openUrl: ctx.openUrl,
+              ...(ctx.readRedirectUrl
+                ? { readRedirectUrl: ctx.readRedirectUrl }
+                : {}),
               ...(ctx.signal ? { signal: ctx.signal } : {}),
             }),
       );

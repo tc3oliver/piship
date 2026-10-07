@@ -69,18 +69,78 @@ function openBrowser(url: string): void {
   }
 }
 
+function isRemoteShell(env: NodeJS.ProcessEnv): boolean {
+  return !!(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
+}
+
 /**
- * What `login` prints under the authorization URL while it waits. A loopback
- * `redirect_uri` in the URL names where the browser must return; in a remote
- * shell (SSH) that address is on this machine, not the browser's, so the
- * port must be forwarded. The timeout is named only when it is known.
+ * Whether `login` listens for a pasted redirect: where the browser cannot
+ * return to this machine. That is a remote shell, `PISHIP_NO_BROWSER=1`, a
+ * Linux session with no display, or a container. There is no way to know for
+ * certain that the browser is elsewhere, so these are the signals that rarely
+ * misfire; with a local browser nothing reads stdin, so a stray line typed
+ * while the sign-in page is open cannot end the login. WSL is not treated as
+ * headless: it reaches a browser on the Windows side.
+ */
+export function pasteFallbackEnabled(
+  env: NodeJS.ProcessEnv,
+  host: {
+    platform?: NodeJS.Platform;
+    exists?: (path: string) => boolean;
+  } = {},
+): boolean {
+  if (env.PISHIP_NO_BROWSER === "1" || isRemoteShell(env)) return true;
+  if ((host.platform ?? process.platform) !== "linux") return false;
+  if (env.WSL_DISTRO_NAME) return false;
+  const exists = host.exists ?? existsSync;
+  if (
+    env.KUBERNETES_SERVICE_HOST ||
+    exists("/.dockerenv") ||
+    exists("/run/.containerenv")
+  )
+    return true;
+  return !env.DISPLAY && !env.WAYLAND_DISPLAY;
+}
+
+/**
+ * Read one pasted line from stdin for the login's paste fallback. It ends
+ * (stdin closes its interface and is paused again) when `signal` aborts, and
+ * stays pending when stdin ends without a line, so the loopback keeps working.
+ */
+export function readRedirectLine(
+  signal: AbortSignal,
+  notice?: string,
+): Promise<string> {
+  if (notice) process.stderr.write(`${notice}\n`);
+  return new Promise<string>((resolve) => {
+    // terminal: false keeps Ctrl-C as a plain SIGINT for untilInterrupted.
+    const rl = createInterface({ input: process.stdin, terminal: false });
+    const stop = () => rl.close();
+    rl.once("line", (line) => {
+      signal.removeEventListener("abort", stop);
+      rl.close();
+      resolve(line);
+    });
+    if (signal.aborted) stop();
+    else signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
+/**
+ * What `login` prints under the authorization URL while it waits, in English
+ * and Traditional Chinese, one pair of lines per message. A loopback
+ * `redirect_uri` in the URL names where the browser must return. Where it
+ * cannot return (see `pasteFallbackEnabled`) the hint says to paste the
+ * address instead. The timeout is named only when it is known.
  */
 export function loginWaitingHint(
   url: string,
-  options: { timeoutMs?: number; env: NodeJS.ProcessEnv },
+  options: { timeoutMs?: number; paste: boolean },
 ): string {
-  const plain =
-    "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.";
+  const plain = [
+    "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
+    "等待在瀏覽器完成登入，按 Ctrl-C 取消。",
+  ].join("\n");
   let redirect: URL;
   try {
     redirect = new URL(new URL(url).searchParams.get("redirect_uri") ?? "");
@@ -93,19 +153,18 @@ export function loginWaitingHint(
     options.timeoutMs === undefined
       ? undefined
       : Math.round(options.timeoutMs / 60_000);
+  const target = `${redirect.origin}${redirect.pathname}`;
   const lines = [
-    `Waiting${minutes ? ` up to ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} for the browser to return to ${redirect.origin}${redirect.pathname}. Press Ctrl-C to cancel.`,
-    "If the browser shows an error from the identity provider instead of a sign-in page, sign-in cannot complete: press Ctrl-C and ask your administrator to check the client ID and its registered redirect URI.",
+    `Waiting${minutes ? ` up to ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} for the browser to return to ${target}. Press Ctrl-C to cancel.`,
+    `等待瀏覽器返回 ${target}${minutes ? `（最多 ${minutes} 分鐘）` : ""}，按 Ctrl-C 取消。`,
+    "If the browser shows an identity provider error, press Ctrl-C and ask your administrator to check the client ID and redirect URI.",
+    "若瀏覽器顯示身分提供者的錯誤，請按 Ctrl-C，並請管理員檢查 client ID 與 redirect URI。",
   ];
-  const { env } = options;
-  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) {
-    const port = redirect.port || "80";
+  if (options.paste)
     lines.push(
-      `This is a remote shell: the browser must reach ${redirect.host} on this machine. On the computer with the browser, forward the port in another terminal, then open the URL there:`,
-      `  ssh -N -L ${port}:${redirect.hostname}:${port} <this host>`,
-      "Or run login on the computer with the browser.",
+      `No browser here? Open the URL on any computer, sign in, then paste the full address it ends on (\u201ccan't connect\u201d is expected) here and press Enter.`,
+      "這裡沒有瀏覽器？在任何電腦開啟網址登入，把最後的完整網址（顯示「無法連線」屬正常）貼到這裡，按 Enter。",
     );
-  }
   return lines.join("\n");
 }
 
@@ -201,6 +260,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
   // The built-in OIDC login waits for the default timeout; an identity
   // adapter's own wait is not known here.
   const builtIn = ctx.metadata.access.identity.mode === "oidc";
+  const paste = pasteFallbackEnabled(process.env);
   try {
     result = await untilInterrupted((signal) =>
       access.login({
@@ -209,12 +269,13 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
           ctx.err(
             loginWaitingHint(url, {
               ...(builtIn ? { timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS } : {}),
-              env: process.env,
+              paste,
             }),
           );
           openBrowser(url);
         },
         readSecret: readSecretInput,
+        ...(paste ? { readRedirectUrl: readRedirectLine } : {}),
         signal,
       }),
     ).finally(() => saveMetrics(metrics));

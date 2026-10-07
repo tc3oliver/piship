@@ -229,6 +229,69 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
 }
 
 /**
+ * Turn one pasted line into the callback URL the loopback listener would have
+ * received: the full redirect URL (same origin and path as the redirect, and
+ * this sign-in's state), or the bare code. A string is returned for a line that
+ * is refused, naming why without echoing it.
+ */
+export function pastedCallback(
+  text: string,
+  redirectUri: string,
+  state: string,
+): URL | string {
+  const input = text.trim();
+  const redirect = new URL(redirectUri);
+  if (!input) return "Nothing was pasted.";
+  if (/^[^\s/?&=#:]+$/.test(input)) {
+    redirect.search = "";
+    redirect.searchParams.set("code", input);
+    redirect.searchParams.set("state", state);
+    return redirect;
+  }
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return "That is not the address the browser was sent to: paste the full address from the browser's address bar, or just the code.";
+  }
+  if (url.origin !== redirect.origin || url.pathname !== redirect.pathname)
+    return `That address is not this sign-in's redirect (${redirect.origin}${redirect.pathname}).`;
+  if (
+    url.searchParams.getAll("state").length > 1 ||
+    url.searchParams.getAll("code").length > 1
+  )
+    return "That address repeats a parameter (state or code); paste the address exactly as the browser shows it.";
+  if (url.searchParams.get("state") !== state)
+    return "That address does not belong to the sign-in in progress (its state differs). Paste the address from the browser tab of this login.";
+  // Rebuilt from the expected redirect: no pasted userinfo or fragment survives.
+  redirect.search = url.search;
+  return redirect;
+}
+
+/** Ask for pasted lines until one is acceptable; a failing reader ends the wait. */
+async function pasteCallback(
+  read: NonNullable<LoginContext["readRedirectUrl"]>,
+  signal: AbortSignal,
+  redirectUri: string,
+  state: string,
+): Promise<URL> {
+  let notice: string | undefined;
+  for (;;) {
+    let line: string;
+    try {
+      line = await read(signal, notice);
+    } catch {
+      // The reader is gone (input closed, cancelled): the loopback keeps going.
+      return new Promise<URL>(() => {});
+    }
+    if (signal.aborted) return new Promise<URL>(() => {});
+    const result = pastedCallback(line, redirectUri, state);
+    if (typeof result !== "string") return result;
+    notice = result;
+  }
+}
+
+/**
  * Native public-client OIDC login with Authorization Code + PKCE (S256), state,
  * nonce, and ID token issuer/audience/authorized-party/signature/time checks,
  * implemented with the maintained openid-client library.
@@ -321,7 +384,27 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       await ctx.openUrl(
         client.buildAuthorizationUrl(config, parameters).toString(),
       );
-      const callback = await receiver.callback;
+      // Whoever finishes first ends the other: the reader is aborted when the
+      // loopback answers, and the listener is closed below when a paste wins.
+      const stopReading = new AbortController();
+      let callback: URL;
+      try {
+        callback = await Promise.race([
+          receiver.callback,
+          ...(ctx.readRedirectUrl
+            ? [
+                pasteCallback(
+                  ctx.readRedirectUrl,
+                  stopReading.signal,
+                  receiver.redirectUri,
+                  state,
+                ),
+              ]
+            : []),
+        ]);
+      } finally {
+        stopReading.abort();
+      }
       try {
         const tokens = await client.authorizationCodeGrant(config, callback, {
           pkceCodeVerifier: verifier,
