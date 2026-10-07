@@ -102,7 +102,7 @@ export interface GovernanceOptions {
    * permission provider's own auto-approval, switched on with it, goes off
    * too.
    */
-  readonly onYoloEnd?: () => void;
+  readonly onYoloEnd?: () => string | undefined | void;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
   /**

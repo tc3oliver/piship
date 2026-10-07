@@ -340,12 +340,12 @@ describe("a session auto-approval", () => {
     const second = applyAgentFiles(declared, agentDir, { session: true });
     expect(() =>
       applyAgentFiles(declared, agentDir, { sessionAutoApprove: true }),
-    ).toThrow(/Concurrent sessions/);
+    ).toThrow(/permission provider/);
     expect(key()).toBe(false);
     first.restore();
     expect(() =>
       applyAgentFiles(declared, agentDir, { sessionAutoApprove: true }),
-    ).toThrow(/Concurrent sessions/);
+    ).toThrow(/permission provider/);
     second.restore();
     const yolo = applyAgentFiles(declared, agentDir, {
       sessionAutoApprove: true,
@@ -353,8 +353,97 @@ describe("a session auto-approval", () => {
     expect(key()).toBe(true);
     expect(() =>
       applyAgentFiles(declared, agentDir, { session: true }),
-    ).toThrow(/Concurrent sessions/);
+    ).toThrow(/permission provider/);
     yolo.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("tells the user what to do when a --yolo session and an ordinary one meet", () => {
+    const declared = lock({ autoApprove: true });
+    const ordinary = applyAgentFiles(declared, agentDir, { session: true });
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { sessionAutoApprove: true }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        userAction: expect.stringContaining("both with --yolo, or neither"),
+      }),
+    );
+    ordinary.restore();
+    const yolo = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { session: true }),
+    ).toThrow(
+      expect.objectContaining({
+        userAction: expect.stringContaining("both with --yolo, or neither"),
+      }),
+    );
+    yolo.restore();
+  });
+
+  it("lets a second --yolo session share the key, and keeps it on until the last one ends", () => {
+    const declared = lock({ autoApprove: true });
+    const first = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    const second = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    expect(key()).toBe(true);
+    // The owner leaves first: the key stays on for the session that remains.
+    first.restore();
+    expect(key()).toBe(true);
+    second.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("keeps the key on when the session that shares it ends first", () => {
+    const declared = lock({ autoApprove: true });
+    const first = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    const second = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    second.restore();
+    expect(key()).toBe(true);
+    first.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("puts the key back on a shared file that an enforced seed just rewrote", () => {
+    const declared = lock({ autoApprove: true, mode: "enforce" });
+    const first = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    const second = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    expect(key()).toBe(true);
+    second.restore();
+    first.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("says the provider's approvals stay on after /auto off while another --yolo session shares them", () => {
+    const declared = lock({ autoApprove: true });
+    const first = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    const second = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    expect(first.endAutoApprove?.()).toMatch(/stay on until the other --yolo/);
+    expect(key()).toBe(true);
+    // The last session that wants it switches it off, with no notice.
+    expect(second.endAutoApprove?.()).toBeUndefined();
+    expect(key()).toBe(false);
+    second.restore();
+    first.restore();
     expect(key()).toBe(false);
   });
 
@@ -367,7 +456,7 @@ describe("a session auto-approval", () => {
     expect(key()).toBe(false);
     expect(() =>
       applyAgentFiles(declared, agentDir, { session: true }),
-    ).toThrow(/Concurrent sessions/);
+    ).toThrow(/permission provider/);
     const stale = JSON.parse(read());
     stale.yoloMode = true;
     writeFileSync(target(), JSON.stringify(stale));
