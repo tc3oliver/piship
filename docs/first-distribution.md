@@ -62,7 +62,7 @@ The first time, there is no `piship.lock` yet, so `test` writes one and says so 
 $PISHIP dev my-agent/piship.yaml
 ```
 
-After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked piship.lock`) as long as the manifest declares no Pi packages and no bundled search tools. Those are resolved and downloaded over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself:
+After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
 ```bash
 $PISHIP lock my-agent/piship.yaml

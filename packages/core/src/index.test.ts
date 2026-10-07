@@ -85,7 +85,7 @@ describe("distribution core", () => {
     expect(lockStatus(path)).toBe("stale");
     expect(lockNeedsNetwork(readManifest(path))).toBe(false);
   });
-  it("needs the network to relock only for packages and search tools", () => {
+  it("resolves new content to relock only for Pi packages, not for bundled search tools", () => {
     const { path } = fixture();
     const manifest = readManifest(path);
     expect(
@@ -93,7 +93,7 @@ describe("distribution core", () => {
         ...manifest,
         runtime: { ...manifest.runtime, searchTools: { mode: "bundled" } },
       } as typeof manifest),
-    ).toBe(true);
+    ).toBe(false);
   });
   it("uses the pinned Pi when runtime.pi is left out", () => {
     const { path } = fixture();

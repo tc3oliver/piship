@@ -229,15 +229,14 @@ export function lockStatus(manifestPath: string): LockStatus {
   return readFileSync(path, "utf8") === expected ? "current" : "stale";
 }
 /**
- * Whether relocking needs the network: Pi packages are resolved over a
- * registry and bundled search tools are downloaded, and the lock pins what
- * came back, so a person decides when they are locked again.
+ * Whether relocking resolves new content over the network: Pi packages are
+ * resolved over a registry and the lock pins what came back, so a person
+ * decides when they are locked again. Bundled search tools are not counted:
+ * they come from the download cache when the lock beside the manifest
+ * already pins them, so an edit to a resource relocks without the network.
  */
 export function lockNeedsNetwork(manifest: Manifest): boolean {
-  return (
-    declaredPackages(manifest).length > 0 ||
-    manifest.runtime.searchTools !== undefined
-  );
+  return declaredPackages(manifest).length > 0;
 }
 export function requireCurrentLock(manifestPath: string): DistributionLock {
   const path = join(dirname(resolve(manifestPath)), "piship.lock");

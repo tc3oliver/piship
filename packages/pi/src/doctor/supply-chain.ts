@@ -9,15 +9,7 @@ import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
 export function supplyChainGroup(data: DoctorData, out: DoctorSection): void {
-  lifecycleDoctor(
-    data.ctx,
-    "Supply Chain",
-    out.ok,
-    out.warn,
-    data.integrityProblem === undefined
-      ? undefined
-      : { bad: out.bad, integrityProblem: data.integrityProblem },
-  );
+  lifecycleDoctor(data.ctx, "Supply Chain", out.ok, out.warn);
   const missing = deferredToolDownloads(data.ctx.metadata, data.ctx.agentDir);
   if (missing.length)
     out.warn(

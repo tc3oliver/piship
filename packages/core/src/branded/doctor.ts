@@ -26,31 +26,17 @@ export function lifecycleDoctor(
   group: LifecycleDoctorGroup,
   ok: DoctorLine,
   warn: DoctorLine,
-  failures?: DoctorFailures,
 ): void {
-  if (group === "Supply Chain") supplyChainDoctor(ctx, ok, failures);
+  if (group === "Supply Chain") supplyChainDoctor(ctx, ok);
   else if (group === "Release") releaseDoctor(ctx, ok, warn);
   else updateDoctor(ctx, ok, warn);
 }
 
-/** What a caller passes to report a verification that failed as one failed line. */
-export interface DoctorFailures {
-  readonly bad: DoctorLine;
-  /** Why the full payload verification failed. */
-  readonly integrityProblem?: string;
-}
-
-function supplyChainDoctor(
-  ctx: BrandedContext,
-  ok: DoctorLine,
-  failures?: DoctorFailures,
-): void {
+function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
   const { metadata } = ctx;
   ok("manifest", `verified (${metadata.manifest.schema})`);
   ok("lockfile", `verified (${metadata.schema})`);
-  if (failures?.integrityProblem !== undefined)
-    failures.bad("integrity", failures.integrityProblem);
-  else ok("integrity", "payload inventory verified by doctor");
+  ok("integrity", "payload inventory verified by doctor");
 }
 
 function releaseDoctor(

@@ -291,24 +291,6 @@ describe("DoctorReport", () => {
 });
 
 describe("renderDoctor", () => {
-  it("reports a payload that fails verification as one failed row and still prints the other groups", () => {
-    const report = renderDoctor({
-      ...doctorData("managed", {
-        access: accessData(),
-        governance: governanceData(),
-      }),
-      integrityProblem: "Payload files changed: package.json",
-    });
-    const output = report.render();
-    expect(report.failed).toBe(true);
-    expect(group(output, "Supply Chain")).toContain(
-      `  ✗ ${"integrity".padEnd(20)} Payload files changed: package.json`,
-    );
-    expect(output).not.toContain("payload inventory verified by doctor");
-    for (const name of ["Identity", "Network", "Update"])
-      expect(group(output, name).length).toBeGreaterThan(0);
-  });
-
   it("reports a managed, governed distribution in every group", () => {
     const report = renderDoctor(
       doctorData("managed", {

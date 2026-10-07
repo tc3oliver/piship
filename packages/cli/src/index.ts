@@ -531,9 +531,10 @@ function parseInitOptions(
  * `dev` and `test` iterate on a manifest, so they do not stop at a lock
  * that is missing or stale. With no lock yet nothing was reviewed, so it is
  * created. A stale lock is relocked unless the manifest declares Pi
- * packages or bundled search tools: relocking those resolves and pins
- * network content, so it stays a deliberate step. `build` and `release`
- * keep requiring a current lock.
+ * packages: relocking those resolves and pins network content, so it stays
+ * a deliberate step. Bundled search tools are read from the download cache
+ * when the old lock pins them. `build` and `release` keep requiring a
+ * current lock.
  */
 async function prepareLock(
   target: string,
@@ -545,7 +546,7 @@ async function prepareLock(
   const lockCommand = `${pishipCommand()} lock ${target}`;
   if (status === "stale" && lockNeedsNetwork(manifest))
     throw new Error(
-      `Lockfile is stale: the manifest or a resource changed since piship.lock was written. This manifest declares Pi packages or bundled search tools, which locking resolves over the network and pins, so relock on purpose: ${lockCommand}`,
+      `Lockfile is stale: the manifest or a resource changed since piship.lock was written. This manifest declares Pi packages, which locking resolves over the network and pins, so relock on purpose: ${lockCommand}`,
     );
   const progress = progressReporter(output.stderr);
   await downloadSearchToolArchives(target, progress ? { progress } : {});
