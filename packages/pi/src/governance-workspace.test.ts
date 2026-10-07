@@ -215,7 +215,8 @@ function context(notices: string[] = [], hasUI = true): ExtensionContext {
     hasUI,
     ui: {
       confirm: async () => true,
-      select: async () => undefined,
+      select: async (_title: string, options: string[]) =>
+        options[0] === "Allow once" ? options[0] : undefined,
       setStatus: () => {},
       notify: (message: string) => notices.push(message),
     },

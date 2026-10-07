@@ -126,7 +126,13 @@ export interface ResolvedDecision extends PolicyDecision {
     | "denied"
     | "cancelled"
     | "unavailable"
-    | "auto";
+    | "auto"
+    | "session";
+  /**
+   * How long an `approved` answer is remembered, when the user chose that:
+   * for the rest of this session, for the same action and target only.
+   */
+  readonly remember?: ApprovalScope;
 }
 
 export interface PolicyRequest {
@@ -141,13 +147,40 @@ export interface PolicyRequest {
 export type PolicyEvaluator = (request: PolicyRequest) => PolicyDecision;
 
 /**
+ * How long an approval is remembered. `once` is this action only; `session`
+ * is every later ask for the same action and target until the session ends,
+ * kept in memory. A persistent scope joins this list, with its own answer,
+ * when something stores it.
+ */
+export type ApprovalScope = "once" | "session";
+
+/** What a channel shows, and the scopes it may offer besides `once`. */
+export interface ApprovalDetail {
+  readonly title: string;
+  readonly message: string;
+  /**
+   * The scopes the user may answer with, `once` first. Absent or `["once"]`
+   * is a plain yes/no; a channel that cannot show more keeps asking yes/no
+   * and never returns a scope that was not offered.
+   */
+  readonly scopes?: readonly ApprovalScope[];
+}
+
+/** The user's answer to an approval. `approved-session` is `session` scope. */
+export type ApprovalAnswer =
+  | "approved"
+  | "approved-session"
+  | "denied"
+  | "cancelled";
+
+/**
  * An approval channel for `ask`. It returns the user's answer; a missing
  * channel (headless) is treated as unavailable and resolves to deny.
  */
 export type ApprovalChannel = (
   decision: PolicyDecision,
-  detail: { readonly title: string; readonly message: string },
-) => Promise<"approved" | "denied" | "cancelled">;
+  detail: ApprovalDetail,
+) => Promise<ApprovalAnswer>;
 
 export function resolveWithoutChannel(
   decision: PolicyDecision,
@@ -160,16 +193,27 @@ export function resolveWithoutChannel(
 export async function resolveDecision(
   decision: PolicyDecision,
   channel: ApprovalChannel | undefined,
-  detail: { readonly title: string; readonly message: string },
+  detail: ApprovalDetail,
 ): Promise<ResolvedDecision> {
   if (decision.effect !== "ask") return resolveWithoutChannel(decision);
   if (!channel) return resolveWithoutChannel(decision);
-  let answer: "approved" | "denied" | "cancelled";
+  let answer: ApprovalAnswer;
   try {
     answer = await channel(decision, detail);
   } catch {
     answer = "cancelled";
   }
+  // A scope the channel was not offered is not honored: a channel that
+  // answers `approved-session` unasked approves this one action only.
+  if (answer === "approved-session")
+    return {
+      ...decision,
+      outcome: "allow",
+      approval: "approved",
+      ...(detail.scopes?.includes("session")
+        ? { remember: "session" as const }
+        : {}),
+    };
   return {
     ...decision,
     outcome: answer === "approved" ? "allow" : "deny",

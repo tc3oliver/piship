@@ -30,7 +30,9 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  type ApprovalAnswer,
   type ApprovalChannel,
+  type ApprovalDetail,
   type PolicyAction,
   processNetworkEnvironment,
   redact,
@@ -116,11 +118,47 @@ export function uiChannel(ctx: ExtensionContext): ApprovalChannel | undefined {
   return async (_decision, detail) => {
     const signal = ctx.signal;
     if (signal?.aborted) return "denied";
+    const options = approvalOptions(detail.scopes);
+    // Only when more than yes/no is offered: Pi's `select` shows the choices,
+    // its `confirm` only two.
+    if (options.length > 2) {
+      const choice = await ctx.ui.select(
+        `${detail.title}\n${detail.message}`,
+        options.map((option) => option.label),
+        signal ? { signal } : undefined,
+      );
+      if (choice === undefined) return signal?.aborted ? "denied" : "cancelled";
+      return (
+        options.find((option) => option.label === choice)?.answer ?? "denied"
+      );
+    }
     const approved = signal
       ? await ctx.ui.confirm(detail.title, detail.message, { signal })
       : await ctx.ui.confirm(detail.title, detail.message);
     return approved ? "approved" : "denied";
   };
+}
+
+/**
+ * The answers a prompt shows, in order, for the scopes it offers. A scope
+ * that stores its answer (a persistent "always") is one more entry here and a
+ * matching `ApprovalAnswer`; the prompt itself does not change.
+ */
+function approvalOptions(
+  scopes: ApprovalDetail["scopes"],
+): { label: string; answer: ApprovalAnswer }[] {
+  return [
+    { label: "Allow once", answer: "approved" },
+    ...(scopes?.includes("session")
+      ? [
+          {
+            label: "Allow for this session",
+            answer: "approved-session" as const,
+          },
+        ]
+      : []),
+    { label: "Deny", answer: "denied" },
+  ];
 }
 
 class BlockedError extends Error {}

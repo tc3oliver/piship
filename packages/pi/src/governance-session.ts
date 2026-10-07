@@ -85,6 +85,14 @@ export type {
 } from "./governance/options.js";
 
 const STRICTNESS = { allow: 0, ask: 1, deny: 2 } as const;
+
+/** The exact action and targets an approval was given for. */
+function sessionAllowKey(
+  action: PolicyAction,
+  resources: readonly string[],
+): string {
+  return JSON.stringify([action, [...resources].sort()]);
+}
 const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 
 /**
@@ -503,15 +511,35 @@ export class GovernanceSession {
       outcome: "allow" as const,
       approval: "auto" as const,
     };
+    // A session allow is the user's own earlier answer to this very ask: it
+    // is looked up only for an `ask` (never a `deny`), under the exact action
+    // and targets, and looked up again once the prompt queue reaches this call.
+    const remembered = sessionAllowKey(action, resources);
+    const sessionApproved = {
+      ...decision,
+      outcome: "allow" as const,
+      approval: "session" as const,
+    };
+    const offered =
+      decision.effect === "ask" &&
+      channel &&
+      this.#offersSession(action, resources)
+        ? { ...prompt, scopes: ["once", "session"] as const }
+        : prompt;
     let auto = this.#autoApproval(action, resources, decision);
     const resolved: ResolvedDecision = auto
       ? approved
-      : decision.effect === "ask" && channel
-        ? await this.#serialized(async () => {
-            auto = this.#autoApproval(action, resources, decision);
-            return auto ? approved : resolveDecision(decision, channel, prompt);
-          })
-        : await resolveDecision(decision, channel, prompt);
+      : decision.effect === "ask" && this.#sessionAllowed.has(remembered)
+        ? sessionApproved
+        : decision.effect === "ask" && channel
+          ? await this.#serialized(async () => {
+              auto = this.#autoApproval(action, resources, decision);
+              if (auto) return approved;
+              if (this.#sessionAllowed.has(remembered)) return sessionApproved;
+              return resolveDecision(decision, channel, offered);
+            })
+          : await resolveDecision(decision, channel, prompt);
+    if (resolved.remember === "session") this.#sessionAllowed.add(remembered);
     const fields = {
       resource: events?.resource ?? redact(decision.resource),
       policy: decision.policyId,
@@ -521,6 +549,7 @@ export class GovernanceSession {
         action,
         ...(events?.detail ?? {}),
         ...(resolved.approval ? { approval: resolved.approval } : {}),
+        ...(resolved.remember ? { remember: resolved.remember } : {}),
         // `source` is taken (a tool call's origin), so the switch that
         // approved gets its own key. The stored auto mode, the usual one,
         // leaves none.
@@ -545,7 +574,9 @@ export class GovernanceSession {
       this.emit(events.allowed, {
         ...fields,
         decision:
-          resolved.approval === "approved" || resolved.approval === "auto"
+          resolved.approval === "approved" ||
+          resolved.approval === "auto" ||
+          resolved.approval === "session"
             ? "approved"
             : "allowed",
       });
@@ -577,6 +608,26 @@ export class GovernanceSession {
     )
       ? undefined
       : switchedOn;
+  }
+
+  /**
+   * The asks the user answered "allow for this session": action and exact
+   * targets. In memory only, so it ends with the session; a `deny` never
+   * consults it, and nothing here is stored.
+   */
+  readonly #sessionAllowed = new Set<string>();
+
+  /**
+   * Whether the prompt may offer "allow for this session". Not for an ask an
+   * enforced, team, project, or managed user rule wrote to keep its prompt:
+   * that rule asks for a confirmation each time. A personal user owns every
+   * layer, as with `--yolo`.
+   */
+  #offersSession(action: PolicyAction, resources: readonly string[]): boolean {
+    if (this.options.lock.deployment.mode === "personal") return true;
+    return !resources.some((item) =>
+      this.engine.keepsPrompt({ action, resource: item }),
+    );
   }
 
   #approvalTail: Promise<unknown> = Promise.resolve();

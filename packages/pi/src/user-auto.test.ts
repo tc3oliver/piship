@@ -161,6 +161,10 @@ function context(confirm?: () => Promise<boolean>) {
     sessionManager: SessionManager.inMemory(tmpdir()),
     ui: {
       confirm: confirm ?? (async () => false),
+      // The approval prompt offers three answers through `select`; the test's
+      // `confirm` still decides, and counts each prompt.
+      select: async (_title: string, options: string[]) =>
+        (await (confirm ?? (async () => false))()) ? options[0] : "Deny",
       setStatus: (_key: string, text: string | undefined) => status.push(text),
       notify: (message: string) => notices.push(message),
     },
