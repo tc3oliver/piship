@@ -247,3 +247,64 @@ describe("numbers the provider and the caller send are bounded", () => {
     expect(services.state.devicePolls.length).toBeLessThan(40);
   });
 });
+
+describe("cancel and deadline abort the requests, not only the wait", () => {
+  it("aborts the device authorization request on Ctrl-C", async () => {
+    let seen: AbortSignal | undefined;
+    const controller = new AbortController();
+    const outcome = provider({
+      fetch: ((url, init) => {
+        if (!String(url).endsWith("/devicecode"))
+          return createManagedFetch(DEFAULT_NETWORK_POLICY)(url, init);
+        seen = init?.signal ?? undefined;
+        return new Promise(() => {});
+      }) as ManagedFetch,
+    })
+      .login(context({ signal: controller.signal }).ctx)
+      .catch((caught: unknown) => caught);
+    while (!seen) await pause(10);
+    expect(seen.aborted).toBe(false);
+    controller.abort();
+    expect(await outcome).toMatchObject({ message: "Sign-in was cancelled" });
+    expect(seen.aborted).toBe(true);
+  });
+
+  it("closes the connection of a token request that is in flight on Ctrl-C", async () => {
+    // The fixture serves a held request only if the client is still there.
+    services.knobs.tokenDelayMs = 400;
+    const controller = new AbortController();
+    const base = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    let started = false;
+    const login = provider({
+      fetch: ((url, init) => {
+        if (String(url).endsWith("/idp/token")) started = true;
+        return base(url, init);
+      }) as ManagedFetch,
+    })
+      .login(context({ signal: controller.signal }).ctx)
+      .catch((caught: unknown) => caught);
+    while (!started) await pause(10);
+    controller.abort();
+    expect(await login).toMatchObject({ message: "Sign-in was cancelled" });
+    await pause(700);
+    expect(services.state.devicePolls).toEqual([]);
+  });
+
+  it("closes the connection of a token request that is in flight at the login deadline", async () => {
+    services.knobs.tokenDelayMs = 600;
+    const base = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    let tokenRequest: AbortSignal | undefined;
+    await expect(
+      provider({
+        fetch: ((url, init) => {
+          if (String(url).endsWith("/idp/token"))
+            tokenRequest = init?.signal ?? undefined;
+          return base(url, init);
+        }) as ManagedFetch,
+      }).login(context({ timeoutMs: 300 }).ctx),
+    ).rejects.toMatchObject({ message: "Sign-in timed out" });
+    expect(tokenRequest?.aborted).toBe(true);
+    await pause(700);
+    expect(services.state.devicePolls).toEqual([]);
+  });
+});

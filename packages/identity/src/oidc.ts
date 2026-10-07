@@ -298,6 +298,8 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
 export class OidcPkceIdentityProvider implements IdentityProvider {
   readonly kind = "oidc";
   #config: Promise<client.Configuration> | undefined;
+  /** The running device login's cancel and deadline signal, joined into each request. */
+  #loginSignal: AbortSignal | undefined;
   readonly #device: boolean;
   constructor(readonly options: OidcIdentityOptions) {
     if (options.scopes.indexOf("openid") < 0)
@@ -335,8 +337,16 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
           },
           client.None(),
           {
-            [client.customFetch]: (url, init) =>
-              this.options.fetch(url, init as RequestInit),
+            [client.customFetch]: (url, init) => {
+              const own = (init as RequestInit).signal;
+              const signals = [own, this.#loginSignal].filter(
+                (item): item is AbortSignal => !!item,
+              );
+              return this.options.fetch(url, {
+                ...(init as RequestInit),
+                ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),
+              });
+            },
             timeout: this.options.timeoutSeconds ?? 30,
             execute: [
               client.enableNonRepudiationChecks,
@@ -503,6 +513,8 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
     if (ctx.signal?.aborted) cancel();
     ctx.signal?.addEventListener("abort", cancel, { once: true });
     const { signal } = stop;
+    // Every request of this login ends when the signal does, not only the wait.
+    this.#loginSignal = signal;
     const ended = (how: string, retry: string) =>
       new PiShipError("IDENTITY_REQUIRED", `Sign-in ${how}`, {
         component: "identity",
@@ -602,6 +614,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       }
       throw mapError(error, "Sign-in failed");
     } finally {
+      this.#loginSignal = undefined;
       clearTimeout(timer);
       ctx.signal?.removeEventListener("abort", cancel);
     }
