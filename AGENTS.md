@@ -18,6 +18,14 @@ Scope test: does the change help describe, build, govern, distribute, secure, di
 
 Run `npm run check` before completion. For Pi-related changes, also run `npm run test:compatibility`.
 
+## Working notes
+
+- `npm test` is the unit tier only; it excludes `tests/e2e`, `tests/compatibility`, and the reference tests. Run one file with `npx vitest run <path>`. `npm run test:e2e` needs `npm run build` first, and `npm run test:reference` needs Docker.
+- Sandbox tests skip when no OS sandbox adapter (bubblewrap on Linux) is available. CI sets `PISHIP_REQUIRE_SANDBOX=1` and `PISHIP_REQUIRE_ISOLATOR=1` on Linux and macOS, so a local skip can still fail there. `tests/ci-guards.test.ts` asserts these CI steps, so changing them in `.github/workflows/ci.yml` needs that test updated too.
+- A new package under `packages/` fails `npm run check:boundaries` until it gets an `allowedLocal` entry in `scripts/check-boundaries.mjs`; a package that ships in the payload must also be listed in `scripts/prepare-build-input.mjs`.
+- Run the PiShip CLI by path: `node packages/cli/dist/bin.js` after a build. PiShip is not published to npm; invoking it through npx fetches an unrelated package.
+- `examples/*/resources/AGENTS.md` and the other example resources are distribution payload, not instructions for this repository. Each example's `piship.lock` records their sha256, so editing a resource or `piship.yaml` needs `piship lock examples/<name>/piship.yaml` to be rerun.
+
 For pull requests, follow the title and evidence guidance in `CONTRIBUTING.md`.
 
 ## CI evidence tiers
