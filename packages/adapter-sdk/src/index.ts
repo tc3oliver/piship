@@ -37,6 +37,7 @@ export {
   type CredentialContext,
   type CredentialMode,
   type CredentialProvider,
+  type DeviceCodePrompt,
   formatError,
   type IdentityCallContext,
   type IdentityProvider,
