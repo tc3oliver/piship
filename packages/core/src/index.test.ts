@@ -415,6 +415,14 @@ describe("distribution ids", () => {
   it("has no suggestion when nothing usable is left", () => {
     expect(suggestDistributionId("___")).toBeUndefined();
   });
+  it("answers a very long run of hyphens at once", () => {
+    const started = Date.now();
+    expect(suggestDistributionId("-".repeat(200_000))).toBeUndefined();
+    expect(
+      suggestDistributionId(`${"-".repeat(200_000)}x${"-".repeat(200_000)}`),
+    ).toBe("x");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
   it("names the suggestion where a bad id is refused", () => {
     expect(() => distributionStateDirectory({ value: "my_agent" })).toThrow(
       "use my-agent",

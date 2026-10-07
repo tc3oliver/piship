@@ -29,10 +29,18 @@ export function isDistributionId(value: string): boolean {
  * when nothing usable is left.
  */
 export function suggestDistributionId(value: string): string | undefined {
-  const words = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  // One pass over the characters, so no pattern backtracks on a long run of
+  // hyphens: a run of other characters becomes one hyphen, and none starts or
+  // ends the result.
+  let words = "";
+  let separated = false;
+  for (const char of value.toLowerCase()) {
+    if ((char >= "a" && char <= "z") || (char >= "0" && char <= "9")) {
+      if (separated && words) words += "-";
+      separated = false;
+      words += char;
+    } else separated = true;
+  }
   if (!words) return undefined;
   return isDistributionId(words) ? words : `app-${words}`;
 }
