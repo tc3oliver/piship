@@ -50,6 +50,7 @@ import {
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
+import { failedServerNotices } from "./governance/mcp.js";
 import { modelPolicy } from "./launch/governance.js";
 import { SessionOutputStore } from "./shell-output.js";
 
@@ -1485,12 +1486,54 @@ describe("Streamable HTTP MCP urls", () => {
         ),
       }),
     ]);
+    // The session says so once, with the cause and where to look.
+    const notices: string[] = [];
+    session.attachNotices((message) => notices.push(message));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(
+      /^MCP server tickets did not start \(.*UNIT_MCP_URL.*\), so its tools are unavailable\. Run unit doctor for details\.$/,
+    );
     await expect(
       open([allowStart, ...mcp(true)], { fetch, resolveTemplate: env({}) }),
     ).rejects.toMatchObject({
       code: "CONFIG_UNAVAILABLE",
       message: expect.stringContaining("UNIT_MCP_URL"),
     });
+  });
+});
+
+describe("failedServerNotices", () => {
+  const report = (
+    id: string,
+    state: "healthy" | "failed" | "denied",
+    required: boolean,
+    reason?: string,
+  ) =>
+    ({
+      id,
+      state,
+      required,
+      transport: "stdio",
+      tools: [],
+      ...(reason ? { reason } : {}),
+    }) as const;
+
+  it("names each failed optional server once and skips the rest", () => {
+    expect(
+      failedServerNotices(
+        [
+          report("a", "failed", false, "spawn  ENOENT\nnope"),
+          report("b", "failed", true, "required"),
+          report("c", "denied", false, "policy"),
+          report("d", "healthy", false),
+          report("e", "failed", false),
+        ],
+        "unit",
+      ),
+    ).toEqual([
+      "MCP server a did not start (spawn ENOENT nope), so its tools are unavailable. Run unit doctor for details.",
+      "MCP server e did not start (it did not start), so its tools are unavailable. Run unit doctor for details.",
+    ]);
   });
 });
 
