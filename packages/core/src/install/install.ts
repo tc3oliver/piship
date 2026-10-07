@@ -22,6 +22,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { assertFreeSpace, extractionNeed } from "./free-space.js";
 import { openInstallStore } from "../store/policy.js";
 import { verifyWrittenPayload } from "../payload.js";
 import { channelTrustFromLock } from "../lock.js";
@@ -215,6 +216,8 @@ export async function installDistribution(
   const lap = stopwatch();
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
+  if (isArchive)
+    assertFreeSpace(installHome(), extractionNeed(statSync(source).size));
   // Where the runtime, Pi package, and dependency files come from a shared
   // store, they are placed from it; the installed release is whole without it.
   const store = openInstallStore();
