@@ -362,6 +362,34 @@ describe("diffLocks", () => {
     ).toEqual(["low", "low"]);
   });
 
+  it("flags a change of identity flow as high, with the redirect that goes", () => {
+    const device = clone(base);
+    device.access.identity.oidc.flow = "device_code";
+    delete device.access.identity.oidc.redirectUri;
+    const report = diffLocks(base, device);
+    expect(report.risk).toBe("high");
+    expect(
+      report.changes.map(({ item, risk, before, after }) => ({
+        item,
+        risk,
+        before,
+        after,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          item: "identity flow",
+          risk: "high",
+          before: "authorization_code_pkce",
+          after: "device_code",
+        },
+      ]),
+    );
+    expect(report.changes.map((change) => change.item)).toContain(
+      "identity redirectUri",
+    );
+  });
+
   it("flags plain HTTP on the gateway, broker, identity, audit sinks, and sandbox as high", () => {
     const https = clone(base);
     https.governance.manifest.audit.sinks.push({

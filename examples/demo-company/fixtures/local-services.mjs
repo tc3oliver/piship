@@ -220,6 +220,15 @@ export async function startLocalServices(options = {}) {
     tokenTimeoutMs: 0,
     tokenTimeoutServes: false,
     tokenFaults: [],
+    // The device authorization grant (RFC 8628). `devicePolls` are the token
+    // endpoint's answers to the first polls, in order (`authorization_pending`,
+    // `slow_down`, `access_denied`, `expired_token`); once they run out the
+    // next poll signs in.
+    deviceEndpoint: true,
+    deviceInterval: 1,
+    deviceExpiresIn: 900,
+    deviceComplete: false,
+    devicePolls: [],
     brokerBaseUrl: undefined,
     credentialTtl: 3600,
     entitledModels: ["acme/coder", "acme/general"],
@@ -234,6 +243,11 @@ export async function startLocalServices(options = {}) {
   };
   const state = {
     codes: new Map(),
+    // device_code -> { scope, subject, email, displayName }
+    devices: new Map(),
+    // Each token request for a device code: { at: ms, deviceCode }.
+    devicePolls: [],
+    deviceAuthorizations: [],
     accessTokens: new Map(),
     refreshTokens: new Map(),
     // Every ID token issued, so a leak scan looks for it like any other
@@ -423,6 +437,18 @@ export async function startLocalServices(options = {}) {
         ),
       };
     }
+    if (
+      form.get("grant_type") === "urn:ietf:params:oauth:grant-type:device_code"
+    ) {
+      const deviceCode = form.get("device_code") ?? "";
+      state.devicePolls.push({ at: Date.now(), deviceCode });
+      const entry = state.devices.get(deviceCode);
+      if (!entry) return { status: 400, body: { error: "invalid_grant" } };
+      const answer = knobs.devicePolls.shift();
+      if (answer) return { status: 400, body: { error: answer } };
+      state.devices.delete(deviceCode);
+      return { status: 200, body: issueTokens(entry, undefined) };
+    }
     if (form.get("grant_type") === "refresh_token") {
       const token = form.get("refresh_token") ?? "";
       const session = state.refreshTokens.get(token);
@@ -507,7 +533,14 @@ export async function startLocalServices(options = {}) {
         jwks_uri: `${issuer}/jwks`,
         revocation_endpoint: `${issuer}/revoke`,
         response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
+        ...(knobs.deviceEndpoint
+          ? { device_authorization_endpoint: `${issuer}/devicecode` }
+          : {}),
+        grant_types_supported: [
+          "authorization_code",
+          "refresh_token",
+          "urn:ietf:params:oauth:grant-type:device_code",
+        ],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
         code_challenge_methods_supported: ["S256"],
@@ -558,6 +591,31 @@ export async function startLocalServices(options = {}) {
       }
       response.writeHead(302, { location: redirectUrl.toString() });
       return response.end();
+    }
+    if (path === "/idp/devicecode" && request.method === "POST") {
+      const form = new URLSearchParams(text);
+      if (form.get("client_id") !== clientId)
+        return json(response, 401, { error: "invalid_client" });
+      state.deviceAuthorizations.push(Object.fromEntries(form));
+      const deviceCode = `demo-device-${random()}`;
+      state.devices.set(deviceCode, {
+        scope: form.get("scope") ?? "openid",
+        subject: knobs.subject,
+        email: knobs.email,
+        displayName: knobs.displayName,
+      });
+      return json(response, 200, {
+        device_code: deviceCode,
+        user_code: "DEMO-CODE",
+        verification_uri: `${issuer}/device`,
+        ...(knobs.deviceComplete
+          ? {
+              verification_uri_complete: `${issuer}/device?user_code=DEMO-CODE`,
+            }
+          : {}),
+        expires_in: knobs.deviceExpiresIn,
+        interval: knobs.deviceInterval,
+      });
     }
     if (path === "/idp/token" && request.method === "POST")
       return respond(

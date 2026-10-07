@@ -421,6 +421,55 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
   });
 
+  it("signs in with the device code flow, with no redirect and no browser, and keeps the code out of state", async () => {
+    const { redirectUri: _redirect, ...oidc } = (
+      (options.access as AccessManifest).identity as {
+        oidc: Record<string, unknown>;
+      }
+    ).oidc;
+    const device = {
+      ...options,
+      access: {
+        ...options.access,
+        identity: {
+          mode: "oidc",
+          oidc: { ...oidc, flow: "device_code" },
+        },
+      },
+    } as typeof options;
+    const distribution = DistributionAccess.open(device);
+    const shown: unknown[] = [];
+    const login = await distribution.login({
+      openUrl: () => {
+        throw new Error("a device sign-in opens no authorization URL");
+      },
+      presentDeviceCode: (prompt) => void shown.push(prompt),
+    });
+    expect(shown).toEqual([
+      expect.objectContaining({
+        userCode: "DEMO-CODE",
+        verificationUri: `${services.issuer}/device`,
+      }),
+    ]);
+    expect(login.identity?.subject).toBe("demo-user-1");
+    expect((await distribution.activate()).selectedModel).toBe("acme/coder");
+    const secrets = [
+      ...services.state.devices.keys(),
+      ...services.state.accessTokens.keys(),
+      ...services.state.refreshTokens.keys(),
+    ];
+    expect(secretScan(join(temp, "state"), [...secrets, "DEMO-CODE"])).toEqual(
+      [],
+    );
+    const explained = await explainConfiguration(device);
+    expect(JSON.stringify(explained)).toContain("device_code (RFC 8628)");
+    expect(JSON.stringify(explained)).not.toContain(
+      "identity.oidc.redirectUri",
+    );
+    await distribution.logout();
+    expect(store.refs()).toEqual([]);
+  });
+
   it("identifies the distribution, its version, and PiShip to the broker and the gateway", async () => {
     const distribution = DistributionAccess.open(options);
     await distribution.login({ openUrl: (url) => void services.approve(url) });

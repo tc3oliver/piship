@@ -1,7 +1,11 @@
 // What `login` prints while it waits for the browser, and how Ctrl-C ends
 // the wait (#149).
 import { describe, expect, it } from "vitest";
-import { loginWaitingHint, untilInterrupted } from "./branded/login.js";
+import {
+  deviceCodeMessage,
+  loginWaitingHint,
+  untilInterrupted,
+} from "./branded/login.js";
 
 const authorize = (redirect: string) =>
   `https://idp.example/authorize?client_id=acme&redirect_uri=${encodeURIComponent(redirect)}&state=s`;
@@ -72,5 +76,38 @@ describe("login cancellation", () => {
     const before = process.listenerCount("SIGINT");
     await expect(untilInterrupted(async () => "done")).resolves.toBe("done");
     expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+});
+
+describe("device code sign-in message", () => {
+  const prompt = {
+    verificationUri: "https://idp.example/device",
+    userCode: "ABCD-EFGH",
+    expiresInSeconds: 300,
+  };
+
+  it("names the URL, the code, how long it waits, and how to cancel", () => {
+    const message = deviceCodeMessage(prompt);
+    expect(message).toContain("https://idp.example/device");
+    expect(message).toContain("enter this code: ABCD-EFGH");
+    expect(message).toContain("Waiting up to 5 minutes");
+    expect(message).toContain("Press Ctrl-C to cancel");
+    expect(message).not.toMatch(/ssh|forward|redirect/i);
+  });
+
+  it("warns that a code someone else sent signs that person in", () => {
+    expect(deviceCodeMessage(prompt)).toMatch(
+      /only because you ran login just now.*someone else/s,
+    );
+  });
+
+  it("offers the complete URL when the provider gives one, and seconds for a short wait", () => {
+    const message = deviceCodeMessage({
+      ...prompt,
+      verificationUriComplete: "https://idp.example/device?user_code=ABCD-EFGH",
+      expiresInSeconds: 45,
+    });
+    expect(message).toContain("https://idp.example/device?user_code=ABCD-EFGH");
+    expect(message).toContain("Waiting up to 45 seconds");
   });
 });
