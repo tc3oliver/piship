@@ -228,6 +228,99 @@ export function plainHttpOrigins(
   return (target) => target.protocol === "http:" && origins.has(target.origin);
 }
 
+const PROXY_URL_VARIABLES = [
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
+/** One proxy variable `normalizeProxyEnvironment` rewrote. */
+export interface ProxyCorrection {
+  readonly name: string;
+  /** The corrected value without any credentials: `http://host:port`. */
+  readonly shown: string;
+}
+
+/**
+ * Give a proxy variable that names only `host:port` the `http://` scheme
+ * curl assumes, in `env` itself, so undici's proxy agent does not reject the
+ * whole launch with `Invalid URL protocol`. A value that cannot name a proxy
+ * even then is a PiShipError that names the variable, never its value (it
+ * may carry credentials). Empty values are left as they are: undici treats
+ * them as unset. Returns what it rewrote; running it again changes nothing.
+ */
+export function normalizeProxyEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): ProxyCorrection[] {
+  const corrections: ProxyCorrection[] = [];
+  for (const name of PROXY_URL_VARIABLES) {
+    const raw = env[name]?.trim();
+    if (!raw) continue;
+    // ALL_PROXY is read by children, not by undici: any scheme, such as
+    // socks5://, is theirs to interpret.
+    const schemes =
+      name.toLowerCase() === "all_proxy" ? undefined : ["http:", "https:"];
+    const invalid = () =>
+      new PiShipError(
+        "CONFIG_INVALID",
+        `${name} is not a proxy address PiShip can use`,
+        {
+          component: "network",
+          userAction: `Set ${name} to http://host:port (for example http://proxy.corp:8080), or unset it to connect directly`,
+        },
+      );
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(raw)) {
+      let url: URL;
+      try {
+        url = new URL(raw);
+      } catch {
+        throw invalid();
+      }
+      if ((schemes && !schemes.includes(url.protocol)) || !url.hostname)
+        throw invalid();
+      continue;
+    }
+    let url: URL;
+    try {
+      url = new URL(`http://${raw}`);
+    } catch {
+      throw invalid();
+    }
+    if (!url.hostname) throw invalid();
+    env[name] = `http://${raw}`;
+    corrections.push({ name, shown: `http://${url.host}` });
+  }
+  return corrections;
+}
+
+/** The notice for corrections `normalizeProxyEnvironment` made. */
+export function proxyCorrectionNotice(
+  corrections: readonly ProxyCorrection[],
+): string | undefined {
+  if (!corrections.length) return undefined;
+  const parts = corrections.map(
+    ({ name, shown }) => `${name} has no scheme, so it is used as ${shown}`,
+  );
+  return `Notice: ${parts.join("; ")}. Write the scheme in the variable to silence this.`;
+}
+
+/**
+ * A personal distribution has no managed access to protect, so
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` is dropped from `env` for this process
+ * (verification stays on) instead of blocking the launch. Returns whether it
+ * was set. Managed access never calls this: it stays fail-closed.
+ */
+export function dropInsecureTlsSwitch(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED !== "0") return false;
+  delete env.NODE_TLS_REJECT_UNAUTHORIZED;
+  return true;
+}
+
 /** Refuse to run managed network flows when TLS verification was disabled. */
 export function assertTlsVerificationEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -409,6 +502,9 @@ function buildDispatcher(
     ? { ca, rejectUnauthorized: true }
     : { rejectUnauthorized: true };
   const keepAlive = options.keepAlive !== false;
+  // undici reads the proxy variables itself and rejects a value without a
+  // scheme with a raw error: correct it first, or say which one is wrong.
+  if (policy.inheritProxyEnvironment) normalizeProxyEnvironment();
   // The proxies undici's EnvHttpProxyAgent reads, read at the same moment.
   const proxies = policy.inheritProxyEnvironment
     ? [

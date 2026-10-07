@@ -2,6 +2,9 @@ import {
   PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
+  dropInsecureTlsSwitch,
+  normalizeProxyEnvironment,
+  proxyCorrectionNotice,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import {
@@ -75,8 +78,21 @@ export async function prepareAccess(
       events: new AccessEvents(),
     };
   }
-  // Refuse before sanitizing: silently dropping a disabled-TLS setting would hide it.
+  // A personal user has no managed access to protect and no manifest key to
+  // change: drop the switch for this launch (verification stays on) and say
+  // what to use instead. Managed access refuses below, before sanitizing:
+  // silently dropping a disabled-TLS setting there would hide it.
+  if (ctx.mode === "personal" && dropInsecureTlsSwitch())
+    ctx.err(
+      "Notice: NODE_TLS_REJECT_UNAUTHORIZED=0 is ignored; PiShip keeps TLS verification on. If a server uses a private or corporate certificate authority, point NODE_EXTRA_CA_CERTS at its PEM file instead.",
+    );
   assertTlsVerificationEnabled();
+  // A proxy variable written as host:port crashes undici's proxy agent:
+  // give it the http:// scheme curl assumes, and say so once.
+  if (ctx.metadata.access.network.proxy.inheritEnvironment) {
+    const notice = proxyCorrectionNotice(normalizeProxyEnvironment());
+    if (notice) ctx.err(notice);
+  }
   const events = new AccessEvents();
   const access = openAccess(ctx, events.listener, metrics);
   let removedEnvironment: string[] = [];
