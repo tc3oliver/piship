@@ -1083,6 +1083,36 @@ export class DistributionAccess {
     return this.#timedIdentity(() => this.#checkIdentity(provider, options));
   }
 
+  /**
+   * The identity a launch starts with. Where the launch may prompt
+   * (`loginInline`) and the stored sign-in is missing or can no longer be
+   * used, the user signs in once on the spot and the identity is read again;
+   * the error of a failed or cancelled sign-in is the launch's error. Any
+   * other failure, and every launch without the hook, keeps the original
+   * error and its "Run <command> login".
+   */
+  async #launchIdentity(options: {
+    required: boolean;
+  }): Promise<IdentitySession | null> {
+    try {
+      return await this.currentIdentity(options);
+    } catch (error) {
+      const signIn = this.options.loginInline;
+      if (
+        !signIn ||
+        !(error instanceof PiShipError) ||
+        (error.code !== "IDENTITY_REQUIRED" &&
+          error.code !== "IDENTITY_EXPIRED") ||
+        // A workload identity signs in by itself; a failure is not one a
+        // person can fix at a prompt.
+        (await this.usesWorkloadIdentity())
+      )
+        throw error;
+      await signIn();
+      return this.currentIdentity(options);
+    }
+  }
+
   #expiring(session: IdentitySession): boolean {
     return (
       !!session.expiresAt && session.expiresAt.getTime() - this.#now() < 60_000
@@ -1668,7 +1698,7 @@ export class DistributionAccess {
     let preferences = recovered.preferences;
     if (recovered.notice) notices.push(recovered.notice);
     const manager = await this.credentialManager();
-    const identity = await this.currentIdentity({
+    const identity = await this.#launchIdentity({
       required: this.#identityRequired(manager),
     });
     this.#pin(identity);
@@ -1912,13 +1942,54 @@ export class DistributionAccess {
     if (!options.force && this.#cachedSecretValid(manager)) return this.#secret;
     // A forced renewal is about the generation this session sent, not
     // whatever another process stored since.
-    return (
-      await this.#renewCredential(
-        manager,
-        !!options.force,
-        options.force ? this.#secretRef : undefined,
-      )
-    ).secret;
+    try {
+      return (
+        await this.#renewCredential(
+          manager,
+          !!options.force,
+          options.force ? this.#secretRef : undefined,
+        )
+      ).secret;
+    } catch (error) {
+      throw this.#midSessionSignInError(error);
+    }
+  }
+
+  /**
+   * A model request that finds the sign-in gone or unrenewable fails inside
+   * Pi's terminal UI, which owns the terminal and shows only the message, so
+   * the message names what to do on that one line. It does not prompt for a
+   * sign-in there: a prompt would write over the screen and compete with Pi
+   * for the keys. A failure that signing in cannot fix, and any retryable
+   * one, is returned unchanged.
+   */
+  #midSessionSignInError(error: unknown): unknown {
+    if (
+      !(error instanceof PiShipError) ||
+      error.retryable ||
+      !(
+        error.code === "IDENTITY_REQUIRED" ||
+        error.code === "IDENTITY_EXPIRED" ||
+        error.code === "CREDENTIAL_EXPIRED"
+      ) ||
+      // Only a failure whose fix is to sign in again. A session pinned to
+      // another user (or one signed out elsewhere) already says what to do.
+      !/\blogin\b/.test(error.userAction ?? "") ||
+      /restart the session/.test(error.message)
+    )
+      return error;
+    const command = this.options.app.command;
+    return new PiShipError(
+      error.code,
+      `${error.message}. Exit, run \`${command} login\`, then start ${command} again.`,
+      {
+        ...(error.component ? { component: error.component } : {}),
+        userAction: `Run ${command} login`,
+        ...(error.sanitizedDetail
+          ? { sanitizedDetail: error.sanitizedDetail }
+          : {}),
+      },
+    );
   }
 
   #cachedSecretValid(manager: CredentialManager): boolean {

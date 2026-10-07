@@ -11,6 +11,8 @@ import {
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
+  inlineLoginOffered,
+  loginInline,
   runAuto,
   runConfig,
   runLogin,
@@ -179,8 +181,18 @@ export async function launchPiDistribution(
   // to switch.
   const sessionAutoApprove =
     yolo && sessionAutoApproveTarget(metadata) !== undefined;
+  // At a terminal in a managed distribution (see `inlineLoginOffered`), a
+  // plain `login` that succeeds goes on into the session it was run for.
+  const atTerminal = inlineLoginOffered(
+    metadata.deployment.mode,
+    { stdinTTY: !!process.stdin.isTTY, stdoutTTY: !!process.stdout.isTTY },
+    process.env,
+  );
+  const loginContinues =
+    !sessionOption && args.length === 1 && args[0] === "login" && atTerminal;
   const startsSession =
     args.length === 0 ||
+    loginContinues ||
     (args.length === 1 &&
       (args[0] === "--smoke" || args[0] === "--smoke-model"));
   const agentFiles = startsSession
@@ -206,6 +218,10 @@ export async function launchPiDistribution(
     mode: metadata.deployment.mode,
     out: (message) => console.log(message),
     err: (message) => console.error(message),
+    // Only the interactive launch (no subcommand) may sign in on the spot.
+    ...(args.length === 0 && atTerminal
+      ? { loginInline: (access) => loginInline(ctx, access) }
+      : {}),
     ...(yolo ? { yolo: true } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
@@ -250,11 +266,14 @@ export async function launchPiDistribution(
       : metadata.deployment.mode === "managed"
         ? "\n\n--yolo approves asks from the distribution defaults without a prompt for this session only, audited; deny and enforced rules still apply, and nothing is stored."
         : "\n\n--yolo approves every ask without a prompt for this session only, audited; deny still applies, and nothing is stored.";
+    const loginHelp = piNative
+      ? ""
+      : "\n\nlogin signs in; run bare at a terminal in a managed distribution, it then starts the session.";
     const piNativeHelp = piNative
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
         ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
         : "\n\nCommands:\n  doctor [--json] | version";
@@ -294,7 +313,13 @@ export async function launchPiDistribution(
   }
   startupMark("search_tools_done");
   if (!sessionOption) {
-    if (args.length === 1 && command === "login") return runLogin(ctx);
+    if (args.length === 1 && command === "login") {
+      // A failed or cancelled login throws here and starts nothing.
+      await runLogin(ctx);
+      if (!loginContinues) return;
+      ctx.err(`Signed in. Starting ${metadata.app.command}...`);
+      return runInteractive(ctx, requestedModel, newSession);
+    }
     if (args.length === 1 && command === "logout") return runLogout(ctx);
     if (command === "doctor") return runDoctor(ctx, rest);
     if (args.length === 1 && command === "models") return runModels(ctx);

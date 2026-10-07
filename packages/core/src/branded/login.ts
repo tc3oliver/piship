@@ -236,6 +236,90 @@ export async function readSecretInput(prompt: string): Promise<string> {
   }
 }
 
+type LoginResult = Awaited<ReturnType<DistributionAccess["login"]>>;
+
+/**
+ * The interactive sign-in `login` and a launch's inline sign-in share: the
+ * browser hint, the paste fallback, the secret prompt, and Ctrl-C as a
+ * cancelled sign-in.
+ */
+async function interactiveLogin(
+  ctx: BrandedContext,
+  access: DistributionAccess,
+  metrics?: LocalMetrics,
+): Promise<LoginResult> {
+  // The built-in OIDC login waits for the default timeout; an identity
+  // adapter's own wait is not known here.
+  const builtIn = ctx.metadata.access?.identity.mode === "oidc";
+  const paste = pasteFallbackEnabled(process.env);
+  return untilInterrupted((signal) =>
+    access.login({
+      openUrl: (url) => {
+        ctx.err(`Open this URL in your browser to sign in:\n${url}`);
+        ctx.err(
+          loginWaitingHint(url, {
+            ...(builtIn ? { timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS } : {}),
+            paste,
+          }),
+        );
+        openBrowser(url);
+      },
+      readSecret: readSecretInput,
+      ...(paste ? { readRedirectUrl: readRedirectLine } : {}),
+      signal,
+    }),
+  ).finally(() => saveMetrics(metrics));
+}
+
+/** What a finished sign-in tells the user. */
+function reportLogin(
+  ctx: BrandedContext,
+  access: DistributionAccess,
+  result: LoginResult,
+): void {
+  const identity = result.identity
+    ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
+    : "No identity provider is configured.";
+  const credential =
+    result.credential.state === "delegated"
+      ? `Credential: ${access.credentialMode} (no stored secret).`
+      : `Credential: ${access.credentialMode} stored in ${access.store?.description ?? "no store"}${result.credential.metadata?.expires_at ? `; expires ${result.credential.metadata.expires_at}` : ""}.`;
+  ctx.out(`${identity}\n${credential}`);
+  for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
+  if (access.store?.kind === "file")
+    ctx.err(
+      "Warning: credentials use the explicitly enabled plaintext file fallback, not platform secure storage.",
+    );
+}
+
+/**
+ * Whether a launch that finds no sign-in may sign in on the spot: a managed
+ * distribution, with a person at the terminal (stdin and stdout both), and
+ * not in CI. Everything else keeps the failure that names the login command.
+ */
+export function inlineLoginOffered(
+  mode: BrandedContext["mode"],
+  terminal: { stdinTTY: boolean; stdoutTTY: boolean },
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const ci = !!env.CI && env.CI !== "0" && env.CI.toLowerCase() !== "false";
+  return mode === "managed" && terminal.stdinTTY && terminal.stdoutTTY && !ci;
+}
+
+/**
+ * Sign in during a launch that found no usable sign-in: the same login the
+ * `login` command runs, on the access the launch already opened. The launch's
+ * own listener and audit see its events, so nothing is recorded twice. A
+ * failed or cancelled sign-in throws the error `login` would.
+ */
+export async function loginInline(
+  ctx: BrandedContext,
+  access: DistributionAccess,
+): Promise<void> {
+  ctx.err("You are not signed in; signing in now.");
+  reportLogin(ctx, access, await interactiveLogin(ctx, access));
+}
+
 export async function runLogin(ctx: BrandedContext): Promise<void> {
   if (
     !ctx.metadata.access ||
@@ -256,29 +340,9 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
-  let result: Awaited<ReturnType<typeof access.login>>;
-  // The built-in OIDC login waits for the default timeout; an identity
-  // adapter's own wait is not known here.
-  const builtIn = ctx.metadata.access.identity.mode === "oidc";
-  const paste = pasteFallbackEnabled(process.env);
+  let result: LoginResult;
   try {
-    result = await untilInterrupted((signal) =>
-      access.login({
-        openUrl: (url) => {
-          ctx.err(`Open this URL in your browser to sign in:\n${url}`);
-          ctx.err(
-            loginWaitingHint(url, {
-              ...(builtIn ? { timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS } : {}),
-              paste,
-            }),
-          );
-          openBrowser(url);
-        },
-        readSecret: readSecretInput,
-        ...(paste ? { readRedirectUrl: readRedirectLine } : {}),
-        signal,
-      }),
-    ).finally(() => saveMetrics(metrics));
+    result = await interactiveLogin(ctx, access, metrics);
   } catch (error) {
     // A login can fail after it stored the new identity or revoked the
     // previous credential (a broker refusal, say): what happened is still
@@ -303,19 +367,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
     result.identity ? principalId(result.identity) : null,
     events,
   );
-  const identity = result.identity
-    ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
-    : "No identity provider is configured.";
-  const credential =
-    result.credential.state === "delegated"
-      ? `Credential: ${access.credentialMode} (no stored secret).`
-      : `Credential: ${access.credentialMode} stored in ${access.store?.description ?? "no store"}${result.credential.metadata?.expires_at ? `; expires ${result.credential.metadata.expires_at}` : ""}.`;
-  ctx.out(`${identity}\n${credential}`);
-  for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
-  if (access.store?.kind === "file")
-    ctx.err(
-      "Warning: credentials use the explicitly enabled plaintext file fallback, not platform secure storage.",
-    );
+  reportLogin(ctx, access, result);
 }
 
 /** The stored identity session's metadata, or null when absent or unreadable. */

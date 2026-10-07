@@ -2,6 +2,7 @@
 // the wait (#149).
 import { describe, expect, it } from "vitest";
 import {
+  inlineLoginOffered,
   loginWaitingHint,
   pasteFallbackEnabled,
   readRedirectLine,
@@ -183,5 +184,23 @@ describe("login paste reader", () => {
     } finally {
       if (original) Object.defineProperty(process, "stdin", original);
     }
+  });
+});
+
+describe("inline sign-in during a launch", () => {
+  const tty = { stdinTTY: true, stdoutTTY: true };
+  it("is offered only to a managed launch at a terminal outside CI", () => {
+    expect(inlineLoginOffered("managed", tty, {})).toBe(true);
+    expect(inlineLoginOffered("managed", tty, { CI: "0" })).toBe(true);
+    expect(inlineLoginOffered("managed", tty, { CI: "false" })).toBe(true);
+    expect(inlineLoginOffered("managed", tty, { CI: "true" })).toBe(false);
+    expect(inlineLoginOffered("managed", tty, { CI: "1" })).toBe(false);
+    expect(inlineLoginOffered("managed", { ...tty, stdinTTY: false }, {})).toBe(
+      false,
+    );
+    expect(
+      inlineLoginOffered("managed", { ...tty, stdoutTTY: false }, {}),
+    ).toBe(false);
+    expect(inlineLoginOffered("personal", tty, {})).toBe(false);
   });
 });

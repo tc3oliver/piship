@@ -92,6 +92,13 @@ export interface AccessOptions {
    * for `ADAPTER_CALL_TIMEOUT_MS` and `ADAPTER_INTERACTIVE_TIMEOUT_MS`.
    */
   readonly adapterTimeoutMs?: number;
+  /**
+   * Signs the user in where a launch finds no usable sign-in (`activate`
+   * would fail with IDENTITY_REQUIRED or IDENTITY_EXPIRED): it runs once and
+   * the identity is read again. Only an interactive launch supplies it; its
+   * own error is the launch's error. A workload identity never uses it.
+   */
+  readonly loginInline?: () => Promise<void>;
 }
 
 export interface ActivatedAccess {
