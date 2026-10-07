@@ -21,6 +21,17 @@ export interface LoginContext {
    */
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  /**
+   * Paste fallback for a machine without a browser: resolves with one line the
+   * person pasted (the full redirect URL, or the bare `code`), and never
+   * resolves or rejects on its own after `signal` aborts. `notice` names why
+   * the previous line was refused, to show before asking again. The built-in
+   * OIDC login races it against the loopback redirect.
+   */
+  readonly readRedirectUrl?: (
+    signal: AbortSignal,
+    notice?: string,
+  ) => Promise<string>;
 }
 
 export interface IdentitySession {

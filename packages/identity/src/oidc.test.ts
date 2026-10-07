@@ -325,6 +325,154 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     expect(session.subject).toBe("demo-user-1");
   });
 
+  describe("paste fallback", () => {
+    /** Act as the browser up to the redirect, without delivering it. */
+    const redirectFor = async (url: string) => {
+      const first = await fetch(url, { redirect: "manual" });
+      return new URL(first.headers.get("location") ?? "");
+    };
+    const never = (signal: AbortSignal) =>
+      new Promise<string>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    const tokenRequests = () =>
+      services.state.requests.filter(
+        (item: { path: string }) => item.path === "/idp/token",
+      ).length;
+
+    it("signs in from a pasted redirect URL and frees the port", async () => {
+      let target = new URL("http://x");
+      let redirect = "";
+      const session = await provider().login({
+        openUrl: async (url) => {
+          target = await redirectFor(url);
+          redirect = new URL(url).searchParams.get("redirect_uri") ?? "";
+        },
+        readRedirectUrl: async () => ` ${target.toString()} \n`,
+      });
+      expect(session.subject).toBe("demo-user-1");
+      await expect(fetch(redirect)).rejects.toThrow();
+    });
+
+    it("signs in from a bare code, relying on PKCE", async () => {
+      let code = "";
+      const session = await provider().login({
+        openUrl: async (url) => {
+          code = (await redirectFor(url)).searchParams.get("code") ?? "";
+        },
+        readRedirectUrl: async () => code,
+      });
+      expect(session.subject).toBe("demo-user-1");
+    });
+
+    it("refuses another state or a foreign address, keeps waiting, and never exchanges them", async () => {
+      let target = new URL("http://x");
+      const notices: (string | undefined)[] = [];
+      const lines = () => {
+        const wrong = new URL(target);
+        wrong.searchParams.set("state", "someone-elses-state");
+        const foreign = new URL(target);
+        foreign.host = "evil.example";
+        return [wrong.toString(), foreign.toString(), "two words", ""];
+      };
+      let index = 0;
+      const session = await provider().login({
+        openUrl: async (url) => {
+          target = await redirectFor(url);
+          // The browser still reaches the loopback listener in the end.
+          setTimeout(() => void fetch(target), 150);
+        },
+        readRedirectUrl: (signal, notice) => {
+          notices.push(notice);
+          const line = lines()[index++];
+          return line === undefined ? never(signal) : Promise.resolve(line);
+        },
+        timeoutMs: 10_000,
+      });
+      expect(session.subject).toBe("demo-user-1");
+      expect(tokenRequests()).toBe(1);
+      expect(notices[0]).toBeUndefined();
+      expect(notices[1]).toContain("state");
+      expect(notices[2]).toContain("not this sign-in's redirect");
+      const shown = notices.join("\n");
+      expect(shown).not.toContain("evil.example");
+      expect(shown).not.toContain(target.searchParams.get("code") ?? "missing");
+    });
+
+    it("maps an error in a pasted URL as the loopback callback does, without echoing it", async () => {
+      let state = "";
+      let redirect = "";
+      const error = await provider()
+        .login({
+          openUrl: (url) => {
+            state = new URL(url).searchParams.get("state") ?? "";
+            redirect = new URL(url).searchParams.get("redirect_uri") ?? "";
+          },
+          readRedirectUrl: async () => {
+            const url = new URL(redirect);
+            url.searchParams.set("error", "invalid_scope");
+            url.searchParams.set("error_description", "SECRETDESC");
+            url.searchParams.set("code", "SECRETCODE");
+            url.searchParams.set("state", state);
+            return url.toString();
+          },
+        })
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        code: "IDENTITY_INVALID",
+        message: expect.stringContaining(
+          "rejected the request (invalid_scope)",
+        ),
+      });
+      const rendered = `${String(error)}${JSON.stringify(error)}${inspect(error, { depth: 10 })}`;
+      expect(rendered).not.toContain("SECRETCODE");
+      expect(rendered).not.toContain("SECRETDESC");
+    });
+
+    it("lets the loopback callback win and aborts the reader", async () => {
+      let readerSignal: AbortSignal | undefined;
+      const session = await provider().login({
+        openUrl: approve,
+        readRedirectUrl: (signal) => {
+          readerSignal = signal;
+          return never(signal);
+        },
+      });
+      expect(session.subject).toBe("demo-user-1");
+      expect(readerSignal?.aborted).toBe(true);
+    });
+
+    it("keeps the loopback working when the reader fails", async () => {
+      const session = await provider().login({
+        openUrl: approve,
+        readRedirectUrl: () => Promise.reject(new Error("stdin closed")),
+      });
+      expect(session.subject).toBe("demo-user-1");
+    });
+
+    it("still times out and cancels with a reader waiting", async () => {
+      await expect(
+        provider().login({
+          openUrl: () => {},
+          readRedirectUrl: never,
+          timeoutMs: 50,
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("timed out"),
+      });
+      const controller = new AbortController();
+      await expect(
+        provider().login({
+          openUrl: () => controller.abort(),
+          readRedirectUrl: never,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("cancelled"),
+      });
+    });
+  });
+
   it.each([
     "unauthorized_client",
     "invalid_client",
