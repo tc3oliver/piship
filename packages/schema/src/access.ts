@@ -1,3 +1,4 @@
+import { unknownFieldMessage } from "./suggest.js";
 import {
   HTTP_TRANSPORTS,
   type HttpTransport,
@@ -176,6 +177,8 @@ export interface AccessManifest {
 }
 
 export class AccessFieldError extends Error {
+  /** Further problems found beside this one in the same pass. */
+  more: readonly AccessFieldError[] = [];
   constructor(
     readonly kind: "invalid field" | "unsafe path/name" | "conflict",
     readonly field: string,
@@ -184,6 +187,31 @@ export class AccessFieldError extends Error {
     super(message);
     this.name = "AccessFieldError";
   }
+}
+/**
+ * Fail on the unknown keys of a record, all of them in one error: the first
+ * is the error, the rest ride in `more`. Each carries a suggestion.
+ */
+export function failUnknown(
+  path: string,
+  unknown: readonly string[],
+  allowed: readonly string[],
+  secrets?: RegExp,
+): never {
+  const errors = unknown.map(
+    (key) =>
+      new AccessFieldError(
+        "invalid field",
+        `${path}.${key}`,
+        secrets?.test(key)
+          ? "Secrets are never declared in piship.yaml"
+          : unknownFieldMessage(key, allowed),
+      ),
+  );
+  const [first] = errors;
+  if (!first) throw new Error("failUnknown needs an unknown key");
+  first.more = errors.slice(1);
+  throw first;
 }
 
 type Json = Record<string, unknown>;
@@ -202,8 +230,8 @@ function record(
   allowed: readonly string[],
 ): Json {
   if (!isRecord(value)) fail(path, "Expected an object");
-  for (const key of Object.keys(value))
-    if (!allowed.includes(key)) fail(`${path}.${key}`, "Unknown field");
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) failUnknown(path, unknown, allowed);
   return value;
 }
 function plainString(value: unknown, path: string): string {
