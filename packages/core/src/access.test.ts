@@ -421,6 +421,61 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
   });
 
+  it("signs in on the spot when a launch has no sign-in and its hook is set, and only then", async () => {
+    let calls = 0;
+    const distribution: DistributionAccess = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+        await distribution.login({
+          openUrl: (url) => void services.approve(url),
+        });
+      },
+    });
+    const activated = await distribution.activate();
+    expect(calls).toBe(1);
+    expect(activated.identity?.subject).toBe("demo-user-1");
+    expect(activated.selectedModel).toBe("acme/coder");
+    // Signed in now: later launches never prompt, and a model refusal is not
+    // a missing sign-in.
+    await distribution.activate();
+    await expect(
+      distribution.activate({ requestedModel: "public/model" }),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    expect(calls).toBe(1);
+  });
+
+  it("surfaces the error of a failed or cancelled inline sign-in, and asks only once", async () => {
+    let calls = 0;
+    const cancelled = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+        throw new PiShipError("IDENTITY_REQUIRED", "Sign-in was cancelled", {
+          component: "identity",
+        });
+      },
+    });
+    await expect(cancelled.activate()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "Sign-in was cancelled",
+    });
+    expect(calls).toBe(1);
+    // A hook that returns without signing in leaves the original failure.
+    const silent = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+      },
+    });
+    await expect(silent.activate()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "You are not signed in",
+      userAction: expect.stringContaining("login"),
+    });
+    expect(calls).toBe(2);
+  });
+
   it("identifies the distribution, its version, and PiShip to the broker and the gateway", async () => {
     const distribution = DistributionAccess.open(options);
     await distribution.login({ openUrl: (url) => void services.approve(url) });

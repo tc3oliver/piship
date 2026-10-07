@@ -11,6 +11,8 @@ import {
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
+  inlineLoginOffered,
+  loginInline,
   runAuto,
   runConfig,
   runLogin,
@@ -217,6 +219,18 @@ export async function launchPiDistribution(
     mode: metadata.deployment.mode,
     out: (message) => console.log(message),
     err: (message) => console.error(message),
+    // Only the interactive launch (no subcommand) may sign in on the spot.
+    ...(args.length === 0 &&
+    inlineLoginOffered(
+      metadata.deployment.mode,
+      {
+        stdinTTY: !!process.stdin.isTTY,
+        stdoutTTY: !!process.stdout.isTTY,
+      },
+      process.env,
+    )
+      ? { loginInline: (access) => loginInline(ctx, access) }
+      : {}),
     ...(yolo ? { yolo: true } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }

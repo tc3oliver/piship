@@ -1083,6 +1083,36 @@ export class DistributionAccess {
     return this.#timedIdentity(() => this.#checkIdentity(provider, options));
   }
 
+  /**
+   * The identity a launch starts with. Where the launch may prompt
+   * (`loginInline`) and the stored sign-in is missing or can no longer be
+   * used, the user signs in once on the spot and the identity is read again;
+   * the error of a failed or cancelled sign-in is the launch's error. Any
+   * other failure, and every launch without the hook, keeps the original
+   * error and its "Run <command> login".
+   */
+  async #launchIdentity(options: {
+    required: boolean;
+  }): Promise<IdentitySession | null> {
+    try {
+      return await this.currentIdentity(options);
+    } catch (error) {
+      const signIn = this.options.loginInline;
+      if (
+        !signIn ||
+        !(error instanceof PiShipError) ||
+        (error.code !== "IDENTITY_REQUIRED" &&
+          error.code !== "IDENTITY_EXPIRED") ||
+        // A workload identity signs in by itself; a failure is not one a
+        // person can fix at a prompt.
+        (await this.usesWorkloadIdentity())
+      )
+        throw error;
+      await signIn();
+      return this.currentIdentity(options);
+    }
+  }
+
   #expiring(session: IdentitySession): boolean {
     return (
       !!session.expiresAt && session.expiresAt.getTime() - this.#now() < 60_000
@@ -1666,7 +1696,7 @@ export class DistributionAccess {
     const access = this.options.access;
     let preferences = readPreferences(this.paths.preferences);
     const manager = await this.credentialManager();
-    const identity = await this.currentIdentity({
+    const identity = await this.#launchIdentity({
       required: this.#identityRequired(manager),
     });
     this.#pin(identity);
