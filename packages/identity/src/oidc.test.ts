@@ -335,6 +335,8 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       new Promise<string>((_resolve, reject) =>
         signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
+    let pasted = "";
+    let wrongLines: string[] = [];
     const tokenRequests = () =>
       services.state.requests.filter(
         (item: { path: string }) => item.path === "/idp/token",
@@ -352,6 +354,86 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       });
       expect(session.subject).toBe("demo-user-1");
       await expect(fetch(redirect)).rejects.toThrow();
+    });
+
+    const exchanged = () =>
+      new URLSearchParams(
+        services.state.requests.find(
+          (item: { path: string }) => item.path === "/idp/token",
+        ).body,
+      );
+
+    it("sends the registered redirect_uri when the pasted URL carries userinfo or a fragment", async () => {
+      for (const decorate of [
+        (u: URL) => {
+          u.username = "u";
+          u.password = "p";
+        },
+        (u: URL) => {
+          u.hash = "frag";
+        },
+      ]) {
+        services.state.requests.length = 0;
+        let redirect = "";
+        const session = await provider().login({
+          openUrl: async (url) => {
+            const target = await redirectFor(url);
+            redirect = new URL(url).searchParams.get("redirect_uri") ?? "";
+            decorate(target);
+            pasted = target.toString();
+          },
+          readRedirectUrl: async () => pasted,
+        });
+        expect(session.subject).toBe("demo-user-1");
+        expect(exchanged().get("redirect_uri")).toBe(redirect);
+      }
+    });
+
+    it("refuses a wrong path with the right state and code", async () => {
+      const notices: (string | undefined)[] = [];
+      const session = await provider().login({
+        openUrl: async (url) => {
+          const target = await redirectFor(url);
+          const other = new URL(target);
+          other.pathname = "/other";
+          wrongLines = [other.toString()];
+          setTimeout(() => void fetch(target), 150);
+        },
+        readRedirectUrl: (signal, notice) => {
+          notices.push(notice);
+          const line = wrongLines.shift();
+          return line === undefined ? never(signal) : Promise.resolve(line);
+        },
+        timeoutMs: 10_000,
+      });
+      expect(session.subject).toBe("demo-user-1");
+      expect(tokenRequests()).toBe(1);
+      expect(notices[1]).toContain("not this sign-in's redirect");
+    });
+
+    it("refuses a repeated state or code, then the loopback completes", async () => {
+      const notices: (string | undefined)[] = [];
+      const session = await provider().login({
+        openUrl: async (url) => {
+          const target = await redirectFor(url);
+          const dupState = new URL(target);
+          dupState.searchParams.append("state", "x");
+          const dupCode = new URL(target);
+          dupCode.searchParams.append("code", "x");
+          wrongLines = [dupState.toString(), dupCode.toString()];
+          setTimeout(() => void fetch(target), 150);
+        },
+        readRedirectUrl: (signal, notice) => {
+          notices.push(notice);
+          const line = wrongLines.shift();
+          return line === undefined ? never(signal) : Promise.resolve(line);
+        },
+        timeoutMs: 10_000,
+      });
+      expect(session.subject).toBe("demo-user-1");
+      expect(tokenRequests()).toBe(1);
+      expect(notices[1]).toContain("repeats");
+      expect(notices[2]).toContain("repeats");
     });
 
     it("signs in from a bare code, relying on PKCE", async () => {

@@ -256,10 +256,16 @@ export function pastedCallback(
   }
   if (url.origin !== redirect.origin || url.pathname !== redirect.pathname)
     return `That address is not this sign-in's redirect (${redirect.origin}${redirect.pathname}).`;
+  if (
+    url.searchParams.getAll("state").length > 1 ||
+    url.searchParams.getAll("code").length > 1
+  )
+    return "That address repeats a parameter (state or code); paste the address exactly as the browser shows it.";
   if (url.searchParams.get("state") !== state)
     return "That address does not belong to the sign-in in progress (its state differs). Paste the address from the browser tab of this login.";
-  url.hash = "";
-  return url;
+  // Rebuilt from the expected redirect: no pasted userinfo or fragment survives.
+  redirect.search = url.search;
+  return redirect;
 }
 
 /** Ask for pasted lines until one is acceptable; a failing reader ends the wait. */
