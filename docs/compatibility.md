@@ -74,7 +74,7 @@ This section is the stable contract from v0.11.0. The versions of PiShip's own s
 ### Exact pin policy
 
 - PiShip runs exactly one Pi version at a time. `@piship/pi` depends on `@earendil-works/pi-coding-agent` at that exact version, never a range and never `latest`, and imports only its public package entrypoint. The seven sibling packages (`chord`, `pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-mcp`, `pi-telemetry`, and `pi-tui`) are held at the same exact version by the root `package.json` `overrides`, and `PI_SIBLING_PINS` in `@piship/pi` is the one list the compatibility suite checks them against. The committed `package-lock.json` fixes every transitive package.
-- A manifest names its Pi in `runtime.pi`, as an exact version. `validate`, `lock`, and `build` refuse one that is not the pinned version (`Pi <version> is not available in this PiShip build`). The lock and `release.json` record it, and `update` refuses a release that records its Pi as unsupported.
+- A manifest may name its Pi in `runtime.pi`, as an exact version, or leave the field out to use the pinned one. `validate`, `lock`, and `build` refuse a stated version that is not the pinned version (`Pi <version> is not available in this PiShip build`), and the message says to remove the line or set the pin. The lock and `release.json` record it, and `update` refuses a release that records its Pi as unsupported.
 - Only `packages/pi` may import or depend on `@earendil-works/pi-*`. No PiShip code imports a Pi internal or private path, and no part of PiShip patches, forks, or vendors Pi.
 - A release keeps running on the Pi it was built with. A newer PiShip does not move an installed release to another Pi: a new Pi version arrives with a new release, installed by `update`.
 
@@ -99,7 +99,7 @@ A Pi upgrade is its own change, with its own section on this page, and follows t
 4. Run `npm run test:compatibility` and the unit tier. The compatibility suite asserts each seam individually, so a renamed export or a changed behavior fails there first. A failure is fixed in `packages/pi` with a regression test, or upstream; the pin does not move past a failing seam.
 5. Write the "Upgrade to Pi X" section: matrix, packaging and sibling pin, lock and dependencies, install scripts, API diff, and each behavior change with what a distribution owner or user must do about it.
 6. Run Release qualification on the exact release commit. No release states a Pi version as qualified before that run has passed, and the [status page](status.md) records it.
-7. Distribution owners then set `runtime.pi` to the new pin, add the new version to the `pi` list of each `certified` resource they reviewed, run `piship validate`, `piship lock`, and `piship diff` against the previous lock, and rebuild ([agent setup](agent-setup.md#9-upgrade-an-existing-distribution)).
+7. Distribution owners then remove `runtime.pi` from the manifest (or set it to the new pin, if it states one), add the new version to the `pi` list of each `certified` resource they reviewed, run `piship validate`, `piship lock`, and `piship diff` against the previous lock, and rebuild ([agent setup](agent-setup.md#9-upgrade-an-existing-distribution)).
 
 ### Upstream seams
 

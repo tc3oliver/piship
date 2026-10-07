@@ -6,7 +6,7 @@ The production lifecycle for `piship/v1alpha4` and later distributions (added in
 
 The flow for a distribution owner:
 
-1. Migrate the manifest to `piship/v1alpha6` (`piship release` also takes `piship/v1alpha5`), add the update trust bootstrap (root and channel keys), and lock ([manifest](../manifest.md#update-trust-bootstrap-v1alpha5)).
+1. Migrate the manifest to `piship/v1` (`piship release` also takes `piship/v1alpha6` and `piship/v1alpha5`), add the update trust bootstrap (root and channel keys), and lock ([manifest](../manifest.md#update-trust-bootstrap-v1alpha5)).
 2. Build a release on each target with `piship release`.
 3. Verify it with `piship verify-release` and, in CI, check reproducibility and build provenance.
 4. Add the archives to a channel with `piship sign-channel` and serve the channel directory over HTTPS, or over plain HTTP from an internal host when the manifest sets `updates.transport: http-allowed` ([channel hosting](trust-root.md#channel-hosting)).
@@ -33,12 +33,12 @@ node packages/cli/dist/bin.js trust-root next ./channel --manifest ./acmecode/pi
 
 ## Building a release
 
-`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1alpha5` or `piship/v1alpha6` manifest, a current `piship.lock` (and `piship.lock.d/` when it declares Pi packages), and package-registry access for the dependency scan and for vendoring Pi packages. Static gates run first, before anything is assembled; each failure names its gate:
+`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1`, `piship/v1alpha6`, or `piship/v1alpha5` manifest, a current `piship.lock` (and `piship.lock.d/` when it declares Pi packages), and package-registry access for the dependency scan and for vendoring Pi packages. Static gates run first, before anything is assembled; each failure names its gate:
 
 | Gate | Stops the build when |
 | --- | --- |
 | `lock` | `piship.lock` is missing, stale, or does not match the manifest and resources (`LOCK_INVALID`) |
-| `schema` | The manifest is not `piship/v1alpha5` or `piship/v1alpha6` |
+| `schema` | The manifest is not `piship/v1`, `piship/v1alpha6`, or `piship/v1alpha5` |
 | `trust` | `updates.source` is set without `updates.trust.bootstrap`, or a managed distribution's root and channel roles share a key (as a migrated v1alpha4 key set does) |
 | `target` | This machine's `<platform>-<arch>` is not in `release.targets`, has no installed lifecycle evidence in this PiShip version (only `linux-x64`, `darwin-arm64`, and `win32-x64` do), or differs from the requested target |
 | `pi` | The pinned Pi version is not in this PiShip build's compatibility matrix |

@@ -93,7 +93,8 @@ function locateOne(
     : found.exact
       ? (found.value ?? found.key)
       : (found.key ?? found.value);
-  const offset = node?.range?.[0];
+  // A section missing from the top level has no node of its own: the start of the document.
+  const offset = (node ?? document.contents)?.range?.[0];
   if (offset === undefined) return error;
   const { line, col } = lineCounter.linePos(offset);
   const position: SourcePosition = { line, column: col };

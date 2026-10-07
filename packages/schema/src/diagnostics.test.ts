@@ -114,6 +114,12 @@ extra: true
     expect(missing.message).toContain("app.command (line 2, column 1)");
   });
 
+  it("shows a section missing from the top level at the start of the file", () => {
+    const error = failure(
+      manifest(valid.replace("piship/v1alpha1", "piship/v1alpha4")),
+    );
+    expect(error.message).toContain("updates (line 1, column 1)");
+  });
   it("reports every YAML syntax error with its position", () => {
     const error = failure(manifest("app: [\nschema: x\n  bad: : :\n"));
     expect(error.kind).toBe("YAML parse failure");

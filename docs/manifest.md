@@ -23,7 +23,7 @@ Seven schemas are accepted. `piship/v1` is the stable contract ([stability](#sta
 
 ## Common fields
 
-Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `runtime.pi`, and `deployment.mode`. `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (from v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
+Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, and `deployment.mode`. `runtime.pi` is optional: left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest; a manifest that states it must state exactly that pin (`validate` says to remove the line or set the pin). `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (from v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
 
 ## Access fields (v1alpha2 and later)
 
@@ -629,15 +629,16 @@ The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribu
 
 ## Runtime references
 
-`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url`, `audit.sinks[].url`, `sandbox.endpoint`, and `sandbox.router`, and from v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
+`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url`, `audit.sinks[].url`, `sandbox.endpoint`, and `sandbox.router`, and from v1alpha4 `updates.source`. Each name must be listed in `variables`, and use uppercase letters, digits, and underscores. A variable that nothing references is a `validate` warning, not an error. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
 
 The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts (or, for an endpoint with [`httpTransport: http-allowed`](#plain-http-to-internal-endpoints-v1alpha6), a private or internal host). `updates.source` is resolved only when `update` runs, not at launch; its resolved value must pass the same URL checks or be an absolute local directory (`--from` also accepts a relative directory). `piship validate` lists the variables launch needs separately from those only `update` reads, and notes which are unset in the current shell. The branded command reads only its own process environment, so a variable set in a shell profile does not reach an IDE or desktop launch; a plain `https` URL needs no variable ([company setup](enterprise-integration.md#plain-urls-or-runtime-variables)).
 
 ## Commands
 
 ```bash
-node packages/cli/dist/bin.js init ./my-agent --personal  # personal v1alpha6 (identity none, pi-native)
-node packages/cli/dist/bin.js init ./my-agent --managed   # managed v1alpha6 template
+node packages/cli/dist/bin.js init ./my-agent --personal  # personal piship/v1 (identity none, pi-native)
+node packages/cli/dist/bin.js init ./my-agent --managed   # managed piship/v1 template
+node packages/cli/dist/bin.js init ./my_agent --id my-agent  # the directory name is not a valid id
 node packages/cli/dist/bin.js validate ./my-agent/piship.yaml
 node packages/cli/dist/bin.js migrate ./my-agent/piship.yaml [--write | --check]
 node packages/cli/dist/bin.js lock ./my-agent/piship.yaml
