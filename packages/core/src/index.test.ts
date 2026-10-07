@@ -257,8 +257,16 @@ describe("init", () => {
           { kind: "instructions", class: "user" },
         ]);
       }
-      lockManifest(path);
-      const lock = requireCurrentLock(path);
+      // Locking the bundled search tools reads PiShip's download cache, which
+      // a fresh machine does not have, so the lock is checked on the same
+      // template without them.
+      const lockable = managed
+        ? path
+        : initDistribution(join(root, "personal-offline-agent"), {
+            bundleSearchTools: false,
+          });
+      lockManifest(lockable);
+      const lock = requireCurrentLock(lockable);
       expect(lock.schema).toBe("piship-lock/v1");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
       expect(lock.updates?.trust).toEqual({});
