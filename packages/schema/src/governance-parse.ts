@@ -46,14 +46,6 @@ export const GOVERNANCE_KEYS = [
 /** Top-level manifest sections added by piship/v1alpha6 to governance. */
 export const V1ALPHA6_GOVERNANCE_KEYS = ["packageTrust"] as const;
 
-/** Governance fields that accept `${NAME}` runtime references. */
-export const GOVERNANCE_RUNTIME_REFERENCE_FIELDS = [
-  "mcp.servers.<id>.url",
-  "audit.sinks[<index>].url",
-  "sandbox.endpoint",
-  "sandbox.router",
-] as const;
-
 /**
  * A capability provider that names a package must name a declared one of the
  * same trust class, and no two capabilities may share a package: its

@@ -1,10 +1,7 @@
 /** The only Pi package integration boundary. All imports use the public package entrypoint. */
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import {
-  type createAgentSession,
-  VERSION,
-} from "@earendil-works/pi-coding-agent";
+import { VERSION } from "@earendil-works/pi-coding-agent";
 import { PiShipError, startupMark, startupNote } from "@piship/contracts";
 import {
   applyAgentFiles,
@@ -52,7 +49,6 @@ export {
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 
 export const PINNED_PI_VERSION = "1.0.3" as const;
-export type PiVersion = typeof PINNED_PI_VERSION;
 /**
  * Pi's sibling packages at the exact versions reviewed with the pinned Pi.
  * Pi 1.0.1+ ships no npm shrinkwrap and declares them with `^`, so the root
@@ -68,7 +64,6 @@ export const PI_SIBLING_PINS: Readonly<Record<string, string>> = {
   "@earendil-works/pi-telemetry": "1.0.3",
   "@earendil-works/pi-tui": "1.0.3",
 };
-export type PiSessionFactory = typeof createAgentSession;
 export interface LaunchOptions {
   readonly distributionDir: string;
   readonly metadata: DistributionLock;

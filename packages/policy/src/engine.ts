@@ -111,15 +111,6 @@ export function isPathAction(action: string): boolean {
 
 // ------------------------------------------------------------ rule parsing
 
-/** Where a rule list came from; team-project sources are narrowing only. */
-export type RuleSource =
-  | "enforced"
-  | "defaults"
-  | "team"
-  | "project"
-  | "user"
-  | (string & {});
-
 export interface PolicyDiagnostic {
   readonly level: "warning" | "error";
   readonly source: string;

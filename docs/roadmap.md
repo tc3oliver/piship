@@ -43,7 +43,7 @@ v0.9 is the last feature milestone before the stable contracts of v0.11. It gove
 - **Migration.** A migration registry with a fixture per step and `piship migrate --check`, which v0.11 reuses for `v1alpha6` to `v1`; v0.8.1 state launches on v0.9 and a rollback to v0.8.1 still reads it.
 - **Upstream requests.** Each Pi gap v0.9 works around is raised upstream: a model ID on `before_provider_request`, a tool-set change event, tool-search discover and activate events, a way to disable or intercept `/share` and `/export`, a capability discovery API, and package installation without lifecycle scripts.
 
-After v0.9, nothing new is designed: [v0.11](#v011--runtime-footprint-windows-performance-stable-v1-contracts-and-production-readiness) freezes `piship/v1` and `piship-lock/v1` and adds the compatibility and support contracts, production evidence, a security review, and the release documentation.
+After v0.9, nothing new is designed: [v0.11](#v011--runtime-footprint-windows-performance-stable-v1-contracts-and-production-readiness-done) freezes `piship/v1` and `piship-lock/v1` and adds the compatibility and support contracts, production evidence, a security review, and the release documentation.
 
 ## v0.8.0 — pre-production trust & validation hardening (implemented)
 

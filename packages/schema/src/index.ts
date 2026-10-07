@@ -73,9 +73,6 @@ export interface ValidationDiagnostic {
 export interface ManifestHeader {
   readonly schema: PishipSchemaVersion;
 }
-export interface LockfileHeader {
-  readonly schema: string;
-}
 export interface Manifest {
   readonly schema: PishipSchemaVersion;
   readonly app: {
