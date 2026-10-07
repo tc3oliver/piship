@@ -21,6 +21,7 @@ import {
   verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
+import { readStateMarker, STATE_MARKER_SCHEMA } from "../migration.js";
 import { verifyRelease } from "../release/index.js";
 import { openInstallStore } from "../store/policy.js";
 import { verifyWrittenPayload } from "../payload.js";
@@ -51,11 +52,18 @@ import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree } from "./copy.js";
 import { renameWithRetry } from "./files.js";
 import { launcherSource, ownsCommandShim, writeShim } from "./launcher.js";
+import { uninstallDistribution } from "./uninstall.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
 function installMarker(apps: string): string {
   return join(apps, ".initial-install.json");
+}
+
+/** Whether `state` carries the marker an install of distribution `id` left. */
+function ownStateMarker(state: string, id: string): boolean {
+  const marker = readStateMarker(state);
+  return marker?.schema === STATE_MARKER_SCHEMA && marker.distribution === id;
 }
 
 /** A receipt owns a command even when a crash preceded writing its shim. */
@@ -157,6 +165,13 @@ export interface InstallChecks {
    * (`channelTrustFromLock`); the lock may pin others.
    */
   readonly expectedKeys?: readonly string[];
+  /**
+   * Replace an existing installation of the same distribution: it is
+   * uninstalled first (state is kept, and a live session refuses it), then
+   * this artifact is installed. Without it an existing installation is a
+   * collision.
+   */
+  readonly replace?: boolean;
 }
 
 function invalidCheck(message: string, userAction: string): PiShipError {
@@ -276,6 +291,11 @@ export async function installDistribution(
     const receipts = dirname(receiptPath(id));
     mkdirSync(receipts, { recursive: true });
     mkdirSync(dirname(commandPath), { recursive: true });
+    // The same locks an uninstall takes are taken by it, so it runs before
+    // this install holds them. What it removes is the receipt, shim, and
+    // releases; the state stays and is adopted below.
+    if (checks.replace && existsSync(receiptPath(id)))
+      uninstallDistribution(id, { removeEditedShim: false });
     const commandHold = acquireLifecycleLock(
       `${commandPath}.piship.lock`,
       () =>
@@ -354,7 +374,7 @@ export async function installDistribution(
           } catch {}
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}; ${active} is already installed. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; to start over, run piship uninstall ${id} (state is kept) and install again with --use-existing-state. ${command} update --from <signed update source> only upgrades to a newer version`
+              ? `Install collision for ${id}/${command}; ${active} is already installed. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; to replace it with this artifact in one step, run the install again with --replace (state is kept); or run piship uninstall ${id} and install again. ${command} update --from <signed update source> only upgrades to a newer version`
               : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
         }
@@ -366,14 +386,18 @@ export async function installDistribution(
               `Install collision for ${id}/${command}: ${path} exists but no PiShip installation of ${id} is recorded; move it aside if it is not in use, then install again`,
             );
         // State that `piship test` or `dev` created for this distribution
-        // before its first install is adopted; any other state is not.
+        // before its first install is adopted, and so is the state of an
+        // earlier install of this very distribution (its state marker names
+        // the id: an uninstall keeps it, and installing again picks it up).
+        // State with no such marker, or another distribution's, is not.
         if (
           !useExistingState &&
           existsSync(runtimeStateDirectory({ value: id })) &&
-          !isTestCreatedState({ value: id })
+          !isTestCreatedState({ value: id }) &&
+          !ownStateMarker(runtimeStateDirectory({ value: id }), id)
         )
           throw new Error(
-            `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
+            `State already exists for ${id} but is not marked as this distribution's own; pass --use-existing-state to explicitly reuse it`,
           );
         // The app directory appears with its marker in one rename, so an
         // interruption never leaves an unmarked apps/<id> that the next

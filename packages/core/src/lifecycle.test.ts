@@ -889,7 +889,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
     const collision = await rejection(installDistribution(a.archive));
     expect(collision.message).toBe(
-      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to start over, run piship uninstall acmepi (state is kept) and install again with --use-existing-state. acmepi update --from <signed update source> only upgrades to a newer version",
+      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to replace it with this artifact in one step, run the install again with --replace (state is kept); or run piship uninstall acmepi and install again. acmepi update --from <signed update source> only upgrades to a newer version",
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -919,6 +919,84 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await expect(installDistribution(a.archive)).rejects.toThrow(
       /State already exists for acmepi/,
     );
+  });
+
+  it("adopts the state of an earlier install of this distribution without --use-existing-state, and no other", async () => {
+    const a = await release("1.0.0");
+    await installDistribution(a.archive);
+    const marker = (distribution: string) =>
+      write(
+        join(stateDir(), "state.json"),
+        JSON.stringify({
+          schema: "piship-state/v1",
+          distribution,
+          version: "1.0.0",
+          pi: "1.0.3",
+          piship: PISHIP_VERSION,
+        }),
+      );
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    marker(ID);
+    uninstallDistribution(ID);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    uninstallDistribution(ID);
+    // Another distribution's marker, no marker, and an unreadable one are
+    // not this distribution's own state.
+    marker("other");
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi but is not marked as this distribution's own; pass --use-existing-state/,
+    );
+    rmSync(join(stateDir(), "state.json"));
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists/,
+    );
+    write(join(stateDir(), "state.json"), "{");
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists/,
+    );
+    expect(apps()).toEqual([]);
+  });
+
+  it("replaces an existing installation when asked to, keeping its state, and says so in the collision", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    const collision = await rejection(installDistribution(b.archive));
+    expect(collision.message).toContain("run the install again with --replace");
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    const replaced = await installDistribution(b.archive, true, {
+      replace: true,
+    });
+    expect(replaced.active).toBe("1.1.0");
+    expect(readInstallReceipt(ID).releases.map((item) => item.version)).toEqual(
+      ["1.1.0"],
+    );
+    expect(apps()).toEqual(["1.1.0", "launch.mjs"]);
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    // Nothing to replace: it is a plain install.
+    uninstallDistribution(ID);
+    expect(
+      (await installDistribution(a.archive, true, { replace: true })).active,
+    ).toBe("1.0.0");
+  });
+
+  it("refuses to replace an installation a running session still uses", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      await expect(
+        installDistribution(b.archive, true, { replace: true }),
+      ).rejects.toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
   it("still refuses state that existed before a test launch", async () => {
