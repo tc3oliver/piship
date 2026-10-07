@@ -318,7 +318,7 @@ export async function readOptionalSourceFile(
  * is treated as a URL and refused rather than resolved against the current
  * directory of drive C; write `C:\foo` or `C:/foo` instead.
  */
-function isUrlSource(source: string): boolean {
+export function isUrlSource(source: string): boolean {
   return (
     /^[a-z][a-z0-9+.-]*:/i.test(source) && !/^[a-z]:([\\/]|$)/i.test(source)
   );

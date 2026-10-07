@@ -2412,6 +2412,134 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(existsSync(join(stateDir(), "secrets"))).toBe(true);
   });
 
+  /** An https update source served from `dir`, recording each request path. */
+  function overHttps(dir: string, requested: string[]): UpdateOptions {
+    const fetcher = (async (input: URL | string) => {
+      const url = new URL(String(input));
+      requested.push(url.pathname);
+      const file = join(dir, url.pathname.split("/").pop() as string);
+      return existsSync(file)
+        ? new Response(readFileSync(file))
+        : new Response("", { status: 404 });
+    }) as typeof fetch;
+    return {
+      runCheck: fakeRun,
+      fetcher,
+      env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+    };
+  }
+  const archives = (requested: string[]) =>
+    requested.filter((path) => path.endsWith(".tar.gz"));
+
+  it("answers update --check over the network from the signed entry, without downloading the archive", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const requested: string[] = [];
+    const result = await updateDistribution(ID, {
+      ...overHttps(channelDir, requested),
+      check: true,
+    });
+    expect(result).toMatchObject({
+      status: "available",
+      from: "1.0.0",
+      to: "1.1.0",
+    });
+    expect(result.migration).toBeUndefined();
+    expect(result.notices.join("\n")).toMatch(
+      /migration check runs when you update/,
+    );
+    expect(archives(requested)).toEqual([]);
+    expect(readInstallReceipt(ID).lastCheck?.result).toBe("available 1.1.0");
+    expect(readdirSync(appsDir()).sort()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("updates to a retained release again without downloading it", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    // A check is answered from the retained release, migration preview included.
+    const check = await updateDistribution(ID, { ...options, check: true });
+    expect(check).toMatchObject({ status: "available", to: "1.1.0" });
+    expect(check.migration).toBeDefined();
+    const result = await updateDistribution(ID, options);
+    expect(result).toMatchObject({ status: "updated", to: "1.1.0" });
+    expect(archives(requested)).toEqual([]);
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.1.0",
+      previous: "1.0.0",
+    });
+  });
+
+  it("downloads a retained release again when its files no longer match the signed entry", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    rmSync(join(appsDir(), "1.1.0", "piship.lock"));
+    const requested: string[] = [];
+    const result = await updateDistribution(
+      ID,
+      overHttps(channelDir, requested),
+    );
+    expect(result.status).toBe("updated");
+    expect(archives(requested)).toHaveLength(1);
+    expect(result.notices.join("\n")).toMatch(
+      /retained 1.1.0 on disk failed verification/,
+    );
+    expect(existsSync(join(appsDir(), "1.1.0", "piship.lock"))).toBe(true);
+  });
+
+  it("keeps a verified download when the update stops after it, and uses it on the next attempt", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    // A candidate an earlier update left, which a running session holds.
+    strandCandidate("1.1.0");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    try {
+      await expect(updateDistribution(ID, options)).rejects.toMatchObject({
+        retryable: true,
+      });
+    } finally {
+      releaseLease();
+    }
+    expect(archives(requested)).toHaveLength(1);
+    expect(readdirSync(join(appsDir(), ".downloads"))).toHaveLength(1);
+    const retried = await updateDistribution(ID, options);
+    expect(retried.status).toBe("updated");
+    // The kept archive was used, and removed once the update committed.
+    expect(archives(requested)).toHaveLength(1);
+    expect(existsSync(join(appsDir(), ".downloads"))).toBe(false);
+  });
+
+  it("does not trust a kept download whose bytes are not the signed archive", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    strandCandidate("1.1.0");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    try {
+      await updateDistribution(ID, options).catch(() => {});
+    } finally {
+      releaseLease();
+    }
+    const kept = join(
+      appsDir(),
+      ".downloads",
+      `acmepi-1.1.0-${currentTarget()}.tar.gz`,
+    );
+    const bytes = readFileSync(kept);
+    bytes[bytes.length - 1] = (bytes[bytes.length - 1] as number) ^ 0xff;
+    writeFileSync(kept, bytes);
+    expect((await updateDistribution(ID, options)).status).toBe("updated");
+    expect(archives(requested)).toHaveLength(2);
+  });
+
   it("fetches through the declared https source", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive);
