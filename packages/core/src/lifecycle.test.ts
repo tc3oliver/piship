@@ -60,7 +60,8 @@ import {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { acquireLock } from "./install/receipt.js";
+import { acquireLock, activeLock } from "./install/receipt.js";
+import { runUninstall } from "./branded/uninstall.js";
 import { readTrustState, trustStatePath } from "./install/trust-state.js";
 import { readStateMarker } from "./migration.js";
 import {
@@ -484,11 +485,17 @@ function containing(needle: string): string[] {
 
 async function rejection(
   promise: Promise<unknown>,
-): Promise<Error & { code?: string; retryable?: boolean }> {
+): Promise<
+  Error & { code?: string; retryable?: boolean; userAction?: string }
+> {
   try {
     await promise;
   } catch (error) {
-    return error as Error & { code?: string; retryable?: boolean };
+    return error as Error & {
+      code?: string;
+      retryable?: boolean;
+      userAction?: string;
+    };
   }
   throw new Error("expected a rejection");
 }
@@ -4049,6 +4056,90 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(memory.refs()).toEqual([]);
     expect(existsSync(receipt.commandPath)).toBe(false);
     expect(existsSync(state)).toBe(false);
+  });
+
+  describe("the branded uninstall command", () => {
+    async function installed() {
+      const receipt = await installDistribution(
+        (await release("1.0.0")).archive,
+      );
+      const out: string[] = [];
+      const err: string[] = [];
+      const ctx = {
+        metadata: activeLock(readInstallReceipt(ID)),
+        distributionDir: receipt.payload,
+        stateDir: stateDir(),
+        mode: "personal" as const,
+        out: (message: string) => out.push(message),
+        err: (message: string) => err.push(message),
+      };
+      write(join(stateDir(), "sessions", "s1.jsonl"), '{"type":"message"}\n');
+      return { receipt, ctx, out, err };
+    }
+
+    it("removes the install from the running command, ignoring its own lease, and says what stays", async () => {
+      const { receipt, ctx, out } = await installed();
+      const releaseLease = holdRuntimeLease(ID, "1.0.0");
+      try {
+        await runUninstall(ctx, []);
+      } finally {
+        releaseLease();
+      }
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+      const text = out.join("\n");
+      expect(text).toContain(`kept     ${stateDir()}`);
+      expect(text).toContain("signed out: no sign-in is stored");
+      expect(text).toContain("acmepi uninstall --purge --yes");
+      expect(text).toContain(`purge ${ID} --yes`);
+    });
+
+    it("refuses a signed-in distribution until logout, deleting nothing, unless told to leave the sign-in", async () => {
+      const { receipt, ctx, out } = await installed();
+      write(
+        join(stateDir(), "credentials-metadata", "inference.json"),
+        JSON.stringify({
+          schema: "piship-credential-metadata/v1",
+          credential_ref: `piship:${ID}:inference#1`,
+        }),
+      );
+      const error = await rejection(runUninstall(ctx, []));
+      expect(error.message).toMatch(/still signed in \(a runtime credential\)/);
+      expect(error.userAction).toMatch(
+        /Run acmepi logout, then acmepi uninstall again/,
+      );
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      await runUninstall(ctx, ["--without-logout"]);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
+    });
+
+    it("deletes the data only with --purge --yes", async () => {
+      const { receipt, ctx, out } = await installed();
+      const error = await rejection(runUninstall(ctx, ["--purge"]));
+      expect(error.userAction).toContain("acmepi uninstall --purge --yes");
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      expect((await rejection(runUninstall(ctx, ["--yes"]))).message).toMatch(
+        /^Usage: acmepi uninstall/,
+      );
+      await runUninstall(ctx, ["--purge", "--yes"]);
+      expect(existsSync(stateDir())).toBe(false);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(out.join("\n")).toContain(`deleted  ${stateDir()}`);
+    });
+
+    it("prints the exact command to run from a new terminal on Windows, changing nothing", async () => {
+      const { receipt, ctx } = await installed();
+      const error = await rejection(
+        runUninstall(ctx, ["--purge", "--yes"], { platform: "win32" }),
+      );
+      expect(error.userAction).toBe(
+        `Open a new terminal and run: node "${join(ctx.distributionDir, "piship.mjs")}" uninstall ${ID} --purge --yes`,
+      );
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      expect(existsSync(stateDir())).toBe(true);
+    });
   });
 
   it("names sandbox logout when only a stored sandbox credential is signed in", async () => {

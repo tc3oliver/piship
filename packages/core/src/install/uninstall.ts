@@ -39,6 +39,12 @@ export interface UninstallOptions {
    * is never removed.
    */
   readonly removeEditedShim?: boolean;
+  /**
+   * The process running the uninstall is itself a session of this
+   * distribution (`<command> uninstall`): its own runtime lease is not
+   * another session that still uses the payload. Another process's is.
+   */
+  readonly ownSession?: boolean;
 }
 
 /**
@@ -89,7 +95,9 @@ function holdForUninstall(
       throw new Error(`Install ownership changed for ${id}; retry`);
     const gate = acquireLaunchGate(id);
     releases.push(() => gate.release());
-    const live = runtimeLeases(id, true).filter((lease) => lease.live);
+    const live = runtimeLeases(id, true).filter(
+      (lease) => lease.live && !(options.ownSession && lease.self),
+    );
     if (live.length)
       throw new Error(
         `Cannot uninstall ${id} while ${live.length} runtime session(s) still use its payload; close them and retry`,

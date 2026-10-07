@@ -50,7 +50,7 @@ export function installedHere(ctx: BrandedContext) {
   }
 }
 
-function requireInstalled(ctx: BrandedContext, command: string): void {
+export function requireInstalled(ctx: BrandedContext, command: string): void {
   if (!installedHere(ctx))
     throw new PiShipError(
       "CONFIG_INVALID",
