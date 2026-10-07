@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { type Manifest, skillFrontmatter } from "@piship/schema";
 
 /** A declared skill that Pi will not load as the author expects. */
@@ -32,7 +32,9 @@ interface Found {
  * description is skipped (a SKILL.md says so; another markdown file is not a
  * skill at all), and a name that breaks the spec loads with a warning.
  */
-function checkSkillFile(file: string, found: Found, shown: string): void {
+function checkSkillFile(file: string, found: Found, path: string): void {
+  // Warnings name the file with forward slashes on every platform.
+  const shown = sep === "/" ? path : path.split(sep).join("/");
   const isSkillFile = basename(file) === "SKILL.md";
   let text: string;
   try {

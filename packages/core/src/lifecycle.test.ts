@@ -4155,57 +4155,88 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       return { receipt, ctx, out, err };
     }
 
-    it("removes the install from the running command, ignoring its own lease, and says what stays", async () => {
-      const { receipt, ctx, out } = await installed();
-      const releaseLease = holdRuntimeLease(ID, "1.0.0");
-      try {
-        await runUninstall(ctx, []);
-      } finally {
-        releaseLease();
-      }
-      expect(existsSync(receipt.commandPath)).toBe(false);
-      expect(existsSync(appsDir())).toBe(false);
-      expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
-      const text = out.join("\n");
-      expect(text).toContain(`kept     ${stateDir()}`);
-      expect(text).toContain("signed out: no sign-in is stored");
-      expect(text).toContain("acmepi uninstall --purge --yes");
-      expect(text).toContain(`purge ${ID} --yes`);
-    });
+    it.runIf(process.platform === "win32")(
+      "cannot remove itself on Windows, changes nothing, and prints the exact command to run from a new terminal",
+      async () => {
+        const { receipt, ctx } = await installed();
+        const error = await rejection(runUninstall(ctx, []));
+        expect(error.message).toContain(
+          "Windows keeps the files of a running acmepi open",
+        );
+        expect(error.userAction).toContain("piship.mjs");
+        expect(error.userAction).toContain("uninstall acmepi");
+        expect(existsSync(receipt.commandPath)).toBe(true);
+      },
+    );
 
-    it("refuses a signed-in distribution until logout, deleting nothing, unless told to leave the sign-in", async () => {
-      const { receipt, ctx, out } = await installed();
-      write(
-        join(stateDir(), "credentials-metadata", "inference.json"),
-        JSON.stringify({
-          schema: "piship-credential-metadata/v1",
-          credential_ref: `piship:${ID}:inference#1`,
-        }),
-      );
-      const error = await rejection(runUninstall(ctx, []));
-      expect(error.message).toMatch(/still signed in \(a runtime credential\)/);
-      expect(error.userAction).toMatch(
-        /Run acmepi logout, then acmepi uninstall again/,
-      );
-      expect(existsSync(receipt.commandPath)).toBe(true);
-      await runUninstall(ctx, ["--without-logout"]);
-      expect(existsSync(receipt.commandPath)).toBe(false);
-      expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
-    });
+    // Windows keeps a running command's files open, so the command cannot
+    // remove itself there (the test below).
+    it.skipIf(process.platform === "win32")(
+      "removes the install from the running command, ignoring its own lease, and says what stays",
+      async () => {
+        const { receipt, ctx, out } = await installed();
+        const releaseLease = holdRuntimeLease(ID, "1.0.0");
+        try {
+          await runUninstall(ctx, []);
+        } finally {
+          releaseLease();
+        }
+        expect(existsSync(receipt.commandPath)).toBe(false);
+        expect(existsSync(appsDir())).toBe(false);
+        expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+        const text = out.join("\n");
+        expect(text).toContain(`kept     ${stateDir()}`);
+        expect(text).toContain("signed out: no sign-in is stored");
+        expect(text).toContain("acmepi uninstall --purge --yes");
+        expect(text).toContain(`purge ${ID} --yes`);
+      },
+    );
 
-    it("deletes the data only with --purge --yes", async () => {
-      const { receipt, ctx, out } = await installed();
-      const error = await rejection(runUninstall(ctx, ["--purge"]));
-      expect(error.userAction).toContain("acmepi uninstall --purge --yes");
-      expect(existsSync(receipt.commandPath)).toBe(true);
-      expect((await rejection(runUninstall(ctx, ["--yes"]))).message).toMatch(
-        /^Usage: acmepi uninstall/,
-      );
-      await runUninstall(ctx, ["--purge", "--yes"]);
-      expect(existsSync(stateDir())).toBe(false);
-      expect(existsSync(appsDir())).toBe(false);
-      expect(out.join("\n")).toContain(`deleted  ${stateDir()}`);
-    });
+    // Windows keeps a running command's files open, so the command cannot
+    // remove itself there (the test below).
+    it.skipIf(process.platform === "win32")(
+      "refuses a signed-in distribution until logout, deleting nothing, unless told to leave the sign-in",
+      async () => {
+        const { receipt, ctx, out } = await installed();
+        write(
+          join(stateDir(), "credentials-metadata", "inference.json"),
+          JSON.stringify({
+            schema: "piship-credential-metadata/v1",
+            credential_ref: `piship:${ID}:inference#1`,
+          }),
+        );
+        const error = await rejection(runUninstall(ctx, []));
+        expect(error.message).toMatch(
+          /still signed in \(a runtime credential\)/,
+        );
+        expect(error.userAction).toMatch(
+          /Run acmepi logout, then acmepi uninstall again/,
+        );
+        expect(existsSync(receipt.commandPath)).toBe(true);
+        await runUninstall(ctx, ["--without-logout"]);
+        expect(existsSync(receipt.commandPath)).toBe(false);
+        expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
+      },
+    );
+
+    // Windows keeps a running command's files open, so the command cannot
+    // remove itself there (the test below).
+    it.skipIf(process.platform === "win32")(
+      "deletes the data only with --purge --yes",
+      async () => {
+        const { receipt, ctx, out } = await installed();
+        const error = await rejection(runUninstall(ctx, ["--purge"]));
+        expect(error.userAction).toContain("acmepi uninstall --purge --yes");
+        expect(existsSync(receipt.commandPath)).toBe(true);
+        expect((await rejection(runUninstall(ctx, ["--yes"]))).message).toMatch(
+          /^Usage: acmepi uninstall/,
+        );
+        await runUninstall(ctx, ["--purge", "--yes"]);
+        expect(existsSync(stateDir())).toBe(false);
+        expect(existsSync(appsDir())).toBe(false);
+        expect(out.join("\n")).toContain(`deleted  ${stateDir()}`);
+      },
+    );
 
     it("prints the exact command to run from a new terminal on Windows, changing nothing", async () => {
       const { receipt, ctx } = await installed();

@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LATEST_SCHEMA, readManifest } from "@piship/schema";
 import {
@@ -440,12 +440,14 @@ describe("distribution ids", () => {
 
 describe("the command PiShip prints for its next step", () => {
   it("names the CLI script by path, quoted when it needs it", () => {
+    // The path is made absolute for the platform (a drive letter and
+    // backslashes on Windows).
+    const script = resolve("/opt/piship/packages/cli/dist/bin.js");
     expect(pishipCommand("/opt/piship/packages/cli/dist/bin.js")).toBe(
-      "node /opt/piship/packages/cli/dist/bin.js",
+      `node ${script}`,
     );
-    expect(pishipCommand("/opt/my tools/piship.mjs")).toBe(
-      'node "/opt/my tools/piship.mjs"',
-    );
+    const spaced = resolve("/opt/my tools/piship.mjs");
+    expect(pishipCommand("/opt/my tools/piship.mjs")).toBe(`node "${spaced}"`);
   });
   it("falls back to piship when the running script is not PiShip", () => {
     expect(pishipCommand("/usr/bin/vitest")).toBe("piship");

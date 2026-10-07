@@ -46,7 +46,8 @@ describe("manifestChange", () => {
   });
 });
 
-describe("SandboxFailureScanner", () => {
+// Native Windows has no sandbox adapter, so the hint is never produced there.
+describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
   it("names the read-only path and the manifest key", () => {
     const hint = hintFor(
       "npm error EROFS: read-only file system, mkdir '<root>/home/.npm/_cacache'\n",
@@ -99,59 +100,62 @@ describe("SandboxFailureScanner", () => {
   });
 });
 
-describe("governed shell command in an enforced sandbox", () => {
-  function session(exitCode: number, text: string) {
-    const p = profile();
-    return {
-      workflowMode: null,
-      currentChannel: () => undefined,
-      decide: async () => ({ outcome: "allow" }),
-      options: { lock: { deployment: { mode: "managed" } } },
-      sandbox: {
-        report: { level: "enforced" },
-        profile: p,
-        exec: async (
-          _command: string,
-          _cwd: string,
-          options: { onData: (data: Buffer) => void },
-        ) => {
-          options.onData(Buffer.from(text.replaceAll("<root>", p.root)));
-          return { exitCode };
+describe.skipIf(process.platform === "win32")(
+  "governed shell command in an enforced sandbox",
+  () => {
+    function session(exitCode: number, text: string) {
+      const p = profile();
+      return {
+        workflowMode: null,
+        currentChannel: () => undefined,
+        decide: async () => ({ outcome: "allow" }),
+        options: { lock: { deployment: { mode: "managed" } } },
+        sandbox: {
+          report: { level: "enforced" },
+          profile: p,
+          exec: async (
+            _command: string,
+            _cwd: string,
+            options: { onData: (data: Buffer) => void },
+          ) => {
+            options.onData(Buffer.from(text.replaceAll("<root>", p.root)));
+            return { exitCode };
+          },
         },
-      },
-    } as unknown as GovernanceSession;
-  }
+      } as unknown as GovernanceSession;
+    }
 
-  async function runCommand(exitCode: number, text: string) {
-    let output = "";
-    await governedBashOperations(session(exitCode, text), "bash").exec(
-      "npm install",
-      "/",
-      {
-        onData: (data) => {
-          output += data.toString();
+    async function runCommand(exitCode: number, text: string) {
+      let output = "";
+      await governedBashOperations(session(exitCode, text), "bash").exec(
+        "npm install",
+        "/",
+        {
+          onData: (data) => {
+            output += data.toString();
+          },
         },
-      },
-    );
-    return output;
-  }
+      );
+      return output;
+    }
 
-  it("appends one hint line after a failed command", async () => {
-    const output = await runCommand(
-      1,
-      "npm error EROFS: read-only file system, mkdir '<root>/home/.npm'\n",
-    );
-    expect(output).toMatch(
-      /\[PiShip sandbox: .*sandbox\.filesystem\.write\.allow/,
-    );
-    expect(output.match(/PiShip sandbox/g)).toHaveLength(1);
-  });
+    it("appends one hint line after a failed command", async () => {
+      const output = await runCommand(
+        1,
+        "npm error EROFS: read-only file system, mkdir '<root>/home/.npm'\n",
+      );
+      expect(output).toMatch(
+        /\[PiShip sandbox: .*sandbox\.filesystem\.write\.allow/,
+      );
+      expect(output.match(/PiShip sandbox/g)).toHaveLength(1);
+    });
 
-  it("adds nothing when the command succeeded", async () => {
-    const output = await runCommand(
-      0,
-      "warn: EROFS: read-only file system, mkdir '<root>/home/.npm'\n",
-    );
-    expect(output).not.toContain("PiShip sandbox");
-  });
-});
+    it("adds nothing when the command succeeded", async () => {
+      const output = await runCommand(
+        0,
+        "warn: EROFS: read-only file system, mkdir '<root>/home/.npm'\n",
+      );
+      expect(output).not.toContain("PiShip sandbox");
+    });
+  },
+);
