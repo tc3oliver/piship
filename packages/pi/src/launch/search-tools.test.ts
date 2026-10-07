@@ -135,6 +135,23 @@ describe("bundled search tools at launch", () => {
     expect(existsSync(join(agentDir, "bin", "rg"))).toBe(false);
   });
 
+  it("runs without the tools on a target the lock does not pin, instead of failing the launch", () => {
+    const { dir, lock } = payload("linux-x64");
+    const agentDir = join(temp(), "agent");
+    expect(installSearchTools(lock, dir, agentDir, "linux-arm64")).toEqual([]);
+    expect(existsSync(join(agentDir, "bin", "fd"))).toBe(false);
+    // Pi's own download is then deferred as for a distribution that bundles
+    // nothing, not left to block the start.
+    const personal = { deployment: { mode: "personal" }, ...lock } as never;
+    const env = { PATH: "" };
+    expect(
+      deferredToolDownloads(personal, agentDir, env, "linux", "linux-arm64"),
+    ).toEqual(["fd", "rg"]);
+    expect(
+      deferredToolDownloads(personal, agentDir, env, "linux", "linux-x64"),
+    ).toEqual([]);
+  });
+
   it("does nothing for a distribution without bundled tools", () => {
     const agentDir = join(temp(), "agent");
     expect(installSearchTools({}, temp(), agentDir)).toEqual([]);

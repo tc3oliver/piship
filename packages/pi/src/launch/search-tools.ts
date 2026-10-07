@@ -247,12 +247,9 @@ export function installSearchTools(
     if (!locked) continue;
     const entry = locked.targets[target];
     const name = searchToolFileName(tool, target);
-    if (!entry)
-      throw new PiShipError(
-        "LOCK_INVALID",
-        `This payload's lock has no bundled ${tool} for ${target}`,
-        { component: "payload" },
-      );
+    // The lock pins this tool for other targets only: the payload carries no
+    // executable for this one, and the launch runs without it.
+    if (!entry) continue;
     const path = join(directory, name);
     const recorded = receipt[name];
     const current = recorded && fingerprint(path, entry.binary);
@@ -346,10 +343,17 @@ export function deferredToolDownloads(
   agentDir: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  target = `${process.platform}-${process.arch}`,
 ): SearchTool[] {
+  // A lock that pins tools for other targets only bundles nothing here.
+  const pinned = SEARCH_TOOLS.filter((tool) => lock.searchTools?.[tool]);
+  const bundled =
+    !!lock.searchTools &&
+    (!pinned.length ||
+      pinned.some((tool) => lock.searchTools?.[tool]?.targets[target]));
   if (
     lock.deployment.mode !== "personal" ||
-    lock.searchTools ||
+    bundled ||
     env.PI_OFFLINE ||
     env.PISHIP_ALLOW_TOOL_DOWNLOAD === "1"
   )

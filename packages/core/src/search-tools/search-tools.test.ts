@@ -511,9 +511,17 @@ describe("bundled search tools in the payload", () => {
     expect(
       code(() => stageSearchTools(lock, temp("piship-stage-"), "linux-x64")),
     ).toBe("INTEGRITY_FAILED");
-    expect(
-      code(() => stageSearchTools(lock, temp("piship-stage-"), "darwin-arm64")),
-    ).toBe("LOCK_INVALID");
+  });
+
+  it("builds without the tools for a target the lock does not pin, and reports which", () => {
+    cacheArchives(["linux-x64", "win32-x64"]);
+    const lock = locked(project());
+    const stage = temp("piship-stage-");
+    expect(stageSearchTools(lock, stage, "darwin-arm64")).toEqual(["fd", "rg"]);
+    expect(existsSync(join(stage, "tools"))).toBe(false);
+    expect(stageSearchTools(lock, temp("piship-stage-"), "linux-x64")).toEqual(
+      [],
+    );
   });
 
   it("gates a lock whose archive is not the official upstream asset or source", () => {

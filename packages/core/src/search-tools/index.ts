@@ -499,27 +499,26 @@ export function currentSearchTools(
 /**
  * `piship build`: place each locked executable for `target` in the payload's
  * `tools/` directory, with its license files under `tools/licenses/<tool>/`.
- * The cached archive and the executable must both match the lock.
+ * The cached archive and the executable must both match the lock. A tool the
+ * lock pins for other targets only is not placed (the launch runs without it,
+ * as for a distribution that bundles none), and is returned so the build can
+ * say so.
  */
 export function stageSearchTools(
   lock: Pick<DistributionLock, "searchTools">,
   payload: string,
   target: string = currentTarget(),
   env?: NodeJS.ProcessEnv,
-): void {
+): SearchTool[] {
+  const skipped: SearchTool[] = [];
   for (const tool of SEARCH_TOOLS) {
     const locked = lock.searchTools?.[tool];
     if (!locked) continue;
     const entry = locked.targets[target];
-    if (!entry)
-      throw new PiShipError(
-        "LOCK_INVALID",
-        `piship.lock has no ${tool} ${locked.version} for ${target}`,
-        {
-          component: "build",
-          userAction: `Add ${target} to release.targets and run piship lock`,
-        },
-      );
+    if (!entry) {
+      skipped.push(tool);
+      continue;
+    }
     const asset = lockedAsset(tool, locked.version, target, entry);
     const path = cachePath(asset, env);
     const archive = existsSync(path) ? readFileSync(path) : undefined;
@@ -558,4 +557,5 @@ export function stageSearchTools(
         flag: "wx",
       });
   }
+  return skipped;
 }
