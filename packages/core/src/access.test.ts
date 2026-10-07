@@ -38,6 +38,7 @@ import {
   recordGatewayResult,
   resolveRuntimeReferences,
 } from "./access/index.js";
+import { setVariablesHint } from "./access/network.js";
 import {
   readPreferences,
   resolveEffectiveConfig,
@@ -287,6 +288,55 @@ describe("runtime references and network policy", () => {
         ACMECODE_LLM_GATEWAY_URL: "https://l.example",
       }),
     ).toThrow("unacceptable URL");
+  });
+
+  it("reports every unset variable at once with how to set them in the user's shell", () => {
+    const thrown = (env: Record<string, string>) => {
+      try {
+        resolveRuntimeReferences(access, env);
+      } catch (error) {
+        return error as PiShipError;
+      }
+      throw new Error("expected a failure");
+    };
+    const all = thrown({ SHELL: "/bin/zsh" });
+    expect(all.code).toBe("CONFIG_UNAVAILABLE");
+    for (const name of [
+      "ACMECODE_OIDC_ISSUER",
+      "ACMECODE_OIDC_CLIENT_ID",
+      "ACMECODE_CREDENTIAL_BROKER_URL",
+      "ACMECODE_CREDENTIAL_REVOKE_URL",
+      "ACMECODE_LLM_GATEWAY_URL",
+    ]) {
+      expect(all.message).toContain(name);
+      expect(all.userAction).toContain(`export ${name}=`);
+    }
+    expect(all.userAction).toContain("administrator");
+    // One name missing: the singular wording of before, still naming the field.
+    const one = thrown({
+      SHELL: "/bin/zsh",
+      ACMECODE_OIDC_ISSUER: "https://idp.corp.example/realm",
+      ACMECODE_OIDC_CLIENT_ID: "acme-cli",
+      ACMECODE_CREDENTIAL_BROKER_URL: "https://broker.corp.example/v1/x",
+      ACMECODE_CREDENTIAL_REVOKE_URL: "https://broker.corp.example/v1/r",
+      ACMECODE_LLM_GATEWAY_URL: "  ",
+    });
+    expect(one.message).toBe(
+      "Runtime variable ACMECODE_LLM_GATEWAY_URL for inference.baseUrl is not set",
+    );
+  });
+
+  it("offers PowerShell syntax where the shell is PowerShell", () => {
+    expect(setVariablesHint(["A_B", "C_D"], {}, "win32")).toBe(
+      'PowerShell (lasts for this window):\n  $env:A_B="..."\n  $env:C_D="..."',
+    );
+    expect(
+      setVariablesHint(["A_B"], { PSModulePath: "/x" }, "linux"),
+    ).toContain('$env:A_B="..."');
+    expect(
+      setVariablesHint(["A_B"], { SHELL: "/bin/bash" }, "win32"),
+    ).toContain("export A_B=");
+    expect(setVariablesHint(["A_B"], {}, "darwin")).toContain("export A_B=");
   });
 
   it("enforces publicFallback: deny as private-only in managed mode", () => {
