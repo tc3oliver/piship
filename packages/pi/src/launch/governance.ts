@@ -219,8 +219,9 @@ function selectedModelEvidence(
         stateDir: ctx.stateDir,
       });
     } catch (error) {
-      // Unreadable user preferences: launch refuses them too. The report then
-      // knows no model and says why instead of failing.
+      // Unreadable user preferences: this read leaves them in place (launch
+      // moves them aside). The report then knows no model and says why
+      // instead of failing.
       if (!(error instanceof PiShipError) || error.code !== "CONFIG_INVALID")
         throw error;
       return { id: `(unknown: ${error.message})` };

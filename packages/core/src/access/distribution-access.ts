@@ -68,7 +68,7 @@ import {
 import { incompatibleCapabilities } from "@piship/policy";
 import type { AccessManifest } from "@piship/schema";
 import { PISHIP_VERSION } from "../compatibility.js";
-import { readPreferences, resolveEffectiveConfig } from "../config.js";
+import { recoverPreferences, resolveEffectiveConfig } from "../config.js";
 import {
   type AdapterContext,
   boundedCredentialProvider,
@@ -1664,7 +1664,9 @@ export class DistributionAccess {
   ): Promise<ActivatedAccess> {
     const notices: string[] = [];
     const access = this.options.access;
-    let preferences = readPreferences(this.paths.preferences);
+    const recovered = recoverPreferences(this.paths.preferences);
+    let preferences = recovered.preferences;
+    if (recovered.notice) notices.push(recovered.notice);
     const manager = await this.credentialManager();
     const identity = await this.currentIdentity({
       required: this.#identityRequired(manager),
@@ -1694,7 +1696,7 @@ export class DistributionAccess {
       manager.storesSecrets ? bind : undefined,
     );
     if (cleared) {
-      preferences = readPreferences(this.paths.preferences);
+      preferences = recoverPreferences(this.paths.preferences).preferences;
       notices.push(
         "The model selection of a previously signed-in identity was cleared",
       );
