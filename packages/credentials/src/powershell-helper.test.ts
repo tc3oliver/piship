@@ -130,6 +130,27 @@ describe("the PowerShell helper's protocol", () => {
     });
   });
 
+  it("refuses a target the line protocol cannot carry, without starting or ending anything", async () => {
+    const { helper, spawns } = fake();
+    for (const target of [
+      "piship acme",
+      "piship:acme\n1 delete other",
+      "piship:acme\r",
+      "piship:acme\u0000x",
+      "piship:acme\tx",
+      "piship:acme\u2028x",
+    ])
+      await expect(helper.request("get", target)).rejects.toThrow(
+        /space or control character/,
+      );
+    expect(spawns).toHaveLength(0);
+    // The helper still serves an ordinary request afterwards.
+    expect(await helper.request("get", "piship:acme:x")).toMatchObject({
+      status: 44,
+    });
+    expect(spawns).toHaveLength(1);
+  });
+
   it("reports a machine PowerShell cannot serve as unavailable, once, and does not ask again", async () => {
     const { helper, spawns } = fake({
       spawn: ((command: string, args: readonly string[], spawnOptions) => {
@@ -400,6 +421,7 @@ function CredWrite($target, $text) {
 }
 function CredRead($target) {
   if ($target -like '*boom') { throw 'CredRead 5' }
+  if ($target -like '*badparts') { return 'chunks:oops-the-stored-secret' }
   if ($memory.ContainsKey($target)) { return $memory[$target] }
   return $null
 }
@@ -467,6 +489,25 @@ describe.runIf(powershell !== undefined)(
         stdout: "",
         stderr: "CredWrite 5",
       });
+      expect(await served.request("get", "piship:acme:other")).toMatchObject({
+        status: 44,
+      });
+    }, 180_000);
+
+    it("answers a stored part count it cannot read with a fixed message, never the stored text", async () => {
+      const served = helper();
+      for (const op of ["get", "delete", "put"] as const) {
+        const reply = await served.request(
+          op,
+          "piship:acme:badparts",
+          op === "put" ? "dg" : undefined,
+        );
+        expect(reply).toEqual({
+          status: 1,
+          stdout: "",
+          stderr: "stored credential has an invalid part count",
+        });
+      }
       expect(await served.request("get", "piship:acme:other")).toMatchObject({
         status: 44,
       });

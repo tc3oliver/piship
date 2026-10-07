@@ -384,3 +384,11 @@ export function searchToolStatus(
     ];
   });
 }
+
+/**
+ * The one line a launch prints when it skips the download of `tools`: what is
+ * skipped, what that turns off besides, and how to get the download back.
+ */
+export function deferredDownloadNotice(tools: readonly SearchTool[]): string {
+  return `Notice: ${tools.join(" and ")} not found on PATH and not bundled, so this start runs Pi with PI_OFFLINE=1 rather than wait for their download. That also turns off Pi's model catalog refresh and /bug, and a command started outside the sandbox inherits the variable. Install ${tools.join(" and ")}, set PISHIP_ALLOW_TOOL_DOWNLOAD=1 to let Pi download them, or bundle them with runtime.searchTools.`;
+}
