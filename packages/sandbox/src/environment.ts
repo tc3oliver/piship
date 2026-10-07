@@ -1,4 +1,5 @@
 // Environment and diagnostic hygiene for governed child processes.
+import { join } from "node:path";
 import {
   type ApprovedNetworkEnvironment,
   DEFAULT_NETWORK_POLICY,
@@ -103,6 +104,42 @@ export function withApprovedNetwork(
 }
 
 export const STDERR_TRUNCATION_MARKER = "[stderr truncated: ";
+
+/**
+ * Cache directories of the common package tools, relative to the session's
+ * `cache` directory inside the writable session temp. A contained command
+ * cannot write `~/.npm` or `~/.cache`, so without these the first
+ * `npm install` or `pip install` fails on a read-only cache. All are pure
+ * caches (content-addressed or integrity-checked), so a fresh directory only
+ * costs a download. `CARGO_HOME` and `GOMODCACHE` are left out on purpose:
+ * Cargo's home also holds configuration and registry credentials a command
+ * would silently stop seeing, and Go makes its module cache read-only, which
+ * would stop the session's temp directory from being removed.
+ */
+export const CACHE_VARIABLES: Readonly<Record<string, string>> = {
+  XDG_CACHE_HOME: "",
+  npm_config_cache: "npm",
+  PIP_CACHE_DIR: "pip",
+  GOCACHE: "go-build",
+};
+
+/**
+ * Point the package tools' caches into `tmpDir` (the session's writable temp)
+ * for each variable the environment does not already set. A value the user
+ * allowed through is respected, whatever it names.
+ */
+export function withCacheEnvironment(
+  env: Readonly<Record<string, string>>,
+  tmpDir: string,
+): Record<string, string> {
+  const set = new Set(Object.keys(env).map((name) => name.toLowerCase()));
+  const root = join(tmpDir, "cache");
+  const output: Record<string, string> = { ...env };
+  for (const [name, directory] of Object.entries(CACHE_VARIABLES))
+    if (!set.has(name.toLowerCase()))
+      output[name] = directory ? join(root, directory) : root;
+  return output;
+}
 
 /**
  * Redact and bound child stderr before it can reach logs or model context.

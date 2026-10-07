@@ -276,7 +276,7 @@ Other server fields: `credential` (`none`, the default, or `runtime`, which send
 
 Each of the three lists is taken as written. A declared `read.deny`, `write.allow`, or `environment.allow` is the complete list, so `deny: [~/.ssh]` leaves `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, and the rest of the defaults readable. This lets a distribution drop a default on purpose (a Kubernetes distribution that lets `kubectl` read `~/.kube`), and it is why [`examples/demo-company`](../examples/demo-company/piship.yaml) and the [reference distribution](../examples/enterprise-reference/piship.yaml) restate every default before adding their own. The lock records the effective lists (`governance.sandbox.filesystem` and `environment` in `piship.lock`).
 
-Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or `..` segments. `tmp` is a private per-session directory. A `custom` adapter module is locked and packaged like other adapters.
+Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or `..` segments. `tmp` is a private per-session directory; the package-manager caches (`npm_config_cache`, `XDG_CACHE_HOME`, `PIP_CACHE_DIR`, `GOCACHE`) point into it unless the environment allowlist passes your own. A contained command that fails on a read-only path, a hidden path, or a host the network mode denies ends with one line naming the path or host and the key above that decides it. A `custom` adapter module is locked and packaged like other adapters.
 
 ### Audit
 

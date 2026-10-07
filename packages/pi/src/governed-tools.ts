@@ -52,6 +52,7 @@ import {
 import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
+import { SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
 /** True when `path` is `root` or below it. */
@@ -577,13 +578,32 @@ export function governedBashOperations(
           ? lowDiskNotice(budget)
           : OUTPUT_LIMIT_NOTICE,
       );
+      // A command the sandbox contained that fails on a denied path or host
+      // gets one line saying which setting decides it, after its own output.
+      const scanner =
+        gov.sandbox.report.level === "enforced"
+          ? new SandboxFailureScanner({
+              profile: gov.sandbox.profile,
+              mode: gov.options.lock.deployment.mode,
+            })
+          : undefined;
       try {
         const result = await run(command, cwd, {
           ...options,
-          onData: output.onData,
+          onData: scanner
+            ? (data) => {
+                scanner.feed(data);
+                output.onData(data);
+              }
+            : output.onData,
           signal: output.signal,
         });
-        return output.exceeded() ? { exitCode: null } : result;
+        if (output.exceeded()) return { exitCode: null };
+        if (scanner && result.exitCode) {
+          const hint = scanner.hint();
+          if (hint) options.onData(Buffer.from(`\n${hint}\n`));
+        }
+        return result;
       } catch (error) {
         // Stopped at the limit: the notice is in the output, and no exit
         // code is reported. A caller's own abort stays an abort.
