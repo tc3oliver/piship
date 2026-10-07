@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SecretValue } from "@piship/contracts";
+import { type PiShipError, SecretValue } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type CommandRunner,
@@ -164,6 +164,9 @@ describe("the PowerShell helper's protocol", () => {
     await expect(helper.request("get", "piship:a")).rejects.toBeInstanceOf(
       HelperUnavailable,
     );
+    await expect(helper.request("get", "piship:a")).rejects.toMatchObject({
+      constrained: true,
+    });
     await expect(helper.request("get", "piship:a")).rejects.toThrow(
       /language-mode/,
     );
@@ -338,6 +341,29 @@ describe("the Windows store with a helper", () => {
     });
     expect(await store.get("piship:acmecode:inference#1")).toBeNull();
     expect(calls).toEqual(["get"]);
+  });
+
+  it("fails at once with the file store named when PowerShell is constrained, without a per-request PowerShell that must fail too", async () => {
+    let started = 0;
+    const run: CommandRunner = () => {
+      started += 1;
+      return { status: 1, stdout: "", stderr: "Add-Type: not allowed" };
+    };
+    const store = new WindowsCredentialSecretStore(run, {
+      helper: () => ({
+        request: () =>
+          Promise.reject(
+            new HelperUnavailable("PowerShell language-mode", true),
+          ),
+      }),
+    });
+    const error = (await store
+      .get("piship:acmecode:inference#1")
+      .catch((e) => e)) as PiShipError;
+    expect(error).toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    expect(error.message).toContain("constrained language mode");
+    expect(error.userAction).toContain("credential.storage.provider: file");
+    expect(started).toBe(0);
   });
 
   it("does not repeat a request whose helper failed after it was sent", async () => {

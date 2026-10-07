@@ -496,7 +496,11 @@ export function buildDistribution(
         // The executables come from the cached upstream archives, checked
         // against the lock; `downloadLockedSearchTools` fills the cache first.
         options.progress?.("Placing the bundled search tools");
-        stageSearchTools(lock, stage);
+        const skipped = stageSearchTools(lock, stage);
+        if (skipped.length)
+          options.progress?.(
+            `Notice: no bundled ${skipped.join(" or ")} for ${process.platform}-${process.arch}, so this build runs without ${skipped.length > 1 ? "them" : "it"}. List the target in release.targets and run piship lock to bundle ${skipped.length > 1 ? "them" : "it"}.`,
+          );
       }
       writeFileSync(
         join(stage, "metadata", "target.json"),

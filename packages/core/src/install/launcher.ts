@@ -8,7 +8,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { PiShipError } from "@piship/contracts";
 import {
   IMPORT_META_URL,
   LAUNCHER_BUILD_PLACEHOLDER,
@@ -358,15 +360,53 @@ const NODE_REQUIRED =
 export function commandShimSource(
   launcher: string,
   platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
 ): string {
   return platform === "win32"
-    ? `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`
+    ? `@echo off\r\nnode "${windowsShimPath(launcher, home)}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`
     : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo '${NODE_REQUIRED}' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
 }
 
 /** The Windows shim of an earlier PiShip, still on disk until reinstalled. */
 function legacyWindowsShimSource(launcher: string): string {
   return `@echo off\r\nwhere node >nul 2>nul || (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`;
+}
+
+/** The shim of an earlier PiShip that wrote the launcher path as it was. */
+function literalWindowsShimSource(launcher: string): string {
+  return `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`;
+}
+
+const isAscii = (text: string) => /^[ -~]*$/.test(text);
+
+/**
+ * The launcher path as a `.cmd` shim may spell it. cmd.exe reads the file in
+ * the console's OEM code page, but PiShip writes it as UTF-8, so a non-ASCII
+ * character (a user name such as `Zoë`) would be misread and the shim would
+ * fail after a clean install. A path under the user's profile is written as
+ * `%USERPROFILE%\...`, which cmd expands itself; any other non-ASCII path
+ * cannot be written safely and fails here, naming the way out.
+ */
+export function windowsShimPath(launcher: string, home: string): string {
+  if (isAscii(launcher)) return launcher;
+  const profile = home.replace(/[\\/]+$/, "");
+  const rest = launcher.slice(profile.length);
+  if (
+    profile &&
+    launcher.slice(0, profile.length).toLowerCase() === profile.toLowerCase() &&
+    /^[\\/]/.test(rest) &&
+    isAscii(rest)
+  )
+    return `%USERPROFILE%${rest}`;
+  throw new PiShipError(
+    "CONFIG_INVALID",
+    `The install path ${launcher} has characters that a Windows command shim cannot hold`,
+    {
+      component: "install",
+      userAction:
+        "Set PISHIP_INSTALL_HOME to a directory whose path is plain ASCII, for example C:\\piship, and install again",
+    },
+  );
 }
 
 export function writeShim(
@@ -385,11 +425,21 @@ export function ownsCommandShim(
   commandPath: string,
   launcher: string,
   platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
 ): boolean {
   if (!existsSync(commandPath)) return false;
   const text = readFileSync(commandPath, "utf8");
+  if (platform !== "win32")
+    return text === commandShimSource(launcher, platform);
+  let current: string | undefined;
+  try {
+    current = commandShimSource(launcher, platform, home);
+  } catch {
+    // A path no shim can hold: only a shim an earlier PiShip wrote can match.
+  }
   return (
-    text === commandShimSource(launcher, platform) ||
-    (platform === "win32" && text === legacyWindowsShimSource(launcher))
+    text === current ||
+    text === literalWindowsShimSource(launcher) ||
+    text === legacyWindowsShimSource(launcher)
   );
 }

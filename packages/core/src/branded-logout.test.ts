@@ -253,7 +253,7 @@ describe("branded logout", () => {
     expect(services.state.revokedCredentials).toEqual([]);
     expect(services.state.revokedTokens).toEqual([]);
     expect(err[0]).toMatch(
-      /^Warning: CONFIG_UNAVAILABLE: Runtime variable ACMECODE_OIDC_ISSUER for identity\.oidc\.issuer is not set.*; signing out locally without contacting the identity provider or credential broker$/s,
+      /^Warning: CONFIG_UNAVAILABLE: Runtime variables are not set: ACMECODE_OIDC_ISSUER \(for identity\.oidc\.issuer\).*; signing out locally without contacting the identity provider or credential broker$/s,
     );
     expect(err.slice(1)).toEqual([
       expect.stringMatching(/^Warning: revocation: not attempted: /),

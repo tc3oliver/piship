@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PiShipError, stopwatch, systemError } from "@piship/contracts";
 import { hash } from "../digest.js";
@@ -22,6 +23,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { assertFreeSpace, extractionNeed } from "./free-space.js";
 import { openInstallStore } from "../store/policy.js";
 import { verifyWrittenPayload } from "../payload.js";
 import { channelTrustFromLock } from "../lock.js";
@@ -50,7 +52,12 @@ import {
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree } from "./copy.js";
 import { renameWithRetry } from "./files.js";
-import { launcherSource, ownsCommandShim, writeShim } from "./launcher.js";
+import {
+  launcherSource,
+  ownsCommandShim,
+  windowsShimPath,
+  writeShim,
+} from "./launcher.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -215,6 +222,8 @@ export async function installDistribution(
   const lap = stopwatch();
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
+  if (isArchive)
+    assertFreeSpace(installHome(), extractionNeed(statSync(source).size));
   // Where the runtime, Pi package, and dependency files come from a shared
   // store, they are placed from it; the installed release is whole without it.
   const store = openInstallStore();
@@ -334,6 +343,9 @@ export async function installDistribution(
           throw new Error(
             "Install path contains characters unsafe for a Windows command shim",
           );
+        // A non-ASCII path the shim cannot hold fails here, before a payload
+        // is placed, naming PISHIP_INSTALL_HOME.
+        if (process.platform === "win32") windowsShimPath(launcher, homedir());
         if (
           existsSync(apps) &&
           !existsSync(receiptPath(id)) &&

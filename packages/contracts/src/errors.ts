@@ -115,11 +115,31 @@ const SYSTEM_ERRORS: Readonly<
     `Operation not permitted on ${path ?? "a path"}`,
     "Check the owner and permissions of the path and its directories",
   ],
+  ENOSPC: (path) => [
+    `The disk holding ${path ?? "this path"} is full`,
+    "Free space on that disk, or set PISHIP_STATE_HOME or PISHIP_INSTALL_HOME to a disk with room",
+  ],
+  EROFS: (path) => [
+    `${path ?? "This path"} is on a read-only file system`,
+    "Set PISHIP_STATE_HOME (and PISHIP_INSTALL_HOME for an install) to a writable directory; HOME is read-only here",
+  ],
+  ENAMETOOLONG: (path) => [
+    `The path ${path ? `${path} ` : ""}is too long for this file system`,
+    "Use a shorter directory: set PISHIP_STATE_HOME or PISHIP_INSTALL_HOME to a short path, or move the project closer to the drive root",
+  ],
+  EBUSY: (path) => [
+    `${path ?? "A path"} is in use by another program`,
+    "Close other programs that may hold it open (an editor, a virus scanner, another PiShip session), then try again",
+  ],
+  EMFILE: () => [
+    "This process has too many files open",
+    "Close other programs, or raise the open-files limit (for example ulimit -n 4096), then try again",
+  ],
 };
 
 /**
  * A PiShip error for a Node file system error (ENOENT, EISDIR, ENOTDIR,
- * EEXIST, EACCES, EPERM): it names the path, says what to do, and keeps the
+ * EEXIST, EACCES, EPERM, ENOSPC, EROFS, ENAMETOOLONG, EBUSY, EMFILE): it names the path, says what to do, and keeps the
  * system code and call as sanitized detail. `undefined` for anything else.
  */
 export function systemError(
