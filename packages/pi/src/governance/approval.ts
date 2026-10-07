@@ -28,10 +28,21 @@ export function terminalApproval(): ApprovalChannel | undefined {
       const answer = await new Promise<string | null>((done) => {
         rl.once("close", () => done(null));
         rl.once("SIGINT", () => done(null));
-        rl.question(`${detail.title}\n${detail.message}\nAllow? [y/N] `, done);
+        rl.question(
+          `${detail.title}\n${detail.message}\n${
+            detail.offerRemember
+              ? "Allow? [y] this time, [a] always for this project until its files change, [N] no, [never] no, and do not ask again: "
+              : "Allow? [y/N] "
+          }`,
+          done,
+        );
       });
       if (answer === null) return "cancelled";
-      return /^y(es)?$/i.test(answer.trim()) ? "approved" : "denied";
+      const reply = answer.trim().toLowerCase();
+      if (detail.offerRemember && /^a(lways)?$/.test(reply))
+        return "approved-always";
+      if (detail.offerRemember && reply === "never") return "denied-always";
+      return /^y(es)?$/.test(reply) ? "approved" : "denied";
     } finally {
       rl.close();
     }

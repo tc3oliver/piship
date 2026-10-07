@@ -127,6 +127,8 @@ export interface ResolvedDecision extends PolicyDecision {
     | "cancelled"
     | "unavailable"
     | "auto";
+  /** Set when the person asked to keep this answer. */
+  readonly remember?: "allow" | "deny";
 }
 
 export interface PolicyRequest {
@@ -146,8 +148,26 @@ export type PolicyEvaluator = (request: PolicyRequest) => PolicyDecision;
  */
 export type ApprovalChannel = (
   decision: PolicyDecision,
-  detail: { readonly title: string; readonly message: string },
-) => Promise<"approved" | "denied" | "cancelled">;
+  detail: ApprovalDetail,
+) => Promise<ApprovalAnswer>;
+
+/** What a prompt shows. `offerRemember` lets the person keep the answer. */
+export interface ApprovalDetail {
+  readonly title: string;
+  readonly message: string;
+  readonly offerRemember?: boolean;
+}
+
+/**
+ * `approved-always` and `denied-always` are answers the person asked to
+ * keep; a channel returns them only when `offerRemember` was set.
+ */
+export type ApprovalAnswer =
+  | "approved"
+  | "denied"
+  | "cancelled"
+  | "approved-always"
+  | "denied-always";
 
 export function resolveWithoutChannel(
   decision: PolicyDecision,
@@ -160,19 +180,34 @@ export function resolveWithoutChannel(
 export async function resolveDecision(
   decision: PolicyDecision,
   channel: ApprovalChannel | undefined,
-  detail: { readonly title: string; readonly message: string },
+  detail: ApprovalDetail,
 ): Promise<ResolvedDecision> {
   if (decision.effect !== "ask") return resolveWithoutChannel(decision);
   if (!channel) return resolveWithoutChannel(decision);
-  let answer: "approved" | "denied" | "cancelled";
+  let answer: ApprovalAnswer;
   try {
     answer = await channel(decision, detail);
   } catch {
     answer = "cancelled";
   }
+  // A kept answer is honoured only where the prompt offered it.
+  const kept = detail.offerRemember === true;
+  const approved =
+    answer === "approved" || (kept && answer === "approved-always");
+  const remember =
+    kept && answer === "approved-always"
+      ? "allow"
+      : kept && answer === "denied-always"
+        ? "deny"
+        : undefined;
   return {
     ...decision,
-    outcome: answer === "approved" ? "allow" : "deny",
-    approval: answer,
+    outcome: approved ? "allow" : "deny",
+    approval: approved
+      ? "approved"
+      : answer === "approved-always" || answer === "denied-always"
+        ? "denied"
+        : answer,
+    ...(remember ? { remember } : {}),
   };
 }
