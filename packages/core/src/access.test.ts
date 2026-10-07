@@ -445,6 +445,49 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     expect(calls).toBe(1);
   });
 
+  it("never prompts for a sign-in mid-session, and says on one line what to do", async () => {
+    let prompts = 0;
+    const distribution = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        prompts += 1;
+      },
+    });
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    await distribution.activate();
+    await distribution.requestSecret();
+    // The sign-in disappears (a logout in another process, say).
+    await distribution.logout();
+    const error = await distribution.requestSecret().then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).code).toBe("IDENTITY_REQUIRED");
+    expect((error as PiShipError).message).toBe(
+      `You are not signed in. Exit, run \`${demo.app.command} login\`, then start ${demo.app.command} again.`,
+    );
+    expect((error as PiShipError).message).not.toContain("\n");
+    expect((error as PiShipError).userAction).toBe(
+      `Run ${demo.app.command} login`,
+    );
+    expect(prompts).toBe(0);
+  });
+
+  it("leaves a failure that signing in cannot fix as it is", async () => {
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    await distribution.activate();
+    await services.close();
+    const error = await distribution.requestSecret({ force: true }).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).message).not.toContain("login");
+    expect((error as PiShipError).userAction ?? "").not.toMatch(/\blogin\b/);
+  });
+
   it("surfaces the error of a failed or cancelled inline sign-in, and asks only once", async () => {
     let calls = 0;
     const cancelled = DistributionAccess.open({

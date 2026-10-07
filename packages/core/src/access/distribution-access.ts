@@ -1940,13 +1940,54 @@ export class DistributionAccess {
     if (!options.force && this.#cachedSecretValid(manager)) return this.#secret;
     // A forced renewal is about the generation this session sent, not
     // whatever another process stored since.
-    return (
-      await this.#renewCredential(
-        manager,
-        !!options.force,
-        options.force ? this.#secretRef : undefined,
-      )
-    ).secret;
+    try {
+      return (
+        await this.#renewCredential(
+          manager,
+          !!options.force,
+          options.force ? this.#secretRef : undefined,
+        )
+      ).secret;
+    } catch (error) {
+      throw this.#midSessionSignInError(error);
+    }
+  }
+
+  /**
+   * A model request that finds the sign-in gone or unrenewable fails inside
+   * Pi's terminal UI, which owns the terminal and shows only the message, so
+   * the message names what to do on that one line. It does not prompt for a
+   * sign-in there: a prompt would write over the screen and compete with Pi
+   * for the keys. A failure that signing in cannot fix, and any retryable
+   * one, is returned unchanged.
+   */
+  #midSessionSignInError(error: unknown): unknown {
+    if (
+      !(error instanceof PiShipError) ||
+      error.retryable ||
+      !(
+        error.code === "IDENTITY_REQUIRED" ||
+        error.code === "IDENTITY_EXPIRED" ||
+        error.code === "CREDENTIAL_EXPIRED"
+      ) ||
+      // Only a failure whose fix is to sign in again. A session pinned to
+      // another user (or one signed out elsewhere) already says what to do.
+      !/\blogin\b/.test(error.userAction ?? "") ||
+      /restart the session/.test(error.message)
+    )
+      return error;
+    const command = this.options.app.command;
+    return new PiShipError(
+      error.code,
+      `${error.message}. Exit, run \`${command} login\`, then start ${command} again.`,
+      {
+        ...(error.component ? { component: error.component } : {}),
+        userAction: `Run ${command} login`,
+        ...(error.sanitizedDetail
+          ? { sanitizedDetail: error.sanitizedDetail }
+          : {}),
+      },
+    );
   }
 
   #cachedSecretValid(manager: CredentialManager): boolean {
