@@ -147,6 +147,13 @@ export interface LifecycleOptions {
   }>;
   readonly now?: () => Date;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Remove releases the installation no longer records right after a
+   * successful update or rollback (default true). Best effort and bounded;
+   * only the active release, the rollback target, and what a running session
+   * holds are never removed.
+   */
+  readonly reclaim?: boolean;
 }
 
 export function appDirectory(id: string): string {

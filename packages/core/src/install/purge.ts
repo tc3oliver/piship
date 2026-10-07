@@ -54,7 +54,7 @@ export interface PurgeOptions {
  * sandbox credential. A discarded marker is already signed out, and a file
  * that does not parse names nothing `logout` could revoke.
  */
-function signedIn(state: string): string[] {
+export function signedInClasses(state: string): string[] {
   const paths = accessStatePaths(state);
   return (
     [
@@ -88,7 +88,7 @@ export function assertSignedOut(
   logout: string,
   options: PurgeOptions,
 ): string[] {
-  const live = signedIn(state);
+  const live = signedInClasses(state);
   // A stored sandbox credential alone is cleared by `sandbox logout`, which
   // also works where sign-in is delegated to Pi and `logout` refuses.
   const step =

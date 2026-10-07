@@ -17,6 +17,7 @@ import {
 } from "@piship/schema";
 import { PI_VERSION } from "./compatibility.js";
 import { digest, hash } from "./digest.js";
+import { pishipCommand } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
 import {
   type DistributionLock,
@@ -30,7 +31,11 @@ import {
 } from "./lock-schema.js";
 import { checkDataContract } from "./data/contract.js";
 import { sessionExportStatus } from "./data/session-export.js";
-import { currentPiPackages, lockPiPackages } from "./pi-packages/lock.js";
+import {
+  currentPiPackages,
+  declaredPackages,
+  lockPiPackages,
+} from "./pi-packages/lock.js";
 import { resolveResources } from "./resources.js";
 import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
@@ -60,12 +65,18 @@ export function channelTrustFromLock(
 ): readonly UpdateTrustKey[] {
   return channelTrustKeys(lock.updates);
 }
+/**
+ * A manifest may leave `runtime.pi` out, which means the Pi this PiShip
+ * pins, so it keeps working across PiShip upgrades. One that states a
+ * version must state the pinned one.
+ */
 export function checkPiVersion(manifest: Manifest): void {
-  if (manifest.runtime.pi !== PI_VERSION)
+  const stated = manifest.runtime.pi;
+  if (stated !== undefined && stated !== PI_VERSION)
     throw new ManifestError(
       "invalid field",
       "runtime.pi",
-      `Pi ${manifest.runtime.pi} is not available in this PiShip build. Pinned runtime: ${PI_VERSION}.`,
+      `Pi ${stated} is not available in this PiShip build. Pinned runtime: ${PI_VERSION}. Remove the runtime.pi line to use the pinned Pi (it follows every PiShip upgrade), or set it to "${PI_VERSION}".`,
     );
 }
 
@@ -209,16 +220,34 @@ export function lockManifest(manifestPath: string): string {
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;
 }
+/** Whether `piship.lock` beside a manifest matches what the manifest locks to. */
+export type LockStatus = "current" | "missing" | "stale";
+export function lockStatus(manifestPath: string): LockStatus {
+  const path = join(dirname(resolve(manifestPath)), "piship.lock");
+  if (!existsSync(path)) return "missing";
+  const expected = `${JSON.stringify(resolveLock(manifestPath), null, 2)}\n`;
+  return readFileSync(path, "utf8") === expected ? "current" : "stale";
+}
+/**
+ * Whether relocking resolves new content over the network: Pi packages are
+ * resolved over a registry and the lock pins what came back, so a person
+ * decides when they are locked again. Bundled search tools are not counted:
+ * they come from the download cache when the lock beside the manifest
+ * already pins them, so an edit to a resource relocks without the network.
+ */
+export function lockNeedsNetwork(manifest: Manifest): boolean {
+  return declaredPackages(manifest).length > 0;
+}
 export function requireCurrentLock(manifestPath: string): DistributionLock {
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   const expected = `${JSON.stringify(resolveLock(manifestPath), null, 2)}\n`;
   if (!existsSync(path))
     throw new Error(
-      `Lockfile missing: ${path}. Run piship lock ${manifestPath}`,
+      `Lockfile missing: ${path}. Run ${pishipCommand()} lock ${manifestPath}`,
     );
   if (readFileSync(path, "utf8") !== expected)
     throw new Error(
-      `Lockfile is stale: ${path}. Run piship lock ${manifestPath}`,
+      `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${manifestPath}`,
     );
   return JSON.parse(expected) as DistributionLock;
 }

@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LATEST_SCHEMA, readManifest } from "@piship/schema";
 import {
@@ -16,7 +16,12 @@ import {
   checkPiVersion,
   distributionStateDirectory,
   initDistribution,
+  isDistributionId,
   lockManifest,
+  lockNeedsNetwork,
+  lockStatus,
+  pishipCommand,
+  suggestDistributionId,
   requireCurrentLock,
   resolveLock,
   runtimeStateDirectory,
@@ -70,6 +75,45 @@ describe("distribution core", () => {
     expect(() => requireCurrentLock(path)).toThrow("Lockfile missing");
     lockManifest(path);
     expect(requireCurrentLock(path).app.id).toBe("mypi");
+  });
+  it("tells a missing lock from a stale one and a current one", () => {
+    const { dir, path } = fixture();
+    expect(lockStatus(path)).toBe("missing");
+    lockManifest(path);
+    expect(lockStatus(path)).toBe("current");
+    writeFileSync(join(dir, "resources", "AGENTS.md"), "changed\n");
+    expect(lockStatus(path)).toBe("stale");
+    expect(lockNeedsNetwork(readManifest(path))).toBe(false);
+  });
+  it("resolves new content to relock only for Pi packages, not for bundled search tools", () => {
+    const { path } = fixture();
+    const manifest = readManifest(path);
+    expect(
+      lockNeedsNetwork({
+        ...manifest,
+        runtime: { ...manifest.runtime, searchTools: { mode: "bundled" } },
+      } as typeof manifest),
+    ).toBe(false);
+  });
+  it("uses the pinned Pi when runtime.pi is left out", () => {
+    const { path } = fixture();
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('runtime:\n  pi: "1.0.3"\n', ""),
+    );
+    expect(readManifest(path).runtime.pi).toBeUndefined();
+    lockManifest(path);
+    expect(requireCurrentLock(path).runtime.version).toBe("1.0.3");
+  });
+  it("refuses another Pi and says how to fix the manifest", () => {
+    const { path } = fixture();
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('"1.0.3"', '"0.9.9"'),
+    );
+    expect(() => checkPiVersion(readManifest(path))).toThrow(
+      /Pi 0\.9\.9 is not available.*Remove the runtime\.pi line.*set it to "1\.0\.3"/,
+    );
   });
   it("rejects resource roots and nested symlinks during locking", () => {
     const { dir, path } = fixture();
@@ -156,17 +200,36 @@ describe("init", () => {
       expect(manifest.governance).toBeDefined();
       expect(manifest.governance?.sandbox.required).toBe(false);
       const projectTrust = manifest.governance?.policy.projectTrust;
-      for (const origin of ["external", "unknown"] as const)
-        expect(projectTrust?.[origin].dimensions).toEqual({
-          passiveContext: "deny",
-          instructions: "deny",
-          skills: "deny",
-          agents: "deny",
-          hooks: "deny",
-          extensions: "deny",
-          mcp: "deny",
-          providers: "deny",
-        });
+      const closed = {
+        passiveContext: "deny",
+        instructions: "deny",
+        skills: "deny",
+        agents: "deny",
+        hooks: "deny",
+        extensions: "deny",
+        mcp: "deny",
+        providers: "deny",
+      };
+      // A person's own projects must work: instructions and skills load
+      // (asked for an unknown origin), code asks, and hooks, agents, and
+      // providers stay denied.
+      const own = {
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+        agents: "deny",
+        hooks: "deny",
+        extensions: "ask",
+        mcp: "ask",
+        providers: "deny",
+      };
+      expect(projectTrust?.external.dimensions).toEqual(managed ? closed : own);
+      expect(projectTrust?.unknown.dimensions).toEqual(
+        managed ? closed : { ...own, instructions: "ask", skills: "ask" },
+      );
+      expect(manifest.runtime.searchTools).toEqual(
+        managed ? undefined : { mode: "bundled" },
+      );
       expect(manifest.lifecycle?.updates).toMatchObject({
         channel: "stable",
         channels: ["stable"],
@@ -194,14 +257,59 @@ describe("init", () => {
           { kind: "instructions", class: "user" },
         ]);
       }
-      lockManifest(path);
-      const lock = requireCurrentLock(path);
+      // Locking the bundled search tools reads PiShip's download cache, which
+      // a fresh machine does not have, so the lock is checked on the same
+      // template without them.
+      const lockable = managed
+        ? path
+        : initDistribution(join(root, "personal-offline-agent"), {
+            bundleSearchTools: false,
+          });
+      lockManifest(lockable);
+      const lock = requireCurrentLock(lockable);
       expect(lock.schema).toBe("piship-lock/v1");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
       expect(lock.updates?.trust).toEqual({});
     },
     180000,
   );
+
+  it("bundles fd and rg and lists github.com by default, and leaves both out on request", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-"));
+    roots.push(root);
+    const bundled = readFileSync(
+      initDistribution(join(root, "bundled-agent")),
+      "utf8",
+    );
+    expect(bundled).toContain("runtime:\n");
+    expect(bundled).toContain("  searchTools:\n    mode: bundled\n");
+    expect(bundled).toContain(
+      "sources: [https://registry.npmjs.org, https://github.com]",
+    );
+    const path = initDistribution(join(root, "plain-agent"), {
+      bundleSearchTools: false,
+    });
+    const plain = readFileSync(path, "utf8");
+    expect(plain).not.toMatch(/^runtime:/m);
+    expect(plain).not.toContain("searchTools");
+    expect(plain).not.toContain("github.com");
+    expect(plain).toContain("sources: [https://registry.npmjs.org]");
+    const manifest = readManifest(path);
+    expect(manifest.runtime.searchTools).toBeUndefined();
+    checkPiVersion(manifest);
+    // It locks offline: nothing in it needs a download.
+    lockManifest(path);
+    expect(requireCurrentLock(path).searchTools).toBeUndefined();
+    // The managed template has no search tools either way.
+    const managed = readFileSync(
+      initDistribution(join(root, "managed-agent"), {
+        managed: true,
+        bundleSearchTools: true,
+      }),
+      "utf8",
+    );
+    expect(managed).not.toContain("searchTools");
+  });
 
   it("writes a managed MCP example that validates once uncommented", () => {
     const root = mkdtempSync(join(tmpdir(), "piship-init-"));
@@ -297,5 +405,52 @@ describe("managed init", () => {
         manifest.access?.variables.every((name) => !/TOKEN/.test(name)),
       ).toBe(true);
     }
+  });
+});
+
+describe("distribution ids", () => {
+  it.each([
+    ["my_agent", "my-agent"],
+    ["agent.v2", "agent-v2"],
+    ["My Agent!", "my-agent"],
+    ["2fast", "app-2fast"],
+    ["--x--", "x"],
+  ])("suggests %s as %s", (name, id) => {
+    expect(isDistributionId(name)).toBe(false);
+    expect(suggestDistributionId(name)).toBe(id);
+    expect(isDistributionId(id)).toBe(true);
+  });
+  it("has no suggestion when nothing usable is left", () => {
+    expect(suggestDistributionId("___")).toBeUndefined();
+  });
+  it("answers a very long run of hyphens at once", () => {
+    const started = Date.now();
+    expect(suggestDistributionId("-".repeat(200_000))).toBeUndefined();
+    expect(
+      suggestDistributionId(`${"-".repeat(200_000)}x${"-".repeat(200_000)}`),
+    ).toBe("x");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+  it("names the suggestion where a bad id is refused", () => {
+    expect(() => distributionStateDirectory({ value: "my_agent" })).toThrow(
+      "use my-agent",
+    );
+  });
+});
+
+describe("the command PiShip prints for its next step", () => {
+  it("names the CLI script by path, quoted when it needs it", () => {
+    // The path is made absolute for the platform (a drive letter and
+    // backslashes on Windows).
+    const script = resolve("/opt/piship/packages/cli/dist/bin.js");
+    expect(pishipCommand("/opt/piship/packages/cli/dist/bin.js")).toBe(
+      `node ${script}`,
+    );
+    const spaced = resolve("/opt/my tools/piship.mjs");
+    expect(pishipCommand("/opt/my tools/piship.mjs")).toBe(`node "${spaced}"`);
+  });
+  it("falls back to piship when the running script is not PiShip", () => {
+    expect(pishipCommand("/usr/bin/vitest")).toBe("piship");
+    expect(pishipCommand(undefined)).toBe("piship");
   });
 });

@@ -1,4 +1,6 @@
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -38,6 +40,7 @@ import {
   recordGatewayResult,
   resolveRuntimeReferences,
 } from "./access/index.js";
+import { setVariablesHint } from "./access/network.js";
 import {
   readPreferences,
   resolveEffectiveConfig,
@@ -254,6 +257,44 @@ describe("configuration precedence", () => {
     if (process.platform !== "win32")
       expect(statSync(path).mode & 0o777).toBe(0o600);
   });
+
+  it("sets and unsets a preference over a damaged file by moving it aside, never deleting it", () => {
+    const path = join(temp, "config", "preferences.json");
+    mkdirSync(join(temp, "config"), { recursive: true });
+    writeFileSync(path, "{not json");
+    const notices: string[] = [];
+    setPreference(path, access, undefined, "model", undefined, (notice) =>
+      notices.push(notice),
+    );
+    const aside = readdirSync(join(temp, "config")).filter((name) =>
+      name.startsWith("preferences.json.damaged-"),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(temp, "config", aside[0] as string), "utf8")).toBe(
+      "{not json",
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(join(temp, "config", aside[0] as string));
+    setPreference(path, access, undefined, "model", "acme/general");
+    expect(readPreferences(path).values.model).toBe("acme/general");
+  });
+
+  it("does not replace a damaged file it could not move aside", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const directory = join(temp, "config");
+    const path = join(directory, "preferences.json");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path, "{not json");
+    chmodSync(directory, 0o500);
+    try {
+      expect(() =>
+        setPreference(path, access, undefined, "model", "acme/general"),
+      ).toThrow("unreadable");
+      expect(readFileSync(path, "utf8")).toBe("{not json");
+    } finally {
+      chmodSync(directory, 0o700);
+    }
+  });
 });
 
 describe("runtime references and network policy", () => {
@@ -287,6 +328,55 @@ describe("runtime references and network policy", () => {
         ACMECODE_LLM_GATEWAY_URL: "https://l.example",
       }),
     ).toThrow("unacceptable URL");
+  });
+
+  it("reports every unset variable at once with how to set them in the user's shell", () => {
+    const thrown = (env: Record<string, string>) => {
+      try {
+        resolveRuntimeReferences(access, env);
+      } catch (error) {
+        return error as PiShipError;
+      }
+      throw new Error("expected a failure");
+    };
+    const all = thrown({ SHELL: "/bin/zsh" });
+    expect(all.code).toBe("CONFIG_UNAVAILABLE");
+    for (const name of [
+      "ACMECODE_OIDC_ISSUER",
+      "ACMECODE_OIDC_CLIENT_ID",
+      "ACMECODE_CREDENTIAL_BROKER_URL",
+      "ACMECODE_CREDENTIAL_REVOKE_URL",
+      "ACMECODE_LLM_GATEWAY_URL",
+    ]) {
+      expect(all.message).toContain(name);
+      expect(all.userAction).toContain(`export ${name}=`);
+    }
+    expect(all.userAction).toContain("administrator");
+    // One name missing: the singular wording of before, still naming the field.
+    const one = thrown({
+      SHELL: "/bin/zsh",
+      ACMECODE_OIDC_ISSUER: "https://idp.corp.example/realm",
+      ACMECODE_OIDC_CLIENT_ID: "acme-cli",
+      ACMECODE_CREDENTIAL_BROKER_URL: "https://broker.corp.example/v1/x",
+      ACMECODE_CREDENTIAL_REVOKE_URL: "https://broker.corp.example/v1/r",
+      ACMECODE_LLM_GATEWAY_URL: "  ",
+    });
+    expect(one.message).toBe(
+      "Runtime variable ACMECODE_LLM_GATEWAY_URL for inference.baseUrl is not set",
+    );
+  });
+
+  it("offers PowerShell syntax where the shell is PowerShell", () => {
+    expect(setVariablesHint(["A_B", "C_D"], {}, "win32")).toBe(
+      'PowerShell (lasts for this window):\n  $env:A_B="..."\n  $env:C_D="..."',
+    );
+    expect(
+      setVariablesHint(["A_B"], { PSModulePath: "/x" }, "linux"),
+    ).toContain('$env:A_B="..."');
+    expect(
+      setVariablesHint(["A_B"], { SHELL: "/bin/bash" }, "win32"),
+    ).toContain("export A_B=");
+    expect(setVariablesHint(["A_B"], {}, "darwin")).toContain("export A_B=");
   });
 
   it("enforces publicFallback: deny as private-only in managed mode", () => {
@@ -421,6 +511,104 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
   });
 
+  it("signs in on the spot when a launch has no sign-in and its hook is set, and only then", async () => {
+    let calls = 0;
+    const distribution: DistributionAccess = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+        await distribution.login({
+          openUrl: (url) => void services.approve(url),
+        });
+      },
+    });
+    const activated = await distribution.activate();
+    expect(calls).toBe(1);
+    expect(activated.identity?.subject).toBe("demo-user-1");
+    expect(activated.selectedModel).toBe("acme/coder");
+    // Signed in now: later launches never prompt, and a model refusal is not
+    // a missing sign-in.
+    await distribution.activate();
+    await expect(
+      distribution.activate({ requestedModel: "public/model" }),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    expect(calls).toBe(1);
+  });
+
+  it("never prompts for a sign-in mid-session, and says on one line what to do", async () => {
+    let prompts = 0;
+    const distribution = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        prompts += 1;
+      },
+    });
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    await distribution.activate();
+    await distribution.requestSecret();
+    // The sign-in disappears (a logout in another process, say).
+    await distribution.logout();
+    const error = await distribution.requestSecret().then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).code).toBe("IDENTITY_REQUIRED");
+    expect((error as PiShipError).message).toBe(
+      `You are not signed in. Exit, run \`${demo.app.command} login\`, then start ${demo.app.command} again.`,
+    );
+    expect((error as PiShipError).message).not.toContain("\n");
+    expect((error as PiShipError).userAction).toBe(
+      `Run ${demo.app.command} login`,
+    );
+    expect(prompts).toBe(0);
+  });
+
+  it("leaves a failure that signing in cannot fix as it is", async () => {
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    await distribution.activate();
+    await services.close();
+    const error = await distribution.requestSecret({ force: true }).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).message).not.toContain("login");
+    expect((error as PiShipError).userAction ?? "").not.toMatch(/\blogin\b/);
+  });
+
+  it("surfaces the error of a failed or cancelled inline sign-in, and asks only once", async () => {
+    let calls = 0;
+    const cancelled = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+        throw new PiShipError("IDENTITY_REQUIRED", "Sign-in was cancelled", {
+          component: "identity",
+        });
+      },
+    });
+    await expect(cancelled.activate()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "Sign-in was cancelled",
+    });
+    expect(calls).toBe(1);
+    // A hook that returns without signing in leaves the original failure.
+    const silent = DistributionAccess.open({
+      ...options,
+      loginInline: async () => {
+        calls += 1;
+      },
+    });
+    await expect(silent.activate()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "You are not signed in",
+      userAction: expect.stringContaining("login"),
+    });
+    expect(calls).toBe(2);
+  });
+
   it("identifies the distribution, its version, and PiShip to the broker and the gateway", async () => {
     const distribution = DistributionAccess.open(options);
     await distribution.login({ openUrl: (url) => void services.approve(url) });
@@ -476,9 +664,31 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     expect(rows.find((row) => row.key === "preferences")?.note).toContain(
       "unreadable",
     );
-    await expect(
-      DistributionAccess.open(options).activate(),
-    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("moves damaged preferences aside at launch, runs with the defaults, and says where they went", async () => {
+    const directory = join(temp, "state", "config");
+    const path = join(directory, "preferences.json");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path, "{not json");
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    const activated = await distribution.activate();
+    const aside = readdirSync(directory).filter((name) =>
+      name.startsWith("preferences.json.damaged-"),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(directory, aside[0] as string), "utf8")).toBe(
+      "{not json",
+    );
+    expect(existsSync(path)).toBe(false);
+    expect(
+      activated.notices.some(
+        (notice) =>
+          notice.includes("unreadable") &&
+          notice.includes(join(directory, aside[0] as string)),
+      ),
+    ).toBe(true);
   });
 
   it("fails closed when the broker or gateway is unavailable", async () => {
@@ -1270,7 +1480,7 @@ describe("capability model requirements", () => {
       });
     });
 
-    it("refuses unreadable preferences offline, as launch does", () => {
+    it("reports unreadable preferences offline without moving them", () => {
       const distribution = open([]);
       const path = accessStatePaths(distribution.options.stateDir).preferences;
       mkdirSync(join(path, ".."), { recursive: true });
@@ -1278,6 +1488,7 @@ describe("capability model requirements", () => {
       expect(() => configuredModel(distribution.options)).toThrow(
         expect.objectContaining({ code: "CONFIG_INVALID" }),
       );
+      expect(readFileSync(path, "utf8")).toBe("{");
     });
 
     it("ignores the requirements of a disabled capability", async () => {

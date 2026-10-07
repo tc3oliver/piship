@@ -73,18 +73,27 @@ export async function runDoctor(
       "CONFIG_INVALID",
       `Usage: ${command} doctor [--json]`,
     );
-  // Full payload verification and abandoned temporary maintenance are
-  // requested diagnostics, never a prerequisite for entering Pi.
+  // Full payload verification is a requested diagnostic, never a prerequisite
+  // for entering Pi. It runs first and ends the command when it fails: the
+  // rest of the report loads payload code (the policy adapter, the MCP
+  // servers), which a payload that does not match its lock must never run,
+  // and an installation found damaged is not changed first.
   verifyPayload(ctx.distributionDir);
   sweepStateTemporaries(ctx.stateDir);
   const notice = reclaimLaunchTemporaries(ctx.metadata.app.id);
   if (notice) ctx.err(notice);
-  // Release directories nothing records any more, removed within a time
-  // budget: install and update never delete them.
-  const reclaimed = describeReclaimed(
-    reclaimObsoleteVersions(ctx.metadata.app.id),
-  );
-  if (reclaimed) ctx.err(reclaimed);
+  try {
+    // Release directories nothing records any more, removed within a
+    // longer budget than the end of an update or rollback has.
+    const reclaimed = describeReclaimed(
+      reclaimObsoleteVersions(ctx.metadata.app.id),
+    );
+    if (reclaimed) ctx.err(reclaimed);
+  } catch (error) {
+    ctx.err(
+      `Could not remove obsolete releases: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   // The shared file store is a cache of file bytes, never what an installed
   // release runs from. This is the only place it is collected or verified.
   try {
@@ -97,7 +106,13 @@ export async function runDoctor(
   }
   // An installed launcher an earlier PiShip wrote is replaced, as at the end
   // of a session, so the report below names the one that runs next.
-  refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
+  try {
+    refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
+  } catch (error) {
+    ctx.err(
+      `Could not replace the installed launcher: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const report = renderDoctor(await collectDoctorData(ctx));
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),

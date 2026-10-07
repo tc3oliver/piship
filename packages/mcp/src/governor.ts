@@ -53,7 +53,7 @@ export interface McpGovernorOptions {
   readonly fetch?: McpFetch;
   /**
    * Managed fetch that also permits plain HTTP to a private or internal
-   * host, used only for servers with `httpTransport: http-allowed`. Without
+   * host, used for every server but one with `httpTransport: https`. Without
    * it those servers use `fetch`, which keeps plain HTTP to loopback.
    */
   readonly plainHttpFetch?: McpFetch;
@@ -333,7 +333,7 @@ export class McpGovernor {
         `MCP server ${config.id} requires the runtime credential, which is not available`,
       );
     const url = this.#resolveUrl(config);
-    const plainHttp = config.httpTransport === "http-allowed";
+    const plainHttp = config.httpTransport !== "https";
     const transport = new StreamableHttpTransport({
       serverId: config.id,
       url,

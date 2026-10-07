@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PISHIP_SCHEMA_V1ALPHA2,
+  launchWarnings,
   migrateManifestSource,
   parseManifest,
   resolveTemplate,
@@ -121,7 +122,11 @@ describe("piship/v1alpha2 managed manifest", () => {
     ["credential.apiKey", "sk-embedded", "Secrets are never declared"],
     ["credential.storage", { provider: "file" }, "acknowledgePlaintext"],
     ["inference.provider", "pi-native", "explicit openai-compatible gateway"],
-    ["inference.baseUrl", "http://gateway.example/v1", "Use https"],
+    [
+      "inference.baseUrl",
+      "http://gateway.example/v1",
+      "so serve it over https",
+    ],
     [
       "inference.baseUrl",
       "https://user:pw@gateway.example/v1",
@@ -178,11 +183,21 @@ describe("piship/v1alpha2 managed manifest", () => {
         ]),
       ),
     ).toThrow("ACME_ISSUER is not declared");
-    expect(() =>
-      parseManifest(
-        patch(managed, "variables", [...managed.variables, "ACME_UNUSED"]),
+    // An unused variable is a warning, not an error.
+    expect(
+      launchWarnings(
+        parseManifest(
+          patch(managed, "variables", [...managed.variables, "ACME_UNUSED"]),
+        ),
       ),
-    ).toThrow("declared but not referenced");
+    ).toEqual([
+      {
+        path: "variables[4]",
+        message: expect.stringContaining(
+          "ACME_UNUSED is declared but not referenced",
+        ),
+      },
+    ]);
     expect(() =>
       parseManifest({
         ...patch(managed, "variables", [

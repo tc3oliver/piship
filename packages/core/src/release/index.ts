@@ -13,6 +13,7 @@ export {
   type SignChannelOptions,
 } from "./channel.js";
 export {
+  isLocalBuildOnThisHost,
   isUnqualifiedPayload,
   LOCAL_BUILD_UNQUALIFIED,
   localBuildMarkerPath,
@@ -20,6 +21,7 @@ export {
   QUALIFICATION_SCHEMA,
   RELEASE_QUALIFIED,
   UNQUALIFIED_BUILD_NOTICE,
+  unqualifiedBuildNotice,
 } from "./qualification.js";
 export { checkLockedPackageSources } from "./sources.js";
 export {

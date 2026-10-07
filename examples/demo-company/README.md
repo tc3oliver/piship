@@ -120,6 +120,8 @@ This walkthrough plays both the owner and the user on one machine, with a local 
    sh /tmp/acmecode-1.0.0-<target>/install.sh
    ```
 
+   On Windows, run the script from PowerShell with `powershell -ExecutionPolicy Bypass -File <extracted folder>\install.ps1` (the default execution policy refuses an unsigned `.ps1`). The installed command is `acmecode.cmd` in the bin directory.
+
 5. Change `app.version` in `/tmp/acmecode/piship.yaml` to `1.1.0`, lock, and release again. Sign it into the stable channel directory, then point the installed command at it:
 
    ```bash

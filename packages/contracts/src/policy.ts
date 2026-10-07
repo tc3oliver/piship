@@ -126,7 +126,14 @@ export interface ResolvedDecision extends PolicyDecision {
     | "denied"
     | "cancelled"
     | "unavailable"
-    | "auto";
+    | "auto"
+    | "session";
+  /**
+   * What the person asked to keep: `allow` or `deny` (stored for the project,
+   * personal mode only), or `session` (in memory, the same action and target,
+   * until the session ends).
+   */
+  readonly remember?: ApprovalScope | "allow" | "deny";
 }
 
 export interface PolicyRequest {
@@ -141,13 +148,50 @@ export interface PolicyRequest {
 export type PolicyEvaluator = (request: PolicyRequest) => PolicyDecision;
 
 /**
+ * How long an approval is remembered. `once` is this action only; `session`
+ * is every later ask for the same action and target until the session ends,
+ * kept in memory. A persistent scope joins this list, with its own answer,
+ * when something stores it.
+ */
+export type ApprovalScope = "once" | "session";
+
+/** What a channel shows, and the scopes it may offer besides `once`. */
+export interface ApprovalDetail {
+  readonly title: string;
+  readonly message: string;
+  /**
+   * The scopes the user may answer with, `once` first. Absent or `["once"]`
+   * is a plain yes/no; a channel that cannot show more keeps asking yes/no
+   * and never returns a scope that was not offered.
+   */
+  readonly scopes?: readonly ApprovalScope[];
+  /**
+   * Lets the person keep the answer for this project (`approved-always` and
+   * `denied-always`); a channel returns them only when this is set.
+   */
+  readonly offerRemember?: boolean;
+}
+
+/**
+ * The user's answer to an approval. `approved-session` is `session` scope;
+ * `approved-always` and `denied-always` are kept for the project.
+ */
+export type ApprovalAnswer =
+  | "approved"
+  | "approved-session"
+  | "denied"
+  | "cancelled"
+  | "approved-always"
+  | "denied-always";
+
+/**
  * An approval channel for `ask`. It returns the user's answer; a missing
  * channel (headless) is treated as unavailable and resolves to deny.
  */
 export type ApprovalChannel = (
   decision: PolicyDecision,
-  detail: { readonly title: string; readonly message: string },
-) => Promise<"approved" | "denied" | "cancelled">;
+  detail: ApprovalDetail,
+) => Promise<ApprovalAnswer>;
 
 export function resolveWithoutChannel(
   decision: PolicyDecision,
@@ -160,19 +204,45 @@ export function resolveWithoutChannel(
 export async function resolveDecision(
   decision: PolicyDecision,
   channel: ApprovalChannel | undefined,
-  detail: { readonly title: string; readonly message: string },
+  detail: ApprovalDetail,
 ): Promise<ResolvedDecision> {
   if (decision.effect !== "ask") return resolveWithoutChannel(decision);
   if (!channel) return resolveWithoutChannel(decision);
-  let answer: "approved" | "denied" | "cancelled";
+  let answer: ApprovalAnswer;
   try {
     answer = await channel(decision, detail);
   } catch {
     answer = "cancelled";
   }
+  if (answer === "approved-session")
+    // A scope the channel was not offered is not honored: a channel that
+    // answers `approved-session` unasked approves this one action only.
+    return {
+      ...decision,
+      outcome: "allow",
+      approval: "approved",
+      ...(detail.scopes?.includes("session")
+        ? { remember: "session" as const }
+        : {}),
+    };
+  // A kept answer is honoured only where the prompt offered it.
+  const kept = detail.offerRemember === true;
+  const approved =
+    answer === "approved" || (kept && answer === "approved-always");
+  const remember =
+    kept && answer === "approved-always"
+      ? "allow"
+      : kept && answer === "denied-always"
+        ? "deny"
+        : undefined;
   return {
     ...decision,
-    outcome: answer === "approved" ? "allow" : "deny",
-    approval: answer,
+    outcome: approved ? "allow" : "deny",
+    approval: approved
+      ? "approved"
+      : answer === "approved-always" || answer === "denied-always"
+        ? "denied"
+        : answer,
+    ...(remember ? { remember } : {}),
   };
 }

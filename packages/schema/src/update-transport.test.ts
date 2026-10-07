@@ -1,6 +1,7 @@
-// piship/v1alpha5 `updates.transport`: https (the default) or http-allowed,
-// which permits a plain-HTTP update source on a private or internal host only,
-// needs bootstrap trust, and changes no other endpoint's rule.
+// piship/v1alpha5 `updates.transport`: a plain-HTTP update source on a private
+// or internal host is admitted by default (http-allowed is the explicit
+// spelling), `https` forces HTTPS-only, a public host is refused, plain HTTP
+// needs bootstrap trust, and no other endpoint's rule changes.
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -81,15 +82,39 @@ describe("updates.transport", () => {
     );
   });
 
-  it("refuses a plain-HTTP internal source under https, as before", () => {
+  it("refuses a plain-HTTP internal source under an explicit https", () => {
     for (const updates of [
-      { source: "http://updates.corp.internal/acmepi" },
+      { source: "http://updates.corp.internal/acmepi", transport: "https" },
       { source: "http://10.0.0.5/acmepi", transport: "https" },
     ])
       rejects(
         manifest(updates),
         "updates.source",
         "Expected an https URL, an http URL on 127.0.0.1, localhost, or [::1]",
+      );
+  });
+
+  it("admits a plain-HTTP private or internal source by default", () => {
+    for (const source of [
+      "http://updates.corp.internal/acmepi",
+      "http://updates/acmepi",
+      "http://10.1.2.3:8080/acmepi",
+    ]) {
+      const updates = updatesOf(manifest({ source }));
+      expect(updates?.source).toBe(source);
+      expect(updates).not.toHaveProperty("transport");
+    }
+  });
+
+  it("refuses a public plain-HTTP host by default", () => {
+    for (const source of [
+      "http://updates.acme.example/acmepi",
+      "http://8.8.8.8/acmepi",
+    ])
+      rejects(
+        manifest({ source }),
+        "updates.source",
+        "is public, so serve it over https",
       );
   });
 
@@ -142,7 +167,18 @@ describe("updates.transport", () => {
     );
   });
 
-  it("leaves OIDC, broker, and gateway endpoints https-only", () => {
+  it("requires bootstrap trust for a plain-HTTP source beyond loopback", () => {
+    rejects(
+      {
+        ...manifest({}),
+        updates: { source: "http://updates.corp.internal/acmepi", trust: {} },
+      },
+      "updates.transport",
+      "A plain-HTTP updates.source requires updates.trust.bootstrap",
+    );
+  });
+
+  it("does not change another endpoint's rule", () => {
     const access = {
       identity: {
         mode: "oidc",
@@ -173,8 +209,8 @@ describe("updates.transport", () => {
       },
     };
     const updates = {
-      transport: "http-allowed",
-      source: "http://updates.corp.internal/acmepi",
+      transport: "https",
+      source: "https://updates.corp.internal/acmepi",
     };
     expect(() => parseManifest(manifest(updates, access))).not.toThrow();
     const plain = (path: string[], value: string): Json => {
@@ -184,15 +220,25 @@ describe("updates.transport", () => {
       target[path[path.length - 1] as string] = value;
       return copy;
     };
+    // updates.transport: https governs the update channel only: the
+    // endpoints keep their own default, plain HTTP to a private host.
     for (const [path, value] of [
       [["identity", "oidc", "issuer"], "http://login.corp.internal"],
       [["credential", "broker", "endpoint"], "http://broker.corp.internal/t"],
       [["inference", "baseUrl"], "http://gateway.corp.internal/v1"],
     ] as const)
+      expect(() =>
+        parseManifest(manifest(updates, plain([...path], value))),
+      ).not.toThrow();
+    for (const [path, value] of [
+      [["identity", "oidc", "issuer"], "http://login.acme.example"],
+      [["credential", "broker", "endpoint"], "http://broker.acme.example/t"],
+      [["inference", "baseUrl"], "http://gateway.acme.example/v1"],
+    ] as const)
       rejects(
         manifest(updates, plain([...path], value)),
         path.join("."),
-        "plain http is accepted only for loopback",
+        "Plain HTTP is accepted only to a private or internal host",
       );
   });
 });

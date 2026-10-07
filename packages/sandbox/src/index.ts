@@ -60,6 +60,7 @@ export {
   MODERN_BUBBLEWRAP,
 } from "./bubblewrap.js";
 export {
+  CACHE_VARIABLES,
   filterEnvironment,
   isCredentialName,
   looksLikeSecret,
@@ -67,6 +68,7 @@ export {
   sanitizeStderr,
   stripCredentials,
   withApprovedNetwork,
+  withCacheEnvironment,
 } from "./environment.js";
 export { NativeBackend } from "./native.js";
 export {

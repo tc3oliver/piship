@@ -332,7 +332,8 @@ describe("diffLocks", () => {
       id: "tickets",
       transport: "streamable-http",
       module: undefined,
-      url: "http://10.20.30.40/mcp",
+      url: "https://mcp.corp.internal/mcp",
+      httpTransport: "https",
     });
     const plain = clone(https);
     const tickets = plain.governance.manifest.mcp.servers.at(-1);
@@ -351,8 +352,9 @@ describe("diffLocks", () => {
       }),
       expect.objectContaining({
         area: "mcp",
-        kind: "added",
+        kind: "changed",
         item: "mcp server tickets httpTransport",
+        before: "https",
         after: "http-allowed",
         risk: "high",
       }),
@@ -362,19 +364,58 @@ describe("diffLocks", () => {
     ).toEqual(["low", "low"]);
   });
 
+  it("treats an absent httpTransport and http-allowed as the same default", () => {
+    const absent = clone(base);
+    absent.governance.manifest.mcp.servers.push({
+      ...structuredClone(absent.governance.manifest.mcp.servers[0]),
+      id: "tickets",
+      transport: "streamable-http",
+      module: undefined,
+      url: "http://10.20.30.40/mcp",
+    });
+    const explicit = clone(absent);
+    explicit.governance.manifest.mcp.servers.at(-1).httpTransport =
+      "http-allowed";
+    expect(diffLocks(absent, explicit).changes).toEqual([]);
+    expect(diffLocks(explicit, absent).changes).toEqual([]);
+    // Only an explicit https differs, and it is the tighter side.
+    const strict = clone(absent);
+    strict.governance.manifest.mcp.servers.at(-1).httpTransport = "https";
+    expect(
+      diffLocks(absent, strict).changes.map(({ item, risk }) => ({
+        item,
+        risk,
+      })),
+    ).toEqual([{ item: "mcp server tickets httpTransport", risk: "low" }]);
+    expect(
+      diffLocks(strict, absent).changes.map(({ item, risk }) => ({
+        item,
+        risk,
+      })),
+    ).toEqual([{ item: "mcp server tickets httpTransport", risk: "high" }]);
+  });
+
   it("flags plain HTTP on the gateway, broker, identity, audit sinks, and sandbox as high", () => {
     const https = clone(base);
     https.governance.manifest.audit.sinks.push({
       id: "collector",
       type: "http",
-      url: "http://10.0.0.6:9000/events",
+      url: "https://audit.corp.internal/events",
       required: false,
+      httpTransport: "https",
     });
+    https.access.inference.httpTransport = "https";
+    https.access.credential.broker.httpTransport = "https";
+    https.access.identity.oidc.httpTransport = "https";
+    https.governance.manifest.sandbox.endpoint =
+      "https://sandbox.corp.internal";
+    https.governance.manifest.sandbox.httpTransport = "https";
     const plain = clone(https);
     plain.access.inference.httpTransport = "http-allowed";
     plain.access.credential.broker.httpTransport = "http-allowed";
     plain.access.identity.oidc.httpTransport = "http-allowed";
     plain.governance.manifest.audit.sinks.at(-1).httpTransport = "http-allowed";
+    plain.governance.manifest.sandbox.httpTransport = "http-allowed";
     plain.governance.manifest.sandbox.httpTransport = "http-allowed";
     const report = diffLocks(https, plain);
     expect(report.risk).toBe("high");

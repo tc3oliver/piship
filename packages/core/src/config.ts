@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { PiShipError } from "@piship/contracts";
 import {
   CONFIG_KEYS,
@@ -88,6 +88,52 @@ export function readPreferences(path: string): UserPreferences {
   }
 }
 
+/**
+ * The preferences, or the defaults when the file is damaged. A damaged file
+ * is renamed to `<path>.damaged-<timestamp>` (never deleted) so the next
+ * write does not replace it, and `notice` says where it went. Preferences
+ * only narrow what the distribution allows, so running without them is low
+ * risk. `moved` is false when the file could not be moved aside; a caller
+ * that is about to write the file must then fail rather than replace it.
+ */
+export function recoverPreferences(
+  path: string,
+  now: () => Date = () => new Date(),
+): {
+  readonly preferences: UserPreferences;
+  readonly notice?: string;
+  readonly moved: boolean;
+  readonly error?: PiShipError;
+} {
+  try {
+    return { preferences: readPreferences(path), moved: true };
+  } catch (error) {
+    if (!(error instanceof PiShipError)) throw error;
+    const stamp = now().toISOString().replace(/[-:.]/g, "");
+    let target = `${path}.damaged-${stamp}`;
+    for (let n = 2; existsSync(target); n += 1)
+      target = `${path}.damaged-${stamp}-${n}`;
+    try {
+      renameSync(path, target);
+      return {
+        preferences: EMPTY,
+        moved: true,
+        notice: `The user preferences file was unreadable, so this run uses the defaults. It was moved aside, not deleted: ${target}`,
+      };
+    } catch (moveError) {
+      // Gone already (another launch moved it): nothing is left to protect.
+      if ((moveError as NodeJS.ErrnoException).code === "ENOENT")
+        return { preferences: EMPTY, moved: true };
+      return {
+        preferences: EMPTY,
+        moved: false,
+        error,
+        notice: `The user preferences file is unreadable and could not be moved aside, so this run uses the defaults: ${path}`,
+      };
+    }
+  }
+}
+
 function writePreferences(path: string, preferences: UserPreferences): void {
   writeJsonAtomic(path, preferences);
 }
@@ -132,9 +178,14 @@ export function setPreference(
   appTheme: string | undefined,
   key: string,
   value: string | undefined,
+  onNotice?: (notice: string) => void,
 ): UserPreferences {
   const policy = policyView(access, appTheme);
-  const current = readPreferences(path);
+  const recovered = recoverPreferences(path);
+  // Never write over a damaged file that could not be moved aside.
+  if (!recovered.moved && recovered.error) throw recovered.error;
+  if (recovered.notice) onNotice?.(recovered.notice);
+  const current = recovered.preferences;
   if (key === "models.allowed") {
     if (value === undefined) {
       const { modelsAllowed: _removed, ...rest } = current;

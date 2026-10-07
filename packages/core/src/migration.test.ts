@@ -311,28 +311,23 @@ describe("checkStateMigration", () => {
     );
   });
 
-  it("refuses unreadable preferences and a newer audit log", () => {
+  it("keeps unreadable preferences for the target, and refuses a newer audit log", () => {
     const dir = populated();
-    // Damaged preferences cannot be rebuilt: refused, naming the file and
-    // the way out, and never touched.
+    // Damaged preferences only narrow what the distribution allows: they do
+    // not block the switch, and the file is never touched here.
     const preferences = join(dir, "config", "preferences.json");
     for (const damaged of ["{not json", "", '{"schema":"piship-pref', "{}"]) {
       write(dir, "config/preferences.json", damaged);
-      const refused = item(
-        checkStateMigration(dir, target(), current),
-        "preferences",
-      );
-      expect(refused).toMatchObject({
+      const report = checkStateMigration(dir, target(), current);
+      const kept = item(report, "preferences");
+      expect(kept).toMatchObject({
         current: "unreadable",
-        verdict: "unsupported",
-        action: "refuse",
+        verdict: "safe",
+        action: "keep",
       });
-      expect(refused.reason).toContain(
-        `${preferences} is empty, cut short, or not a preferences file`,
-      );
-      expect(refused.reason).toContain(
-        `move it aside (for example to ${preferences}.damaged)`,
-      );
+      expect(kept.reason).toContain(`${preferences} cannot be read`);
+      expect(kept.reason).toContain(`${preferences}.damaged-`);
+      expect(report.verdict).toBe("safe");
       expect(readFileSync(preferences, "utf8")).toBe(damaged);
     }
     write(dir, "config/preferences.json", { schema: "piship-preferences/v1" });

@@ -45,8 +45,9 @@ export interface StreamableHttpTransportOptions {
   /** Upper bound on a whole response body or event stream. */
   readonly maxResponseBytes?: number;
   /**
-   * `httpTransport: http-allowed`: also permit plain HTTP to a private or
-   * internal host. Without it plain HTTP is accepted only on loopback.
+   * Also permit plain HTTP to a private or internal host: the default,
+   * withheld by `httpTransport: https`. Without it plain HTTP is accepted
+   * only on loopback.
    */
   readonly plainHttp?: boolean;
   /** Header name to identity claim; the claims are asked for per request. */
@@ -111,16 +112,16 @@ export class StreamableHttpTransport implements McpTransport {
           `MCP server ${options.serverId} is at ${url.origin}, but the runtime credential is only sent to ${allowed.length ? allowed.join(", ") : "the inference gateway origin, which is not configured"}`,
         );
     }
-    // Plain HTTP beyond loopback only with http-allowed, to a private or
-    // internal host, and never with the runtime credential.
+    // Plain HTTP beyond loopback only to a private or internal host unless
+    // the server is https-only, and never with the runtime credential.
     if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
       if (!options.plainHttp)
         throw mcpUnhealthy(
-          `MCP server ${options.serverId} URL must use https; plain HTTP is accepted only for loopback, or for a private or internal host with httpTransport: http-allowed`,
+          `MCP server ${options.serverId} URL must use https; plain HTTP is accepted only for loopback, or for a private or internal host when the server is not set to httpTransport: https`,
         );
       if (!isPrivateNetworkHost(url.hostname))
         throw mcpUnhealthy(
-          `MCP server ${options.serverId} URL is plain HTTP to ${url.hostname}, which is public; httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+          `MCP server ${options.serverId} URL is plain HTTP to ${url.hostname}, which is public; plain HTTP is accepted only to a private or internal host`,
         );
       if (options.credential)
         throw mcpUnhealthy(

@@ -163,9 +163,8 @@ describe.runIf(HOST_EVIDENCED)(
       );
       expect(error.code).toBe("CONFIG_UNAVAILABLE");
       expect(error.message).toContain(CA_VARIABLE);
-      expect(error.userAction).toBe(
-        `Set ${CA_VARIABLE} in the launch environment (see the distribution documentation)`,
-      );
+      expect(error.userAction).toContain("administrator");
+      expect(error.userAction).toContain(CA_VARIABLE);
       expect(requests).toEqual([]);
     });
 

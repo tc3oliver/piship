@@ -27,7 +27,7 @@ import { hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { PiShipError, processAlive } from "@piship/contracts";
+import { processAlive } from "@piship/contracts";
 import {
   recordedIdentity,
   recordedProcessGone,
@@ -687,11 +687,11 @@ export function resumeRefusal(
  * Opens the session a launch continues: the project's most recent one when
  * no other live process owns it and it is safe to load, a new one when
  * `newSession` is set or another process owns the most recent. A corrupt or
- * oversized most recent session stops the launch with the file unchanged,
- * except for a `disposable` one (the acceptance sessions of `--smoke`, which
- * hold no user work and cannot be given `--new-session` by `piship test`,
- * `dev --smoke`, or `doctor`): it starts a new session and says so, and the
- * file is kept.
+ * oversized most recent session never blocks the launch: it starts a new
+ * session and says so, and the file is kept unchanged. The risk is low (the
+ * file is neither read nor changed), and refusing would fail every later
+ * launch the same way until `--new-session`. `disposable` only words the
+ * notice for the acceptance sessions of `--smoke`.
  */
 export function openSession(
   cwd: string,
@@ -725,25 +725,18 @@ export function openSession(
   }
   try {
     const problem = inspectSession(recent);
-    if (problem && options.disposable)
+    if (problem) {
+      // A session that cannot be resumed must not block the launch: the file
+      // may hold the user's work, so it is left untouched, and the new
+      // session becomes the most recent one the next launch continues.
+      const subject = options.disposable
+        ? "most recent acceptance session"
+        : "most recent session of this project";
       return {
         sessionManager: fresh(),
         ownership,
-        notice: `The most recent acceptance session is ${problem.kind === "oversized" ? `${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit` : `damaged (${printable(problem.reason)})`}, so this run starts a new one. The file is kept unchanged: ${recent}`,
+        notice: `The ${subject} is ${problem.kind === "oversized" ? `${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit for resuming a session automatically` : `damaged, and Pi would continue without the damaged part (${printable(problem.reason)})`}, so this launch starts a new session. The file is kept unchanged and was not loaded, repaired, or deleted: ${recent}`,
       };
-    if (problem) {
-      const action = `Run ${options.command} --new-session to start a new session. The file is kept unchanged for recovery; it was not loaded, repaired, or deleted.`;
-      throw problem.kind === "oversized"
-        ? new PiShipError(
-            "CONFIG_UNAVAILABLE",
-            `The most recent session of this project is ${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit for resuming a session automatically: ${recent}`,
-            { userAction: action, component: "session" },
-          )
-        : new PiShipError(
-            "CONFIG_UNAVAILABLE",
-            `The most recent session of this project is damaged and is not resumed, because Pi would continue without the damaged part: ${printable(problem.reason)}: ${recent}`,
-            { userAction: action, component: "session" },
-          );
     }
     return {
       sessionManager: SessionManager.open(recent, sessionDir, cwd),

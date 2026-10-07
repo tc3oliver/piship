@@ -30,11 +30,15 @@ export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./store/index.js";
 export { raiseThreadpool } from "./threadpool.js";
+export { pishipCommand } from "./invocation.js";
 export * from "./update/index.js";
 export {
   channelTrustFromLock,
   checkPiVersion,
   lockManifest,
+  lockNeedsNetwork,
+  lockStatus,
+  type LockStatus,
   requireCurrentLock,
   resolveLock,
 } from "./lock.js";
@@ -84,15 +88,19 @@ export {
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
+export { checkSkills, type SkillWarning } from "./skills-check.js";
 export {
   checkSearchTools,
   checkSearchToolSources,
   downloadLockedSearchTools,
   downloadSearchToolArchives,
+  probeSearchToolUpstream,
   readSearchToolArchive,
   SEARCH_TOOL_PAYLOAD_DIRECTORY,
   SEARCH_TOOL_SPECS,
+  SEARCH_TOOL_UPSTREAM_URL,
   type SearchToolDownloadOptions,
+  type SearchToolProbeOptions,
   type SearchToolRequest,
   searchToolAsset,
   searchToolCacheDirectory,
@@ -110,14 +118,17 @@ export {
   binHome,
   distributionStateDirectory,
   installHome,
+  isDistributionId,
   isTestCreatedState,
   runtimeStateDirectory,
   stateHome,
+  suggestDistributionId,
   testStateMarker,
   withTestState,
 } from "./state-paths.js";
 export * from "./pi-packages/footprint.js";
 export * from "./supply-chain.js";
+export * from "./project-trust-memory.js";
 export * from "./user-auto.js";
 export {
   abandonedTemporaryCount,

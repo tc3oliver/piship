@@ -32,6 +32,7 @@ import {
   referenceUrl,
   unsafe,
 } from "./fields.js";
+import { plainHttpPermitted } from "../http-transport.js";
 import { TRUST } from "./policy.js";
 import { exposure, exposureRules } from "./runtime.js";
 
@@ -135,12 +136,14 @@ function parseServer(
         conflict(`${path}.${key}`, `${key} applies only to stdio servers`);
     if (server.url === undefined)
       fail(`${path}.url`, "A streamable-http server needs a url");
-    const httpTransport = oneOf(
-      server.httpTransport,
-      `${path}.httpTransport`,
-      MCP_HTTP_TRANSPORTS,
-      "https",
-    );
+    const httpTransport =
+      server.httpTransport === undefined
+        ? undefined
+        : oneOf(
+            server.httpTransport,
+            `${path}.httpTransport`,
+            MCP_HTTP_TRANSPORTS,
+          );
     if (httpTransport === "http-allowed" && credential === "runtime")
       conflict(
         `${path}.httpTransport`,
@@ -152,7 +155,9 @@ function parseServer(
         server.url,
         `${path}.url`,
         variables,
-        httpTransport === "http-allowed",
+        // A runtime credential is never sent over plain HTTP, so such a
+        // server's URL is https (or loopback) whatever the default.
+        plainHttpPermitted(httpTransport) && credential !== "runtime",
       ),
     };
     const headers =
@@ -160,7 +165,7 @@ function parseServer(
         ? undefined
         : parseHeaders(server.headers, `${path}.headers`);
     http = {
-      ...(httpTransport === "http-allowed" ? { httpTransport } : {}),
+      ...(httpTransport === undefined ? {} : { httpTransport }),
       ...(headers ? { headers } : {}),
     };
   }

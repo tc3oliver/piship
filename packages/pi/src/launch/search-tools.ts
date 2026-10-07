@@ -229,12 +229,22 @@ function replace(path: string, content: Buffer): void {
  * fingerprint matches the receipt written when it was last verified is kept
  * without being read. Returns nothing when the distribution bundles no
  * search tools.
+ *
+ * A tool that cannot be put in place throws, unless `onProblem` is given:
+ * the launch passes it so that a bundled `fd` or `rg` problem, which only
+ * costs file-name completion and Pi's find and grep tools, does not stop the
+ * command. `onProblem` then gets the tool and the error, the tool is left
+ * out of the result, and the others are still installed. A payload copy that
+ * does not match the lock is never run or installed, and an executable in
+ * Pi's tool directory that is not the pinned one is removed then, so Pi
+ * cannot run it from there either.
  */
 export function installSearchTools(
   lock: Pick<DistributionLock, "searchTools">,
   distributionDir: string,
   agentDir: string,
   target = `${process.platform}-${process.arch}`,
+  onProblem?: (tool: SearchTool, error: unknown) => void,
 ): InstalledSearchTool[] {
   const installed: InstalledSearchTool[] = [];
   if (!lock.searchTools) return installed;
@@ -247,45 +257,73 @@ export function installSearchTools(
     if (!locked) continue;
     const entry = locked.targets[target];
     const name = searchToolFileName(tool, target);
-    if (!entry)
-      throw new PiShipError(
-        "LOCK_INVALID",
-        `This payload's lock has no bundled ${tool} for ${target}`,
-        { component: "payload" },
-      );
+    // The lock pins this tool for other targets only: the payload carries no
+    // executable for this one, and the launch runs without it.
+    if (!entry) continue;
     const path = join(directory, name);
-    const recorded = receipt[name];
-    const current = recorded && fingerprint(path, entry.binary);
-    if (recorded && current && sameFingerprint(recorded, current)) {
-      installed.push({ tool, version: locked.version, path });
-      continue;
-    }
-    let verified = verifiedFingerprint(path, entry.binary);
-    if (!verified) {
-      const content = readFileSync(
-        join(distributionDir, SEARCH_TOOL_PAYLOAD_DIRECTORY, name),
-      );
-      if (sha256(content) !== entry.binary)
-        throw new PiShipError(
-          "INTEGRITY_FAILED",
-          `The bundled ${tool} in ${distributionDir} does not match piship.lock`,
-          {
-            component: "payload",
-            userAction: "Do not run it; reinstall the distribution",
-          },
+    try {
+      const recorded = receipt[name];
+      const current = recorded && fingerprint(path, entry.binary);
+      if (recorded && current && sameFingerprint(recorded, current)) {
+        installed.push({ tool, version: locked.version, path });
+        continue;
+      }
+      let verified = verifiedFingerprint(path, entry.binary);
+      if (!verified) {
+        const content = readFileSync(
+          join(distributionDir, SEARCH_TOOL_PAYLOAD_DIRECTORY, name),
         );
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      replace(path, content);
-      verified = verifiedFingerprint(path, entry.binary);
+        if (sha256(content) !== entry.binary)
+          throw new PiShipError(
+            "INTEGRITY_FAILED",
+            `The bundled ${tool} in ${distributionDir} does not match piship.lock`,
+            {
+              component: "payload",
+              userAction: "Do not run it; reinstall the distribution",
+            },
+          );
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+        replace(path, content);
+        verified = verifiedFingerprint(path, entry.binary);
+      }
+      if (verified) {
+        receipt[name] = verified;
+        receiptChanged = true;
+      }
+      installed.push({ tool, version: locked.version, path });
+    } catch (error) {
+      if (!onProblem) throw error;
+      // The copy in Pi's directory is not the pinned one (or it would have
+      // been kept above), and Pi would run it before anything on PATH.
+      if (error instanceof PiShipError && error.code === "INTEGRITY_FAILED")
+        try {
+          rmSync(path, { force: true });
+        } catch {
+          // Nothing more to do here; the warning still names the problem.
+        }
+      onProblem(tool, error);
     }
-    if (verified) {
-      receipt[name] = verified;
-      receiptChanged = true;
-    }
-    installed.push({ tool, version: locked.version, path });
   }
   if (receiptChanged) writeReceipt(directory, receipt);
   return installed;
+}
+
+/**
+ * The warning for a bundled tool that was left out: what is missing, why,
+ * and that the launch goes on.
+ */
+export function searchToolProblemNotice(
+  tool: SearchTool,
+  error: unknown,
+): string {
+  const integrity =
+    error instanceof PiShipError && error.code === "INTEGRITY_FAILED";
+  const why = integrity
+    ? "the payload's copy does not match piship.lock, so it was not run or installed; reinstall the distribution"
+    : error instanceof Error
+      ? error.message
+      : String(error);
+  return `Warning: the bundled ${tool} is not available (${why}). This start goes on without it, so file-name completion and Pi's find and grep tools may be limited until it is restored.`;
 }
 
 /** The names Pi looks for on PATH, besides its own tool directory. */
@@ -346,10 +384,17 @@ export function deferredToolDownloads(
   agentDir: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  target = `${process.platform}-${process.arch}`,
 ): SearchTool[] {
+  // A lock that pins tools for other targets only bundles nothing here.
+  const pinned = SEARCH_TOOLS.filter((tool) => lock.searchTools?.[tool]);
+  const bundled =
+    !!lock.searchTools &&
+    (!pinned.length ||
+      pinned.some((tool) => lock.searchTools?.[tool]?.targets[target]));
   if (
     lock.deployment.mode !== "personal" ||
-    lock.searchTools ||
+    bundled ||
     env.PI_OFFLINE ||
     env.PISHIP_ALLOW_TOOL_DOWNLOAD === "1"
   )

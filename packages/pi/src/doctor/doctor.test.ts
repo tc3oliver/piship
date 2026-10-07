@@ -835,6 +835,37 @@ describe("Network group", () => {
     ).toEqual([]);
   });
 
+  it("shows an endpoint that resolves to plain HTTP by default, and nothing for https or a forced https", () => {
+    const data = doctorData("managed", { access: accessData() });
+    const metadata = data.ctx.metadata as unknown as Record<string, unknown>;
+    metadata.access = {
+      variables: [],
+      identity: {
+        mode: "oidc",
+        oidc: { issuer: "https://idp.acme.example/realms/acme" },
+      },
+      credential: {
+        provider: "http-broker",
+        broker: {
+          endpoint: "http://10.20.30.40:8080/token",
+          httpTransport: "https",
+        },
+      },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.20.30.40:4000/v1",
+      },
+    };
+    metadata.governance = { manifest: { audit: { sinks: [] } } };
+    const lines = group(renderDoctor(data).render(), "Network");
+    expect(lines[0]).toBe(
+      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.20.30.40:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
+    );
+    expect(lines[1]).toContain("TLS verification");
+    expect(lines.join("\n")).not.toContain("credential.broker.httpTransport");
+    expect(lines.join("\n")).not.toContain("identity.oidc.httpTransport");
+  });
+
   it("says when no proxy is set and when the proxy environment is ignored", () => {
     const base = accessData();
     const unset = group(

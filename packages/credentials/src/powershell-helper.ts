@@ -19,8 +19,8 @@
 // needs administrator rights, and nothing newer than 5.1 is used.
 // Reflection.Emit and Add-Type both need FullLanguage mode, so a machine
 // that constrains PowerShell (AppLocker, WDAC) is reported by the script
-// itself and the store keeps its per-request implementation, which fails
-// there as it always did.
+// itself and the store fails at once, naming the file store, because the
+// per-request implementation (Add-Type) cannot run there either.
 import { type spawn as nodeSpawn, spawn } from "node:child_process";
 
 /** What a request came back with, as `CommandResult` carries it. */
@@ -45,9 +45,12 @@ export interface CredentialHelper {
  * way. Any other failure of a request leaves its outcome unknown.
  */
 export class HelperUnavailable extends Error {
-  constructor(reason: string) {
+  /** PowerShell is in a constrained language mode (AppLocker, WDAC). */
+  readonly constrained: boolean;
+  constructor(reason: string, constrained = false) {
     super(reason);
     this.name = "HelperUnavailable";
+    this.constrained = constrained;
   }
 }
 
@@ -412,6 +415,7 @@ export function createPowerShellHelper(
                 line?.startsWith(UNSUPPORTED)
                   ? `PowerShell cannot define the credential calls here (${line.slice(UNSUPPORTED.length).trim() || "unsupported"})`
                   : "PowerShell ended before the credential helper was ready",
+                line === `${UNSUPPORTED} language-mode`,
               ),
             );
           }

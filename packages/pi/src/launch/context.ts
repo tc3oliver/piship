@@ -2,6 +2,9 @@ import {
   PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
+  dropInsecureTlsSwitch,
+  normalizeProxyEnvironment,
+  proxyCorrectionNotice,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import {
@@ -22,7 +25,7 @@ export interface LaunchContext extends BrandedContext {
   /** The session was started with `--yolo`. */
   readonly yolo?: boolean;
   /** Takes back the permission provider's auto-approval `--yolo` switched on. */
-  readonly endProviderAutoApprove?: () => void;
+  readonly endProviderAutoApprove?: () => string | undefined;
 }
 
 /**
@@ -75,8 +78,21 @@ export async function prepareAccess(
       events: new AccessEvents(),
     };
   }
-  // Refuse before sanitizing: silently dropping a disabled-TLS setting would hide it.
+  // A personal user has no managed access to protect and no manifest key to
+  // change: drop the switch for this launch (verification stays on) and say
+  // what to use instead. Managed access refuses below, before sanitizing:
+  // silently dropping a disabled-TLS setting there would hide it.
+  if (ctx.mode === "personal" && dropInsecureTlsSwitch())
+    ctx.err(
+      "Notice: NODE_TLS_REJECT_UNAUTHORIZED=0 is ignored; PiShip keeps TLS verification on. If a server uses a private or corporate certificate authority, point NODE_EXTRA_CA_CERTS at its PEM file instead.",
+    );
   assertTlsVerificationEnabled();
+  // A proxy variable written as host:port crashes undici's proxy agent:
+  // give it the http:// scheme curl assumes, and say so once.
+  if (ctx.metadata.access.network.proxy.inheritEnvironment) {
+    const notice = proxyCorrectionNotice(normalizeProxyEnvironment());
+    if (notice) ctx.err(notice);
+  }
   const events = new AccessEvents();
   const access = openAccess(ctx, events.listener, metrics);
   let removedEnvironment: string[] = [];
@@ -93,7 +109,7 @@ export async function prepareAccess(
   // Only a managed distribution narrows what child processes inherit; a
   // personal one keeps the environment of the user's shell.
   // Pi's provider requests use the process dispatcher: with
-  // inference.httpTransport: http-allowed it admits plain HTTP to the
+  // inference.httpTransport not https it admits plain HTTP to the
   // gateway's own origin, and to no other host.
   applyProcessNetworkPolicy(access.network, {
     restrictChildren: ctx.mode === "managed",

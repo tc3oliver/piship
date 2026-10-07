@@ -13,5 +13,11 @@ export { runConfig } from "./config.js";
 export { releasesWithoutDataSweep, sweepDistributionData } from "./data.js";
 export { lifecycleDoctor, undeclaredGovernanceHosts } from "./doctor.js";
 export { runRollback, runUpdate } from "./lifecycle.js";
-export { runLogin, runLogout } from "./login.js";
+export {
+  inlineLoginOffered,
+  loginInline,
+  runLogin,
+  runLogout,
+} from "./login.js";
+export { runUninstall } from "./uninstall.js";
 export { runSandbox } from "./sandbox.js";

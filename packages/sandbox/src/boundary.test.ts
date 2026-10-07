@@ -269,6 +269,25 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       ).toBe("tmp\n");
     });
 
+    it("points the package caches at a directory the sandbox lets it write", async () => {
+      const result = await run(
+        sandbox,
+        [
+          `for dir in "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$GOCACHE"; do`,
+          `mkdir -p "$dir" && echo ok > "$dir/probe" || echo "failed $dir"; done`,
+          `echo "cargo=\${CARGO_HOME-unset}"`,
+        ].join("\n"),
+      );
+      expect(result.output).not.toContain("failed");
+      expect(result.output).toContain("cargo=unset");
+      expect(
+        readFileSync(
+          join(sandbox.profile.tmpDir, "cache", "npm", "probe"),
+          "utf8",
+        ),
+      ).toBe("ok\n");
+    });
+
     it("denies writes outside the allowlist", async () => {
       for (const target of [
         join(outside, "escape"),

@@ -68,7 +68,7 @@ import {
 import { incompatibleCapabilities } from "@piship/policy";
 import type { AccessManifest } from "@piship/schema";
 import { PISHIP_VERSION } from "../compatibility.js";
-import { readPreferences, resolveEffectiveConfig } from "../config.js";
+import { recoverPreferences, resolveEffectiveConfig } from "../config.js";
 import {
   type AdapterContext,
   boundedCredentialProvider,
@@ -222,7 +222,7 @@ export class DistributionAccess {
   /** The configured `credential.storage.provider`, recorded in metadata. */
   readonly storeProvider: SecretStoreProvider;
   /**
-   * With `inference.httpTransport: http-allowed` and a plain-HTTP gateway:
+   * Unless `inference.httpTransport: https`, with a plain-HTTP gateway:
    * admits plain HTTP to the gateway's origin only, for the process
    * dispatcher Pi's provider requests use (`applyProcessNetworkPolicy`).
    */
@@ -293,9 +293,9 @@ export class DistributionAccess {
       options.mode,
     );
     this.#fetch = createManagedFetch(this.network, "access");
-    // `httpTransport: http-allowed`: each opted-in endpoint has a fetch of
-    // its own that admits plain HTTP to its own origin only; every other
-    // request keeps the loopback-only rule.
+    // Each endpoint not set to `httpTransport: https` has a fetch of its own
+    // that admits plain HTTP to its own origin only; every other request
+    // keeps the loopback-only rule.
     const access = options.access;
     const scoped = (urls: readonly (string | undefined)[]) => {
       const plainHttp = plainHttpOrigins(urls);
@@ -304,14 +304,15 @@ export class DistributionAccess {
         : this.#fetch;
     };
     this.inferencePlainHttp =
-      access?.inference.httpTransport === "http-allowed"
+      access && access.inference.httpTransport !== "https"
         ? plainHttpOrigins([this.endpoints.baseUrl])
         : undefined;
     this.#gatewayFetch = this.inferencePlainHttp
       ? scoped([this.endpoints.baseUrl])
       : this.#fetch;
     this.#brokerFetch =
-      access?.credential.broker?.httpTransport === "http-allowed"
+      access?.credential.broker &&
+      access.credential.broker.httpTransport !== "https"
         ? scoped([
             this.endpoints.brokerEndpoint,
             this.endpoints.brokerRevokeEndpoint,
@@ -322,7 +323,7 @@ export class DistributionAccess {
     // refuses a discovered plain-HTTP endpoint on a public host.
     this.#identityPlainHttp =
       access?.identity.mode === "oidc" &&
-      access.identity.oidc.httpTransport === "http-allowed";
+      access.identity.oidc.httpTransport !== "https";
     const identityOrigins = this.#identityOrigins;
     this.#admitIdentityOrigins([this.endpoints.issuer]);
     this.#identityFetch = this.#identityPlainHttp
@@ -1083,6 +1084,36 @@ export class DistributionAccess {
     return this.#timedIdentity(() => this.#checkIdentity(provider, options));
   }
 
+  /**
+   * The identity a launch starts with. Where the launch may prompt
+   * (`loginInline`) and the stored sign-in is missing or can no longer be
+   * used, the user signs in once on the spot and the identity is read again;
+   * the error of a failed or cancelled sign-in is the launch's error. Any
+   * other failure, and every launch without the hook, keeps the original
+   * error and its "Run <command> login".
+   */
+  async #launchIdentity(options: {
+    required: boolean;
+  }): Promise<IdentitySession | null> {
+    try {
+      return await this.currentIdentity(options);
+    } catch (error) {
+      const signIn = this.options.loginInline;
+      if (
+        !signIn ||
+        !(error instanceof PiShipError) ||
+        (error.code !== "IDENTITY_REQUIRED" &&
+          error.code !== "IDENTITY_EXPIRED") ||
+        // A workload identity signs in by itself; a failure is not one a
+        // person can fix at a prompt.
+        (await this.usesWorkloadIdentity())
+      )
+        throw error;
+      await signIn();
+      return this.currentIdentity(options);
+    }
+  }
+
   #expiring(session: IdentitySession): boolean {
     return (
       !!session.expiresAt && session.expiresAt.getTime() - this.#now() < 60_000
@@ -1664,9 +1695,11 @@ export class DistributionAccess {
   ): Promise<ActivatedAccess> {
     const notices: string[] = [];
     const access = this.options.access;
-    let preferences = readPreferences(this.paths.preferences);
+    const recovered = recoverPreferences(this.paths.preferences);
+    let preferences = recovered.preferences;
+    if (recovered.notice) notices.push(recovered.notice);
     const manager = await this.credentialManager();
-    const identity = await this.currentIdentity({
+    const identity = await this.#launchIdentity({
       required: this.#identityRequired(manager),
     });
     this.#pin(identity);
@@ -1694,7 +1727,7 @@ export class DistributionAccess {
       manager.storesSecrets ? bind : undefined,
     );
     if (cleared) {
-      preferences = readPreferences(this.paths.preferences);
+      preferences = recoverPreferences(this.paths.preferences).preferences;
       notices.push(
         "The model selection of a previously signed-in identity was cleared",
       );
@@ -1910,13 +1943,54 @@ export class DistributionAccess {
     if (!options.force && this.#cachedSecretValid(manager)) return this.#secret;
     // A forced renewal is about the generation this session sent, not
     // whatever another process stored since.
-    return (
-      await this.#renewCredential(
-        manager,
-        !!options.force,
-        options.force ? this.#secretRef : undefined,
-      )
-    ).secret;
+    try {
+      return (
+        await this.#renewCredential(
+          manager,
+          !!options.force,
+          options.force ? this.#secretRef : undefined,
+        )
+      ).secret;
+    } catch (error) {
+      throw this.#midSessionSignInError(error);
+    }
+  }
+
+  /**
+   * A model request that finds the sign-in gone or unrenewable fails inside
+   * Pi's terminal UI, which owns the terminal and shows only the message, so
+   * the message names what to do on that one line. It does not prompt for a
+   * sign-in there: a prompt would write over the screen and compete with Pi
+   * for the keys. A failure that signing in cannot fix, and any retryable
+   * one, is returned unchanged.
+   */
+  #midSessionSignInError(error: unknown): unknown {
+    if (
+      !(error instanceof PiShipError) ||
+      error.retryable ||
+      !(
+        error.code === "IDENTITY_REQUIRED" ||
+        error.code === "IDENTITY_EXPIRED" ||
+        error.code === "CREDENTIAL_EXPIRED"
+      ) ||
+      // Only a failure whose fix is to sign in again. A session pinned to
+      // another user (or one signed out elsewhere) already says what to do.
+      !/\blogin\b/.test(error.userAction ?? "") ||
+      /restart the session/.test(error.message)
+    )
+      return error;
+    const command = this.options.app.command;
+    return new PiShipError(
+      error.code,
+      `${error.message}. Exit, run \`${command} login\`, then start ${command} again.`,
+      {
+        ...(error.component ? { component: error.component } : {}),
+        userAction: `Run ${command} login`,
+        ...(error.sanitizedDetail
+          ? { sanitizedDetail: error.sanitizedDetail }
+          : {}),
+      },
+    );
   }
 
   #cachedSecretValid(manager: CredentialManager): boolean {

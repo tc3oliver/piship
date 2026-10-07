@@ -323,4 +323,89 @@ describe("channel trust root", () => {
       downloadArchive(dir, entry, join(out, "long.tar.gz")),
     ).rejects.toThrow(/exceeds 44 bytes/);
   });
+
+  describe("a download that does not complete", () => {
+    const url = "https://updates.example.test/acmepi";
+    const bodyOf = (
+      chunks: Buffer[],
+      end: "close" | "error" | "stall",
+    ): typeof fetch =>
+      (async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+              if (end === "close") controller.close();
+            },
+            pull(controller) {
+              // The chunks above are read first; the next read fails.
+              if (end === "error")
+                setTimeout(
+                  () => controller.error(new TypeError("terminated")),
+                  5,
+                );
+            },
+          }),
+        )) as unknown as typeof fetch;
+
+    it("is a retryable interruption, not an integrity failure, when the body ends short", async () => {
+      const out = temp();
+      const error = await downloadArchive(
+        url,
+        entry,
+        join(out, "short.tar.gz"),
+        bodyOf([ARCHIVE.subarray(0, 10)], "close"),
+      ).catch((caught) => caught);
+      expect(error).toMatchObject({
+        code: "UPDATE_FAILED",
+        retryable: true,
+        message: expect.stringMatching(/interrupted after 10 of 44 bytes/),
+        userAction: expect.stringMatching(/Run update again/),
+      });
+    });
+
+    it("is retryable when the stream errors, and when it stalls past the idle timeout", async () => {
+      const out = temp();
+      await expect(
+        downloadArchive(
+          url,
+          entry,
+          join(out, "error.tar.gz"),
+          bodyOf([ARCHIVE.subarray(0, 5)], "error"),
+        ),
+      ).rejects.toMatchObject({
+        code: "UPDATE_FAILED",
+        retryable: true,
+        message: expect.stringMatching(/interrupted after 5 bytes/),
+      });
+      await expect(
+        downloadArchive(
+          url,
+          entry,
+          join(out, "stall.tar.gz"),
+          bodyOf([ARCHIVE.subarray(0, 5)], "stall"),
+          undefined,
+          50,
+        ),
+      ).rejects.toMatchObject({
+        code: "UPDATE_FAILED",
+        retryable: true,
+        message: expect.stringMatching(/sent nothing for/),
+      });
+    });
+
+    it("stays an integrity failure when the full length arrives with the wrong digest", async () => {
+      const out = temp();
+      const wrong = Buffer.from(ARCHIVE);
+      wrong[0] = (wrong[0] as number) ^ 0xff;
+      await expect(
+        downloadArchive(
+          url,
+          entry,
+          join(out, "wrong.tar.gz"),
+          bodyOf([wrong], "close"),
+        ),
+      ).rejects.toMatchObject({ code: "INTEGRITY_FAILED" });
+    });
+  });
 });

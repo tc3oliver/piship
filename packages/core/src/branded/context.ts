@@ -33,6 +33,13 @@ export interface BrandedContext {
   readonly err: (message: string) => void;
   /** Test seam: how long the final audit flush may retry a required sink. */
   readonly auditCloseDeadlineMs?: number;
+  /**
+   * Set only by a launch that may prompt: a launch that finds no usable
+   * sign-in runs this login on its access instead of failing with "Run
+   * <command> login". Absent for every command and launch that must not
+   * prompt, which then keep the failure.
+   */
+  readonly loginInline?: (access: DistributionAccess) => Promise<void>;
 }
 
 /** One doctor report line: a label and its value. */
@@ -53,7 +60,8 @@ export function openAccess(
   metrics?: LocalMetrics,
 ): DistributionAccess {
   const capabilities = ctx.metadata.governance?.manifest.capabilities;
-  return DistributionAccess.open({
+  const loginInline = ctx.loginInline;
+  const access: DistributionAccess = DistributionAccess.open({
     app: ctx.metadata.app,
     mode: ctx.mode,
     access: ctx.metadata.access,
@@ -62,7 +70,9 @@ export function openAccess(
     ...(capabilities ? { capabilities } : {}),
     ...(onEvent ? { onEvent } : {}),
     ...(metrics ? { metrics } : {}),
+    ...(loginInline ? { loginInline: () => loginInline(access) } : {}),
   });
+  return access;
 }
 
 /** Local metrics never block a launch or a command. */
@@ -102,7 +112,7 @@ export async function recordAudit(
       stateDir: ctx.stateDir,
       rotation: auditRotation(lock),
       fetch: createManagedFetch(network, "audit"),
-      // A sink with httpTransport: http-allowed: plain HTTP to its own
+      // A sink not set to httpTransport: https: plain HTTP to its own
       // origin only.
       plainHttpFetch: (url) => {
         const plainHttp = plainHttpOrigins([url]);

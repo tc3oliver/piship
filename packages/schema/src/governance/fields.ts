@@ -1,7 +1,12 @@
 // Shared field validators for the piship/v1alpha3 governance parsers. Every
 // field is validated strictly; unknown and secret-looking fields are rejected.
 import { valid as validSemver } from "semver";
-import { AccessFieldError, checkUrl, parseDuration } from "../access.js";
+import {
+  AccessFieldError,
+  checkUrl,
+  failUnknown,
+  parseDuration,
+} from "../access.js";
 import {
   checkTemplate,
   checkVariableName,
@@ -31,12 +36,8 @@ export function record(
   allowed: readonly string[],
 ): Json {
   if (!isRecord(value)) fail(path, "Expected an object");
-  for (const key of Object.keys(value))
-    if (!allowed.includes(key)) {
-      if (SECRET_FIELD.test(key))
-        fail(`${path}.${key}`, "Secrets are never declared in piship.yaml");
-      fail(`${path}.${key}`, "Unknown field");
-    }
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) failUnknown(path, unknown, allowed, SECRET_FIELD);
   return value;
 }
 export function optionalRecord(
@@ -140,7 +141,7 @@ export function modulePath(value: unknown, path: string): string {
 }
 /**
  * An endpoint URL or `${NAME}` reference. With `plainHttp` (the endpoint's
- * `httpTransport: http-allowed`) plain HTTP to a private or internal host is
+ * `httpTransport` is not `https`) plain HTTP to a private or internal host is
  * accepted too; a reference is checked the same way once it resolves.
  */
 export function referenceUrl(

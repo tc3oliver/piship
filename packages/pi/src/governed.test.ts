@@ -50,6 +50,7 @@ import {
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
+import { failedServerNotices } from "./governance/mcp.js";
 import { modelPolicy } from "./launch/governance.js";
 import { SessionOutputStore } from "./shell-output.js";
 
@@ -174,10 +175,19 @@ function context(
     sessionManager: SessionManager.inMemory(tmpdir()),
     ui: {
       confirm: confirm ?? (async () => answer === true),
-      select: async (_title: string, options: string[]) =>
-        typeof answer === "string" && answer !== "cancel"
+      select: async (title: string, options: string[]) => {
+        // The approval prompt offers three answers; `confirm` decides them.
+        if (options[0] === "Allow once")
+          return (await (confirm ?? (async () => answer === true))(
+            title,
+            title,
+          ))
+            ? options[0]
+            : "Deny";
+        return typeof answer === "string" && answer !== "cancel"
           ? options.find((item) => item === answer)
-          : undefined,
+          : undefined;
+      },
       setStatus: () => {},
       notify: () => {},
     },
@@ -615,6 +625,140 @@ describe("governed built-in tools", () => {
     ).rejects.toThrow(/builtin:default/);
   });
 
+  describe("allow for this session", () => {
+    /** An interactive context whose approval prompt picks `answer`. */
+    function choosing(answer: string, seen: string[][] = []) {
+      return {
+        hasUI: true,
+        sessionManager: SessionManager.inMemory(tmpdir()),
+        ui: {
+          confirm: async () => false,
+          select: async (_title: string, options: string[]) => {
+            seen.push(options);
+            return options.find((option) => option === answer);
+          },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionToolContext;
+    }
+
+    it("offers three answers and remembers only the exact target it was given for", async () => {
+      const { session, workspace } = await open();
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      await run(write, { path: "a.txt", content: "1" }, ctx);
+      expect(seen[0]).toEqual(["Allow once", "Allow for this session", "Deny"]);
+      const afterFirst = seen.length;
+      // The same file again: no prompt.
+      await run(write, { path: "a.txt", content: "2" }, ctx);
+      expect(seen).toHaveLength(afterFirst);
+      expect(readFileSync(join(workspace, "a.txt"), "utf8")).toBe("2");
+      // Another file in the same directory is another target: it asks.
+      await run(write, { path: "b.txt", content: "3" }, ctx);
+      expect(seen.length).toBeGreaterThan(afterFirst);
+    });
+
+    it("lasts one session, and allow once is never remembered", async () => {
+      const first = await open();
+      const seen: string[][] = [];
+      await run(
+        tool(governedTools(first.session, first.workspace), "write"),
+        { path: "a.txt", content: "1" },
+        choosing("Allow for this session", seen),
+      );
+      const second = await open();
+      const before = seen.length;
+      await run(
+        tool(governedTools(second.session, second.workspace), "write"),
+        { path: "a.txt", content: "1" },
+        choosing("Allow once", seen),
+      );
+      expect(seen.length).toBeGreaterThan(before);
+      const again = seen.length;
+      await run(
+        tool(governedTools(second.session, second.workspace), "write"),
+        { path: "a.txt", content: "2" },
+        choosing("Allow once", seen),
+      );
+      expect(seen.length).toBeGreaterThan(again);
+    });
+
+    it("never touches a deny, and never asks one", async () => {
+      const { session, workspace, home } = await open();
+      const seen: string[][] = [];
+      const read = tool(governedTools(session, workspace), "read");
+      await expect(
+        run(
+          read,
+          { path: join(home, ".ssh", "id_rsa") },
+          choosing("Allow for this session", seen),
+        ),
+      ).rejects.toThrow(/rule secrets/);
+      expect(seen).toEqual([]);
+    });
+
+    it("is audited as an approval, with the remembered scope on the first answer", async () => {
+      const { session, workspace, root } = await open(
+        [
+          "audit:",
+          "  enabled: true",
+          "  sinks:",
+          "    - { id: local, type: file, required: false }",
+        ],
+        {
+          userRules: [
+            {
+              id: "me.echo",
+              action: "shell.execute",
+              resource: "echo *",
+              effect: "ask",
+            },
+          ],
+        },
+      );
+      const bash = tool(governedTools(session, workspace), "bash");
+      const ctx = choosing("Allow for this session");
+      await run(bash, { command: "echo one" }, ctx);
+      await run(bash, { command: "echo one" }, ctx);
+      // A different command is a different target.
+      await expect(
+        run(bash, { command: "echo two" }, choosing("Deny")),
+      ).rejects.toThrow(/not allowed/);
+      await session.close();
+      const events = readFileSync(
+        join(root, "state", "logs", "audit.jsonl"),
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              event: string;
+              decision?: string;
+              detail?: Record<string, unknown>;
+            },
+        )
+        .filter(
+          (event) =>
+            event.event === "tool.allowed" &&
+            event.detail?.action === "shell.execute",
+        );
+      expect(events).toHaveLength(2);
+      expect(events[0]?.detail).toMatchObject({
+        approval: "approved",
+        remember: "session",
+      });
+      expect(events[1]?.detail).toMatchObject({ approval: "session" });
+      expect(events.map((event) => event.decision)).toEqual([
+        "approved",
+        "approved",
+      ]);
+    });
+  });
+
   it.each([
     ["Ctrl-C", "\x03"],
     ["Ctrl-D", "\x04"],
@@ -696,6 +840,20 @@ describe("governed built-in tools", () => {
       reason:
         "read was blocked because the policy check failed (AUDIT_UNAVAILABLE)",
     });
+  });
+
+  it("says why Plan mode refuses the shell and what to do instead", async () => {
+    const { session } = await open();
+    session.workflowMode = "plan";
+    const call = load(governanceHooks(session)).handlers.get("tool_call");
+    const refusal = (await call?.(
+      { toolName: "bash", input: { command: "ls" } },
+      context(),
+    )) as { block: boolean; reason: string };
+    expect(refusal.block).toBe(true);
+    expect(refusal.reason).toMatch(/read-only command/);
+    expect(refusal.reason).toMatch(/read tool/);
+    expect(refusal.reason).toMatch(/\/build/);
   });
 
   it("blocks writes and commands in Plan mode even when policy allows them", async () => {
@@ -933,8 +1091,10 @@ describe("governed shell output bounds", () => {
       workflowMode: "build",
       currentChannel: () => undefined,
       decide: async () => ({ outcome: "allow" }),
+      options: { lock: { deployment: { mode: "personal" } } },
       sandbox: {
         report: { level: "enforced" },
+        profile: { readDeny: [], writeAllow: [], network: "allow" },
         exec: async (
           _command: string,
           _cwd: string,
@@ -1326,12 +1486,54 @@ describe("Streamable HTTP MCP urls", () => {
         ),
       }),
     ]);
+    // The session says so once, with the cause and where to look.
+    const notices: string[] = [];
+    session.attachNotices((message) => notices.push(message));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(
+      /^MCP server tickets did not start \(.*UNIT_MCP_URL.*\), so its tools are unavailable\. Run unit doctor for details\.$/,
+    );
     await expect(
       open([allowStart, ...mcp(true)], { fetch, resolveTemplate: env({}) }),
     ).rejects.toMatchObject({
       code: "CONFIG_UNAVAILABLE",
       message: expect.stringContaining("UNIT_MCP_URL"),
     });
+  });
+});
+
+describe("failedServerNotices", () => {
+  const report = (
+    id: string,
+    state: "healthy" | "failed" | "denied",
+    required: boolean,
+    reason?: string,
+  ) =>
+    ({
+      id,
+      state,
+      required,
+      transport: "stdio",
+      tools: [],
+      ...(reason ? { reason } : {}),
+    }) as const;
+
+  it("names each failed optional server once and skips the rest", () => {
+    expect(
+      failedServerNotices(
+        [
+          report("a", "failed", false, "spawn  ENOENT\nnope"),
+          report("b", "failed", true, "required"),
+          report("c", "denied", false, "policy"),
+          report("d", "healthy", false),
+          report("e", "failed", false),
+        ],
+        "unit",
+      ),
+    ).toEqual([
+      "MCP server a did not start (spawn ENOENT nope), so its tools are unavailable. Run unit doctor for details.",
+      "MCP server e did not start (it did not start), so its tools are unavailable. Run unit doctor for details.",
+    ]);
   });
 });
 

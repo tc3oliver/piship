@@ -1,6 +1,7 @@
-// httpTransport: http-allowed on the access endpoints: runtime references
-// are checked again when they resolve, plain HTTP is admitted for the
-// opted-in gateway's origin only, and config explain shows the opt-in.
+// httpTransport on the access endpoints: plain HTTP to a private host is
+// admitted by default, runtime references are checked again when they
+// resolve, plain HTTP is admitted for the gateway's origin only, httpTransport:
+// https forces HTTPS-only, and config explain shows the effective transport.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,36 +32,46 @@ const ENV = {
   ACMECODE_LLM_GATEWAY_URL: "http://10.20.30.40:4000/v1",
 };
 
-/** The demo's access section with every endpoint opted in to plain HTTP. */
-function optedIn(access: AccessManifest): AccessManifest {
+/** The demo's access section with every endpoint set to `transport`. */
+function withTransport(
+  access: AccessManifest,
+  transport: "http-allowed" | "https",
+): AccessManifest {
   if (access.identity.mode !== "oidc" || !access.credential.broker)
     throw new Error("the demo uses OIDC and the broker");
   return {
     ...access,
     identity: {
       ...access.identity,
-      oidc: { ...access.identity.oidc, httpTransport: "http-allowed" },
+      oidc: { ...access.identity.oidc, httpTransport: transport },
     },
     credential: {
       ...access.credential,
-      broker: { ...access.credential.broker, httpTransport: "http-allowed" },
+      broker: { ...access.credential.broker, httpTransport: transport },
     },
-    inference: { ...access.inference, httpTransport: "http-allowed" },
+    inference: { ...access.inference, httpTransport: transport },
   };
 }
+const optedIn = (access: AccessManifest) =>
+  withTransport(access, "http-allowed");
 
-describe("access endpoints with httpTransport: http-allowed", () => {
+describe("access endpoints and httpTransport", () => {
   const lock = resolveLock(DEMO);
   const access = lock.access as AccessManifest;
 
-  it("resolves plain-HTTP references to private hosts only with the opt-in", () => {
-    expect(() => resolveRuntimeReferences(access, ENV)).toThrow(
+  it("resolves plain-HTTP references to private hosts unless https is forced", () => {
+    expect(() =>
+      resolveRuntimeReferences(withTransport(access, "https"), ENV),
+    ).toThrow(
       /inference\.baseUrl resolved to an unacceptable URL|identity\.oidc\.issuer resolved to an unacceptable URL/,
     );
-    const resolved = resolveRuntimeReferences(optedIn(access), ENV);
-    expect(resolved.baseUrl).toBe(ENV.ACMECODE_LLM_GATEWAY_URL);
-    expect(resolved.brokerEndpoint).toBe(ENV.ACMECODE_CREDENTIAL_BROKER_URL);
-    expect(resolved.issuer).toBe(ENV.ACMECODE_OIDC_ISSUER);
+    // The demo says nothing about httpTransport: that is the default.
+    for (const manifest of [access, optedIn(access)]) {
+      const resolved = resolveRuntimeReferences(manifest, ENV);
+      expect(resolved.baseUrl).toBe(ENV.ACMECODE_LLM_GATEWAY_URL);
+      expect(resolved.brokerEndpoint).toBe(ENV.ACMECODE_CREDENTIAL_BROKER_URL);
+      expect(resolved.issuer).toBe(ENV.ACMECODE_OIDC_ISSUER);
+    }
     // A reference that resolves to a public plain-HTTP host fails closed.
     for (const [name, field] of [
       ["ACMECODE_LLM_GATEWAY_URL", "inference.baseUrl"],
@@ -68,7 +79,7 @@ describe("access endpoints with httpTransport: http-allowed", () => {
       ["ACMECODE_OIDC_ISSUER", "identity.oidc.issuer"],
     ] as const)
       expect(() =>
-        resolveRuntimeReferences(optedIn(access), {
+        resolveRuntimeReferences(access, {
           ...ENV,
           [name]: "http://gateway.acme.example/v1",
         }),
@@ -101,35 +112,37 @@ describe("access endpoints with httpTransport: http-allowed", () => {
         distributionDir: stateDir,
         env,
       });
-    const opened = open(optedIn(access));
+    const opened = open(access);
     const admit = opened.inferencePlainHttp;
     expect(admit?.(new URL("http://10.20.30.40:4000/v1/chat"))).toBe(true);
     // The broker shares the host but not the port; it is not the gateway.
     expect(admit?.(new URL("http://10.20.30.40:8080/token"))).toBe(false);
     expect(admit?.(new URL("http://keycloak.corp.internal/"))).toBe(false);
-    // Only the gateway's opt-in widens the process dispatcher.
-    const brokerOnly = optedIn(access);
-    const { httpTransport: _, ...inference } = brokerOnly.inference;
+    // Only the gateway's own setting widens the process dispatcher.
+    const brokerOnly = withTransport(access, "http-allowed");
     expect(
       open(
-        { ...brokerOnly, inference },
+        {
+          ...brokerOnly,
+          inference: { ...brokerOnly.inference, httpTransport: "https" },
+        },
         { ...ENV, ACMECODE_LLM_GATEWAY_URL: "https://10.20.30.40:4000/v1" },
       ).inferencePlainHttp,
     ).toBeUndefined();
-    // Opted in, but the gateway resolves to https: nothing is widened.
+    // Allowed, but the gateway resolves to https: nothing is widened.
     expect(
-      open(optedIn(access), {
+      open(access, {
         ...ENV,
         ACMECODE_LLM_GATEWAY_URL: "https://10.20.30.40:4000/v1",
       }).inferencePlainHttp,
     ).toBeUndefined();
-    expect(open(optedIn(access)).network.allowHosts).toEqual([
+    expect(open(access).network.allowHosts).toEqual([
       "10.20.30.40",
       "keycloak.corp.internal",
     ]);
   });
 
-  it("is shown by config explain only when an endpoint opted in", async () => {
+  it("is shown by config explain as the effective transport of each endpoint", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "piship-plain-http-"));
     roots.push(stateDir);
     const governance = lock.governance?.manifest as GovernanceManifest;
@@ -146,11 +159,36 @@ describe("access endpoints with httpTransport: http-allowed", () => {
       });
     const keys = (rows: Awaited<ReturnType<typeof explain>>) =>
       rows.filter((row) => row.key.endsWith("httpTransport"));
-    expect(keys(await explain(access, governance))).toEqual([]);
+    // Absent is the default: plain HTTP to a private host is allowed.
+    expect(
+      keys(await explain(access, governance)).map((row) => [
+        row.key,
+        row.value,
+        row.source,
+      ]),
+    ).toEqual([
+      ["identity.oidc.httpTransport", "http-allowed", "builtin-default"],
+      ["credential.broker.httpTransport", "http-allowed", "builtin-default"],
+      ["inference.httpTransport", "http-allowed", "builtin-default"],
+    ]);
+    // https forces HTTPS-only and is shown as the owner's choice.
+    expect(
+      keys(await explain(withTransport(access, "https"), governance)).map(
+        (row) => [row.key, row.value, row.source],
+      ),
+    ).toEqual([
+      ["identity.oidc.httpTransport", "https", "distribution-enforced"],
+      ["credential.broker.httpTransport", "https", "distribution-enforced"],
+      ["inference.httpTransport", "https", "distribution-enforced"],
+    ]);
     const rows = keys(
       await explain(optedIn(access), {
         ...governance,
-        sandbox: { ...governance.sandbox, httpTransport: "http-allowed" },
+        sandbox: {
+          ...governance.sandbox,
+          endpoint: "http://sandbox.corp.internal:3000",
+          httpTransport: "http-allowed",
+        },
         audit: {
           ...governance.audit,
           sinks: [

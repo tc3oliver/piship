@@ -8,11 +8,14 @@ import {
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
+  inlineLoginOffered,
+  loginInline,
   runAuto,
   runConfig,
   runLogin,
   runLogout,
   runRollback,
+  runUninstall,
   runSandbox,
   runtimeStateDirectory,
   runUpdate,
@@ -30,6 +33,7 @@ import {
   deferredDownloadNotice,
   deferredToolDownloads,
   installSearchTools,
+  searchToolProblemNotice,
 } from "./launch/search-tools.js";
 
 export {
@@ -173,8 +177,18 @@ export async function launchPiDistribution(
   // to switch.
   const sessionAutoApprove =
     yolo && sessionAutoApproveTarget(metadata) !== undefined;
+  // At a terminal in a managed distribution (see `inlineLoginOffered`), a
+  // plain `login` that succeeds goes on into the session it was run for.
+  const atTerminal = inlineLoginOffered(
+    metadata.deployment.mode,
+    { stdinTTY: !!process.stdin.isTTY, stdoutTTY: !!process.stdout.isTTY },
+    process.env,
+  );
+  const loginContinues =
+    !sessionOption && args.length === 1 && args[0] === "login" && atTerminal;
   const startsSession =
     args.length === 0 ||
+    loginContinues ||
     (args.length === 1 &&
       (args[0] === "--smoke" || args[0] === "--smoke-model"));
   const agentFiles = startsSession
@@ -192,18 +206,6 @@ export async function launchPiDistribution(
       );
     }
   });
-  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
-  // Pi's agent directory here before Pi was imported (environment.ts).
-  startupMark("search_tools_start");
-  installSearchTools(metadata, options.distributionDir, agentDir);
-  // Pi's interactive mode would wait for a download of a missing fd or rg.
-  const deferred = deferredToolDownloads(metadata, agentDir);
-  if (deferred.length) {
-    process.env.PI_OFFLINE = "1";
-    console.error(deferredDownloadNotice(deferred));
-    startupNote("tool_downloads_deferred", deferred.join(","));
-  }
-  startupMark("search_tools_done");
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),
@@ -212,6 +214,10 @@ export async function launchPiDistribution(
     mode: metadata.deployment.mode,
     out: (message) => console.log(message),
     err: (message) => console.error(message),
+    // Only the interactive launch (no subcommand) may sign in on the spot.
+    ...(args.length === 0 && atTerminal
+      ? { loginInline: (access) => loginInline(ctx, access) }
+      : {}),
     ...(yolo ? { yolo: true } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
@@ -235,6 +241,10 @@ export async function launchPiDistribution(
             ? "\n  sandbox login | sandbox logout"
             : ""
         }${
+          metadata.deployment.mode === "personal"
+            ? "\n  config trust list | config trust forget [<path>|--all]"
+            : ""
+        }${
           metadata.governance.manifest.policy.userAuto === "allowed" &&
           metadata.deployment.mode === "managed"
             ? "\n  auto on | auto off | auto status"
@@ -256,26 +266,66 @@ export async function launchPiDistribution(
       : metadata.deployment.mode === "managed"
         ? "\n\n--yolo approves asks from the distribution defaults without a prompt for this session only, audited; deny and enforced rules still apply, and nothing is stored."
         : "\n\n--yolo approves every ask without a prompt for this session only, audited; deny still applies, and nothing is stored.";
+    const loginHelp = piNative
+      ? ""
+      : "\n\nlogin signs in; run bare at a terminal in a managed distribution, it then starts the session.";
     const piNativeHelp = piNative
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback | uninstall [--purge --yes]\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
-        : "\n\nCommands:\n  doctor [--json] | version";
+        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
+        : "\n\nCommands:\n  doctor [--json] | version | uninstall [--purge --yes]";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
     return;
   }
+  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
+  // Pi's agent directory here before Pi was imported (environment.ts). A
+  // problem with them (a lock without the target, a missing payload file, a
+  // read-only agent directory, a payload copy that does not match the lock)
+  // is a warning, never a failure: the command goes on without the tool, and
+  // never runs one that is not the pinned executable. `--version` and
+  // `--help` do not need them and never touch the agent directory.
+  startupMark("search_tools_start");
+  try {
+    installSearchTools(
+      metadata,
+      options.distributionDir,
+      agentDir,
+      undefined,
+      (tool, error) => ctx.err(searchToolProblemNotice(tool, error)),
+    );
+  } catch (error) {
+    // Reading the receipt or the tool directory failed as a whole.
+    ctx.err(
+      `Warning: the bundled search tools could not be checked (${error instanceof Error ? error.message : String(error)}). This start goes on without them.`,
+    );
+  }
+  // Pi's interactive mode would wait for a download of a missing fd or rg.
+  const deferred = deferredToolDownloads(metadata, agentDir);
+  if (deferred.length) {
+    process.env.PI_OFFLINE = "1";
+    console.error(deferredDownloadNotice(deferred));
+    startupNote("tool_downloads_deferred", deferred.join(","));
+  }
+  startupMark("search_tools_done");
   if (!sessionOption) {
-    if (args.length === 1 && command === "login") return runLogin(ctx);
+    if (args.length === 1 && command === "login") {
+      // A failed or cancelled login throws here and starts nothing.
+      await runLogin(ctx);
+      if (!loginContinues) return;
+      ctx.err(`Signed in. Starting ${metadata.app.command}...`);
+      return runInteractive(ctx, requestedModel, newSession);
+    }
     if (args.length === 1 && command === "logout") return runLogout(ctx);
     if (command === "doctor") return runDoctor(ctx, rest);
     if (args.length === 1 && command === "models") return runModels(ctx);
     if (command === "update") return runUpdate(ctx, rest);
     if (args.length === 1 && command === "rollback") return runRollback(ctx);
+    if (command === "uninstall") return runUninstall(ctx, rest);
     if (command === "config") return runConfig(ctx, rest);
     // Every sandbox subcommand goes to the runner, which refuses anything
     // but login and logout without echoing the command line: a mistyped one

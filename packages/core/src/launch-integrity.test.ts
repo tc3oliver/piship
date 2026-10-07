@@ -3,7 +3,13 @@
 // the release was installed, however many files the payload holds; with
 // runtime.verifyAtLaunch the whole payload, inventory included.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +19,7 @@ import {
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
 import { hash } from "./digest.js";
+import { runtimeStateDirectory } from "./state-paths.js";
 import { installDistribution, readInstallReceipt } from "./install/index.js";
 import { payloadInventory, verifyLaunchPayload } from "./payload.js";
 
@@ -32,6 +39,70 @@ function editLock(payload: string): void {
   lock.runtime = { ...lock.runtime, edited: true };
   writeFileSync(lockPath(payload), `${JSON.stringify(lock, null, 2)}\n`);
 }
+
+describe("files a power loss leaves missing or empty", () => {
+  const damaged = (path: string) =>
+    expect.objectContaining({
+      code: "INTEGRITY_FAILED",
+      message: expect.stringContaining(path),
+      userAction: expect.stringMatching(
+        /piship repair acmepi <release archive>/,
+      ),
+    });
+
+  it("is reported with the repair command when a file every launch reads is missing or empty", async () => {
+    await installed();
+    const { payload } = readInstallReceipt(ID);
+    const lock = readFileSync(lockPath(payload));
+    writeFileSync(lockPath(payload), "");
+    expect(() => verifyLaunchPayload(payload)).toThrow(
+      damaged("piship.lock (empty)"),
+    );
+    rmSync(lockPath(payload));
+    expect(() => verifyLaunchPayload(payload)).toThrow(
+      damaged("missing: piship.lock"),
+    );
+    writeFileSync(lockPath(payload), lock);
+    const target = join(payload, "metadata", "target.json");
+    writeFileSync(target, "");
+    expect(() => verifyLaunchPayload(payload)).toThrow(
+      damaged("metadata/target.json (empty)"),
+    );
+  });
+
+  it("is found by a stat of the inventory's files, which hashes nothing, and only once per boot", async () => {
+    await installed();
+    const { payload } = readInstallReceipt(ID);
+    const state = runtimeStateDirectory({ value: ID });
+    mkdirSync(join(state, "cache"), { recursive: true });
+    const victim = join(payload, "package-lock.json");
+    const original = readFileSync(victim);
+    writeFileSync(victim, "");
+    vi.mocked(createHash).mockClear();
+    expect(() => verifyLaunchPayload(payload)).toThrow(
+      damaged("package-lock.json (empty)"),
+    );
+    expect(vi.mocked(createHash)).toHaveBeenCalledTimes(1);
+    rmSync(victim);
+    expect(() => verifyLaunchPayload(payload)).toThrow(
+      damaged("missing: package-lock.json"),
+    );
+    // Intact: accepted, and recorded for this boot, so a later damage waits
+    // for the next boot's check (the lock digest is still checked each time).
+    writeFileSync(victim, original);
+    expect(verifyLaunchPayload(payload).app.id).toBe(ID);
+    expect(existsSync(join(state, "cache", "payload-files.json"))).toBe(true);
+    writeFileSync(victim, "");
+    expect(() => verifyLaunchPayload(payload)).not.toThrow();
+  });
+
+  it("is not checked for a build directory", async () => {
+    const { a } = await installed();
+    const build = join(a.directory, "payload");
+    writeFileSync(join(build, "package-lock.json"), "");
+    expect(() => verifyLaunchPayload(build)).not.toThrow();
+  });
+});
 
 describe("an installed release's lock", () => {
   it("is launched when it is the one that was installed", async () => {

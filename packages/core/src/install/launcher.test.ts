@@ -32,6 +32,7 @@ import {
   installedLauncherPath,
   launcherSource,
   ownsCommandShim,
+  windowsShimPath,
   refreshInstalledLauncher,
   writeShim,
 } from "./launcher.js";
@@ -294,6 +295,44 @@ describe("the command shim", () => {
     // at install time outlives the node the user switches to.
     expect(text).not.toMatch(/where|\.exe|if exist/);
     expect(text.split("\r\n").filter(Boolean)).toHaveLength(3);
+  });
+
+  it("writes %USERPROFILE% for a non-ASCII path under the profile, because cmd reads the shim in the OEM code page", () => {
+    const home = "C:\\Users\\Zoë";
+    const under = `${home}\\AppData\\Local\\piship\\apps\\acmepi\\launch.mjs`;
+    const text = commandShimSource(under, "win32", home);
+    expect(text).toContain(
+      'node "%USERPROFILE%\\AppData\\Local\\piship\\apps\\acmepi\\launch.mjs" %*',
+    );
+    // Every byte of the shim is ASCII, so the code page cannot change it.
+    expect(Buffer.byteLength(text)).toBe(text.length);
+    // Case-insensitive on Windows; an ASCII path is left as it is.
+    expect(windowsShimPath(`c:\\users\\zoë\\x\\launch.mjs`, home)).toBe(
+      "%USERPROFILE%\\x\\launch.mjs",
+    );
+    expect(windowsShimPath(launcher, home)).toBe(launcher);
+    expect(ownsCommandShim(file(text), under, "win32", home)).toBe(true);
+    // The shim an earlier PiShip wrote with the literal path is still its own.
+    const literal = `@echo off\r\nnode "${under}" %*\r\nif %errorlevel% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\n`;
+    expect(ownsCommandShim(file(literal), under, "win32", home)).toBe(true);
+  });
+
+  it("fails an install path outside the profile that a shim cannot hold, naming PISHIP_INSTALL_HOME", () => {
+    const outside = "D:\\Daten\\Müller\\apps\\acmepi\\launch.mjs";
+    expect(() => windowsShimPath(outside, "C:\\Users\\me")).toThrow(
+      /command shim cannot hold/,
+    );
+    let action: string | undefined;
+    try {
+      commandShimSource(outside, "win32", "C:\\Users\\me");
+    } catch (error) {
+      action = (error as { userAction?: string }).userAction;
+    }
+    expect(action).toContain("PISHIP_INSTALL_HOME");
+    // A non-ASCII directory below the profile still cannot be named.
+    expect(() =>
+      windowsShimPath("C:\\Users\\me\\Café\\launch.mjs", "C:\\Users\\me"),
+    ).toThrow(/PiShip|command shim/);
   });
 
   it("keeps the POSIX shim as it was", () => {

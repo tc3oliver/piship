@@ -820,7 +820,9 @@ async function createScenario<Releases extends ReleaseFixtures>(
           });
       expect(installed.status, installed.stderr).toBe(0);
       expect(installed.stdout).toContain(`Installed ${id}@1.0.0`);
-      expect(installed.stdout).toContain(`Next: run ${id} --help`);
+      // The next step depends on the mode: variables and login (managed),
+      // /login inside Pi (Pi-native), or --help.
+      expect(installed.stdout).toMatch(new RegExp(`Next: .*${id}`));
       rmSync(extracted, { recursive: true, force: true });
       expect((await run(["version"])).stdout).toContain(
         `${distribution.name} 1.0.0`,

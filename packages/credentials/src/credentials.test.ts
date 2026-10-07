@@ -247,6 +247,25 @@ describe("platform secret stores", () => {
       code: "CONFIG_INVALID",
     });
   });
+  it.skipIf(process.platform === "win32")(
+    "advises a local state directory, not the opt-in already taken, for permissions that are not owner-only",
+    async () => {
+      const directory = join(temp, "secrets");
+      const store = new RestrictedFileSecretStore(directory);
+      await store.put("piship:x:inference#1", secret);
+      const file = join(directory, readdirSync(directory)[0] ?? "");
+      chmodSync(file, 0o644);
+      const error = (await store.get("piship:x:inference#1").then(
+        () => null,
+        (caught: unknown) => caught,
+      )) as PiShipError;
+      expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+      expect(error.message).toContain("not owner-only");
+      expect(error.userAction).toContain("PISHIP_STATE_HOME");
+      expect(error.userAction).toMatch(/WSL.*SMB or NFS.*exFAT/);
+      expect(error.userAction).not.toMatch(/opt in/);
+    },
+  );
   // A store that exists but cannot be read is unavailable, never absent.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "reports an unreadable file store or entry as SECRET_STORE_UNAVAILABLE naming the path",

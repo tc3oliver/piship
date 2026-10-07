@@ -3,6 +3,7 @@
 // certain to fail at launch is rejected by the parser; one that fails or is
 // ignored only in some environments is reported as a warning by `validate`.
 import { posix, win32 } from "node:path";
+import { isLoopbackHost } from "@piship/contracts";
 import {
   AccessFieldError,
   type AccessManifest,
@@ -206,32 +207,6 @@ function mcpServers(
         message:
           "Identity headers take their value from the signed-in OIDC identity and need identity.mode: oidc",
       });
-    if (
-      server.httpTransport === "http-allowed" &&
-      (hasRuntimeReference(url) || new URL(url).protocol === "http:")
-    )
-      findings.push({
-        path: `${path}.httpTransport`,
-        certain: false,
-        message: hasRuntimeReference(url)
-          ? "http-allowed: if this URL resolves to plain HTTP, traffic to the server, including any identity headers, is unencrypted and unauthenticated on the network path; it must resolve to https or a private or internal host, or the server does not start"
-          : "http-allowed: traffic to this server, including any identity headers, is unencrypted and unauthenticated on the network path; serve it over https where possible",
-      });
-    const plainName = plainHost(url);
-    if (
-      server.httpTransport === "http-allowed" &&
-      plainName !== undefined &&
-      new URL(url).protocol === "http:" &&
-      (plainName.endsWith(".local") ||
-        (!plainName.includes(".") &&
-          !plainName.includes(":") &&
-          plainName !== "localhost"))
-    )
-      findings.push({
-        path: `${path}.url`,
-        certain: false,
-        message: `${plainName} is resolved through mDNS or the machine's DNS search domains, which another device on the network can answer for; over plain HTTP nothing verifies the server, so use an IP address or a fully qualified name under .internal or .corp`,
-      });
     // `always`: the server can never start; `otherwise`: it starts only if
     // a runtime value resolves as the message says.
     const [always, otherwise] = server.required
@@ -300,25 +275,28 @@ function mcpServers(
 }
 
 /**
- * Endpoints that opted in to plain HTTP (`httpTransport: http-allowed`),
- * other than MCP servers: what travels unencrypted, and a host name that
- * another device on the network can answer for.
+ * Endpoints that may be reached over plain HTTP to a private or internal
+ * host, which is the default: what travels unencrypted, as one warning, and
+ * each host name that another device on the network can answer for. An
+ * endpoint with `httpTransport: https` is never listed. A `${NAME}` URL is
+ * listed only when the owner wrote `http-allowed`, since what it resolves to
+ * is unknown until launch.
  */
 function plainHttpEndpoints(
   access: AccessManifest | undefined,
   governance: GovernanceManifest | undefined,
 ): Finding[] {
   const endpoints: {
-    readonly path: string;
+    readonly transport: string | undefined;
     readonly urls: readonly (readonly [string, string | undefined])[];
     readonly exposed: string;
     readonly always?: boolean;
   }[] = [];
   const oidc =
     access?.identity.mode === "oidc" ? access.identity.oidc : undefined;
-  if (oidc?.httpTransport === "http-allowed")
+  if (oidc)
     endpoints.push({
-      path: "identity.oidc.httpTransport",
+      transport: oidc.httpTransport,
       urls: [["identity.oidc.issuer", oidc.issuer]],
       exposed:
         "the authorization code and the identity tokens, including the refresh token, which anyone on the network path can read and replay",
@@ -327,9 +305,9 @@ function plainHttpEndpoints(
       always: true,
     });
   const broker = access?.credential.broker;
-  if (broker?.httpTransport === "http-allowed")
+  if (broker)
     endpoints.push({
-      path: "credential.broker.httpTransport",
+      transport: broker.httpTransport,
       urls: [
         ["credential.broker.endpoint", broker.endpoint],
         ["credential.broker.revokeEndpoint", broker.revokeEndpoint],
@@ -337,65 +315,87 @@ function plainHttpEndpoints(
       exposed:
         "the identity token sent to the broker and the gateway credential it issues, which anyone on the network path can read and replay until they expire",
     });
-  if (access?.inference.httpTransport === "http-allowed")
+  if (access?.inference.baseUrl !== undefined)
     endpoints.push({
-      path: "inference.httpTransport",
+      transport: access.inference.httpTransport,
       urls: [["inference.baseUrl", access.inference.baseUrl]],
       exposed:
         "the gateway credential, which anyone on the network path can read and replay until it expires, and every prompt, file excerpt, and response, which can also be altered in transit",
     });
   for (const [index, sink] of (governance?.audit.sinks ?? []).entries())
-    if (sink.httpTransport === "http-allowed")
+    if (sink.url !== undefined)
       endpoints.push({
-        path: `audit.sinks[${index}].httpTransport`,
+        transport: sink.httpTransport,
         urls: [[`audit.sinks[${index}].url`, sink.url]],
         exposed:
           "audit events, including any captured content, which can also be dropped or altered in transit",
       });
   const sandbox = governance?.sandbox;
-  if (sandbox?.httpTransport === "http-allowed")
+  if (sandbox)
     endpoints.push({
-      path: "sandbox.httpTransport",
+      transport: sandbox.httpTransport,
       urls: [
         ["sandbox.endpoint", sandbox.endpoint],
         ["sandbox.router", sandbox.router],
       ],
       exposed: `commands, their output, and files sent to the sandbox${sandbox.credential === "stored" ? ", and the stored sandbox credential" : ""}, which can also be altered in transit`,
     });
-  const findings: Finding[] = [];
+  if (governance?.mcp.mode !== "off")
+    for (const server of governance?.mcp.servers ?? [])
+      if (server.transport === "streamable-http" && server.url !== undefined)
+        endpoints.push({
+          transport: server.httpTransport,
+          urls: [[`mcp.servers.${server.id}.url`, server.url]],
+          exposed:
+            "traffic to the server, including any identity headers, which can also be altered in transit",
+        });
+  const listed: string[] = [];
+  const spoofable: Finding[] = [];
   for (const endpoint of endpoints) {
+    if (endpoint.transport === "https") continue;
     const declared = endpoint.urls.flatMap(([path, url]) =>
       url === undefined ? [] : [[path, url] as const],
     );
-    const templated = declared.some(([, url]) => hasRuntimeReference(url));
-    const plain = declared.some(
+    const plain = declared.filter(
       ([, url]) =>
-        !hasRuntimeReference(url) && new URL(url).protocol === "http:",
-    );
-    if (plain || templated || endpoint.always)
-      findings.push({
-        path: endpoint.path,
-        certain: false,
-        message:
-          plain || endpoint.always
-            ? `http-allowed: over plain HTTP, ${endpoint.exposed}, travel unencrypted and unauthenticated on the network path; serve it over https where possible`
-            : `http-allowed: if this URL resolves to plain HTTP, ${endpoint.exposed}, travel unencrypted and unauthenticated on the network path; it must resolve to https or a private or internal host, or it is refused`,
-      });
-    for (const [path, url] of declared) {
-      const host = plainHost(url);
-      if (
-        host !== undefined &&
+        !hasRuntimeReference(url) &&
         new URL(url).protocol === "http:" &&
-        spoofableHostName(host)
-      )
-        findings.push({
+        !isLoopbackHost(new URL(url).hostname),
+    );
+    const explicit = endpoint.transport === "http-allowed";
+    const templated = explicit
+      ? declared.filter(([, url]) => hasRuntimeReference(url))
+      : [];
+    if (plain.length)
+      listed.push(
+        `${plain.map(([path]) => path).join(", ")} (${endpoint.exposed})`,
+      );
+    else if (templated.length || (explicit && endpoint.always))
+      listed.push(
+        `${(templated.length ? templated : declared).map(([path]) => path).join(", ")}, if it resolves to plain HTTP (${endpoint.exposed})`,
+      );
+    for (const [path, url] of plain) {
+      const host = plainHost(url);
+      if (host !== undefined && spoofableHostName(host))
+        spoofable.push({
           path,
           certain: false,
           message: spoofableHostWarning(host),
         });
     }
   }
-  return findings;
+  return [
+    ...(listed.length
+      ? [
+          {
+            path: "network",
+            certain: false,
+            message: `Plain HTTP to a private or internal host is admitted by default, and these endpoints travel unencrypted and unauthenticated on the network path: ${listed.join("; ")}. Serve them over https where possible, or set httpTransport: https on an endpoint to require it`,
+          },
+        ]
+      : []),
+    ...spoofable,
+  ];
 }
 
 /**
@@ -446,12 +446,22 @@ export function runtimeVariableUse(manifest: Manifest): {
   readonly launch: readonly string[];
   readonly update: readonly string[];
 } {
-  const updateOnly = new Set(
-    manifest.lifecycle ? lifecycleReferences(manifest.lifecycle) : [],
-  );
+  const { launch, update } = variableReferences(manifest);
+  const variables = manifest.access?.variables ?? [];
+  return {
+    launch: variables.filter((name) => launch.has(name)),
+    update: variables.filter((name) => !launch.has(name) && update.has(name)),
+  };
+}
+/** The variable names the manifest references, by when they are read. */
+function variableReferences(manifest: Manifest): {
+  readonly launch: ReadonlySet<string>;
+  readonly update: ReadonlySet<string>;
+} {
   const access = manifest.access;
+  const launch = new Set<string>();
   if (access) {
-    const launch = [
+    for (const text of [
       ...(access.identity.mode === "oidc"
         ? [
             access.identity.oidc.issuer,
@@ -463,16 +473,36 @@ export function runtimeVariableUse(manifest: Manifest): {
       access.credential.broker?.revokeEndpoint,
       access.inference.baseUrl,
       ...access.network.tls.additionalCA,
-    ].flatMap((text) => (text ? referencedVariables(text) : []));
+    ])
+      for (const name of text ? referencedVariables(text) : [])
+        launch.add(name);
     if (manifest.governance)
-      launch.push(...governanceReferences(manifest.governance));
-    for (const name of launch) updateOnly.delete(name);
+      for (const name of governanceReferences(manifest.governance))
+        launch.add(name);
   }
-  const variables = access?.variables ?? [];
   return {
-    launch: variables.filter((name) => !updateOnly.has(name)),
-    update: variables.filter((name) => updateOnly.has(name)),
+    launch,
+    update: new Set(
+      manifest.lifecycle ? lifecycleReferences(manifest.lifecycle) : [],
+    ),
   };
+}
+/**
+ * Declared variables that nothing references. They change nothing at launch,
+ * so they are reported by `launchWarnings` and never refuse the manifest.
+ */
+function unusedVariables(manifest: Manifest): ValidationDiagnostic[] {
+  const { launch, update } = variableReferences(manifest);
+  return (manifest.access?.variables ?? []).flatMap((name, index) =>
+    launch.has(name) || update.has(name)
+      ? []
+      : [
+          {
+            path: `variables[${index}]`,
+            message: `${name} is declared but not referenced; remove it from variables, or use \${${name}} in a field that accepts a runtime reference`,
+          },
+        ],
+  );
 }
 
 /**
@@ -482,6 +512,7 @@ export function runtimeVariableUse(manifest: Manifest): {
  */
 export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
+    ...unusedVariables(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

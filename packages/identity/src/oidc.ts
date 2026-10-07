@@ -23,7 +23,7 @@ export interface OidcIdentityOptions {
   /** Managed fetch honoring proxy, CA, and private-only policy. */
   readonly fetch: ManagedFetch;
   /**
-   * `identity.oidc.httpTransport: http-allowed`: the issuer and the
+   * Unless `identity.oidc.httpTransport: https`: the issuer and the
    * endpoints its discovery document names may use plain HTTP to a private
    * or internal host. `fetch` must admit those requests; this provider
    * refuses a plain-HTTP endpoint on any other host, including the
@@ -198,7 +198,7 @@ function session(
 }
 
 /**
- * With `http-allowed`, every endpoint the discovery document names is https,
+ * With plain HTTP permitted, every endpoint the discovery document names is https,
  * or plain HTTP to loopback or a private or internal host. The managed fetch
  * checks the endpoints PiShip requests; this also covers the authorization
  * and end-session endpoints, which the browser opens.
@@ -220,7 +220,7 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
     if (url.protocol === "http:" && !isPrivateNetworkHost(url.hostname))
       throw new PiShipError(
         "CONFIG_INVALID",
-        `The identity provider's ${key} is plain HTTP to ${url.hostname}, which is public; identity.oidc.httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+        `The identity provider's ${key} is plain HTTP to ${url.hostname}, which is public; plain HTTP is accepted only to a private or internal host`,
         { component: "identity" },
       );
     endpoints.push(value);

@@ -9,17 +9,24 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import type {
+  ApprovalAnswer,
   ApprovalChannel,
   AuditEvent,
   ManagedFetch,
 } from "@piship/contracts";
-import { PI_VERSION, resolveLock } from "@piship/core";
+import {
+  forgetProjectTrust,
+  listRememberedProjects,
+  PI_VERSION,
+  resolveLock,
+} from "@piship/core";
 import { toPosixPath } from "@piship/policy";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveProject } from "./governance/project.js";
@@ -77,21 +84,23 @@ async function open(
     readonly defaultEffect?: "allow" | "deny" | "ask";
     readonly files?: readonly string[];
     readonly subdirectory?: string;
-    readonly answer?: "approved" | "denied";
+    readonly answer?: ApprovalAnswer;
     readonly headless?: boolean;
+    /** Launch again in the root (workspace, state, home) of an earlier one. */
+    readonly again?: string;
     readonly sandboxRequired?: boolean;
   } = {},
 ) {
   // The project root is resolved through links, as the matcher sees it.
-  const root = realpathSync(
-    mkdtempSync(join(tmpdir(), "piship-project-trust-")),
-  );
-  roots.push(root);
+  const root =
+    options.again ??
+    realpathSync(mkdtempSync(join(tmpdir(), "piship-project-trust-")));
+  if (!options.again) roots.push(root);
   const distribution = join(root, "distribution");
   const workspace = join(root, "workspace");
   mkdirSync(distribution, { recursive: true });
   mkdirSync(join(workspace, ".git"), { recursive: true });
-  for (const file of options.files ?? CLAUDE_FILES) {
+  for (const file of options.again ? [] : (options.files ?? CLAUDE_FILES)) {
     mkdirSync(dirname(join(workspace, file)), { recursive: true });
     writeFileSync(
       join(workspace, file),
@@ -147,7 +156,11 @@ async function open(
         deployment: { ...resolved.deployment, mode: options.mode },
       }
     : resolved;
-  const prompts: { title: string; message: string }[] = [];
+  const prompts: {
+    title: string;
+    message: string;
+    offerRemember?: boolean;
+  }[] = [];
   const answer = options.answer ?? "approved";
   const startupApproval: ApprovalChannel = async (_decision, detail) => {
     prompts.push(detail);
@@ -226,7 +239,10 @@ describe("personal mode", () => {
   it("asks once, for the whole configuration, when the project is not known", async () => {
     const { session, prompts, claude } = await open({ unmatched: true });
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]?.title).toBe("Project Claude Code configuration");
+    // The root CLAUDE.md of an unknown project is asked about in the same
+    // question, not a second one.
+    expect(prompts[0]?.title).toBe("Project configuration");
+    expect(prompts[0]?.message).toContain("CLAUDE.md");
     for (const path of CLAUDE_PATHS)
       expect(prompts[0]?.message).toContain(path);
     expect(session.projectTrust.trusted).toBe(true);
@@ -252,8 +268,9 @@ describe("personal mode", () => {
           event.resource === "project:.claude",
       ),
     ).toBeDefined();
-    expect(notices.join("\n")).toMatch(
-      /Project Claude Code configuration .* is not loaded: project trust: denied/,
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(
+      /^Not loaded from this project: \.claude\/.* \(you declined; start unit again and answer a to trust it\)\.$/,
     );
   });
 
@@ -367,6 +384,7 @@ describe("managed mode", () => {
     const { session, prompts } = await open({
       mode: "managed",
       unmatched: true,
+      unknown: ["instructions: deny"],
     });
     expect(prompts).toEqual([]);
     expect(session.projectTrust.trusted).toBe(false);
@@ -692,4 +710,169 @@ it("managed pi-code hooks entry points are excluded when only rules are admitted
   expect(session.loader.extensions.some((path) => path.includes("hooks"))).toBe(
     false,
   );
+});
+
+describe("a kept answer", () => {
+  const statePath = (root: string) =>
+    join(root, "state", "config", "project-trust.json");
+  const unknownAsk = { unmatched: true } as const;
+
+  it("is offered with the question, and ends the question until the files change", async () => {
+    const first = await open({ ...unknownAsk, answer: "approved-always" });
+    expect(first.prompts).toHaveLength(1);
+    expect(first.prompts[0]?.offerRemember).toBe(true);
+    expect(first.session.projectTrust.trusted).toBe(true);
+    await first.session.close();
+    const stored = readFileSync(statePath(first.root), "utf8");
+    // The digest and the paths are kept, never a file's content.
+    expect(stored).toMatch(/"digest": "[0-9a-f]{64}"/);
+    expect(stored).not.toContain("text");
+    const second = await open({ ...unknownAsk, again: first.root });
+    expect(second.prompts).toEqual([]);
+    expect(second.session.projectTrust.trusted).toBe(true);
+    for (const item of second.claude()) expect(item.loaded).toBe(true);
+    await second.session.close();
+    // A headless launch has no one to ask, and needs none.
+    const headless = await open({
+      ...unknownAsk,
+      again: first.root,
+      headless: true,
+    });
+    expect(headless.session.projectTrust.trusted).toBe(true);
+    await headless.session.close();
+    // A changed file is a new question.
+    writeFileSync(join(first.workspace, ".claude/rules/style.md"), "changed\n");
+    const changed = await open({ ...unknownAsk, again: first.root });
+    expect(changed.prompts).toHaveLength(1);
+  });
+
+  it("is stored owner-only", async () => {
+    const first = await open({ ...unknownAsk, answer: "approved-always" });
+    await first.session.close();
+    if (process.platform !== "win32")
+      expect(statSync(statePath(first.root)).mode & 0o777).toBe(0o600);
+  });
+
+  it("can be a refusal, which also ends the question and says how to undo it", async () => {
+    const first = await open({ ...unknownAsk, answer: "denied-always" });
+    expect(first.session.projectTrust.trusted).toBe(false);
+    await first.session.close();
+    const second = await open({ ...unknownAsk, again: first.root });
+    expect(second.prompts).toEqual([]);
+    expect(second.session.projectTrust).toMatchObject({ trusted: false });
+    expect(second.session.projectTrust.reason).toMatch(/remembered/);
+    expect(second.notices.join("\n")).toMatch(
+      /you chose never to trust it; undo with unit config trust forget/,
+    );
+  });
+
+  it("is forgotten on request, and the question comes back", async () => {
+    const first = await open({ ...unknownAsk, answer: "approved-always" });
+    await first.session.close();
+    expect(listRememberedProjects(join(first.root, "state"))).toHaveLength(1);
+    expect(forgetProjectTrust(join(first.root, "state"), first.workspace)).toBe(
+      1,
+    );
+    const second = await open({ ...unknownAsk, again: first.root });
+    expect(second.prompts).toHaveLength(1);
+  });
+
+  it("never outranks policy: a deny stays denied and a rule still applies", async () => {
+    const first = await open({ ...unknownAsk, answer: "approved-always" });
+    await first.session.close();
+    const denied = await open({
+      ...unknownAsk,
+      unknown: ["claudeHooks: deny", "instructions: allow"],
+      again: first.root,
+    });
+    expect(denied.prompts).toEqual([]);
+    expect(denied.session.projectTrust.trusted).toBe(false);
+    expect(denied.session.projectTrust.reason).toMatch(/denies claudeHooks/);
+    await denied.session.close();
+    const ruled = await open({
+      ...unknownAsk,
+      again: first.root,
+      policy: [
+        "  enforced:",
+        "    - { id: no-hooks, action: resource.load, resource: 'project:.claude/hooks', effect: deny }",
+      ],
+    });
+    expect(ruled.session.projectTrust).toMatchObject({
+      trusted: false,
+      reason: "policy no-hooks",
+    });
+  });
+
+  it("is not offered, and not honoured, in a managed distribution", async () => {
+    const first = await open({
+      ...unknownAsk,
+      mode: "managed",
+    });
+    expect(first.prompts[0]?.offerRemember).toBeFalsy();
+    // The distribution asked, and a person may answer yes for this launch,
+    // but a managed launch does not keep it.
+    await first.session.close();
+    expect(listRememberedProjects(join(first.root, "state"))).toEqual([]);
+    const second = await open({
+      ...unknownAsk,
+      mode: "managed",
+      again: first.root,
+    });
+    expect(second.prompts).toHaveLength(1);
+  });
+
+  it("asks once for everything the project needs a yes for", async () => {
+    const { session, prompts } = await open({
+      ...unknownAsk,
+      files: ["AGENTS.md", ".claude/rules/r.md"],
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.message).toContain("AGENTS.md");
+    expect(prompts[0]?.message).toContain(".claude/rules");
+    expect(session.projectTrust.trusted).toBe(true);
+    expect(session.loader.instructions.map((item) => item.path)).toEqual([
+      expect.stringMatching(/AGENTS\.md$/),
+    ]);
+  });
+});
+
+describe("what a launch leaves out", () => {
+  it("is said in one line naming the files and how to trust them, once until they change", async () => {
+    const first = await open({
+      unmatched: true,
+      headless: true,
+      files: ["AGENTS.md", ".claude/rules/r.md"],
+    });
+    expect(first.notices).toHaveLength(1);
+    expect(first.notices[0]).toMatch(
+      /\.claude\/rules.*AGENTS\.md.*nobody was there to ask; start unit in a terminal and answer a to trust it/,
+    );
+    expect(first.session.loader.instructions).toEqual([]);
+    await first.session.close();
+    const second = await open({
+      unmatched: true,
+      headless: true,
+      again: first.root,
+    });
+    expect(second.notices).toEqual([]);
+    await second.session.close();
+    writeFileSync(join(first.workspace, "AGENTS.md"), "changed\n");
+    const third = await open({
+      unmatched: true,
+      headless: true,
+      again: first.root,
+    });
+    expect(third.notices).toHaveLength(1);
+  });
+
+  it("names the manifest key when policy denies the file", async () => {
+    const { notices } = await open({
+      unmatched: true,
+      unknown: ["instructions: deny"],
+      files: ["AGENTS.md"],
+    });
+    expect(notices).toEqual([
+      "Not loaded from this project: AGENTS.md (set policy.projectTrust.unknown.instructions to allow in piship.yaml and rebuild to trust it).",
+    ]);
+  });
 });

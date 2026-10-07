@@ -26,6 +26,7 @@ import {
   type ReleaseMetadata,
   type VulnerabilityReport,
 } from "./metadata.js";
+import { pishipCommand } from "../invocation.js";
 import { isUnqualifiedPayload, RELEASE_QUALIFIED } from "./qualification.js";
 import { hash } from "./shared.js";
 
@@ -105,7 +106,7 @@ export async function verifyRelease(
   if (!statSync(path).isFile() && isUnqualifiedPayload(path))
     throw fail(
       `${path} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, recorded tests, or checksums`,
-      "Run piship release <manifest> to build the qualified release",
+      `Run ${pishipCommand()} release <manifest> to build the qualified release`,
     );
   if (statSync(path).isFile()) {
     const checkDigest = (actual: string): void =>

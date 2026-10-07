@@ -1,7 +1,14 @@
 // `config explain` states the precedence the policy engine applies to user
 // rules in config/policy.json: narrowing only in managed mode, replacing a
 // default in personal mode.
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +69,36 @@ describe("config explain policy guidance", () => {
     expect(note).toContain("may relax it");
     expect(note).toContain("never override an enforced rule");
     expect(note).not.toContain("narrowing only");
+  });
+});
+
+describe("config over damaged preferences", () => {
+  it("unsets a preference after moving the damaged file aside, with a notice", async () => {
+    const manifest = example("personal");
+    mkdirSync(join(temp, "config"), { recursive: true });
+    writeFileSync(join(temp, "config", "preferences.json"), "{not json");
+    const out: string[] = [];
+    const err: string[] = [];
+    await runConfig(
+      {
+        metadata: resolveLock(manifest),
+        distributionDir: dirname(manifest),
+        stateDir: temp,
+        mode: "personal",
+        out: (message) => out.push(message),
+        err: (message) => err.push(message),
+      },
+      ["unset", "models.allowed"],
+    );
+    expect(out.join("\n")).toContain("Removed models.allowed");
+    const aside = readdirSync(join(temp, "config")).filter((name) =>
+      name.startsWith("preferences.json.damaged-"),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(temp, "config", aside[0] as string), "utf8")).toBe(
+      "{not json",
+    );
+    expect(err.join("\n")).toMatch(/Notice: .*unreadable.*damaged-/);
   });
 });
 

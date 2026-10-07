@@ -8,6 +8,7 @@ import {
   type AccessManifest,
   checkUrl,
   RuntimeReferenceError,
+  referencedVariables,
   resolveTemplate,
 } from "@piship/schema";
 
@@ -38,6 +39,50 @@ function resolveReference(
 }
 
 /**
+ * How to set `names` in the user's shell: PowerShell on Windows (and in a
+ * PowerShell started elsewhere), sh otherwise. The values are placeholders:
+ * the administrator supplies them.
+ */
+export function setVariablesHint(
+  names: readonly string[],
+  env: Environment = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const powershell = !env.SHELL && (platform === "win32" || !!env.PSModulePath);
+  if (powershell)
+    return `PowerShell (lasts for this window):\n${names.map((name) => `  $env:${name}="..."`).join("\n")}`;
+  return `sh, bash or zsh:\n${names.map((name) => `  export ${name}=...`).join("\n")}`;
+}
+
+/**
+ * Report every unset runtime variable among `templates` at once, with how to
+ * set them, instead of failing on the first and again on the next launch.
+ */
+function assertVariablesSet(
+  templates: readonly (readonly [string, string | undefined])[],
+  env: Environment,
+): void {
+  const unset = new Map<string, string>();
+  for (const [field, value] of templates)
+    for (const name of value ? referencedVariables(value) : [])
+      if (name && !env[name]?.trim() && !unset.has(name))
+        unset.set(name, field);
+  if (!unset.size) return;
+  const names = [...unset.keys()];
+  const one = names.length === 1;
+  throw new PiShipError(
+    "CONFIG_UNAVAILABLE",
+    one
+      ? `Runtime variable ${names[0]} for ${unset.get(names[0] ?? "")} is not set`
+      : `Runtime variables are not set: ${names.map((name) => `${name} (for ${unset.get(name)})`).join(", ")}`,
+    {
+      component: "config",
+      userAction: `Ask your administrator for ${one ? "its value" : "their values"}, then set ${one ? "it" : "them"} in the environment that starts this command. In ${setVariablesHint(names, env)}`,
+    },
+  );
+}
+
+/**
  * Resolve `network.tls.additionalCA`. A declared bundle is never dropped: an
  * unset variable fails exactly as it does at launch.
  */
@@ -45,6 +90,13 @@ export function resolveAdditionalCA(
   access: AccessManifest,
   env: Environment = process.env,
 ): string[] {
+  assertVariablesSet(
+    access.network.tls.additionalCA.map((path, index) => [
+      `network.tls.additionalCA[${index}]`,
+      path,
+    ]),
+    env,
+  );
   return access.network.tls.additionalCA.map((path, index) =>
     resolveReference(access, env, `network.tls.additionalCA[${index}]`, path),
   );
@@ -55,7 +107,29 @@ export function resolveRuntimeReferences(
   access: AccessManifest,
   env: Environment = process.env,
 ): ResolvedEndpoints {
-  // `plainHttp`: the endpoint's `httpTransport: http-allowed`; the resolved
+  const oidc =
+    access.identity.mode === "oidc" ? access.identity.oidc : undefined;
+  assertVariablesSet(
+    [
+      ["identity.oidc.issuer", oidc?.issuer],
+      ["identity.oidc.clientId", oidc?.clientId],
+      ["identity.oidc.audience", oidc?.audience],
+      ["credential.broker.endpoint", access.credential.broker?.endpoint],
+      [
+        "credential.broker.revokeEndpoint",
+        access.credential.broker?.revokeEndpoint,
+      ],
+      ["inference.baseUrl", access.inference.baseUrl],
+      ...access.network.tls.additionalCA.map(
+        (path, index): [string, string] => [
+          `network.tls.additionalCA[${index}]`,
+          path,
+        ],
+      ),
+    ],
+    env,
+  );
+  // `plainHttp`: the endpoint's `httpTransport` is not `https`; the resolved
   // URL is checked as a static one is, so a public plain-HTTP host fails.
   const one = (
     field: string,
@@ -81,14 +155,13 @@ export function resolveRuntimeReferences(
   };
   const identity =
     access.identity.mode === "oidc" ? access.identity.oidc : undefined;
-  const brokerPlainHttp =
-    access.credential.broker?.httpTransport === "http-allowed";
+  const brokerPlainHttp = access.credential.broker?.httpTransport !== "https";
   const values = {
     issuer: one(
       "identity.oidc.issuer",
       identity?.issuer,
       true,
-      identity?.httpTransport === "http-allowed",
+      identity?.httpTransport !== "https",
     ),
     clientId: one("identity.oidc.clientId", identity?.clientId, false),
     audience: one("identity.oidc.audience", identity?.audience, false),
@@ -108,7 +181,7 @@ export function resolveRuntimeReferences(
       "inference.baseUrl",
       access.inference.baseUrl,
       true,
-      access.inference.httpTransport === "http-allowed",
+      access.inference.httpTransport !== "https",
     ),
   };
   const output: Record<string, unknown> = {

@@ -1,9 +1,11 @@
 // The doctor groups that need no Pi runtime or governed session.
+import { statfsSync } from "node:fs";
 import { LocalMetrics } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import {
   abandonedTemporaryCount,
+  installHome,
   inspectInstalledLauncher,
   lifecycleStatus,
 } from "../index.js";
@@ -134,12 +136,23 @@ function updateDoctor(
   }
   if (status.previous) ok("rollback", `${status.previous} retained`);
   else ok("rollback", "no retained release");
+  const free = freeInstallBytes();
+  if (free !== undefined) {
+    const kept = [status.active, status.previous].filter(Boolean).join(", ");
+    const text = `${(free / 1_073_741_824).toFixed(1)} GiB free on the install volume; keeping ${kept}`;
+    if (free < LOW_DISK_BYTES)
+      warn(
+        "disk",
+        `${text}. Free some space: an update needs about the size of a release`,
+      );
+    else ok("disk", text);
+  }
   if (status.lastCheck)
     ok("last check", `${status.lastCheck.result} (${status.lastCheck.time})`);
   if (status.leftovers.length)
     warn(
       "interrupted",
-      `${status.leftovers.length} leftover item(s); cleaned by the next update or rollback`,
+      `${status.leftovers.length} leftover item(s) in the install directory (${status.leftovers.slice(0, 3).join(", ")}${status.leftovers.length > 3 ? ", ..." : ""}); update, rollback, and doctor remove obsolete releases once no running session uses them`,
     );
   if (status.runtimeLeases) {
     if (status.runtimeLeases.live)
@@ -147,7 +160,7 @@ function updateDoctor(
     if (status.runtimeLeases.stale)
       warn(
         "runtime leases",
-        `${status.runtimeLeases.stale} stale lease(s); cleaned by the next update or rollback`,
+        `${status.runtimeLeases.stale} stale lease record(s) from sessions that ended without cleaning up; they hold nothing back and are removed by uninstall or repair`,
       );
   }
   const counts = LocalMetrics.load(ctx.stateDir).snapshot().lifecycle ?? {};
@@ -158,6 +171,18 @@ function updateDoctor(
         .map(([key, count]) => `${key}=${count}`)
         .join(", "),
     );
+}
+
+/** Below this, an update (about one release of extra space) may not fit. */
+const LOW_DISK_BYTES = 1_073_741_824;
+
+function freeInstallBytes(): number | undefined {
+  try {
+    const stats = statfsSync(installHome());
+    return stats.bavail * stats.bsize;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Whether the update source resolves to plain HTTP on a non-loopback host. */

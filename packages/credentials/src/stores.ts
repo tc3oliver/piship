@@ -516,6 +516,14 @@ export class WindowsCredentialSecretStore implements SecretStore {
             this.description,
             error instanceof Error ? error.message : String(error),
           );
+        // Add-Type needs FullLanguage as the helper does: the per-request
+        // PowerShell below would only fail the same way, seconds later.
+        if (error.constrained)
+          throw unavailable(
+            this.description,
+            "PowerShell runs in a constrained language mode here (AppLocker or Windows Defender Application Control), so it cannot reach the Credential Manager",
+            "Ask the administrator to allow powershell.exe in FullLanguage mode, or ask the distribution's author to store the sign-in in owner-only files with credential.storage.provider: file in piship.yaml",
+          );
       }
     return this.#invoke([op, target, ...(value === undefined ? [] : [value])]);
   }
@@ -615,7 +623,8 @@ export class RestrictedFileSecretStore implements SecretStore {
       if (mode)
         throw unavailable(
           this.description,
-          "directory permissions are not owner-only",
+          `the permissions of ${this.directory} are not owner-only and cannot be set: its file system probably ignores POSIX permissions (WSL /mnt/c, an SMB or NFS share, exFAT)`,
+          "Move the state directory to a local disk with POSIX permissions: set PISHIP_STATE_HOME to a directory there, then sign in again",
         );
     }
   }
@@ -636,7 +645,7 @@ export class RestrictedFileSecretStore implements SecretStore {
       unavailable(
         this.description,
         `cannot read ${path}: ${detail}`,
-        `Give your user owner-only access to ${this.directory} and its files (chmod 700 on the directory, 600 on the files), or remove an entry that is not a valid secret file and sign in again`,
+        `Give your user owner-only access to ${this.directory} and its files (chmod 700 on the directory, 600 on the files), or remove an entry that is not a valid secret file and sign in again. If chmod has no effect, the file system ignores POSIX permissions (WSL /mnt/c, an SMB or NFS share, exFAT): set PISHIP_STATE_HOME to a directory on a local disk`,
       );
     const code = (error: unknown) =>
       (error as NodeJS.ErrnoException).code ?? (error as Error).message;

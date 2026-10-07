@@ -2,7 +2,7 @@
 
 MyPi is the neutral personal reference distribution on `piship/v1`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
-- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's crash log and the `fd` and `rg` binaries it downloads go to MyPi's state too ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
+- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's crash log and the `fd` and `rg` binaries it downloads go to MyPi's state too ([interactive launch](#interactive-launch)). A project's own `AGENTS.md`, skills, and themes load (a project with no recognised origin is asked once per launch), project extensions and `.mcp.json` servers ask first, and hooks, agents, and providers stay denied (`policy.projectTrust`).
 - **An exact pinned Pi**, 1.0.3.
 - **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
@@ -68,6 +68,8 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    tar -xzf dist/releases/mypi-1.0.0-<target>.tar.gz -C /tmp
    sh /tmp/mypi-1.0.0-<target>/install.sh --use-existing-state
    ```
+
+   On Windows, run the same step in PowerShell: the default execution policy refuses an unsigned `.ps1`, so start it with `powershell -ExecutionPolicy Bypass -File <extracted folder>\install.ps1 --use-existing-state`. The installed command is `mypi.cmd` in the bin directory.
 
 3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
 

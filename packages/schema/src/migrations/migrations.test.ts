@@ -341,7 +341,10 @@ describe("migration verdicts", () => {
 
   for (const [name, reason] of [
     ["cannot-migrate-invalid", /runtime\.pi/],
-    ["cannot-migrate-future-schema", /Expected piship\/v1alpha1 or/],
+    [
+      "cannot-migrate-future-schema",
+      /Unsupported schema piship\/v2; the current schema is piship\/v1/,
+    ],
     ["cannot-migrate-tool-glob", /Tool names use letters/],
   ] as const)
     it(`cannot migrate: ${name}`, () => {
