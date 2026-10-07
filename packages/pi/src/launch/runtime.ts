@@ -154,6 +154,30 @@ export interface SessionOptions {
   readonly disposable?: boolean;
 }
 
+/**
+ * The model a resumed session switches to when the one it ended on is no
+ * longer allowed: the one the launch chose, or else the first the
+ * distribution still allows. Only a distribution that allows none fails.
+ */
+export function replacementModel<T>(
+  chosen: T | undefined,
+  allowed: readonly T[],
+  previous: string,
+  command: string,
+): T {
+  const replacement = chosen ?? allowed[0];
+  if (replacement === undefined)
+    throw new PiShipError(
+      "MODEL_DENIED",
+      `The resumed session uses ${previous}, which is not allowed, and this distribution allows no other model`,
+      {
+        userAction: `Ask the distribution owner to allow a model, then start ${command} again`,
+        component: "inference",
+      },
+    );
+  return replacement;
+}
+
 async function startRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
@@ -403,14 +427,17 @@ async function startRuntime(
       current &&
       !governed.isSelectable(current.provider, current.id)
     ) {
-      if (!model)
-        throw new PiShipError(
-          "MODEL_DENIED",
-          `The resumed session uses ${current.provider}/${current.id}, which is not allowed`,
-        );
-      await result.session.setModel(model);
+      // The model the launch chose, or else the first one the distribution
+      // still allows: a session is never refused for the model it ended on.
+      const replacement = replacementModel(
+        model,
+        modelRuntime.getAvailableSnapshot(),
+        `${current.provider}/${current.id}`,
+        ctx.metadata.app.command,
+      );
+      await result.session.setModel(replacement);
       ctx.err(
-        `Notice: the resumed session used ${current.provider}/${current.id}, which is no longer allowed; switched to ${model.provider}/${model.id}.`,
+        `Notice: the resumed session used ${current.provider}/${current.id}, which is no longer allowed; switched to ${replacement.provider}/${replacement.id}.`,
       );
     }
     const services: AgentSessionServices = {
