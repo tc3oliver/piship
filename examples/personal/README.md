@@ -69,6 +69,8 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    sh /tmp/mypi-1.0.0-<target>/install.sh --use-existing-state
    ```
 
+   On Windows, run the same step in PowerShell: the default execution policy refuses an unsigned `.ps1`, so start it with `powershell -ExecutionPolicy Bypass -File <extracted folder>\install.ps1 --use-existing-state`. The installed command is `mypi.cmd` in the bin directory.
+
 3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
 
    ```bash

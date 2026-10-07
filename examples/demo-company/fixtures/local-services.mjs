@@ -746,6 +746,21 @@ export async function startLocalServices(options = {}) {
   };
 }
 
+/**
+ * The lines that set `variables` in the user's shell. Windows gets both of its
+ * shells, since PowerShell does not read cmd's `set`.
+ */
+export function environmentLines(variables, platform) {
+  if (platform !== "win32")
+    return variables.map(([name, value]) => `export ${name}=${value}`);
+  return [
+    "# PowerShell:",
+    ...variables.map(([name, value]) => `$env:${name}="${value}"`),
+    "# cmd.exe:",
+    ...variables.map(([name, value]) => `set ${name}=${value}`),
+  ];
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const portIndex = process.argv.indexOf("--port");
   const services = await startLocalServices(
@@ -754,12 +769,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   console.log(
     "# Local demo fixtures (not a real IdP or gateway). Export these, then run acmecode login:",
   );
-  for (const [name, value] of Object.entries(services.env()))
-    console.log(
-      process.platform === "win32"
-        ? `set ${name}=${value}`
-        : `export ${name}=${value}`,
-    );
+  for (const line of environmentLines(
+    Object.entries(services.env()),
+    process.platform,
+  ))
+    console.log(line);
   console.log(
     "# Sign-in is auto-approved: open the printed login URL in a browser.",
   );
