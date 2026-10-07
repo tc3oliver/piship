@@ -24,7 +24,6 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deadPid,
@@ -130,27 +129,28 @@ function open(newSession = false) {
   return openSession(project, sessionDir, { newSession, command: "mypi" });
 }
 
-/** Opening the session fails with the diagnostic, and the file is unchanged. */
+/**
+ * Opening the session does not fail: it starts a new session and says why,
+ * and the damaged file is unchanged.
+ */
 function expectRefused(file: string, pattern: RegExp) {
   const before = readFileSync(file);
   const mtime = statSync(file).mtimeMs;
-  let error: unknown;
+  const opened = open();
   try {
-    open();
-  } catch (caught) {
-    error = caught;
+    expect(opened.notice).toMatch(pattern);
+    expect(opened.notice).toContain(file);
+    expect(opened.notice).toContain("starts a new session");
+    expect(opened.notice).toContain("kept unchanged");
+    expect(opened.sessionManager.getSessionFile()).not.toBe(file);
+    expect(readFileSync(file).equals(before)).toBe(true);
+    expect(statSync(file).mtimeMs).toBe(mtime);
+  } finally {
+    opened.ownership.release();
   }
-  expect(error).toBeInstanceOf(PiShipError);
-  const refused = error as PiShipError;
-  expect(refused.message).toMatch(pattern);
-  expect(refused.message).toContain(file);
-  expect(refused.userAction).toContain("mypi --new-session");
-  expect(refused.userAction).toContain("kept unchanged");
-  expect(readFileSync(file).equals(before)).toBe(true);
-  expect(statSync(file).mtimeMs).toBe(mtime);
-  // The owner record taken for the inspection is given back.
+  // The owner records taken for the inspection and the new session are given back.
   expect(readdirSync(join(sessionDir, OWNER_DIRECTORY))).toEqual([]);
-  return refused;
+  return opened;
 }
 
 describe("resuming a persisted session", () => {
@@ -236,7 +236,7 @@ describe("resuming a persisted session", () => {
   });
 });
 
-describe("a corrupt session is not resumed (#62)", () => {
+describe("a corrupt session is not resumed, and does not block the launch (#62)", () => {
   it("refuses a malformed message in the middle", () => {
     const { file, lines: entries } = persistedSession();
     const broken = [...entries] as unknown[];
@@ -253,11 +253,7 @@ describe("a corrupt session is not resumed (#62)", () => {
     const { file, lines: entries } = persistedSession();
     const last = JSON.stringify(entries.at(-1));
     rewrite(file, [...entries.slice(0, -1), last.slice(0, 30)], "");
-    const refused = expectRefused(
-      file,
-      /last record \(line \d+\) is incomplete/,
-    );
-    expect(refused.code).toBe("CONFIG_UNAVAILABLE");
+    expectRefused(file, /last record \(line \d+\) is incomplete/);
   });
 
   it("resumes a complete last record that only lacks its newline", () => {
@@ -364,6 +360,34 @@ describe("a corrupt session is not resumed (#62)", () => {
     expectRefused(file, /line 2 is not a session entry/);
   });
 
+  it("starts a new session with a notice instead of failing, and the next launch continues it", () => {
+    const { file, id, lines: entries } = persistedSession();
+    rewrite(file, [...entries.slice(0, 2), "{not json", ...entries.slice(2)]);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(file, past, past);
+    const before = readFileSync(file);
+    const first = open();
+    expect(first.notice).toMatch(
+      /most recent session of this project is damaged.*line 3 is not valid JSON.*starts a new session/,
+    );
+    expect(first.notice).toContain(file);
+    expect(first.sessionManager.getSessionId()).not.toBe(id);
+    first.sessionManager.appendMessage({
+      role: "user",
+      content: "fresh start",
+      timestamp: Date.now(),
+    });
+    first.sessionManager.appendMessage(assistant("hello"));
+    first.ownership.release();
+    expect(readFileSync(file).equals(before)).toBe(true);
+    const next = open();
+    expect(next.notice).toBeUndefined();
+    expect(next.sessionManager.getSessionId()).toBe(
+      first.sessionManager.getSessionId(),
+    );
+    next.ownership.release();
+  });
+
   it("starts a new session with --new-session and keeps the damaged one", () => {
     const { file, id, lines: entries } = persistedSession();
     rewrite(file, [...entries.slice(0, 2), "{not json", ...entries.slice(2)]);
@@ -456,7 +480,7 @@ describe("a damaged acceptance session is replaced, not refused", () => {
     const first = disposable();
     expect(first.sessionManager.getSessionId()).not.toBe(id);
     expect(first.notice).toMatch(
-      /acceptance session is damaged \(line 4 is not valid JSON\), so this run starts a new one/,
+      /acceptance session is damaged, and Pi would continue without the damaged part \(line 4 is not valid JSON\), so this launch starts a new session/,
     );
     expect(readFileSync(file).equals(damaged)).toBe(true);
     first.ownership.release();
