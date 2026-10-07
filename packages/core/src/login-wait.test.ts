@@ -1,7 +1,11 @@
 // What `login` prints while it waits for the browser, and how Ctrl-C ends
 // the wait (#149).
 import { describe, expect, it } from "vitest";
-import { loginWaitingHint, untilInterrupted } from "./branded/login.js";
+import {
+  loginWaitingHint,
+  readRedirectLine,
+  untilInterrupted,
+} from "./branded/login.js";
 
 const authorize = (redirect: string) =>
   `https://idp.example/authorize?client_id=acme&redirect_uri=${encodeURIComponent(redirect)}&state=s`;
@@ -35,6 +39,25 @@ describe("login waiting hint", () => {
       expect(hint).toContain("ssh -N -L 8765:127.0.0.1:8765");
     },
   );
+
+  it.each([
+    ["a remote shell", { SSH_TTY: "/dev/pts/1" }],
+    ["PISHIP_NO_BROWSER=1", { PISHIP_NO_BROWSER: "1" }],
+  ])("offers pasting the address first for %s", (_name, env) => {
+    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
+      env,
+    });
+    expect(hint).toContain("paste it here, then press Enter");
+    expect(hint).toContain("127.0.0.1:8765");
+  });
+
+  it("mentions pasting concisely outside a remote shell", () => {
+    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
+      env: {},
+    });
+    expect(hint).toContain("paste it here");
+    expect(hint).not.toMatch(/ssh/i);
+  });
 
   it("forwards an IPv6 loopback redirect to the same address", () => {
     const hint = loginWaitingHint(authorize("http://[::1]:9000/cb"), {
@@ -72,5 +95,36 @@ describe("login cancellation", () => {
     const before = process.listenerCount("SIGINT");
     await expect(untilInterrupted(async () => "done")).resolves.toBe("done");
     expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+});
+
+describe("login paste reader", () => {
+  it("reads one line from stdin and stops reading when aborted", async () => {
+    const { PassThrough } = await import("node:stream");
+    const input = new PassThrough();
+    const original = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", {
+      value: input,
+      configurable: true,
+    });
+    try {
+      const first = readRedirectLine(new AbortController().signal);
+      input.write("http://127.0.0.1:1/callback?code=c&state=s\n");
+      await expect(first).resolves.toBe(
+        "http://127.0.0.1:1/callback?code=c&state=s",
+      );
+      // Abort or end of input without a line never resolves.
+      const controller = new AbortController();
+      let settled = false;
+      void readRedirectLine(controller.signal).then(() => {
+        settled = true;
+      });
+      controller.abort();
+      input.end();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(settled).toBe(false);
+    } finally {
+      if (original) Object.defineProperty(process, "stdin", original);
+    }
   });
 });

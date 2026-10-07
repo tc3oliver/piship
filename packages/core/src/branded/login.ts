@@ -69,6 +69,34 @@ function openBrowser(url: string): void {
   }
 }
 
+function isRemoteShell(env: NodeJS.ProcessEnv): boolean {
+  return !!(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
+}
+
+/**
+ * Read one pasted line from stdin for the login's paste fallback. It ends
+ * (stdin closes its interface and is paused again) when `signal` aborts, and
+ * stays pending when stdin ends without a line, so the loopback keeps working.
+ */
+export function readRedirectLine(
+  signal: AbortSignal,
+  notice?: string,
+): Promise<string> {
+  if (notice) process.stderr.write(`${notice}\n`);
+  return new Promise<string>((resolve) => {
+    // terminal: false keeps Ctrl-C as a plain SIGINT for untilInterrupted.
+    const rl = createInterface({ input: process.stdin, terminal: false });
+    const stop = () => rl.close();
+    rl.once("line", (line) => {
+      signal.removeEventListener("abort", stop);
+      rl.close();
+      resolve(line);
+    });
+    if (signal.aborted) stop();
+    else signal.addEventListener("abort", stop, { once: true });
+  });
+}
+
 /**
  * What `login` prints under the authorization URL while it waits. A loopback
  * `redirect_uri` in the URL names where the browser must return; in a remote
@@ -98,14 +126,22 @@ export function loginWaitingHint(
     "If the browser shows an error from the identity provider instead of a sign-in page, sign-in cannot complete: press Ctrl-C and ask your administrator to check the client ID and its registered redirect URI.",
   ];
   const { env } = options;
-  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) {
-    const port = redirect.port || "80";
+  if (isRemoteShell(env) || env.PISHIP_NO_BROWSER === "1") {
     lines.push(
-      `This is a remote shell: the browser must reach ${redirect.host} on this machine. On the computer with the browser, forward the port in another terminal, then open the URL there:`,
-      `  ssh -N -L ${port}:${redirect.hostname}:${port} <this host>`,
-      "Or run login on the computer with the browser.",
+      `No browser here? Open the URL on any computer, sign in, then copy the full address from the browser (it will show "can't connect" on ${redirect.host}) and paste it here, then press Enter.`,
     );
-  }
+    if (isRemoteShell(env)) {
+      const port = redirect.port || "80";
+      lines.push(
+        `Or, in this remote shell, forward the port: the browser must reach ${redirect.host} on this machine, so on the computer with the browser run this in another terminal, then open the URL there:`,
+        `  ssh -N -L ${port}:${redirect.hostname}:${port} <this host>`,
+        "Or run login on the computer with the browser.",
+      );
+    }
+  } else
+    lines.push(
+      "If the browser cannot return here, copy the full address it ends on and paste it here, then press Enter.",
+    );
   return lines.join("\n");
 }
 
@@ -215,6 +251,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
           openBrowser(url);
         },
         readSecret: readSecretInput,
+        readRedirectUrl: readRedirectLine,
         signal,
       }),
     ).finally(() => saveMetrics(metrics));
