@@ -16,6 +16,8 @@ import type { ChannelRelease } from "./channel.js";
 const MAX_METADATA_BYTES = 1024 * 1024;
 const METADATA_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 30 * 60_000;
+/** An archive stream that delivers nothing for this long is treated as dropped. */
+const ARCHIVE_IDLE_TIMEOUT_MS = 60_000;
 
 function tooLarge(name: string, limit: number): PiShipError {
   return new PiShipError(
@@ -31,40 +33,80 @@ function tooLarge(name: string, limit: number): PiShipError {
 /**
  * Stream a response body into `destination`, stopping past `limit` bytes.
  * Returns the SHA-256 of what was written, computed while it streamed.
+ *
+ * A body that stops early (a connection dropped by sleep or a network
+ * change, a stalled stream, a server that closes before the signed size) is
+ * a retryable interruption, not an integrity failure: only a body of the
+ * full length is judged by its digest.
  */
 async function saveBody(
   response: Response,
   destination: string,
   name: string,
   limit: number,
+  idleMs: number,
 ): Promise<string> {
   const { Readable, Transform } = await import("node:stream");
   const { pipeline } = await import("node:stream/promises");
   const { createWriteStream } = await import("node:fs");
   const digest = createHash("sha256");
   let received = 0;
+  const idle = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const rearm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => idle.abort(), idleMs);
+  };
+  const interrupted = (reason: string): PiShipError =>
+    new PiShipError(
+      "UPDATE_FAILED",
+      `Downloading ${name} was interrupted ${reason}`,
+      {
+        retryable: true,
+        userAction:
+          "Run update again; if it keeps stopping at the same size, report the update source",
+      },
+    );
+  rearm();
   try {
     await pipeline(
       Readable.fromWeb(response.body as never),
       new Transform({
         transform(chunk: Buffer, _encoding, callback) {
+          rearm();
           received += chunk.length;
           digest.update(chunk);
           callback(received > limit ? tooLarge(name, limit) : null, chunk);
         },
       }),
       createWriteStream(destination, { flags: "wx" }),
+      { signal: idle.signal },
     );
-    return digest.digest("hex");
   } catch (error) {
-    if (["TimeoutError", "AbortError"].includes((error as Error).name))
+    if (error instanceof PiShipError) throw error;
+    const failure = error as NodeJS.ErrnoException;
+    if (idle.signal.aborted)
+      throw interrupted(
+        `after ${received} bytes: the update source sent nothing for ${idleMs / 1000} s`,
+      );
+    if (["TimeoutError", "AbortError"].includes(failure.name))
       throw new PiShipError(
         "UPDATE_FAILED",
         `Update source stopped sending ${name} before the deadline`,
         { retryable: true },
       );
-    throw error;
+    // A local failure writing the file (a full disk) is not the network's.
+    if (failure.syscall !== undefined && failure.code !== undefined)
+      throw error;
+    throw interrupted(
+      `after ${received} bytes (${failure.cause instanceof Error ? failure.cause.message : failure.message})`,
+    );
+  } finally {
+    clearTimeout(timer);
   }
+  if (received < limit)
+    throw interrupted(`after ${received} of ${limit} bytes`);
+  return digest.digest("hex");
 }
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
@@ -369,6 +411,7 @@ export async function downloadArchive(
   destination: string,
   fetcher: typeof fetch = fetch,
   transport?: UpdateTransport,
+  idleMs: number = ARCHIVE_IDLE_TIMEOUT_MS,
 ): Promise<string> {
   if (
     basename(entry.archive) !== entry.archive ||
@@ -391,7 +434,13 @@ export async function downloadArchive(
       ARCHIVE_TIMEOUT_MS,
       transport,
     );
-    actual = await saveBody(response, destination, entry.archive, entry.bytes);
+    actual = await saveBody(
+      response,
+      destination,
+      entry.archive,
+      entry.bytes,
+      idleMs,
+    );
   } else {
     const path = join(resolve(source), entry.archive);
     if (statSync(path).size > entry.bytes)
