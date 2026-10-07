@@ -503,6 +503,10 @@ function artifactFor(target: string): string {
   if (existsSync(path) && statSync(path).isDirectory()) return path;
   return readInstallReceipt(target).payload;
 }
+/** What to do about a `runtime.pi` that is not the pinned Pi. */
+function piPinReview(stated: string): string {
+  return `runtime.pi is ${stated} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until you remove the runtime.pi line (the build then uses the pinned Pi, and the field cannot go stale again) or set it to "${PI_VERSION}" after re-verifying the distribution (docs/compatibility.md, "Upgrading Pi")`;
+}
 export async function runCli(
   args: readonly string[],
   output: CliOutput,
@@ -668,11 +672,9 @@ export async function runCli(
         const pin = readManifest(target).runtime.pi;
         const review = [
           ...check.review,
-          ...(pin === PI_VERSION
+          ...(pin === undefined || pin === PI_VERSION
             ? []
-            : [
-                `runtime.pi is ${pin} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until the pin is updated and the distribution is re-verified (docs/compatibility.md, "Upgrading Pi")`,
-              ]),
+            : [piPinReview(pin)]),
         ];
         if (!check.changes.length && !review.length)
           output.stdout(`Already ${check.to}; nothing to migrate.`);
@@ -704,6 +706,11 @@ export async function runCli(
           output.stdout(
             `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${list(plan.changes)}\n\n${plan.source}`,
           );
+        // A stale Pi pin is the usual reason to run this after a PiShip
+        // upgrade, so say how to fix it even when nothing else changes.
+        const pin = readManifest(target).runtime.pi;
+        if (pin !== undefined && pin !== PI_VERSION)
+          output.stderr(`Note: ${piPinReview(pin)}`);
       }
     } else if (command === "config") {
       const configTarget = rest[0] ?? "";

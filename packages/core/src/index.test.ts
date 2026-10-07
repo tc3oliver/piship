@@ -71,6 +71,26 @@ describe("distribution core", () => {
     lockManifest(path);
     expect(requireCurrentLock(path).app.id).toBe("mypi");
   });
+  it("uses the pinned Pi when runtime.pi is left out", () => {
+    const { path } = fixture();
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('runtime:\n  pi: "1.0.3"\n', ""),
+    );
+    expect(readManifest(path).runtime.pi).toBeUndefined();
+    lockManifest(path);
+    expect(requireCurrentLock(path).runtime.version).toBe("1.0.3");
+  });
+  it("refuses another Pi and says how to fix the manifest", () => {
+    const { path } = fixture();
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('"1.0.3"', '"0.9.9"'),
+    );
+    expect(() => checkPiVersion(readManifest(path))).toThrow(
+      /Pi 0\.9\.9 is not available.*Remove the runtime\.pi line.*set it to "1\.0\.3"/,
+    );
+  });
   it("rejects resource roots and nested symlinks during locking", () => {
     const { dir, path } = fixture();
     writeFileSync(

@@ -60,12 +60,18 @@ export function channelTrustFromLock(
 ): readonly UpdateTrustKey[] {
   return channelTrustKeys(lock.updates);
 }
+/**
+ * A manifest may leave `runtime.pi` out, which means the Pi this PiShip
+ * pins, so it keeps working across PiShip upgrades. One that states a
+ * version must state the pinned one.
+ */
 export function checkPiVersion(manifest: Manifest): void {
-  if (manifest.runtime.pi !== PI_VERSION)
+  const stated = manifest.runtime.pi;
+  if (stated !== undefined && stated !== PI_VERSION)
     throw new ManifestError(
       "invalid field",
       "runtime.pi",
-      `Pi ${manifest.runtime.pi} is not available in this PiShip build. Pinned runtime: ${PI_VERSION}.`,
+      `Pi ${stated} is not available in this PiShip build. Pinned runtime: ${PI_VERSION}. Remove the runtime.pi line to use the pinned Pi (it follows every PiShip upgrade), or set it to "${PI_VERSION}".`,
     );
 }
 

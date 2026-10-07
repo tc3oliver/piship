@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { checkVariableName, LATEST_SCHEMA } from "@piship/schema";
-import { PI_VERSION } from "./compatibility.js";
 import { distributionStateDirectory } from "./state-paths.js";
 
 /**
@@ -114,8 +113,9 @@ app:
   name: ${id}
   command: ${id}
   version: 1.0.0
-runtime:
-  pi: "${PI_VERSION}"
+# runtime.pi is left out on purpose: the build uses the Pi version this
+# PiShip pins, so a PiShip upgrade does not break the manifest. State it
+# ("runtime: {pi: ...}") only to refuse any other Pi.
 `;
   if (options.managed) {
     const candidate = id.toUpperCase().replaceAll("-", "_");
