@@ -152,6 +152,17 @@ describe("login with identity.oidc.flow: device_code", () => {
     expect(second.err.join("\n")).not.toMatch(/ssh -N -L/);
   });
 
+  it.each(["SSH_CLIENT", "SSH_TTY"])(
+    "opens no browser when %s alone marks a remote shell",
+    async (name) => {
+      process.env[name] = "set";
+      const { ctx, err } = context();
+      await runLogin(ctx);
+      expect(browser.spawned).toEqual([]);
+      expect(err.join("\n")).toContain("DEMO-CODE");
+    },
+  );
+
   it("opens the verification URL, with the code in it when there is one, otherwise", async () => {
     services.knobs.deviceComplete = true;
     await runLogin(context().ctx);
