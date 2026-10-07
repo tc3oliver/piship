@@ -49,6 +49,7 @@ export async function runConfig(
       ctx.metadata.app.theme,
       key,
       action === "set" ? rest[0] : undefined,
+      (notice) => ctx.err(`Notice: ${notice}`),
     );
     ctx.out(
       action === "set"

@@ -1,4 +1,6 @@
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -254,6 +256,44 @@ describe("configuration precedence", () => {
     if (process.platform !== "win32")
       expect(statSync(path).mode & 0o777).toBe(0o600);
   });
+
+  it("sets and unsets a preference over a damaged file by moving it aside, never deleting it", () => {
+    const path = join(temp, "config", "preferences.json");
+    mkdirSync(join(temp, "config"), { recursive: true });
+    writeFileSync(path, "{not json");
+    const notices: string[] = [];
+    setPreference(path, access, undefined, "model", undefined, (notice) =>
+      notices.push(notice),
+    );
+    const aside = readdirSync(join(temp, "config")).filter((name) =>
+      name.startsWith("preferences.json.damaged-"),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(temp, "config", aside[0] as string), "utf8")).toBe(
+      "{not json",
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(join(temp, "config", aside[0] as string));
+    setPreference(path, access, undefined, "model", "acme/general");
+    expect(readPreferences(path).values.model).toBe("acme/general");
+  });
+
+  it("does not replace a damaged file it could not move aside", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const directory = join(temp, "config");
+    const path = join(directory, "preferences.json");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path, "{not json");
+    chmodSync(directory, 0o500);
+    try {
+      expect(() =>
+        setPreference(path, access, undefined, "model", "acme/general"),
+      ).toThrow("unreadable");
+      expect(readFileSync(path, "utf8")).toBe("{not json");
+    } finally {
+      chmodSync(directory, 0o700);
+    }
+  });
 });
 
 describe("runtime references and network policy", () => {
@@ -476,9 +516,31 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     expect(rows.find((row) => row.key === "preferences")?.note).toContain(
       "unreadable",
     );
-    await expect(
-      DistributionAccess.open(options).activate(),
-    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
+  it("moves damaged preferences aside at launch, runs with the defaults, and says where they went", async () => {
+    const directory = join(temp, "state", "config");
+    const path = join(directory, "preferences.json");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path, "{not json");
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    const activated = await distribution.activate();
+    const aside = readdirSync(directory).filter((name) =>
+      name.startsWith("preferences.json.damaged-"),
+    );
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(directory, aside[0] as string), "utf8")).toBe(
+      "{not json",
+    );
+    expect(existsSync(path)).toBe(false);
+    expect(
+      activated.notices.some(
+        (notice) =>
+          notice.includes("unreadable") &&
+          notice.includes(join(directory, aside[0] as string)),
+      ),
+    ).toBe(true);
   });
 
   it("fails closed when the broker or gateway is unavailable", async () => {
@@ -1270,7 +1332,7 @@ describe("capability model requirements", () => {
       });
     });
 
-    it("refuses unreadable preferences offline, as launch does", () => {
+    it("reports unreadable preferences offline without moving them", () => {
       const distribution = open([]);
       const path = accessStatePaths(distribution.options.stateDir).preferences;
       mkdirSync(join(path, ".."), { recursive: true });
@@ -1278,6 +1340,7 @@ describe("capability model requirements", () => {
       expect(() => configuredModel(distribution.options)).toThrow(
         expect.objectContaining({ code: "CONFIG_INVALID" }),
       );
+      expect(readFileSync(path, "utf8")).toBe("{");
     });
 
     it("ignores the requirements of a disabled capability", async () => {

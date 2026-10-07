@@ -573,6 +573,20 @@ export function checkStateMigration(
       });
       continue;
     }
+    // Preferences only narrow what the distribution allows, so an unreadable
+    // file is a low risk and never blocks the switch: the next launch moves
+    // it aside and starts with the defaults.
+    if (schema === "unreadable" && dataClass.schema === "preferences") {
+      items.push({
+        name: dataClass.name,
+        path: dataClass.path,
+        current: schema,
+        verdict: "safe",
+        action: "keep",
+        reason: `${path} cannot be read; the next launch moves it aside to ${path}.damaged-<time> and starts with the defaults`,
+      });
+      continue;
+    }
     items.push({
       name: dataClass.name,
       path: dataClass.path,
