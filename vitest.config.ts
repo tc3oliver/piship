@@ -16,9 +16,12 @@ export default defineConfig({
       PISHIP_BUILD_INPUT: fileURLToPath(new URL("./", import.meta.url)),
       // Installs in a test fill a store of this run, not the user's.
       PISHIP_STORE_HOME: testStoreHome,
-      // `piship init` bundles fd and rg when GitHub answers; a test never
-      // asks the network (the probe itself is tested against local servers).
-      PISHIP_INIT_PROBE: "reachable",
+      // `piship init` bundles fd and rg when GitHub answers, and the `lock`
+      // that follows then downloads them from GitHub. A test never uses the
+      // network, so `init` leaves them out (the probe itself is tested
+      // against local servers, and the test of the bundled template asks for
+      // them explicitly).
+      PISHIP_INIT_PROBE: "unreachable",
     },
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     testTimeout: 15_000,
