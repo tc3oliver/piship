@@ -10,9 +10,13 @@ import { distributionStateDirectory } from "./state-paths.js";
  * and release keys are configured (as `piship migrate` writes them).
  */
 function initGovernance(managed: boolean, id: string): string {
-  // Workspace-provided items (.pi, .agents, AGENTS.md, .mcp.json) stay
-  // unloaded outside trusted projects, as in the v0.1 personal alpha.
-  const projectTrust = `  # Relax per dimension, or add company.match entries, to trust projects.
+  // Managed: workspace-provided items (.pi, .agents, AGENTS.md, .mcp.json)
+  // stay unloaded outside trusted projects. Personal: the person's own
+  // projects must work, so instructions and skills load (an unknown origin,
+  // such as a repository with no remote, is asked once per launch) and
+  // anything that starts code asks. Hooks, agents, and providers stay denied.
+  const projectTrust = managed
+    ? `  # Relax per dimension, or add company.match entries, to trust projects.
   projectTrust:
     external: &isolated
       passiveContext: deny
@@ -24,6 +28,31 @@ function initGovernance(managed: boolean, id: string): string {
       mcp: deny
       providers: deny
     unknown: *isolated
+`
+    : `  # Your own projects load their AGENTS.md and skills. Anything that starts
+  # code (extensions, MCP servers) asks first, and hooks, agents, and
+  # providers stay denied. \`ask\` is answered on the terminal before Pi
+  # starts and resolves to deny for a headless run. Relax or tighten per
+  # dimension; add company.match entries to trust a repository outright.
+  projectTrust:
+    external:
+      passiveContext: allow
+      instructions: allow
+      skills: allow
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
+    unknown:
+      passiveContext: allow
+      instructions: ask
+      skills: ask
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
 `;
   const policy = managed
     ? `# Unmatched actions ask the person; headless runs resolve ask to deny.
@@ -194,7 +223,13 @@ ${initGovernance(true, id)}`,
   } else
     writeFileSync(
       join(root, "piship.yaml"),
-      `${header}deployment:
+      `${header}  # fd and rg ship in the payload, pinned and digest-checked. Without them
+  # Pi downloads them on the first prompt and waits 24 to 30 seconds. \`piship
+  # lock\` downloads them once per release target, so it needs network access
+  # to github.com (listed under release.sources below).
+  searchTools:
+    mode: bundled
+deployment:
   mode: personal
 # Pi-native providers and auth, kept in this distribution's isolated state.
 identity:
@@ -207,7 +242,9 @@ resources:
   instructions:
     user:
       - ./resources/AGENTS.md
-${initGovernance(false, id)}`,
+${initGovernance(false, id)}release:
+  sources: [https://registry.npmjs.org, https://github.com]
+`,
     );
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
   return join(root, "piship.yaml");

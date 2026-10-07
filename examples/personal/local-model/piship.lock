@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-8051b1cc48715d9474879b8f3ba24e2426e9f97953105a2708f0420037777947"
+    "sha256": "sha256-06edca977ef54b18631076649c383b7c272feb5af8480bd12e1ed56ef7abd9d6"
   },
   "app": {
     "id": "mypi-local",
@@ -1113,38 +1113,38 @@
           "company": {
             "match": [],
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           },
           "external": {
             "match": [],
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           },
           "unknown": {
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "ask",
+              "skills": "ask",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           }
@@ -1238,7 +1238,7 @@
   },
   "digests": {
     "resources": "sha256-1939a95167d86318487ddf7c5aba64cdd6d8f7e8f8e1327a1e641b9216e0d7fc",
-    "policy": "sha256-f2a23f9c6124c6e225becbae582e7d908251d7698692e1f3d51e09c9c29cd5c7",
+    "policy": "sha256-44822a77145631049342c642d7a32d77ef3325a30f58cc6ec2452c1cdfd67d66",
     "capabilities": "sha256-4022bc787f6db8d35c5a068d80546a5c3b3dd8720fe1bf6ecb7ae4b84a0b0791",
     "mcp": "sha256-9c86a5a216a08e2e5c954edae514fa193e41a151a6f6ba4fdc3fbd979d9f9ae9",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",

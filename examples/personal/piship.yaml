@@ -44,24 +44,34 @@ resources:
   themes:
     user: [./resources/themes/mypi.json]
 
-# Personal policy: everything the distribution declares is allowed. Workspace
-# files stay readable by tools, but nothing the project ships is loaded:
-# no project themes, instructions, skills, extensions, MCP definitions, or
-# the rest. Only the resources declared below reach Pi.
+# Personal policy: everything the distribution declares is allowed, and your
+# own projects work. A project's AGENTS.md, skills, and themes load (an
+# unknown origin, such as a repository with no remote, is asked once per
+# launch, on the terminal before Pi starts; a headless run resolves ask to
+# deny). Anything that starts code, project extensions and .mcp.json servers,
+# asks first. Hooks, agents, and providers stay denied.
 policy:
   default: allow
   projectTrust:
-    company: &closed
-      passiveContext: deny
-      instructions: deny
-      skills: deny
+    company: &own
+      passiveContext: allow
+      instructions: allow
+      skills: allow
       agents: deny
       hooks: deny
-      extensions: deny
-      mcp: deny
+      extensions: ask
+      mcp: ask
       providers: deny
-    external: *closed
-    unknown: *closed
+    external: *own
+    unknown:
+      passiveContext: allow
+      instructions: ask
+      skills: ask
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
 
 # A user-managed MCP server: a local stdio script shipped with the
 # distribution. It needs no network and no credential.
