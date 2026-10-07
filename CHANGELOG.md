@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+## v0.12.0
+
+Minor milestone on Pi 1.0.3 and the stable `piship/v1` contracts (`piship/v1alpha6` stays accepted for the migration window). It removes the crashes, dead ends and repeated prompts a user meets from install to daily use, makes plain HTTP to private hosts work by default, and keeps every credential, integrity, sandbox and deny control as it was. A manifest that leaves out `runtime.pi` is accepted from this version, so a distribution that omits it needs one bridge release that still states it. Changes since v0.11.0:
+
 ### Added
 
 - `login` accepts the OAuth redirect URL (or the bare `code`) pasted into the terminal, so a machine with no browser, such as a remote shell, signs in without an SSH port forward ([identity](docs/identity.md#remote-shells), [security](docs/security.md#pasted-redirect-url)). It is offered with `PISHIP_NO_BROWSER=1`, in a remote shell, on a display-less Linux session, or in a container, and races the loopback listener there; the pasted address must be this sign-in's redirect with its `state`; the code exchange and the error mapping are the same. `LoginContext` gains the optional `readRedirectUrl`. No manifest, lock, or schema change. In those cases the waiting hint says to paste the address and no longer suggests an SSH port forward; the hint is now printed in English and Traditional Chinese, and with a local browser it adds nothing about pasting.

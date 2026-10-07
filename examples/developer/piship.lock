@@ -17,8 +17,8 @@
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.0.3",
-    "pishipVersion": "0.11.0",
-    "npmLockSha256": "8e93887a973fe17ba76191260264bf361ee9764155160faf2b409cc17e400241",
+    "pishipVersion": "0.12.0",
+    "npmLockSha256": "8ab976c8bc5585125fb7f9c0c2fea6aecb21dae15874e74a4471e99218d2df15",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -1961,7 +1961,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-1e5da8f7792b3c305e7bdc2743f5a55d9fe0c583d89b89a4e07a970014d64bba",
+    "packages": "sha256-ff7162de39b5038d4445c85272ce2f540ec1623a89110560502883a620960a56",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2005,7 +2005,7 @@
       "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
       "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
       "files": 105,
-      "lockfileSha256": "36c83bb4ee4e6833b9619dd2a7c997e32bf2d439293adc4b813ffdf9b679aa41",
+      "lockfileSha256": "2c019a808a57b12a52b52c5078b6d795c914f23c42c313454bfebf9e4ce606c4",
       "resources": [
         {
           "kind": "extensions",
@@ -2138,7 +2138,7 @@
       "integrity": "sha512-6PTzboAc9z2WSEA6aNXCWGsd5ES5MKNJBMIxazbEk2fzcXZFerhJ1k07UDrGjE+hkkd6TnPhsHAxMQ28ZT0WGQ==",
       "tree": "sha256-c572b0417918aa4b1d372ee8c5e446a3974fda19a3e40617476d813946f34016",
       "files": 1568,
-      "lockfileSha256": "821cb43363b954d03baf472f8cbd9491f6551d38045578fe22a2b4f6a749ee62",
+      "lockfileSha256": "b8fb5d094f06a2b3ca82630cd7d70e74faf3a8ad4068774933858e36acfc4d77",
       "resources": [
         {
           "kind": "extensions",
@@ -2242,7 +2242,7 @@
       "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
       "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
       "files": 68,
-      "lockfileSha256": "edaa12b71cff31a0c382dba1f6f0b42de24d9a68bd37c55e2d9bba7ccc56eac6",
+      "lockfileSha256": "9fc0595ae9d9f3faa8267c788c5f25e8f1c4aca59bd0b2467315a75b287b5ae4",
       "resources": [
         {
           "kind": "extensions",
