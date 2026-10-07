@@ -232,7 +232,8 @@ ${initGovernance(true, id)}`,
   } else
     writeFileSync(
       join(root, "piship.yaml"),
-      `${header}  # fd and rg ship in the payload, pinned and digest-checked. Without them
+      `${header}runtime:
+  # fd and rg ship in the payload, pinned and digest-checked. Without them
   # Pi downloads them on the first prompt and waits 24 to 30 seconds. \`piship
   # lock\` downloads them once per release target, so it needs network access
   # to github.com (listed under release.sources below).
