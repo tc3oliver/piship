@@ -382,7 +382,7 @@ What it cannot prove:
 
 ### Pasted redirect URL
 
-When a machine has no browser, `login` accepts the redirect address pasted into the terminal ([identity](identity.md#remote-shells)). It carries a single-use authorization code that is bound to the sign-in by PKCE and by `state`; it is useless without the verifier that stays in the `login` process, and a pasted address with another `state` or another redirect is refused and never exchanged. Do not share it or paste it anywhere else: until the exchange it is a credential in flight. PiShip does not log or echo what was pasted, and its messages never repeat the pasted query.
+When a machine has no browser, `login` accepts the redirect address pasted into the terminal ([identity](identity.md#remote-shells)). It carries a single-use authorization code that is bound to the sign-in by PKCE and by `state`; it is useless without the verifier that stays in the `login` process, and a pasted address with another `state` or another redirect is refused and never exchanged. Do not share it or paste it anywhere else: until the exchange it is a credential in flight. PiShip never prints or logs what was pasted, and its messages never repeat the pasted query (the terminal itself shows what you type).
 
 ## Security test map
 
