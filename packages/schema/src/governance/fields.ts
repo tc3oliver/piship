@@ -140,7 +140,7 @@ export function modulePath(value: unknown, path: string): string {
 }
 /**
  * An endpoint URL or `${NAME}` reference. With `plainHttp` (the endpoint's
- * `httpTransport: http-allowed`) plain HTTP to a private or internal host is
+ * `httpTransport` is not `https`) plain HTTP to a private or internal host is
  * accepted too; a reference is checked the same way once it resolves.
  */
 export function referenceUrl(

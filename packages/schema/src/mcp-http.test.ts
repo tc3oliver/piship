@@ -1,5 +1,6 @@
 // piship/v1alpha6 `mcp.servers.<id>.httpTransport` (plain HTTP to a private
-// or internal host, by opt-in) and identity-derived `headers`.
+// or internal host by default, `https` to force HTTPS-only) and
+// identity-derived `headers`.
 import { describe, expect, it } from "vitest";
 import {
   launchWarnings,
@@ -81,7 +82,7 @@ const serverOf = (input: Json) =>
   parseManifest(input).governance?.mcp.servers[0];
 
 describe("mcp.servers.<id>.httpTransport", () => {
-  it("is absent unless http-allowed, so existing manifests lock unchanged", () => {
+  it("is absent unless declared, so existing manifests lock unchanged", () => {
     const plain = serverOf(managed({ url: "https://mcp.acme.example/mcp" }));
     expect(plain).not.toHaveProperty("httpTransport");
     expect(plain).not.toHaveProperty("headers");
@@ -92,12 +93,40 @@ describe("mcp.servers.<id>.httpTransport", () => {
           httpTransport: "https",
         }),
       ),
-    ).not.toHaveProperty("httpTransport");
+    ).toMatchObject({ httpTransport: "https" });
   });
 
-  it("keeps plain HTTP to loopback only without the opt-in", () => {
+  it("admits plain HTTP to a private or internal host by default", () => {
+    for (const url of [
+      "http://10.20.30.40/mcp",
+      "http://mcp.corp.internal/mcp",
+    ]) {
+      const server = serverOf(managed({ url }));
+      expect(server).toMatchObject({ url });
+      expect(server).not.toHaveProperty("httpTransport");
+    }
+  });
+
+  it("refuses a public host over plain HTTP by default", () => {
+    for (const url of ["http://mcp.acme.example/mcp", "http://8.8.8.8/mcp"])
+      rejects(
+        managed({ url }),
+        "mcp.servers.tools.url",
+        "is public, so serve it over https",
+      );
+  });
+
+  it("keeps plain HTTP to loopback only with httpTransport: https", () => {
     rejects(
-      managed({ url: "http://10.20.30.40/mcp" }),
+      managed({ url: "http://10.20.30.40/mcp", httpTransport: "https" }),
+      "mcp.servers.tools.url",
+      "plain http is accepted only for loopback",
+    );
+  });
+
+  it("keeps credential: runtime off plain HTTP without an explicit setting", () => {
+    rejects(
+      managed({ url: "http://10.20.30.40/mcp", credential: "runtime" }),
       "mcp.servers.tools.url",
       "plain http is accepted only for loopback",
     );
@@ -130,9 +159,19 @@ describe("mcp.servers.<id>.httpTransport", () => {
     expect(serverOf(input)).toMatchObject({ url: MCP_URL_REF });
     const warnings = launchWarnings(parseManifest(input));
     expect(warnings).toContainEqual({
-      path: "mcp.servers.tools.httpTransport",
-      message: expect.stringContaining("unencrypted"),
+      path: "network",
+      message: expect.stringContaining(
+        "mcp.servers.tools.url, if it resolves to plain HTTP",
+      ),
     });
+    // Without the explicit setting a reference is not guessed at.
+    expect(
+      launchWarnings(
+        parseManifest(
+          managed({ url: MCP_URL_REF }, { variables: ["MCP_URL"] }),
+        ),
+      ).filter((w) => w.path === "network"),
+    ).toEqual([]);
   });
 
   it("warns that plain HTTP traffic is unencrypted", () => {
@@ -145,9 +184,15 @@ describe("mcp.servers.<id>.httpTransport", () => {
       ),
     );
     expect(warnings).toContainEqual({
-      path: "mcp.servers.tools.httpTransport",
+      path: "network",
       message: expect.stringContaining("unencrypted"),
     });
+    // The same warning without the explicit setting: it is the default.
+    expect(
+      launchWarnings(
+        parseManifest(managed({ url: "http://10.20.30.40/mcp" })),
+      ).filter((w) => w.path === "network"),
+    ).toHaveLength(1);
     expect(
       launchWarnings(
         parseManifest(
@@ -156,7 +201,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
             httpTransport: "http-allowed",
           }),
         ),
-      ).filter((w) => w.path === "mcp.servers.tools.httpTransport"),
+      ).filter((w) => w.path === "network"),
     ).toEqual([]);
   });
 

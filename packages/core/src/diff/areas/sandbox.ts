@@ -46,12 +46,16 @@ export function sandbox(
             "Stops sending the runtime credential to the sandbox endpoint.",
           ],
   );
-  // An absent httpTransport is https.
-  out.scalar(
+  // An absent httpTransport and http-allowed are the same default.
+  out.transport(
     "sandbox",
     "sandbox httpTransport",
-    x?.httpTransport,
-    y?.httpTransport,
+    x?.endpoint === undefined
+      ? undefined
+      : { transport: x.httpTransport, url: x.endpoint },
+    y?.endpoint === undefined
+      ? undefined
+      : { transport: y.httpTransport, url: y.endpoint },
     (_, v) =>
       v === "http-allowed"
         ? [

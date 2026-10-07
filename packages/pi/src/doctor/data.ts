@@ -515,20 +515,21 @@ async function collectAccess(
             : manifest.identity.mode === "oidc" && !workload
               ? [{ label: "identity", url: opened.endpoints.issuer }]
               : [],
-          // Opted-in endpoints (httpTransport: http-allowed) are checked
-          // over plain HTTP to their own origins, as their clients reach them.
+          // Endpoints not set to httpTransport: https are checked over
+          // plain HTTP to their own origins, as their clients reach them.
           plainHttpOrigins([
             manifest.identity.mode === "oidc" &&
-            manifest.identity.oidc.httpTransport === "http-allowed"
+            manifest.identity.oidc.httpTransport !== "https"
               ? opened.endpoints.issuer
               : undefined,
-            ...(manifest.credential.broker?.httpTransport === "http-allowed"
+            ...(manifest.credential.broker &&
+            manifest.credential.broker.httpTransport !== "https"
               ? [
                   opened.endpoints.brokerEndpoint,
                   opened.endpoints.brokerRevokeEndpoint,
                 ]
               : []),
-            manifest.inference.httpTransport === "http-allowed"
+            manifest.inference.httpTransport !== "https"
               ? opened.endpoints.baseUrl
               : undefined,
           ]),

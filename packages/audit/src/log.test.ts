@@ -569,10 +569,10 @@ describe("AuditLog http sink", () => {
     ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
   });
 
-  it("sends an http-allowed sink over plain HTTP to a private host through its own fetch only", async () => {
+  it("sends a sink over plain HTTP to a private host through its own fetch only, unless it is https", async () => {
     const scoped: string[] = [];
     const sent: string[] = [];
-    const open = (url: string, httpTransport?: "http-allowed") =>
+    const open = (url: string, httpTransport?: "http-allowed" | "https") =>
       AuditLog.open({
         config: config([
           {
@@ -600,18 +600,24 @@ describe("AuditLog http sink", () => {
     await log.close();
     expect(scoped).toEqual(["http://10.0.0.6:9000"]);
     expect(sent).toEqual(["http://10.0.0.6:9000/events"]);
-    // A public host, or a private one without the opt-in, is refused.
+    // The default is the same as http-allowed.
+    await (await open("http://10.0.0.6:9000/events")).close();
+    expect(sent).toHaveLength(2);
+    // A public host is refused either way, a private one when forced to https.
+    for (const transport of [undefined, "http-allowed"] as const)
+      await expect(
+        open("http://audit.acme.example/events", transport),
+      ).rejects.toMatchObject({
+        code: "AUDIT_UNAVAILABLE",
+        message: expect.stringContaining("which is public"),
+      });
     await expect(
-      open("http://audit.acme.example/events", "http-allowed"),
+      open("http://10.0.0.6:9000/events", "https"),
     ).rejects.toMatchObject({
-      code: "AUDIT_UNAVAILABLE",
-      message: expect.stringContaining("which is public"),
-    });
-    await expect(open("http://10.0.0.6:9000/events")).rejects.toMatchObject({
       code: "AUDIT_UNAVAILABLE",
       message: expect.stringContaining("must use https"),
     });
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
   });
 
   it("fails launch when a required http sink is unreachable at open", async () => {

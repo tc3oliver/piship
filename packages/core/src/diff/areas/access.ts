@@ -69,7 +69,8 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
       ["low", "Requests fewer identity scopes."],
     );
   }
-  // An absent httpTransport is https.
+  // An absent httpTransport and http-allowed are the same default; only
+  // https is stricter.
   const plainHttp =
     (exposed: string) =>
     (_: string, v: string): Verdict =>
@@ -79,11 +80,11 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
             `May be reached over plain HTTP to a private or internal host; ${exposed} unencrypted on the network path.`,
           ]
         : ["low", "Reached over https only."];
-  out.scalar(
+  out.transport(
     "access",
     "identity httpTransport",
-    xo?.httpTransport,
-    yo?.httpTransport,
+    xo && { transport: xo.httpTransport, url: xo.issuer },
+    yo && { transport: yo.httpTransport, url: yo.issuer },
     plainHttp("sign-in tokens, including the refresh token, are then"),
   );
   const xa = x.identity?.mode === "adapter" ? x.identity.adapter : undefined;
@@ -114,11 +115,17 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(y.credential?.broker?.revokeEndpoint),
     endpoint,
   );
-  out.scalar(
+  out.transport(
     "access",
     "credential broker httpTransport",
-    x.credential?.broker?.httpTransport,
-    y.credential?.broker?.httpTransport,
+    x.credential?.broker && {
+      transport: x.credential.broker.httpTransport,
+      url: x.credential.broker.endpoint,
+    },
+    y.credential?.broker && {
+      transport: y.credential.broker.httpTransport,
+      url: y.credential.broker.endpoint,
+    },
     plainHttp("the identity token and the issued gateway credential are then"),
   );
   out.scalar(
@@ -172,11 +179,21 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(y.inference?.baseUrl),
     endpoint,
   );
-  out.scalar(
+  out.transport(
     "access",
     "inference httpTransport",
-    x.inference?.httpTransport,
-    y.inference?.httpTransport,
+    x.inference?.baseUrl === undefined
+      ? undefined
+      : {
+          transport: x.inference.httpTransport,
+          url: x.inference.baseUrl,
+        },
+    y.inference?.baseUrl === undefined
+      ? undefined
+      : {
+          transport: y.inference.httpTransport,
+          url: y.inference.baseUrl,
+        },
     plainHttp("the gateway credential and every prompt and response are then"),
   );
   out.scalar("access", "inference api", x.inference?.api, y.inference?.api, [

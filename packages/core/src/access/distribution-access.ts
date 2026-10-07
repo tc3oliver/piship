@@ -222,7 +222,7 @@ export class DistributionAccess {
   /** The configured `credential.storage.provider`, recorded in metadata. */
   readonly storeProvider: SecretStoreProvider;
   /**
-   * With `inference.httpTransport: http-allowed` and a plain-HTTP gateway:
+   * Unless `inference.httpTransport: https`, with a plain-HTTP gateway:
    * admits plain HTTP to the gateway's origin only, for the process
    * dispatcher Pi's provider requests use (`applyProcessNetworkPolicy`).
    */
@@ -293,9 +293,9 @@ export class DistributionAccess {
       options.mode,
     );
     this.#fetch = createManagedFetch(this.network, "access");
-    // `httpTransport: http-allowed`: each opted-in endpoint has a fetch of
-    // its own that admits plain HTTP to its own origin only; every other
-    // request keeps the loopback-only rule.
+    // Each endpoint not set to `httpTransport: https` has a fetch of its own
+    // that admits plain HTTP to its own origin only; every other request
+    // keeps the loopback-only rule.
     const access = options.access;
     const scoped = (urls: readonly (string | undefined)[]) => {
       const plainHttp = plainHttpOrigins(urls);
@@ -304,14 +304,15 @@ export class DistributionAccess {
         : this.#fetch;
     };
     this.inferencePlainHttp =
-      access?.inference.httpTransport === "http-allowed"
+      access && access.inference.httpTransport !== "https"
         ? plainHttpOrigins([this.endpoints.baseUrl])
         : undefined;
     this.#gatewayFetch = this.inferencePlainHttp
       ? scoped([this.endpoints.baseUrl])
       : this.#fetch;
     this.#brokerFetch =
-      access?.credential.broker?.httpTransport === "http-allowed"
+      access?.credential.broker &&
+      access.credential.broker.httpTransport !== "https"
         ? scoped([
             this.endpoints.brokerEndpoint,
             this.endpoints.brokerRevokeEndpoint,
@@ -322,7 +323,7 @@ export class DistributionAccess {
     // refuses a discovered plain-HTTP endpoint on a public host.
     this.#identityPlainHttp =
       access?.identity.mode === "oidc" &&
-      access.identity.oidc.httpTransport === "http-allowed";
+      access.identity.oidc.httpTransport !== "https";
     const identityOrigins = this.#identityOrigins;
     this.#admitIdentityOrigins([this.endpoints.issuer]);
     this.#identityFetch = this.#identityPlainHttp

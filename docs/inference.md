@@ -96,8 +96,8 @@ Pi's message keeps only the SDK's text for a request that got no answer ("Connec
 | A routed request to a model outside the declared `routes`, or one `model.dispatch` denies | `MODEL_DENIED` |
 | Model unentitled, unlisted, or narrowed out | `MODEL_UNAVAILABLE` |
 | Undeclared host under `privateOnly` | `NETWORK_DENIED` |
-| Non-loopback plain HTTP endpoint | `NETWORK_DENIED`, unless `inference.httpTransport: http-allowed` (piship/v1alpha6) and the host is private or internal; then only the gateway's own origin is admitted over plain HTTP, and the credential and prompts travel unencrypted ([manifest](manifest.md#plain-http-to-internal-endpoints-v1alpha6)) |
-| Plain HTTP to a public host with `inference.httpTransport: http-allowed` | Refused by `validate`; a `${NAME}` that resolves to one fails the launch with `CONFIG_INVALID` |
+| Non-loopback plain HTTP endpoint | Admitted when the host is private or internal, unless `inference.httpTransport: https` (piship/v1alpha6) forces HTTPS-only, which gives `NETWORK_DENIED`; then only the gateway's own origin is admitted over plain HTTP, and the credential and prompts travel unencrypted ([manifest](manifest.md#plain-http-to-internal-endpoints-v1alpha6)) |
+| Plain HTTP to a public host | Refused by `validate`; a `${NAME}` that resolves to one fails the launch with `CONFIG_INVALID` |
 | `NODE_TLS_REJECT_UNAUTHORIZED=0` | `TLS_POLICY_VIOLATION` |
 | Platform secret store unavailable | `SECRET_STORE_UNAVAILABLE` |
 

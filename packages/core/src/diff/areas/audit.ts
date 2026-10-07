@@ -7,6 +7,8 @@ const PLAIN_HTTP: Verdict = [
   "Audit sink may be reached over plain HTTP to a private or internal host; audit events are unencrypted and can be dropped or altered in transit.",
 ];
 
+const HTTPS_ONLY = "Audit sink is reached over https only.";
+
 export function audit(
   out: Collector,
   b: GovernanceManifest,
@@ -34,15 +36,13 @@ export function audit(
         undefined,
         as.type,
       );
-      if (as.httpTransport === "http-allowed")
-        out.push(
-          "audit",
-          "added",
-          `${item} httpTransport`,
-          PLAIN_HTTP,
-          undefined,
-          as.httpTransport,
-        );
+      out.transport(
+        "audit",
+        `${item} httpTransport`,
+        undefined,
+        { transport: as.httpTransport, url: as.url },
+        (_, v) => (v === "http-allowed" ? PLAIN_HTTP : ["low", HTTPS_ONLY]),
+      );
       continue;
     }
     if (bs && !as) {
@@ -71,16 +71,17 @@ export function audit(
       "medium",
       "Audit sink endpoint changed.",
     ]);
-    // An absent httpTransport is https.
-    out.scalar(
+    // An absent httpTransport and http-allowed are the same default.
+    out.transport(
       "audit",
       `${item} httpTransport`,
-      bs.httpTransport,
-      as.httpTransport,
-      (_, v) =>
-        v === "http-allowed"
-          ? PLAIN_HTTP
-          : ["low", "Audit sink is reached over https only."],
+      bs.type === "http"
+        ? { transport: bs.httpTransport, url: bs.url }
+        : undefined,
+      as.type === "http"
+        ? { transport: as.httpTransport, url: as.url }
+        : undefined,
+      (_, v) => (v === "http-allowed" ? PLAIN_HTTP : ["low", HTTPS_ONLY]),
     );
   }
   const bc: Record<string, boolean> = { ...(x?.capture ?? {}) };

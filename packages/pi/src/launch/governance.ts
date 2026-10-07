@@ -40,7 +40,7 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 
 /**
  * The MCP plain-HTTP fetch: it admits plain HTTP only to the origins of the
- * resolved urls of servers with `httpTransport: http-allowed` that are on a
+ * resolved urls of servers not set to `httpTransport: https` that are on a
  * private or internal host. A url that does not resolve admits nothing; the
  * server then fails to start on its own.
  */
@@ -50,7 +50,10 @@ function mcpPlainHttp(
   network: NetworkPolicy,
 ): Pick<GovernanceOptions, "mcpPlainHttpFetch"> {
   const urls = servers
-    .filter((server) => server.httpTransport === "http-allowed")
+    .filter(
+      (server) =>
+        server.httpTransport !== "https" && server.credential !== "runtime",
+    )
     .map((server) => {
       try {
         return resolveTemplate(
@@ -106,9 +109,10 @@ export function governanceOptions(
     fetch: createManagedFetch(network, "governance"),
     plainHttpFetch: (plainHttp) =>
       createManagedFetch(network, "governance", { plainHttp }),
-    // Plain HTTP beyond loopback only for MCP servers that declare
-    // httpTransport: http-allowed, to the origins of their resolved urls on
-    // a private or internal host, and only on this fetch. Each server's
+    // Plain HTTP beyond loopback only for MCP servers not set to
+    // httpTransport: https and without the runtime credential, to the
+    // origins of their resolved urls on a private or internal host, and only
+    // on this fetch. Each server's
     // transport requests only its own url. Private-only network policy
     // still applies.
     ...mcpPlainHttp(ctx, servers, network),

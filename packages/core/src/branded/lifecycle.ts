@@ -200,8 +200,8 @@ function declaredSourceUrl(ctx: BrandedContext): URL | null {
 
 /**
  * Whether this update reads its channel over plain HTTP from a non-loopback
- * host (`updates.transport: http-allowed`), from `--from` or the declared
- * source. Audit records it as `transport: http`.
+ * host (allowed unless `updates.transport: https`), from `--from` or the
+ * declared source. Audit records it as `transport: http`.
  */
 function overPlainHttp(ctx: BrandedContext, from: string | undefined): boolean {
   let url: URL | null;
@@ -237,8 +237,8 @@ export async function runUpdate(
   const network = lifecycleNetwork(ctx);
   // Proxy, CA, and TLS policy apply. Only the update host the distribution
   // declares is added to the allowed hosts; a --from URL gets no exception.
-  // Plain HTTP beyond loopback only for updates.transport: http-allowed, to
-  // a private or internal host, and only on this fetch.
+  // Plain HTTP beyond loopback only to a private or internal host, unless
+  // updates.transport is https, and only on this fetch.
   const declaredHost = declaredSourceUrl(ctx)?.hostname;
   const transport = ctx.metadata.updates?.transport;
   const fetcher = createManagedFetch(

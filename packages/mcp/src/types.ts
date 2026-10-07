@@ -35,8 +35,8 @@ export interface McpServerConfig {
     readonly deny: readonly string[];
   };
   /**
-   * `http-allowed` also permits plain HTTP to a private or internal host;
-   * absent or `https` keeps plain HTTP to loopback only.
+   * `https` keeps plain HTTP to loopback only; absent or `http-allowed`
+   * also permits plain HTTP to a private or internal host.
    */
   readonly httpTransport?: "https" | "http-allowed";
   /** Request headers whose value is a claim of the signed-in identity. */

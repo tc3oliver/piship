@@ -395,18 +395,56 @@ describe("validate", () => {
       expect(output).not.toContain("[REDACTED]");
   });
 
-  it("names the opt-in when a private endpoint is plain HTTP without it", async () => {
+  it("admits a plain-HTTP private endpoint by default and warns on one line", async () => {
     const result = await validate({
       schema: "piship/v1alpha6",
       inference: {
         provider: "openai-compatible",
         baseUrl: "http://10.20.30.40:4000/v1",
       },
+      audit: {
+        sinks: [
+          { id: "collector", type: "http", url: "http://10.0.0.6/events" },
+        ],
+      },
+    });
+    expect(result.status).toBe(0);
+    const lines = result.stderr
+      .split("\n")
+      .filter((line) => line.startsWith("Warning: network: "));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(
+      "Plain HTTP to a private or internal host is admitted by default",
+    );
+    expect(lines[0]).toContain("inference.baseUrl (the gateway credential");
+    expect(lines[0]).toContain("audit.sinks[0].url (audit events");
+  });
+
+  it("names httpTransport: https when it refuses a private plain-HTTP endpoint", async () => {
+    const result = await validate({
+      schema: "piship/v1alpha6",
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.20.30.40:4000/v1",
+        httpTransport: "https",
+      },
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
-      "inference.httpTransport: http-allowed (piship/v1alpha6)",
+      "this endpoint is https-only (inference.httpTransport: https",
     );
+  });
+
+  it("refuses a public plain-HTTP endpoint without any setting", async () => {
+    const result = await validate({
+      schema: "piship/v1alpha6",
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://gateway.acme.example/v1",
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("is public, so serve it over https");
   });
 
   it("rejects a required MCP server that fails every launch and warns about an optional one", async () => {
@@ -1198,7 +1236,7 @@ describe("config explain from a manifest", () => {
     for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
       expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
     expect(text).toMatch(
-      /^updates\.transport\s+"https"\s+\[builtin-default\]/m,
+      /^updates\.transport\s+"http-allowed"\s+\[builtin-default\] — the update channel may use plain HTTP to a private or internal host by default/m,
     );
   });
 

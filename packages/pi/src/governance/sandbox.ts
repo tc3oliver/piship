@@ -273,9 +273,9 @@ async function loadCustom(
 }
 
 /**
- * The fetch for the sandbox backend. With `sandbox.httpTransport:
- * http-allowed` a resolved endpoint or router may be plain HTTP to a
- * private or internal host, and only those origins are admitted over plain
+ * The fetch for the sandbox backend. Unless `sandbox.httpTransport:
+ * https` is set or the runtime credential is sent, a resolved endpoint or
+ * router may be plain HTTP to a private or internal host, and only those origins are admitted over plain
  * HTTP; an e2b-compatible backend's command endpoint (envd) is a host
  * under the endpoint's domain, admitted when it is private too.
  */
@@ -284,7 +284,10 @@ function sandboxFetch(
   fields: readonly (readonly [string, string | undefined])[],
 ): GovernanceOptions["fetch"] {
   const config = options.lock.governance.manifest.sandbox;
-  if (config.httpTransport !== "http-allowed") return options.fetch;
+  // The runtime credential is never sent over plain HTTP, so such a sandbox
+  // keeps the https-only fetch whatever its URLs resolve to.
+  if (config.httpTransport === "https" || config.credential === "runtime")
+    return options.fetch;
   const urls: URL[] = [];
   for (const [field, value] of fields) {
     if (value === undefined) continue;
@@ -296,7 +299,7 @@ function sandboxFetch(
     }
     if (url.protocol === "http:" && !isPrivateNetworkHost(url.hostname))
       throw unavailable(
-        `${field} is plain HTTP to ${url.hostname}, which is public; sandbox.httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+        `${field} is plain HTTP to ${url.hostname}, which is public; plain HTTP is accepted only to a private or internal host`,
       );
     urls.push(url);
   }

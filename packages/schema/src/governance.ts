@@ -504,9 +504,9 @@ export interface McpServerConfig {
   /** piship/v1alpha6: per-tool exposure globs (`tools:` in the manifest). */
   readonly toolExposure?: readonly ToolExposureRule[];
   /**
-   * piship/v1alpha6, streamable-http only: `http-allowed` also permits plain
-   * HTTP to a private or internal host (`isPrivateNetworkHost`). Absent
-   * means `https` (plain HTTP only on loopback).
+   * piship/v1alpha6, streamable-http only: `https` forces HTTPS-only (plain
+   * HTTP only on loopback); absent or `http-allowed` also permits plain HTTP
+   * to a private or internal host (`isPrivateNetworkHost`).
    */
   readonly httpTransport?: McpHttpTransport;
   /**
@@ -517,7 +517,7 @@ export interface McpServerConfig {
   readonly headers?: Readonly<Record<string, McpIdentityHeader>>;
 }
 
-/** `mcp.servers.<id>.httpTransport`: `https` (default) or `http-allowed`. */
+/** `mcp.servers.<id>.httpTransport`: `https` forces HTTPS-only; `http-allowed` is the default. */
 export const MCP_HTTP_TRANSPORTS = ["https", "http-allowed"] as const;
 export type McpHttpTransport = (typeof MCP_HTTP_TRANSPORTS)[number];
 
@@ -592,9 +592,9 @@ export interface SandboxConfig {
    */
   readonly credential?: "runtime" | "stored";
   /**
-   * piship/v1alpha6, remote providers: `http-allowed` also permits plain
-   * HTTP to a private or internal host for `endpoint` and `router`. Absent
-   * means `https`.
+   * piship/v1alpha6, remote providers: `https` forces HTTPS-only for
+   * `endpoint` and `router`; absent or `http-allowed` also permits plain HTTP
+   * to a private or internal host.
    */
   readonly httpTransport?: HttpTransport;
   readonly filesystem: {
@@ -617,8 +617,8 @@ export interface AuditSinkConfig {
   readonly url?: string;
   readonly required: boolean;
   /**
-   * piship/v1alpha6, http sinks: `http-allowed` also permits plain HTTP to
-   * a private or internal host. Absent means `https`.
+   * piship/v1alpha6, http sinks: `https` forces HTTPS-only; absent or
+   * `http-allowed` also permits plain HTTP to a private or internal host.
    */
   readonly httpTransport?: HttpTransport;
 }

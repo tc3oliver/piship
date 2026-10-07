@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isLoopbackHost } from "@piship/contracts";
 import type {
   AnyLock,
   DiffArea,
@@ -56,8 +57,73 @@ export const EXECUTABLE_KINDS: readonly string[] = [
   "providers",
 ];
 
+/** An endpoint as the diff sees its transport: its `httpTransport` and URL. */
+export interface TransportEndpoint {
+  readonly transport?: string | undefined;
+  readonly url?: string | undefined;
+}
+
+/**
+ * An endpoint's effective transport: an absent `httpTransport` and
+ * `http-allowed` both admit plain HTTP to a private or internal host, so
+ * only `https` differs.
+ */
+function effectiveTransport(endpoint: TransportEndpoint): string {
+  return endpoint.transport === "https" ? "https" : "http-allowed";
+}
+
+/** Whether a literal URL is plain HTTP beyond loopback. */
+function plainUrl(url: string | undefined): boolean {
+  if (url === undefined) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export class Collector {
   readonly changes: DiffChange[] = [];
+
+  /**
+   * Compare one endpoint's effective transport. A change between `https`
+   * and plain HTTP is reported; an absent value and `http-allowed` are the
+   * same default and are not. A newly added endpoint is reported only when
+   * it is plain HTTP or says `http-allowed`; its own addition is reported
+   * elsewhere. `verdict` sees `https` or `http-allowed`.
+   */
+  transport(
+    area: DiffArea,
+    item: string,
+    before: TransportEndpoint | undefined,
+    after: TransportEndpoint | undefined,
+    verdict: (before: string, after: string) => Verdict,
+  ): void {
+    if (!after) return;
+    if (before) {
+      this.scalar(
+        area,
+        item,
+        effectiveTransport(before),
+        effectiveTransport(after),
+        verdict,
+      );
+      return;
+    }
+    if (
+      effectiveTransport(after) === "http-allowed" &&
+      (after.transport === "http-allowed" || plainUrl(after.url))
+    )
+      this.push(
+        area,
+        "added",
+        item,
+        verdict("", "http-allowed"),
+        undefined,
+        "http-allowed",
+      );
+  }
 
   push(
     area: DiffArea,

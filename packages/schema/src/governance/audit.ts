@@ -2,7 +2,7 @@
 import type { AuditCapture } from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import type { AuditConfig, AuditSinkConfig } from "../governance.js";
-import { HTTP_TRANSPORTS } from "../http-transport.js";
+import { HTTP_TRANSPORTS, plainHttpPermitted } from "../http-transport.js";
 import {
   bool,
   conflict,
@@ -58,12 +58,10 @@ function parseSink(
       `${path}.httpTransport`,
       "httpTransport applies only to http sinks",
     );
-  const httpTransport = oneOf(
-    sink.httpTransport,
-    `${path}.httpTransport`,
-    HTTP_TRANSPORTS,
-    "https",
-  );
+  const httpTransport =
+    sink.httpTransport === undefined
+      ? undefined
+      : oneOf(sink.httpTransport, `${path}.httpTransport`, HTTP_TRANSPORTS);
   return {
     id,
     type,
@@ -73,12 +71,12 @@ function parseSink(
             sink.url,
             `${path}.url`,
             variables,
-            httpTransport === "http-allowed",
+            plainHttpPermitted(httpTransport),
           ),
         }
       : {}),
     required: bool(sink.required, `${path}.required`, false),
-    ...(httpTransport === "http-allowed" ? { httpTransport } : {}),
+    ...(httpTransport === undefined ? {} : { httpTransport }),
   };
 }
 

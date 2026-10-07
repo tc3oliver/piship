@@ -1,6 +1,8 @@
 import { redact } from "@piship/contracts";
 import {
+  effectiveHttpTransport,
   type GovernanceManifest,
+  type HttpTransport,
   resolveTemplate,
   type UpdatesManifest,
 } from "@piship/schema";
@@ -28,6 +30,34 @@ export interface ExplainOptions extends AccessOptions {
   readonly updates?: UpdatesManifest;
   /** v1alpha6 bundled search tools, as tool -> upstream version. */
   readonly searchTools?: Readonly<Record<string, string>>;
+}
+
+/**
+ * An endpoint's effective transport: `https`, or `http-allowed` (plain HTTP
+ * to a private or internal host), which is the default when the manifest
+ * says nothing. `exposed` says what then travels unencrypted.
+ */
+function transportRow(
+  key: string,
+  declared: HttpTransport | undefined,
+  exposed: string,
+  runtimeCredential = false,
+): ExplainRow {
+  const value = effectiveHttpTransport(declared, runtimeCredential);
+  const note =
+    value === "http-allowed"
+      ? `plain HTTP to a private or internal host is allowed${declared === undefined ? " by default (httpTransport: https requires https)" : ""}; ${exposed}`
+      : runtimeCredential
+        ? "https only: the runtime credential is never sent over plain HTTP"
+        : "https only (plain HTTP to loopback aside)";
+  return {
+    key,
+    value,
+    source:
+      declared === undefined ? "builtin-default" : "distribution-enforced",
+    overridable: false,
+    note,
+  };
 }
 
 /** Governance settings as `config explain` rows; all distribution-enforced. */
@@ -66,12 +96,13 @@ function governanceRows(
       : []),
     row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
     ...mcp.servers.flatMap((server) => [
-      ...(server.httpTransport === "http-allowed"
+      ...(server.transport === "streamable-http"
         ? [
-            row(
+            transportRow(
               `mcp.servers.${server.id}.httpTransport`,
               server.httpTransport,
-              "plain HTTP to a private or internal host is allowed; that traffic, including identity headers, is unencrypted",
+              "that traffic, including identity headers, is then unencrypted",
+              server.credential === "runtime",
             ),
           ]
         : []),
@@ -94,12 +125,13 @@ function governanceRows(
       "run doctor for the effective containment level",
     ),
     row("sandbox.provider", sandbox.provider ?? "native"),
-    ...(sandbox.httpTransport === "http-allowed"
+    ...(sandbox.endpoint !== undefined
       ? [
-          row(
+          transportRow(
             "sandbox.httpTransport",
             sandbox.httpTransport,
-            "plain HTTP to a private or internal sandbox endpoint is allowed; commands, their output, and files sent to the sandbox are then unencrypted",
+            "commands, their output, and files sent to the sandbox are then unencrypted",
+            sandbox.credential === "runtime",
           ),
         ]
       : []),
@@ -118,12 +150,12 @@ function governanceRows(
         : "disabled",
     ),
     ...audit.sinks.flatMap((sink, index) =>
-      sink.httpTransport === "http-allowed"
+      sink.type === "http"
         ? [
-            row(
+            transportRow(
               `audit.sinks[${index}].httpTransport`,
               sink.httpTransport,
-              `sink ${sink.id}: plain HTTP to a private or internal collector is allowed; audit events are then unencrypted`,
+              `sink ${sink.id}: audit events are then unencrypted`,
             ),
           ]
         : [],
@@ -195,16 +227,13 @@ export async function explainConfiguration(
       note,
     });
   };
-  // Shown only when an endpoint opted in; absent is https.
-  const plainHttp = (key: string, value: string | undefined, note: string) => {
-    if (value === "http-allowed")
-      rows.push({
-        key,
-        value,
-        source: "distribution-enforced",
-        overridable: false,
-        note,
-      });
+  // The effective transport of an endpoint the distribution declares.
+  const plainHttp = (
+    key: string,
+    declared: HttpTransport | undefined,
+    exposed: string,
+  ) => {
+    rows.push(transportRow(key, declared, exposed));
   };
   if (!access) {
     rows.push(
@@ -242,7 +271,7 @@ export async function explainConfiguration(
       plainHttp(
         "identity.oidc.httpTransport",
         access.identity.oidc.httpTransport,
-        "the issuer and the endpoints its discovery names may use plain HTTP to a private or internal host; sign-in tokens, including the refresh token, are then unencrypted",
+        "the issuer and the endpoints its discovery names then carry sign-in tokens, including the refresh token, unencrypted",
       );
       rows.push(
         {
@@ -283,11 +312,12 @@ export async function explainConfiguration(
       "credential.broker.revokeEndpoint",
       access.credential.broker?.revokeEndpoint,
     );
-    plainHttp(
-      "credential.broker.httpTransport",
-      access.credential.broker?.httpTransport,
-      "plain HTTP to a private or internal broker is allowed; the identity token and the issued gateway credential are then unencrypted",
-    );
+    if (access.credential.broker)
+      plainHttp(
+        "credential.broker.httpTransport",
+        access.credential.broker.httpTransport,
+        "the identity token and the issued gateway credential are then unencrypted",
+      );
     if (!["pi-native", "none"].includes(access.credential.provider))
       rows.push(
         {
@@ -315,11 +345,12 @@ export async function explainConfiguration(
       overridable: false,
     });
     reference("inference.baseUrl", access.inference.baseUrl);
-    plainHttp(
-      "inference.httpTransport",
-      access.inference.httpTransport,
-      "plain HTTP to a private or internal gateway is allowed; the gateway credential and every prompt and response are then unencrypted",
-    );
+    if (access.inference.baseUrl !== undefined)
+      plainHttp(
+        "inference.httpTransport",
+        access.inference.httpTransport,
+        "the gateway credential and every prompt and response are then unencrypted",
+      );
     if (access.models.catalog.length)
       rows.push({
         key: "models.catalog",
@@ -366,15 +397,15 @@ export async function explainConfiguration(
   if (options.updates)
     rows.push({
       key: "updates.transport",
-      value: options.updates.transport ?? "https",
+      value: options.updates.transport ?? "http-allowed",
       source: options.updates.transport
         ? "distribution-enforced"
         : "builtin-default",
       overridable: false,
       note:
-        options.updates.transport === "http-allowed"
-          ? "the update channel may use plain HTTP to a private or internal host; integrity by signature only. Every other endpoint still needs https"
-          : "plain HTTP only to loopback",
+        options.updates.transport === "https"
+          ? "https only (plain HTTP to loopback aside)"
+          : `the update channel may use plain HTTP to a private or internal host${options.updates.transport ? "" : " by default (transport: https requires https)"}; integrity by signature only`,
     });
   const paths = accessStatePaths(options.stateDir);
   let preferences: ReturnType<typeof readPreferences> = {
