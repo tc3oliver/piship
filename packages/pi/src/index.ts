@@ -245,6 +245,10 @@ export async function launchPiDistribution(
             ? "\n  sandbox login | sandbox logout"
             : ""
         }${
+          metadata.deployment.mode === "personal"
+            ? "\n  config trust list | config trust forget [<path>|--all]"
+            : ""
+        }${
           metadata.governance.manifest.policy.userAuto === "allowed" &&
           metadata.deployment.mode === "managed"
             ? "\n  auto on | auto off | auto status"

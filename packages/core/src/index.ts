@@ -118,6 +118,7 @@ export {
 } from "./state-paths.js";
 export * from "./pi-packages/footprint.js";
 export * from "./supply-chain.js";
+export * from "./project-trust-memory.js";
 export * from "./user-auto.js";
 export {
   abandonedTemporaryCount,

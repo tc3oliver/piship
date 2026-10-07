@@ -2,7 +2,9 @@ import { PiShipError, redact } from "@piship/contracts";
 import {
   accessStatePaths,
   explainConfiguration,
+  forgetProjectTrust,
   formatExplanation,
+  listRememberedProjects,
   setPreference,
 } from "../index.js";
 import type { BrandedContext } from "./context.js";
@@ -39,6 +41,30 @@ export async function runConfig(
     else ctx.out(formatExplanation(ctx.metadata.app.name, rows));
     return;
   }
+  if (action === "trust" && key === "list" && rest.length === 0) {
+    const remembered = listRememberedProjects(ctx.stateDir);
+    ctx.out(
+      remembered.length
+        ? remembered
+            .map(
+              (item) =>
+                `${item.answer === "allow" ? "trusted    " : "not trusted"} ${item.root} (${item.items.length} item${item.items.length === 1 ? "" : "s"}, ${item.answeredAt})`,
+            )
+            .join("\n")
+        : "No project answers are remembered.",
+    );
+    return;
+  }
+  if (action === "trust" && key === "forget" && rest.length <= 1) {
+    const target = rest[0] === "--all" ? "all" : (rest[0] ?? process.cwd());
+    const count = forgetProjectTrust(ctx.stateDir, target);
+    ctx.out(
+      count
+        ? `Forgot the remembered answer for ${count} project${count === 1 ? "" : "s"}; ${ctx.metadata.app.command} asks again at the next launch there.`
+        : "No remembered answer for that project.",
+    );
+    return;
+  }
   if (
     (action === "set" && key && rest.length === 1) ||
     (action === "unset" && key && rest.length === 0)
@@ -60,6 +86,6 @@ export async function runConfig(
   }
   throw new PiShipError(
     "CONFIG_INVALID",
-    `Usage: ${ctx.metadata.app.command} config explain [--json] | config set <key> <value> | config unset <key>`,
+    `Usage: ${ctx.metadata.app.command} config explain [--json] | config set <key> <value> | config unset <key> | config trust list | config trust forget [<path>|--all]`,
   );
 }
