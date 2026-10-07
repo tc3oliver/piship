@@ -35,7 +35,7 @@ export interface AuditSinkConfig {
   /** HTTP sinks: endpoint URL or `${NAME}` runtime reference. */
   readonly url?: string;
   readonly required: boolean;
-  /** `http-allowed`: plain HTTP to a private or internal host too. */
+  /** `https` forbids plain HTTP beyond loopback; otherwise it is allowed to a private or internal host. */
   readonly httpTransport?: "https" | "http-allowed";
 }
 
@@ -86,7 +86,7 @@ export interface AuditLogOptions {
   /** Injected (managed) fetch used by HTTP sinks. */
   readonly fetch?: AuditFetch;
   /**
-   * For a sink with `httpTransport: http-allowed` whose URL is plain HTTP
+   * For a sink not set to `httpTransport: https` whose URL is plain HTTP
    * to a private or internal host: a managed fetch that also admits plain
    * HTTP to that URL's origin, and to nothing else. Without it such a sink
    * is not opened.
@@ -562,27 +562,28 @@ function resolveHttpUrl(
   if (url.username || url.password)
     throw new Error("HTTP sink url must not embed credentials");
   if (
-    sink.httpTransport === "http-allowed" &&
+    sink.httpTransport !== "https" &&
     url.protocol === "http:" &&
+    !isLoopbackHost(url.hostname) &&
     !isPrivateNetworkHost(url.hostname)
   )
     throw new Error(
-      `HTTP sink url is plain HTTP to ${url.hostname}, which is public; httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+      `HTTP sink url is plain HTTP to ${url.hostname}, which is public; plain HTTP is accepted only to a private or internal host`,
     );
   if (
     url.protocol !== "https:" &&
     !(
       url.protocol === "http:" &&
-      (isLoopbackHost(url.hostname) || sink.httpTransport === "http-allowed")
+      (isLoopbackHost(url.hostname) || sink.httpTransport !== "https")
     )
   )
     throw new Error(
-      "HTTP sink url must use https (plain http only for loopback, or for a private or internal host with httpTransport: http-allowed)",
+      "HTTP sink url must use https (plain http only for loopback, or for a private or internal host unless the sink sets httpTransport: https)",
     );
   return url;
 }
 
-/** Plain HTTP beyond loopback, which only an opted-in sink reaches. */
+/** Plain HTTP beyond loopback, which only a sink not set to https reaches. */
 function plainHttpSink(url: URL): boolean {
   return url.protocol === "http:" && !isLoopbackHost(url.hostname);
 }

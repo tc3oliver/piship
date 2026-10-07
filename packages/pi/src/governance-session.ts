@@ -191,7 +191,7 @@ export class GovernanceSession {
         stateDir: options.stateDir,
         rotation: auditRotation(options.lock),
         fetch: options.fetch,
-        // A sink with httpTransport: http-allowed: plain HTTP to its own
+        // A sink not set to httpTransport: https: plain HTTP to its own
         // origin only.
         plainHttpFetch: (url) => {
           const plainHttp = plainHttpOrigins([url]);

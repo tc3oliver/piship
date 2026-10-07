@@ -3,7 +3,7 @@
 import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
 import { AccessFieldError, failUnknown } from "./access.js";
-import { PRIVATE_HOSTS } from "./http-transport.js";
+import { PRIVATE_HOSTS, plainHttpPermitted } from "./http-transport.js";
 import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 import {
   checkTemplate,
@@ -19,10 +19,10 @@ export const LIFECYCLE_RUNTIME_REFERENCE_FIELDS = ["updates.source"] as const;
 
 /**
  * How the update channel may be reached (piship/v1alpha5
- * `updates.transport`): `https` (the default) keeps plain HTTP to loopback
- * only; `http-allowed` also permits plain HTTP to a private or internal
- * update host. It covers the update channel, its root metadata, and release
- * downloads only, never another endpoint.
+ * `updates.transport`): `https` forces HTTPS-only (plain HTTP to loopback
+ * aside); absent or `http-allowed` also permits plain HTTP to a private or
+ * internal update host. It covers the update channel, its root metadata, and
+ * release downloads only, never another endpoint.
  */
 export const UPDATE_TRANSPORTS = ["https", "http-allowed"] as const;
 export type UpdateTransport = (typeof UPDATE_TRANSPORTS)[number];
@@ -103,12 +103,12 @@ export interface UpdatesManifest {
   /** Channels a user may select; always includes `channel`. */
   readonly channels: readonly ReleaseChannel[];
   /**
-   * Update metadata location: an https URL, loopback http URL (or, with
-   * `transport: http-allowed`, an http URL on a private or internal host),
-   * or `${NAME}` template.
+   * Update metadata location: an https URL, loopback http URL (or, unless
+   * `transport: https`, an http URL on a private or internal host), or
+   * `${NAME}` template.
    */
   readonly source?: string;
-  /** piship/v1alpha5 only; absent means `https`. */
+  /** piship/v1alpha5 and later; absent admits plain HTTP to a private host. */
   readonly transport?: UpdateTransport;
   /** Keep the previous known-good release for rollback. */
   readonly rollback: boolean;
@@ -278,15 +278,15 @@ function publicKey(value: unknown, path: string): string {
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 const UPDATE_SOURCE_FORMS = `Expected an https URL, an http URL on 127.0.0.1, localhost, or [::1], or a \${NAME} runtime reference (which may also resolve to an absolute local directory)`;
 /**
- * What `updates.transport: http-allowed` accepts as a plain-HTTP update host:
- * the same hosts as every `httpTransport: http-allowed` endpoint.
+ * What a plain-HTTP update host may be unless `updates.transport: https`:
+ * the same hosts as every endpoint's plain HTTP.
  */
 export const PRIVATE_UPDATE_HOSTS = PRIVATE_HOSTS;
 
 /**
  * Whether `updates.transport` lets the update channel use plain HTTP to
- * `url`: always for loopback, and with `http-allowed` for a private or
- * internal host. Only the URL text is judged, never DNS.
+ * `url`: always for loopback, and for a private or internal host unless the
+ * transport is `https`. Only the URL text is judged, never DNS.
  */
 export function plainHttpUpdateAllowed(
   url: URL,
@@ -295,8 +295,18 @@ export function plainHttpUpdateAllowed(
   return (
     url.protocol === "http:" &&
     (LOOPBACK_HOSTS.includes(url.hostname) ||
-      (transport === "http-allowed" && isPrivateNetworkHost(url.hostname)))
+      (plainHttpPermitted(transport) && isPrivateNetworkHost(url.hostname)))
   );
+}
+
+/** Whether a literal update source is plain HTTP to a host beyond loopback. */
+function plainRemoteSource(source: string): boolean {
+  try {
+    const url = new URL(source);
+    return url.protocol === "http:" && !LOOPBACK_HOSTS.includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function updateSource(
@@ -324,13 +334,13 @@ function updateSource(
   if (url.search || url.hash)
     fail(path, "URLs must not contain query strings or fragments");
   if (
-    transport === "http-allowed" &&
+    plainHttpPermitted(transport) &&
     url.protocol === "http:" &&
     !plainHttpUpdateAllowed(url, transport)
   )
     fail(
       path,
-      `updates.transport: http-allowed permits plain HTTP only to a private or internal host (${PRIVATE_UPDATE_HOSTS}); ${url.hostname} is public, so serve it over https`,
+      `Plain HTTP is accepted only to a private or internal host (${PRIVATE_UPDATE_HOSTS}); ${url.hostname} is public, so serve it over https`,
     );
   if (url.protocol !== "https:" && !plainHttpUpdateAllowed(url, transport))
     fail(path, UPDATE_SOURCE_FORMS);
@@ -550,15 +560,27 @@ function parseUpdates(
     updates.transport === undefined
       ? undefined
       : oneOf(updates.transport, "updates.transport", UPDATE_TRANSPORTS);
+  const source =
+    updates.source === undefined
+      ? undefined
+      : updateSource(
+          updates.source,
+          "updates.source",
+          variables,
+          // piship/v1alpha4 has no transport and keeps https-only sources.
+          bootstrap ? transport : "https",
+        );
   // Plain HTTP leaves integrity to the update signatures alone, so it needs
-  // a bootstrap root to verify them.
+  // a bootstrap root to verify them: when declared with http-allowed, and
+  // when the source itself is plain HTTP beyond loopback.
   if (
-    transport === "http-allowed" &&
+    (transport === "http-allowed" ||
+      (source !== undefined && plainRemoteSource(source))) &&
     !(isRecord(updates.trust) && updates.trust.bootstrap !== undefined)
   )
     fail(
       "updates.transport",
-      "http-allowed requires updates.trust.bootstrap: over plain HTTP, update integrity rests on the signed update metadata alone",
+      `${transport === "http-allowed" ? "http-allowed" : "A plain-HTTP updates.source"} requires updates.trust.bootstrap: over plain HTTP, update integrity rests on the signed update metadata alone`,
     );
   const channel =
     updates.channel === undefined
@@ -586,16 +608,7 @@ function parseUpdates(
   return {
     channel,
     channels,
-    ...(updates.source === undefined
-      ? {}
-      : {
-          source: updateSource(
-            updates.source,
-            "updates.source",
-            variables,
-            transport,
-          ),
-        }),
+    ...(source === undefined ? {} : { source }),
     // Present only when declared, so a manifest without it locks unchanged.
     ...(transport === undefined ? {} : { transport }),
     rollback: updates.rollback ?? true,

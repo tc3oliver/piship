@@ -33,12 +33,12 @@ export function updates(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(y?.source),
     ["high", "Updates come from a different source."],
   );
-  // An absent transport is https.
-  out.scalar(
+  // An absent transport and http-allowed are the same default.
+  out.transport(
     "updates",
     "update transport",
-    x?.transport,
-    y?.transport,
+    x && { transport: x.transport, url: x.source },
+    y && { transport: y.transport, url: y.source },
     (_, v) =>
       v === "http-allowed"
         ? [

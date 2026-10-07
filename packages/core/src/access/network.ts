@@ -129,7 +129,7 @@ export function resolveRuntimeReferences(
     ],
     env,
   );
-  // `plainHttp`: the endpoint's `httpTransport: http-allowed`; the resolved
+  // `plainHttp`: the endpoint's `httpTransport` is not `https`; the resolved
   // URL is checked as a static one is, so a public plain-HTTP host fails.
   const one = (
     field: string,
@@ -155,14 +155,13 @@ export function resolveRuntimeReferences(
   };
   const identity =
     access.identity.mode === "oidc" ? access.identity.oidc : undefined;
-  const brokerPlainHttp =
-    access.credential.broker?.httpTransport === "http-allowed";
+  const brokerPlainHttp = access.credential.broker?.httpTransport !== "https";
   const values = {
     issuer: one(
       "identity.oidc.issuer",
       identity?.issuer,
       true,
-      identity?.httpTransport === "http-allowed",
+      identity?.httpTransport !== "https",
     ),
     clientId: one("identity.oidc.clientId", identity?.clientId, false),
     audience: one("identity.oidc.audience", identity?.audience, false),
@@ -182,7 +181,7 @@ export function resolveRuntimeReferences(
       "inference.baseUrl",
       access.inference.baseUrl,
       true,
-      access.inference.httpTransport === "http-allowed",
+      access.inference.httpTransport !== "https",
     ),
   };
   const output: Record<string, unknown> = {

@@ -122,7 +122,11 @@ describe("piship/v1alpha2 managed manifest", () => {
     ["credential.apiKey", "sk-embedded", "Secrets are never declared"],
     ["credential.storage", { provider: "file" }, "acknowledgePlaintext"],
     ["inference.provider", "pi-native", "explicit openai-compatible gateway"],
-    ["inference.baseUrl", "http://gateway.example/v1", "Use https"],
+    [
+      "inference.baseUrl",
+      "http://gateway.example/v1",
+      "so serve it over https",
+    ],
     [
       "inference.baseUrl",
       "https://user:pw@gateway.example/v1",

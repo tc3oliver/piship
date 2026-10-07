@@ -156,6 +156,14 @@ const channelRequests = () =>
   requests.filter((line) => !line.startsWith("CONNECT"));
 
 describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
+  it("is the default: a plain-HTTP internal channel needs no setting", async () => {
+    const { channelDir } = await installed(false, undefined);
+    served = channelDir;
+    process.env.ACMEPI_UPDATE_SOURCE = SOURCE;
+    expect(await update(["--check"])).toContain("1.1.0 is available");
+    expect(await update()).toContain("Updated AcmePi 1.0.0 -> 1.1.0");
+  });
+
   it("installs, updates, and rolls back over a plain-HTTP internal channel through the proxy", async () => {
     const { channelDir } = await installed(false, "http-allowed");
     served = channelDir;
@@ -271,7 +279,8 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
   });
 
   it("refuses a public host, from updates.source or --from, before any request", async () => {
-    await installed(false, "http-allowed");
+    // The default refuses it exactly as the explicit setting does.
+    await installed(false, undefined);
     for (const source of [
       "http://updates.acme.example/acmepi",
       "http://203.0.113.7/acmepi",
@@ -330,18 +339,17 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
   });
 });
 
-describe.runIf(HOST_EVIDENCED)("updates.transport: https (the default)", () => {
-  for (const transport of [undefined, "https"] as const)
-    it(`refuses a plain-HTTP internal source exactly as before (${transport ?? "absent"})`, async () => {
-      await installed(false, transport);
-      process.env.ACMEPI_UPDATE_SOURCE = SOURCE;
-      const error = await refused(update());
-      expect(error.code).toBe("NETWORK_DENIED");
-      expect(error.message).toBe(
-        "Update sources must use https (got http://updates.corp.internal)",
-      );
-      const from = await refused(update(["--from", SOURCE]));
-      expect(from.code).toBe("NETWORK_DENIED");
-      expect(requests).toEqual([]);
-    });
+describe.runIf(HOST_EVIDENCED)("updates.transport: https", () => {
+  it("refuses a plain-HTTP internal source, forcing HTTPS-only", async () => {
+    await installed(false, "https");
+    process.env.ACMEPI_UPDATE_SOURCE = SOURCE;
+    const error = await refused(update());
+    expect(error.code).toBe("NETWORK_DENIED");
+    expect(error.message).toBe(
+      "Update sources must use https (got http://updates.corp.internal)",
+    );
+    const from = await refused(update(["--from", SOURCE]));
+    expect(from.code).toBe("NETWORK_DENIED");
+    expect(requests).toEqual([]);
+  });
 });

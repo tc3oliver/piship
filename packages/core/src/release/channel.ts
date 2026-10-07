@@ -443,7 +443,7 @@ export async function readChannel(
     readonly minSequence?: number;
     readonly now?: () => Date;
     readonly fetcher?: typeof fetch;
-    /** The installation's `updates.transport`; absent means https. */
+    /** The installation's `updates.transport`; absent admits plain HTTP to a private host. */
     readonly transport?: UpdateTransport;
   },
 ): Promise<{

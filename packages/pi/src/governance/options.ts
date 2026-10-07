@@ -27,7 +27,7 @@ export interface GovernanceOptions {
   readonly fetch: ManagedFetch;
   /**
    * The governance fetch that also permits plain HTTP to the origins of the
-   * resolved urls of MCP servers with `httpTransport: http-allowed` on a
+   * resolved urls of MCP servers not set to `httpTransport: https` on a
    * private or internal host; only those servers use it. Absent when none
    * resolves to such a url.
    */
@@ -35,8 +35,8 @@ export interface GovernanceOptions {
   /**
    * The governance fetch that also admits plain HTTP where `plainHttp`
    * accepts (usually `plainHttpOrigins` of one endpoint): for the audit
-   * sinks and the sandbox with `httpTransport: http-allowed`. Absent, such
-   * an endpoint over plain HTTP is refused.
+   * sinks and the sandbox unless set to `httpTransport: https`. Absent,
+   * such an endpoint over plain HTTP is refused.
    */
   readonly plainHttpFetch?: (
     plainHttp: (target: URL) => boolean,

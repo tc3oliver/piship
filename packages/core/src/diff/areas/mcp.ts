@@ -68,15 +68,15 @@ export function mcp(
         undefined,
         y.transport,
       );
-      if (y.httpTransport === "http-allowed")
-        out.push(
-          "mcp",
-          "added",
-          `${item} httpTransport`,
-          PLAIN_HTTP,
-          undefined,
-          y.httpTransport,
-        );
+      out.transport(
+        "mcp",
+        `${item} httpTransport`,
+        undefined,
+        y.url === undefined
+          ? undefined
+          : { transport: y.httpTransport, url: y.url },
+        () => PLAIN_HTTP,
+      );
       for (const header of headerEntries(y))
         out.push(
           "mcp",
@@ -121,12 +121,16 @@ export function mcp(
           ? ["high", "Server now receives the runtime credential."]
           : ["medium", "Server no longer receives the runtime credential."],
     );
-    // An absent httpTransport is https.
-    out.scalar(
+    // An absent httpTransport and http-allowed are the same default.
+    out.transport(
       "mcp",
       `${item} httpTransport`,
-      x.httpTransport,
-      y.httpTransport,
+      x.url === undefined
+        ? undefined
+        : { transport: x.httpTransport, url: x.url },
+      y.url === undefined
+        ? undefined
+        : { transport: y.httpTransport, url: y.url },
       (_, v) =>
         v === "http-allowed"
           ? PLAIN_HTTP

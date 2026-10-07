@@ -1,13 +1,16 @@
-// piship/v1alpha6 `httpTransport: http-allowed` on the inference gateway,
-// the credential broker, the OIDC issuer, HTTP audit sinks, and remote
-// sandbox endpoints: plain HTTP to a private or internal host, by opt-in.
+// piship/v1alpha6 `httpTransport` on the inference gateway, the credential
+// broker, the OIDC issuer, HTTP audit sinks, and remote sandbox endpoints:
+// plain HTTP to a private or internal host is admitted by default,
+// `http-allowed` says so explicitly, and `https` forces HTTPS-only.
 import { describe, expect, it } from "vitest";
 import {
   launchWarnings,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_V1ALPHA6,
+  effectiveHttpTransport,
   parseManifest,
+  plainHttpPermitted,
   plainHttpProblem,
 } from "./index.js";
 
@@ -94,7 +97,7 @@ function rejects(input: Json, field: string, message?: string): void {
 const warnings = (input: Json) => launchWarnings(parseManifest(input));
 
 describe("httpTransport on access endpoints", () => {
-  it("is absent unless http-allowed, so existing manifests parse and lock unchanged", () => {
+  it("is absent unless declared, so existing manifests parse and lock unchanged", () => {
     const access = parseManifest(manifest()).access;
     expect(access?.inference).not.toHaveProperty("httpTransport");
     expect(access?.credential.broker).not.toHaveProperty("httpTransport");
@@ -109,7 +112,54 @@ describe("httpTransport on access endpoints", () => {
         }),
       }),
     ).access;
-    expect(explicit?.inference).toEqual(access?.inference);
+    // An explicit https is recorded: it differs from the default.
+    expect(explicit?.inference).toMatchObject({ httpTransport: "https" });
+  });
+
+  it("admits plain HTTP to a private host by default and says nothing in the lock", () => {
+    const access = parseManifest(
+      manifest({
+        ...gateway({ baseUrl: "http://10.20.30.40:4000/v1" }),
+        ...broker({ endpoint: "http://10.20.30.40:8080/token" }),
+        ...oidc({ issuer: "http://keycloak.corp.internal/realms/acme" }),
+      }),
+    ).access;
+    expect(access?.inference.baseUrl).toBe("http://10.20.30.40:4000/v1");
+    expect(access?.inference).not.toHaveProperty("httpTransport");
+    expect(access?.credential.broker).not.toHaveProperty("httpTransport");
+  });
+
+  it("forces https with httpTransport: https", () => {
+    rejects(
+      manifest(
+        gateway({
+          baseUrl: "http://10.20.30.40:4000/v1",
+          httpTransport: "https",
+        }),
+      ),
+      "inference.baseUrl",
+      "this endpoint is https-only (inference.httpTransport: https",
+    );
+    rejects(
+      manifest(
+        broker({
+          endpoint: "http://10.20.30.40:8080/token",
+          httpTransport: "https",
+        }),
+      ),
+      "credential.broker.endpoint",
+      "credential.broker.httpTransport: https",
+    );
+    rejects(
+      manifest(
+        oidc({
+          issuer: "http://keycloak.corp.internal",
+          httpTransport: "https",
+        }),
+      ),
+      "identity.oidc.issuer",
+      "identity.oidc.httpTransport: https",
+    );
   });
 
   it("accepts plain HTTP to a private or internal host with http-allowed", () => {
@@ -183,33 +233,20 @@ describe("httpTransport on access endpoints", () => {
     );
   });
 
-  it("keeps plain HTTP to a private host refused without the opt-in", () => {
-    rejects(
-      manifest(gateway({ baseUrl: "http://10.20.30.40:4000/v1" })),
-      "inference.baseUrl",
-      "or for a private or internal host with inference.httpTransport: http-allowed (piship/v1alpha6)",
-    );
-    rejects(
-      manifest(broker({ endpoint: "http://10.20.30.40:8080/token" })),
-      "credential.broker.endpoint",
-      "credential.broker.httpTransport: http-allowed",
-    );
-    rejects(
-      manifest(oidc({ issuer: "http://keycloak.corp.internal" })),
-      "identity.oidc.issuer",
-      "identity.oidc.httpTransport: http-allowed",
-    );
-    // A public host gets no hint: the opt-in would not admit it.
-    let message = "";
-    try {
-      parseManifest(
-        manifest(gateway({ baseUrl: "http://gw.acme.example/v1" })),
-      );
-    } catch (error) {
-      message = (error as Error).message;
+  it("refuses plain HTTP to a public host by default too", () => {
+    for (const input of [
+      manifest(gateway({ baseUrl: "http://gw.acme.example/v1" })),
+      manifest(broker({ endpoint: "http://broker.acme.example/token" })),
+      manifest(oidc({ issuer: "http://login.acme.example" })),
+    ]) {
+      let message = "";
+      try {
+        parseManifest(input);
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain("is public, so serve it over https");
     }
-    expect(message).toContain("Use https");
-    expect(message).not.toContain("httpTransport");
   });
 
   it("refuses userinfo, a query, and an unknown value", () => {
@@ -308,11 +345,20 @@ describe("httpTransport on access endpoints", () => {
         }),
       ),
     ).toContainEqual({
-      path: "inference.httpTransport",
+      path: "network",
       message: expect.stringContaining(
-        "if this URL resolves to plain HTTP, the gateway credential",
+        "inference.baseUrl, if it resolves to plain HTTP (the gateway credential",
       ),
     });
+    // A reference is not guessed at without the explicit setting.
+    expect(
+      warnings(
+        manifest({
+          variables: ["GATEWAY_URL"],
+          ...gateway({ baseUrl: GATEWAY_REF }),
+        }),
+      ),
+    ).toEqual([]);
   });
 
   it("warns that the credential and prompts are unencrypted, and about spoofable names", () => {
@@ -335,14 +381,14 @@ describe("httpTransport on access endpoints", () => {
     );
     const at = (path: string) =>
       found.filter((item) => item.path === path).map((item) => item.message);
-    expect(at("inference.httpTransport").join()).toContain(
-      "the gateway credential, which anyone on the network path can read and replay until it expires, and every prompt",
-    );
-    expect(at("credential.broker.httpTransport").join()).toContain(
-      "the identity token sent to the broker and the gateway credential it issues",
-    );
-    expect(at("identity.oidc.httpTransport").join()).toContain(
-      "including the refresh token",
+    // One line for every unencrypted endpoint.
+    expect(at("network")).toHaveLength(1);
+    expect(at("network")[0]).toBe(
+      "Plain HTTP to a private or internal host is admitted by default, and these endpoints travel unencrypted and unauthenticated on the network path: " +
+        "identity.oidc.issuer, if it resolves to plain HTTP (the authorization code and the identity tokens, including the refresh token, which anyone on the network path can read and replay); " +
+        "credential.broker.endpoint (the identity token sent to the broker and the gateway credential it issues, which anyone on the network path can read and replay until they expire); " +
+        "inference.baseUrl (the gateway credential, which anyone on the network path can read and replay until it expires, and every prompt, file excerpt, and response, which can also be altered in transit). " +
+        "Serve them over https where possible, or set httpTransport: https on an endpoint to require it",
     );
     expect(at("inference.baseUrl").join()).toContain(
       "litellm is resolved through mDNS or the machine's DNS search domains",
@@ -374,7 +420,7 @@ describe("httpTransport on audit sinks and the sandbox", () => {
     sandbox: { required: true, provider: "e2b-compatible", ...fields },
   });
 
-  it("accepts plain HTTP to a private host per sink, and records only the opt-in", () => {
+  it("accepts plain HTTP to a private host per sink, and records only what is declared", () => {
     const parsed = parseManifest(
       manifest(
         sink({
@@ -391,8 +437,14 @@ describe("httpTransport on audit sinks and the sandbox", () => {
       parseManifest(manifest(sink({ url: "https://audit.acme.example/e" })))
         .governance?.audit.sinks[0],
     ).not.toHaveProperty("httpTransport");
+    expect(
+      parseManifest(manifest(sink({ url: "http://10.0.0.6:9000/events" })))
+        .governance?.audit.sinks[0],
+    ).not.toHaveProperty("httpTransport");
     rejects(
-      manifest(sink({ url: "http://10.0.0.6:9000/events" })),
+      manifest(
+        sink({ url: "http://10.0.0.6:9000/events", httpTransport: "https" }),
+      ),
       "audit.sinks[0].url",
       "Use https",
     );
@@ -423,7 +475,7 @@ describe("httpTransport on audit sinks and the sandbox", () => {
           }),
         ),
       ).map((item) => item.path),
-    ).toContain("audit.sinks[0].httpTransport");
+    ).toContain("network");
   });
 
   it("accepts a private sandbox endpoint and router, and refuses a public one", () => {
@@ -459,8 +511,18 @@ describe("httpTransport on audit sinks and the sandbox", () => {
       "sandbox.router",
       "is public",
     );
+    expect(
+      parseManifest(
+        manifest(sandbox({ endpoint: "http://sandbox.corp.internal:3000" })),
+      ).governance?.sandbox,
+    ).toMatchObject({ endpoint: "http://sandbox.corp.internal:3000" });
     rejects(
-      manifest(sandbox({ endpoint: "http://sandbox.corp.internal:3000" })),
+      manifest(
+        sandbox({
+          endpoint: "http://sandbox.corp.internal:3000",
+          httpTransport: "https",
+        }),
+      ),
       "sandbox.endpoint",
       "Use https",
     );
@@ -478,6 +540,18 @@ describe("httpTransport on audit sinks and the sandbox", () => {
       "sandbox.httpTransport",
       "the runtime credential is never sent to the sandbox over plain HTTP",
     );
+    // Without the explicit setting the runtime credential is still kept off
+    // plain HTTP: the endpoint must be https.
+    rejects(
+      manifest(
+        sandbox({
+          endpoint: "http://sandbox.corp.internal:3000",
+          credential: "runtime",
+        }),
+      ),
+      "sandbox.endpoint",
+      "Use https",
+    );
     expect(
       warnings(
         manifest(
@@ -487,7 +561,7 @@ describe("httpTransport on audit sinks and the sandbox", () => {
             httpTransport: "http-allowed",
           }),
         ),
-      ).find((item) => item.path === "sandbox.httpTransport")?.message,
+      ).find((item) => item.path === "network")?.message,
     ).toContain("the stored sandbox credential");
   });
 
@@ -532,5 +606,17 @@ describe("plainHttpProblem", () => {
     expect(plainHttpProblem(new URL("http://example.com"))).toContain(
       "example.com is public",
     );
+  });
+});
+
+describe("plainHttpPermitted and effectiveHttpTransport", () => {
+  it("permit every transport but an explicit https", () => {
+    expect(plainHttpPermitted(undefined)).toBe(true);
+    expect(plainHttpPermitted("http-allowed")).toBe(true);
+    expect(plainHttpPermitted("https")).toBe(false);
+    expect(effectiveHttpTransport(undefined)).toBe("http-allowed");
+    expect(effectiveHttpTransport("https")).toBe("https");
+    // A runtime credential is never sent over plain HTTP.
+    expect(effectiveHttpTransport(undefined, true)).toBe("https");
   });
 });

@@ -222,8 +222,8 @@ async function fetchSource(
 }
 
 /**
- * Reads a small file from a directory or an https (or loopback http, or with
- * `transport` http-allowed private http) source. `answer.date` receives the
+ * Reads a small file from a directory or an https (or loopback http, or
+ * private http unless `transport` is https) source. `answer.date` receives the
  * source's HTTP `Date`, when it sent one.
  */
 export async function readSourceFile(
@@ -327,7 +327,7 @@ export function isUrlSource(source: string): boolean {
 /**
  * Validate an update source after `${NAME}` resolution or from `--from`, with
  * the same URL rules as the manifest: https, or http to a loopback host (or,
- * with `transport` http-allowed, to a private or internal host), with no
+ * unless `transport` is https, to a private or internal host), with no
  * credentials, query string, or fragment. Any other value is a local
  * directory; one resolved from `updates.source` must be absolute, while a
  * `--from` directory may be relative to the working directory. Returns the
@@ -371,19 +371,19 @@ export function checkUpdateSource(
 }
 
 /**
- * Only https, or http to a loopback host, may serve updates; with
- * `transport` http-allowed, also http to a private or internal host. The
- * host is judged by its text, never by DNS.
+ * Only https, or http to a loopback host, may serve updates; unless
+ * `transport` is https, also http to a private or internal host. The host is
+ * judged by its text, never by DNS.
  */
 export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
   if (
-    transport === "http-allowed" &&
+    transport !== "https" &&
     url.protocol === "http:" &&
     !plainHttpUpdateAllowed(url, transport)
   )
     throw new PiShipError(
       "NETWORK_DENIED",
-      `updates.transport http-allowed permits plain HTTP only to a private or internal update host; ${url.host} is public`,
+      `Plain HTTP is accepted only to a private or internal update host; ${url.host} is public`,
       {
         userAction: `Serve the update channel over https, or from ${PRIVATE_UPDATE_HOSTS}`,
       },

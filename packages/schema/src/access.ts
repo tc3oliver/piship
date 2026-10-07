@@ -2,6 +2,7 @@ import { unknownFieldMessage } from "./suggest.js";
 import {
   HTTP_TRANSPORTS,
   type HttpTransport,
+  plainHttpPermitted,
   plainHttpProblem,
 } from "./http-transport.js";
 import {
@@ -24,9 +25,9 @@ export type IdentityConfig =
         readonly audience?: string;
         readonly redirectUri: string;
         /**
-         * piship/v1alpha6: `http-allowed` also permits plain HTTP to a
-         * private or internal host for the issuer and every endpoint its
-         * discovery document names. Absent means `https`.
+         * piship/v1alpha6: `https` forces HTTPS-only for the issuer and every
+         * endpoint its discovery document names; absent or `http-allowed`
+         * also permits plain HTTP to a private or internal host.
          */
         readonly httpTransport?: HttpTransport;
       };
@@ -46,9 +47,9 @@ export interface CredentialConfig {
     readonly endpoint: string;
     readonly revokeEndpoint?: string;
     /**
-     * piship/v1alpha6: `http-allowed` also permits plain HTTP to a private
-     * or internal host for `endpoint` and `revokeEndpoint`. Absent means
-     * `https`.
+     * piship/v1alpha6: `https` forces HTTPS-only for `endpoint` and
+     * `revokeEndpoint`; absent or `http-allowed` also permits plain HTTP to
+     * a private or internal host.
      */
     readonly httpTransport?: HttpTransport;
   };
@@ -66,8 +67,8 @@ export interface InferenceConfig {
   readonly api?: "openai-completions" | "openai-responses";
   readonly liveCatalog: boolean;
   /**
-   * piship/v1alpha6: `http-allowed` also permits plain HTTP to a private or
-   * internal host for `baseUrl`. Absent means `https`.
+   * piship/v1alpha6: `https` forces HTTPS-only for `baseUrl`; absent or
+   * `http-allowed` also permits plain HTTP to a private or internal host.
    */
   readonly httpTransport?: HttpTransport;
 }
@@ -252,7 +253,7 @@ function referenceString(
   path: string,
   variables: readonly string[],
   kind: "url" | "id" | "path",
-  /** `httpTransport: http-allowed`; see checkUrl. */
+  /** Whether the endpoint permits plain HTTP to a private host; see checkUrl. */
   plainHttp = false,
 ): string {
   if (typeof value !== "string" || value.trim() === "")
@@ -266,12 +267,12 @@ function referenceString(
   if (kind === "url") checkUrl(text, path, plainHttp);
   return text;
 }
-/** Endpoint URL fields that have an `httpTransport` opt-in beside them. */
+/** Endpoint URL fields that have an `httpTransport` beside them. */
 const PLAIN_HTTP_ENDPOINT =
   /^(?:identity\.oidc\.issuer|credential\.broker\.(?:endpoint|revokeEndpoint)|inference\.baseUrl|audit\.sinks\[\d+\]\.url|sandbox\.(?:endpoint|router)|mcp\.servers\.[^.]+\.url)$/;
 /**
- * An endpoint URL: https, or plain HTTP to loopback. With `plainHttp` (the
- * endpoint's `httpTransport: http-allowed`) plain HTTP to a private or
+ * An endpoint URL: https, or plain HTTP to loopback. With `plainHttp` (an
+ * endpoint whose `httpTransport` is not `https`) plain HTTP to a private or
  * internal host is accepted too, and to a public host refused. Only the URL
  * text is judged, never DNS.
  */
@@ -295,16 +296,16 @@ export function checkUrl(value: string, path: string, plainHttp = false): URL {
     url.hostname,
   );
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    // An endpoint with an httpTransport opt-in, on a host it would accept.
-    const optIn =
+    // An endpoint that would take plain HTTP to this host but is https-only.
+    const strict =
       url.protocol === "http:" &&
       PLAIN_HTTP_ENDPOINT.test(path) &&
       !plainHttpProblem(url)
-        ? `, or for a private or internal host with ${path.replace(/\.[^.]+$/, ".httpTransport")}: http-allowed (piship/v1alpha6)`
+        ? `; this endpoint is https-only (${path.replace(/\.[^.]+$/, ".httpTransport")}: https, or a runtime credential)`
         : "";
     fail(
       path,
-      `Use https; plain http is accepted only for loopback fixtures${optIn}`,
+      `Use https; plain http is accepted only for loopback fixtures${strict}`,
     );
   }
   return url;
@@ -356,9 +357,15 @@ function adapterPath(value: unknown, path: string): string {
     fail(path, "Adapters must be ECMAScript modules ending in .mjs or .js");
   return item;
 }
-/** `<endpoint>.httpTransport`; absent is `https`. */
-function httpTransport(value: unknown, path: string): HttpTransport {
-  if (value === undefined) return "https";
+/**
+ * `<endpoint>.httpTransport`; absent stays absent (plain HTTP to a private
+ * host is admitted) so a manifest that does not set it parses as before.
+ */
+function httpTransport(
+  value: unknown,
+  path: string,
+): HttpTransport | undefined {
+  if (value === undefined) return undefined;
   if (
     typeof value !== "string" ||
     !(HTTP_TRANSPORTS as readonly string[]).includes(value)
@@ -477,7 +484,7 @@ function parseIdentity(
         "identity.oidc.issuer",
         variables,
         "url",
-        transport === "http-allowed",
+        plainHttpPermitted(transport),
       ),
       clientId: referenceString(
         oidc.clientId,
@@ -498,7 +505,7 @@ function parseIdentity(
             ),
           }),
       redirectUri: redirect,
-      ...(transport === "http-allowed" ? { httpTransport: transport } : {}),
+      ...(transport === undefined ? {} : { httpTransport: transport }),
     },
   };
 }
@@ -572,7 +579,7 @@ function parseCredential(
       section.httpTransport,
       "credential.broker.httpTransport",
     );
-    const plainHttp = transport === "http-allowed";
+    const plainHttp = plainHttpPermitted(transport);
     broker = {
       endpoint: referenceString(
         section.endpoint,
@@ -592,7 +599,7 @@ function parseCredential(
               plainHttp,
             ),
           }),
-      ...(plainHttp ? { httpTransport: transport } : {}),
+      ...(transport === undefined ? {} : { httpTransport: transport }),
     };
   } else if (credential.broker !== undefined)
     conflict(
@@ -696,11 +703,11 @@ function parseInference(
       "inference.baseUrl",
       variables,
       "url",
-      transport === "http-allowed",
+      plainHttpPermitted(transport),
     ),
     api,
     liveCatalog: bool(inference.liveCatalog, "inference.liveCatalog", false),
-    ...(transport === "http-allowed" ? { httpTransport: transport } : {}),
+    ...(transport === undefined ? {} : { httpTransport: transport }),
   };
 }
 

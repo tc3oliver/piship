@@ -101,6 +101,37 @@ describe("the declared sandbox backend", () => {
     ).toBeInstanceOf(KubernetesAgentSandboxBackend);
   });
 
+  it("reaches a private plain-HTTP endpoint by default, unless https is forced or the runtime credential is sent", async () => {
+    const scoped: string[] = [];
+    const plainHttpFetch = (plainHttp: (target: URL) => boolean) => {
+      scoped.push(String(plainHttp(new URL("http://sbx.corp.internal:3000/"))));
+      return async () => new Response(null, { status: 204 });
+    };
+    const endpoint = "http://sbx.corp.internal:3000";
+    const open = (
+      extra: Partial<SandboxConfig>,
+      more: Partial<GovernanceOptions> = {},
+    ) =>
+      sandboxBackend(
+        options({ provider: "e2b-compatible", endpoint, ...extra }, {
+          plainHttpFetch,
+          ...more,
+        } as Partial<GovernanceOptions>),
+      );
+    await open({});
+    await open({ httpTransport: "https" });
+    // The runtime credential is never sent over plain HTTP, even to an
+    // endpoint on the gateway's own origin.
+    await open(
+      { credential: "runtime" },
+      {
+        credential: async () => "runtime-credential",
+        credentialOrigins: [endpoint],
+      },
+    );
+    expect(scoped).toEqual(["true"]);
+  });
+
   it("reaches an http-allowed endpoint over plain HTTP through a fetch scoped to it", async () => {
     let admit: ((target: URL) => boolean) | undefined;
     const used: string[] = [];

@@ -210,25 +210,46 @@ describe("updates.transport in the lock", () => {
     "  source: http://updates.corp.internal/acmepi\n  transport: http-allowed\n",
   );
 
-  it("is locked only when declared, and diff reports the change", () => {
+  const STRICT = HTTP.replace(
+    "  source: http://updates.corp.internal/acmepi\n  transport: http-allowed\n",
+    "  source: https://updates.acme.example\n  transport: https\n",
+  );
+
+  it("is locked only when declared, and diff reports a change of source", () => {
     const before = resolveLock(project(MANIFEST));
     expect(before.updates).not.toHaveProperty("transport");
     const after = resolveLock(project(HTTP));
     expect(after.updates?.transport).toBe("http-allowed");
     expect(after.updates?.source).toBe("http://updates.corp.internal/acmepi");
+    // http-allowed is the default's own spelling: no transport change.
     const report = diffLocks(before, after);
-    expect(report.changes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          area: "updates",
-          item: "update transport",
-          kind: "added",
-          risk: "high",
-          after: "http-allowed",
-        }),
-      ]),
+    expect(report.changes.map((change) => change.item)).toEqual([
+      "update source",
+    ]);
+    expect(formatDiff(report)).toContain("update source");
+  });
+
+  it("reports a change of effective transport, tightening low and loosening high", () => {
+    const base = resolveLock(project(MANIFEST));
+    const strict = resolveLock(project(STRICT));
+    expect(strict.updates?.transport).toBe("https");
+    const tightened = diffLocks(base, strict).changes.find(
+      (change) => change.item === "update transport",
     );
-    expect(formatDiff(report)).toContain("update transport");
+    expect(tightened).toMatchObject({
+      before: "http-allowed",
+      after: "https",
+      risk: "low",
+    });
+    const loosened = diffLocks(strict, base).changes.find(
+      (change) => change.item === "update transport",
+    );
+    expect(loosened).toMatchObject({
+      before: "https",
+      after: "http-allowed",
+      risk: "high",
+    });
+    expect(formatDiff(diffLocks(strict, base))).toContain("update transport");
   });
 
   it("does not change the digest of a manifest whose comments mention it", () => {

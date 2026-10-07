@@ -4,7 +4,7 @@ import {
   type SandboxConfig,
   type SandboxProvider,
 } from "../governance.js";
-import { HTTP_TRANSPORTS } from "../http-transport.js";
+import { HTTP_TRANSPORTS, plainHttpPermitted } from "../http-transport.js";
 import {
   bool,
   conflict,
@@ -173,26 +173,27 @@ function parseBackend(
       "sandbox.endpoint",
       "sandbox.credential: stored needs the endpoint the credential is sent to",
     );
-  const httpTransport = oneOf(
-    sandbox.httpTransport,
-    "sandbox.httpTransport",
-    HTTP_TRANSPORTS,
-    "https",
-  );
-  const plainHttp = httpTransport === "http-allowed";
-  if (plainHttp && sandbox.endpoint === undefined)
+  const httpTransport =
+    sandbox.httpTransport === undefined
+      ? undefined
+      : oneOf(sandbox.httpTransport, "sandbox.httpTransport", HTTP_TRANSPORTS);
+  if (httpTransport === "http-allowed" && sandbox.endpoint === undefined)
     conflict(
       "sandbox.httpTransport",
       "httpTransport applies to the sandbox endpoint (and router); this sandbox declares no endpoint",
     );
   // As for MCP servers: the runtime credential goes over plain HTTP only to
   // the inference gateway itself, never to another service on its origin.
-  if (plainHttp && credential === "runtime")
+  if (httpTransport === "http-allowed" && credential === "runtime")
     conflict(
       "sandbox.httpTransport",
       // No `credential: <word>` text: the CLI redactor reads it as a value.
       "http-allowed cannot be combined with sandbox.credential set to runtime; the runtime credential is never sent to the sandbox over plain HTTP",
     );
+  // A runtime credential is never sent over plain HTTP, so such a sandbox's
+  // endpoint is https (or loopback) whatever the default.
+  const plainHttp =
+    plainHttpPermitted(httpTransport) && credential !== "runtime";
   return {
     provider,
     ...(sandbox.adapter === undefined
@@ -253,7 +254,7 @@ function parseBackend(
           ),
         }),
     ...(credential === "none" ? {} : { credential }),
-    ...(plainHttp ? { httpTransport } : {}),
+    ...(httpTransport === undefined ? {} : { httpTransport }),
   };
 }
 

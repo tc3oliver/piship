@@ -80,7 +80,7 @@ interface UpdatesLock {
   readonly channel?: string;
   readonly channels?: readonly string[];
   readonly source?: string;
-  /** v1alpha5 `https` or `http-allowed`; absent means https. */
+  /** v1alpha5 `https` or `http-allowed`; absent is the `http-allowed` default. */
   readonly transport?: string;
   readonly rollback?: boolean;
   readonly trust?: {

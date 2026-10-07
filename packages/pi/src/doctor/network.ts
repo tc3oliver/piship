@@ -13,9 +13,11 @@ import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
 /**
- * Endpoints that opted in to plain HTTP (`httpTransport: http-allowed`),
- * by host only. MCP servers are reported with each server; here only when
- * a proxy would refuse them.
+ * Endpoints that may use plain HTTP (every one not set to
+ * `httpTransport: https`), by host only: a warning for each that resolves to
+ * plain HTTP, and a note for an endpoint that says `http-allowed` but does
+ * not. MCP servers are reported with each server; here only when a proxy
+ * would refuse them.
  */
 function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
   const metadata = data.ctx.metadata;
@@ -28,41 +30,51 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
     readonly key: string;
     readonly urls: readonly (readonly [string, string | undefined])[];
     readonly exposed: string;
+    /** The manifest says `http-allowed`, not just the default. */
+    readonly explicit?: boolean;
     /** Reported elsewhere; only a proxy refusal is shown here. */
     readonly proxyOnly?: boolean;
   }[] = [];
-  if (oidc?.httpTransport === "http-allowed")
+  if (oidc && oidc.httpTransport !== "https")
     endpoints.push({
       key: "identity.oidc.httpTransport",
+      explicit: oidc.httpTransport === "http-allowed",
       urls: [["identity.oidc.issuer", oidc.issuer]],
       exposed: "sign-in tokens, including the refresh token, are",
     });
   const broker = access?.credential?.broker;
-  if (broker?.httpTransport === "http-allowed")
+  if (broker && broker.httpTransport !== "https")
     endpoints.push({
       key: "credential.broker.httpTransport",
+      explicit: broker.httpTransport === "http-allowed",
       urls: [
         ["credential.broker.endpoint", broker.endpoint],
         ["credential.broker.revokeEndpoint", broker.revokeEndpoint],
       ],
       exposed: "the identity token and the issued gateway credential are",
     });
-  if (access?.inference?.httpTransport === "http-allowed")
+  if (access?.inference?.baseUrl && access.inference.httpTransport !== "https")
     endpoints.push({
       key: "inference.httpTransport",
+      explicit: access.inference.httpTransport === "http-allowed",
       urls: [["inference.baseUrl", access.inference.baseUrl]],
       exposed: "the gateway credential and every prompt and response are",
     });
   for (const sink of governance?.audit?.sinks ?? [])
-    if (sink.httpTransport === "http-allowed")
+    if (sink.url !== undefined && sink.httpTransport !== "https")
       endpoints.push({
         key: `audit sink ${sink.id} httpTransport`,
+        explicit: sink.httpTransport === "http-allowed",
         urls: [["audit.sinks.url", sink.url]],
         exposed: "audit events are",
       });
-  if (governance?.sandbox?.httpTransport === "http-allowed")
+  if (
+    governance?.sandbox?.endpoint !== undefined &&
+    governance.sandbox.httpTransport !== "https"
+  )
     endpoints.push({
       key: "sandbox.httpTransport",
+      explicit: governance.sandbox.httpTransport === "http-allowed",
       urls: [
         ["sandbox.endpoint", governance.sandbox.endpoint],
         ["sandbox.router", governance.sandbox.router],
@@ -70,7 +82,7 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
       exposed: "sandbox commands, their output, and files are",
     });
   for (const server of governance?.mcp?.servers ?? [])
-    if (server.httpTransport === "http-allowed")
+    if (server.url !== undefined && server.httpTransport !== "https")
       endpoints.push({
         key: `mcp ${server.id} proxy`,
         urls: [[`mcp.servers.${server.id}.url`, server.url]],
@@ -119,7 +131,7 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
         endpoint.key,
         `http-allowed: plain HTTP to ${plain.join(", ")}; ${endpoint.exposed} unencrypted on the network path`,
       );
-    else
+    else if (endpoint.explicit)
       out.info(
         endpoint.key,
         unresolved
