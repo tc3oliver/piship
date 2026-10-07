@@ -18,6 +18,7 @@ import {
   runLogin,
   runLogout,
   runRollback,
+  runUninstall,
   runSandbox,
   runtimeStateDirectory,
   runUpdate,
@@ -277,10 +278,10 @@ export async function launchPiDistribution(
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback | uninstall [--purge --yes]\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
-        : "\n\nCommands:\n  doctor [--json] | version";
+        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
+        : "\n\nCommands:\n  doctor [--json] | version | uninstall [--purge --yes]";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
@@ -329,6 +330,7 @@ export async function launchPiDistribution(
     if (args.length === 1 && command === "models") return runModels(ctx);
     if (command === "update") return runUpdate(ctx, rest);
     if (args.length === 1 && command === "rollback") return runRollback(ctx);
+    if (command === "uninstall") return runUninstall(ctx, rest);
     if (command === "config") return runConfig(ctx, rest);
     // Every sandbox subcommand goes to the runner, which refuses anything
     // but login and logout without echoing the command line: a mistyped one

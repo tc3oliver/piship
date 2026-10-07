@@ -139,10 +139,10 @@ const lifecycleCommands: Record<
 > = {
   install: {
     usage:
-      "install <artifact|release-dir|archive> [--sha256 <hex>] [--expect-key sha256:<fingerprint>]... [--use-existing-state]",
+      "install <artifact|release-dir|archive> [--sha256 <hex>] [--expect-key sha256:<fingerprint>]... [--use-existing-state] [--replace]",
     positional: [1, 1],
     values: ["--sha256"],
-    flags: ["--use-existing-state"],
+    flags: ["--use-existing-state", "--replace"],
     repeated: ["--expect-key"],
   },
   release: {
@@ -931,6 +931,7 @@ async function runLifecycle(
         ...(repeated["--expect-key"]
           ? { expectedKeys: repeated["--expect-key"] }
           : {}),
+        ...(flags.has("--replace") ? { replace: true } : {}),
       },
     );
     output.stdout(

@@ -1,5 +1,5 @@
 // Verified update of an installed distribution from its signed channel.
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PiShipError, stopwatch } from "@piship/contracts";
@@ -18,12 +18,14 @@ import {
   releaseInfo,
   requireManaged,
   syncDirectory,
+  type InstalledRelease,
   type InstallReceipt,
   type LifecycleOptions,
   type RetiredKey,
 } from "../install/receipt.js";
 import { renameWithRetry } from "../install/files.js";
 import { refreshInstalledLauncher } from "../install/launcher.js";
+import { reclaimAfterCommit } from "../install/reclaim.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import {
   advanceTrustState,
@@ -37,16 +39,22 @@ import {
   checkStateMigration,
   compareVersions,
   type MigrationReport,
+  type StateSchemaSupport,
 } from "../migration.js";
 import { storageOf } from "../storage-transition.js";
+import { sha256File } from "../archive.js";
+import { hash } from "../digest.js";
+import { verifyPayloadContents } from "../payload.js";
 import { openInstallStore } from "../store/policy.js";
 import type { ContentStore } from "../store/store.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import { raiseThreadpool } from "../threadpool.js";
+import { isUrlSource } from "../release/source.js";
 import {
   checkUpdateSource,
   downloadArchive,
+  payloadStateSchemas,
   readChannel,
   verifyRelease,
   type ChannelRelease,
@@ -120,6 +128,99 @@ function resolveSource(
   return checkUpdateSource(resolved, "updates.source", transport);
 }
 
+/** Where a verified download is kept when the update stops after it. */
+export const DOWNLOADS = ".downloads";
+
+/** What an update activates: a freshly verified archive, or a retained release as it stands. */
+interface Candidate {
+  readonly lock: DistributionLock;
+  readonly pi: string;
+  readonly schemas: StateSchemaSupport;
+  readonly release: NonNullable<InstalledRelease["release"]>;
+  readonly cleanup: () => void;
+}
+
+/**
+ * A retained release as it stands, checked against the signed entry. Throws
+ * when the release is damaged or is not what the entry names; the caller
+ * downloads it again.
+ */
+function retainedCandidate(
+  directory: string,
+  id: string,
+  receipt: InstallReceipt,
+  entry: ChannelRelease,
+  retained: InstalledRelease,
+): Candidate {
+  const lock = verifyPayloadContents(directory, {
+    requireTarget: true,
+    // As a rollback does: the files were hashed against the inventory when
+    // this release was installed, and doctor verifies them in full.
+    verifyContents: false,
+  });
+  const problems = [
+    [lock.app.id, id, "distribution"],
+    [lock.app.command, receipt.app.command, "command"],
+    [lock.app.version, entry.version, "version"],
+    [lock.runtime.version, entry.pi, "Pi version"],
+    [
+      hash(readFileSync(join(directory, "piship.lock"))),
+      entry.lockSha256,
+      "lock",
+    ],
+  ].filter(([a, b]) => a !== b);
+  if (problems.length)
+    throw new Error(
+      `it does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
+    );
+  return {
+    lock,
+    pi: lock.runtime.version,
+    schemas: payloadStateSchemas(lock),
+    release: retained.release as NonNullable<InstalledRelease["release"]>,
+    cleanup: () => {},
+  };
+}
+
+/** A kept download of exactly the signed archive, or undefined. */
+async function usableDownload(
+  path: string,
+  entry: ChannelRelease,
+): Promise<string | undefined> {
+  try {
+    if (statSync(path).size !== entry.bytes) throw new Error("size");
+    if ((await sha256File(path)) === entry.sha256) return path;
+  } catch {
+    // Absent or not the signed bytes: downloaded again.
+  }
+  rmSync(path, { force: true });
+  return undefined;
+}
+
+function keepDownload(
+  archive: string,
+  apps: string,
+  cachePath: string,
+  cacheable: boolean,
+): void {
+  if (!cacheable || archive === cachePath || !existsSync(archive)) return;
+  try {
+    rmSync(join(apps, DOWNLOADS), { recursive: true, force: true });
+    mkdirSync(join(apps, DOWNLOADS), { recursive: true });
+    renameWithRetry(archive, cachePath);
+  } catch {
+    // The next attempt downloads again.
+  }
+}
+
+function discardDownloads(apps: string): void {
+  try {
+    rmSync(join(apps, DOWNLOADS), { recursive: true, force: true });
+  } catch {
+    // Reclaimed by doctor and the next update.
+  }
+}
+
 export interface UpdateOptions extends LifecycleOptions {
   readonly channel?: string;
   /** Directory or URL overriding `updates.source`. */
@@ -189,6 +290,21 @@ function newestFor(
 export async function updateDistribution(
   id: string,
   options: UpdateOptions = {},
+): Promise<UpdateResult> {
+  const result = await performUpdate(id, options);
+  // The lifecycle lock is released: what the installation no longer records
+  // (the release before the one rolled back to, and the like) is removed now
+  // and not left for `doctor`.
+  if (result.status !== "updated" || options.reclaim === false) return result;
+  const notices = reclaimAfterCommit(id);
+  return notices.length > 0
+    ? { ...result, notices: [...result.notices, ...notices] }
+    : result;
+}
+
+async function performUpdate(
+  id: string,
+  options: UpdateOptions,
 ): Promise<UpdateResult> {
   raiseThreadpool();
   requireManaged(readInstallReceipt(id));
@@ -334,12 +450,56 @@ export async function updateDistribution(
       (release) => release.version === entry.version,
     );
     const present = existsSync(destination);
-    // Bytes the receipt already retains for this exact archive are reused, so
-    // the payload need not be extracted again.
-    const reuseRetained =
-      retained !== undefined &&
+    // A release the receipt retains from this exact archive (its recorded
+    // archive digest is the signed entry's) is used as it stands: nothing is
+    // downloaded or extracted again. Its lock, manifest, and target are
+    // checked against the signed entry here, so a damaged or mismatched copy
+    // is not activated but replaced by a download.
+    let local: Candidate | undefined;
+    let damagedRetained = false;
+    if (
+      retained?.release !== undefined &&
       present &&
-      retained.release?.archiveSha256 === entry.sha256;
+      retained.release.archiveSha256 === entry.sha256
+    )
+      try {
+        local = retainedCandidate(destination, id, receipt, entry, retained);
+      } catch (error) {
+        damagedRetained = true;
+        notices.push(
+          `The retained ${entry.version} on disk failed verification (${(error as Error).message}); it is downloaded again`,
+        );
+      }
+    const reuseRetained = local !== undefined;
+    // A complete archive an earlier attempt downloaded and verified against
+    // the signed digest, kept because the update stopped after it (a
+    // migration review, a running session), is used instead of downloading
+    // again; its digest is checked again on the bytes used.
+    const cachePath = join(apps, DOWNLOADS, entry.archive);
+    const cacheable = isUrlSource(source);
+    const cached =
+      !reuseRetained && cacheable
+        ? await usableDownload(cachePath, entry)
+        : undefined;
+    // Over the network, a check that can be answered by the signed entry alone
+    // (a newer release exists on this channel) does not fetch the archive:
+    // the migration preview is the only thing it would add, and `update`
+    // runs that check before it switches anything.
+    if (options.check && !reuseRetained && cached === undefined && cacheable) {
+      notices.push(
+        "The migration check runs when you update; it stops for review before anything is switched",
+      );
+      record(`available ${entry.version}`);
+      return {
+        status: "available",
+        id,
+        from: receipt.active,
+        to: entry.version,
+        channel,
+        keyId,
+        notices,
+      };
+    }
     // A payload this update writes is extracted straight into the destination,
     // which nothing references yet; a failure before the commit leaves it as
     // an unreferenced candidate, which the next update sets aside and `doctor`
@@ -353,16 +513,31 @@ export async function updateDistribution(
     let store: ContentStore | undefined;
     const temporary = createStagingDirectory(apps);
     const staging = temporary.path;
+    let archive = join(staging, entry.archive);
+    let downloaded = false;
     try {
-      const archive = join(staging, entry.archive);
-      options.progress?.(
-        `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
-      );
-      // The download is hashed as it streams and checked against the signed
-      // entry's digest and size, so a wrong archive is refused before it is
-      // opened.
-      await downloadArchive(source, entry, archive, options.fetcher, transport);
-      lap("update download and digest");
+      if (cached !== undefined) {
+        archive = cached;
+        options.progress?.(
+          `Using the ${entry.version} archive downloaded earlier`,
+        );
+      } else if (!reuseRetained) {
+        options.progress?.(
+          `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
+        );
+        // The download is hashed as it streams and checked against the signed
+        // entry's digest and size, so a wrong archive is refused before it is
+        // opened.
+        await downloadArchive(
+          source,
+          entry,
+          archive,
+          options.fetcher,
+          transport,
+        );
+        downloaded = true;
+        lap("update download and digest");
+      }
       options.faults?.("staged");
       if (extracting && present) {
         // What is at the destination is not the signed archive's bytes: a
@@ -384,48 +559,59 @@ export async function updateDistribution(
               userAction: `Close the running ${id} sessions and run the update again`,
             },
           );
-        if (retained !== undefined)
+        if (retained !== undefined && !damagedRetained)
           notices.push(
             `The retained ${entry.version} was built from other archive bytes than the channel now offers, so it was replaced`,
           );
         replaced = join(apps, `.retained-${entry.version}-${randomUUID()}`);
         renameWithRetry(destination, replaced);
       }
-      options.progress?.(`Verifying the ${entry.version} release`);
-      // The archive is read once more, and only once: that read extracts the
-      // payload into the destination, hashing the archive and every file as
-      // they are written. The archive digest must be the signed entry's, and
-      // every file the inventory release.json binds, before this returns. A
-      // check, or a release already retained, needs only the metadata.
-      written = extracting;
-      store = extracting ? openInstallStore() : undefined;
-      const verified = await verifyRelease(archive, {
-        requireTarget: true,
-        expectedSha256: entry.sha256,
-        fastClient: true,
-        ...(extracting
-          ? { payloadTo: destination, ...(store ? { store } : {}) }
-          : { extractTo: join(staging, "release"), metadataOnly: true }),
-      });
-      lap("update extract and verify release");
-      const target = verified.metadata;
-      const problems = [
-        [target.distribution.id, id, "distribution"],
-        [target.distribution.command, receipt.app.command, "command"],
-        [target.distribution.version, entry.version, "version"],
-        [target.pi.version, entry.pi, "Pi version"],
-        [target.lockSha256, entry.lockSha256, "lock"],
-      ].filter(([a, b]) => a !== b);
-      if (problems.length)
-        throw new PiShipError(
-          "INTEGRITY_FAILED",
-          `The ${entry.version} release does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
-        );
-      if (target.pi.compatibility === "unsupported")
-        throw new PiShipError(
-          "UPDATE_FAILED",
-          `The ${entry.version} release runs Pi ${target.pi.version}, which it records as unsupported`,
-        );
+      let candidate: Candidate;
+      if (local !== undefined) candidate = local;
+      else {
+        options.progress?.(`Verifying the ${entry.version} release`);
+        // The archive is read once more, and only once: that read extracts the
+        // payload into the destination, hashing the archive and every file as
+        // they are written. The archive digest must be the signed entry's, and
+        // every file the inventory release.json binds, before this returns. A
+        // check needs only the metadata.
+        written = extracting;
+        store = extracting ? openInstallStore() : undefined;
+        const verified = await verifyRelease(archive, {
+          requireTarget: true,
+          expectedSha256: entry.sha256,
+          fastClient: true,
+          ...(extracting
+            ? { payloadTo: destination, ...(store ? { store } : {}) }
+            : { extractTo: join(staging, "release"), metadataOnly: true }),
+        });
+        lap("update extract and verify release");
+        const target = verified.metadata;
+        const problems = [
+          [target.distribution.id, id, "distribution"],
+          [target.distribution.command, receipt.app.command, "command"],
+          [target.distribution.version, entry.version, "version"],
+          [target.pi.version, entry.pi, "Pi version"],
+          [target.lockSha256, entry.lockSha256, "lock"],
+        ].filter(([a, b]) => a !== b);
+        if (problems.length)
+          throw new PiShipError(
+            "INTEGRITY_FAILED",
+            `The ${entry.version} release does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
+          );
+        if (target.pi.compatibility === "unsupported")
+          throw new PiShipError(
+            "UPDATE_FAILED",
+            `The ${entry.version} release runs Pi ${target.pi.version}, which it records as unsupported`,
+          );
+        candidate = {
+          lock: verified.lock,
+          pi: target.pi.version,
+          schemas: target.stateSchemas,
+          release: releaseInfo(target, entry.sha256),
+          cleanup: verified.cleanup,
+        };
+      }
       options.faults?.("verified");
       lap("update signed-entry binding");
       const stateDir = runtimeStateDirectory({ value: id });
@@ -433,9 +619,9 @@ export async function updateDistribution(
         stateDir,
         {
           version: entry.version,
-          pi: target.pi.version,
-          schemas: target.stateSchemas,
-          ...storageOf(verified.lock),
+          pi: candidate.pi,
+          schemas: candidate.schemas,
+          ...storageOf(candidate.lock),
         },
         {
           version: receipt.active,
@@ -499,14 +685,14 @@ export async function updateDistribution(
         ...(await clearCredentials(stateDir, id, migration, options)),
       );
       const keepPrevious =
-        updates.rollback && verified.lock.updates?.rollback !== false;
+        updates.rollback && candidate.lock.updates?.rollback !== false;
       const current = readInstallReceipt(id);
       // The new release's lock does not touch the installation's update
       // trust: only a verified root can, so a channel signer cannot widen
       // its own authority by publishing a release with another bootstrap.
       const next: InstallReceipt = {
         ...current,
-        app: verified.lock.app,
+        app: candidate.lock.app,
         payload: destination,
         active: entry.version,
         ...(keepPrevious ? { previous: receipt.active } : {}),
@@ -515,7 +701,7 @@ export async function updateDistribution(
             version: entry.version,
             payload: destination,
             installedAt: now().toISOString(),
-            release: releaseInfo(target, entry.sha256),
+            release: candidate.release,
           },
           ...(keepPrevious
             ? current.releases.filter((item) => item.version === receipt.active)
@@ -546,12 +732,13 @@ export async function updateDistribution(
       // The launcher an earlier PiShip installed is not rewritten by an
       // activation; a stale one is replaced now, not at the next session.
       refreshInstalledLauncher(id, destination);
-      notices.push(...markActivated(stateDir, verified.lock));
+      notices.push(...markActivated(stateDir, candidate.lock));
       try {
-        verified.cleanup();
+        candidate.cleanup();
       } catch {
         // The staging directory is removed below or by the next recovery.
       }
+      discardDownloads(apps);
       return {
         status: "updated",
         id,
@@ -563,6 +750,17 @@ export async function updateDistribution(
         snapshot,
         notices,
       };
+    } catch (error) {
+      // A complete download that failed no integrity check is kept for the
+      // next attempt: a migration review, a running session, or a full disk
+      // must not cost the whole transfer again.
+      const integrity =
+        error instanceof PiShipError && error.code === "INTEGRITY_FAILED";
+      if (downloaded && !integrity)
+        keepDownload(archive, apps, cachePath, cacheable);
+      else if (integrity && archive === cachePath)
+        rmSync(cachePath, { force: true });
+      throw error;
     } finally {
       store?.end();
       // Not committed: put back the retained release this update replaced,

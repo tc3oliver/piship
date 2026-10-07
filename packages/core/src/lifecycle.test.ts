@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   symlinkSync,
   unlinkSync,
   watch,
@@ -59,7 +60,8 @@ import {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { acquireLock } from "./install/receipt.js";
+import { acquireLock, activeLock } from "./install/receipt.js";
+import { runUninstall } from "./branded/uninstall.js";
 import { readTrustState, trustStatePath } from "./install/trust-state.js";
 import { readStateMarker } from "./migration.js";
 import {
@@ -352,7 +354,13 @@ async function fixture(
   cpSync(join(channelDir, "stable.json"), join(old, "stable.json"));
   cpSync(join(channelDir, "stable.json.sig"), join(old, "stable.json.sig"));
   await sign(channelDir, [b.archive]);
-  const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+  // The tests of what an update leaves on disk look at it before any
+  // reclaiming; the reclaim after a commit has its own tests.
+  const opts: UpdateOptions = {
+    source: channelDir,
+    runCheck: fakeRun,
+    reclaim: false,
+  };
   return { a, b, channelDir, old, opts };
 }
 
@@ -477,11 +485,17 @@ function containing(needle: string): string[] {
 
 async function rejection(
   promise: Promise<unknown>,
-): Promise<Error & { code?: string; retryable?: boolean }> {
+): Promise<
+  Error & { code?: string; retryable?: boolean; userAction?: string }
+> {
   try {
     await promise;
   } catch (error) {
-    return error as Error & { code?: string; retryable?: boolean };
+    return error as Error & {
+      code?: string;
+      retryable?: boolean;
+      userAction?: string;
+    };
   }
   throw new Error("expected a rejection");
 }
@@ -875,7 +889,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
     const collision = await rejection(installDistribution(a.archive));
     expect(collision.message).toBe(
-      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to start over, run piship uninstall acmepi (state is kept) and install again with --use-existing-state. acmepi update --from <signed update source> only upgrades to a newer version",
+      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to replace it with this artifact in one step, run the install again with --replace (state is kept); or run piship uninstall acmepi and install again. acmepi update --from <signed update source> only upgrades to a newer version",
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -905,6 +919,84 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await expect(installDistribution(a.archive)).rejects.toThrow(
       /State already exists for acmepi/,
     );
+  });
+
+  it("adopts the state of an earlier install of this distribution without --use-existing-state, and no other", async () => {
+    const a = await release("1.0.0");
+    await installDistribution(a.archive);
+    const marker = (distribution: string) =>
+      write(
+        join(stateDir(), "state.json"),
+        JSON.stringify({
+          schema: "piship-state/v1",
+          distribution,
+          version: "1.0.0",
+          pi: "1.0.3",
+          piship: PISHIP_VERSION,
+        }),
+      );
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    marker(ID);
+    uninstallDistribution(ID);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    uninstallDistribution(ID);
+    // Another distribution's marker, no marker, and an unreadable one are
+    // not this distribution's own state.
+    marker("other");
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi but is not marked as this distribution's own; pass --use-existing-state/,
+    );
+    rmSync(join(stateDir(), "state.json"));
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists/,
+    );
+    write(join(stateDir(), "state.json"), "{");
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists/,
+    );
+    expect(apps()).toEqual([]);
+  });
+
+  it("replaces an existing installation when asked to, keeping its state, and says so in the collision", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    const collision = await rejection(installDistribution(b.archive));
+    expect(collision.message).toContain("run the install again with --replace");
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    const replaced = await installDistribution(b.archive, true, {
+      replace: true,
+    });
+    expect(replaced.active).toBe("1.1.0");
+    expect(readInstallReceipt(ID).releases.map((item) => item.version)).toEqual(
+      ["1.1.0"],
+    );
+    expect(apps()).toEqual(["1.1.0", "launch.mjs"]);
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    // Nothing to replace: it is a plain install.
+    uninstallDistribution(ID);
+    expect(
+      (await installDistribution(a.archive, true, { replace: true })).active,
+    ).toBe("1.0.0");
+  });
+
+  it("refuses to replace an installation a running session still uses", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      await expect(
+        installDistribution(b.archive, true, { replace: true }),
+      ).rejects.toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
   it("still refuses state that existed before a test launch", async () => {
@@ -2412,6 +2504,134 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(existsSync(join(stateDir(), "secrets"))).toBe(true);
   });
 
+  /** An https update source served from `dir`, recording each request path. */
+  function overHttps(dir: string, requested: string[]): UpdateOptions {
+    const fetcher = (async (input: URL | string) => {
+      const url = new URL(String(input));
+      requested.push(url.pathname);
+      const file = join(dir, url.pathname.split("/").pop() as string);
+      return existsSync(file)
+        ? new Response(readFileSync(file))
+        : new Response("", { status: 404 });
+    }) as typeof fetch;
+    return {
+      runCheck: fakeRun,
+      fetcher,
+      env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+    };
+  }
+  const archives = (requested: string[]) =>
+    requested.filter((path) => path.endsWith(".tar.gz"));
+
+  it("answers update --check over the network from the signed entry, without downloading the archive", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const requested: string[] = [];
+    const result = await updateDistribution(ID, {
+      ...overHttps(channelDir, requested),
+      check: true,
+    });
+    expect(result).toMatchObject({
+      status: "available",
+      from: "1.0.0",
+      to: "1.1.0",
+    });
+    expect(result.migration).toBeUndefined();
+    expect(result.notices.join("\n")).toMatch(
+      /migration check runs when you update/,
+    );
+    expect(archives(requested)).toEqual([]);
+    expect(readInstallReceipt(ID).lastCheck?.result).toBe("available 1.1.0");
+    expect(readdirSync(appsDir()).sort()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("updates to a retained release again without downloading it", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    // A check is answered from the retained release, migration preview included.
+    const check = await updateDistribution(ID, { ...options, check: true });
+    expect(check).toMatchObject({ status: "available", to: "1.1.0" });
+    expect(check.migration).toBeDefined();
+    const result = await updateDistribution(ID, options);
+    expect(result).toMatchObject({ status: "updated", to: "1.1.0" });
+    expect(archives(requested)).toEqual([]);
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.1.0",
+      previous: "1.0.0",
+    });
+  });
+
+  it("downloads a retained release again when its files no longer match the signed entry", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    rmSync(join(appsDir(), "1.1.0", "piship.lock"));
+    const requested: string[] = [];
+    const result = await updateDistribution(
+      ID,
+      overHttps(channelDir, requested),
+    );
+    expect(result.status).toBe("updated");
+    expect(archives(requested)).toHaveLength(1);
+    expect(result.notices.join("\n")).toMatch(
+      /retained 1.1.0 on disk failed verification/,
+    );
+    expect(existsSync(join(appsDir(), "1.1.0", "piship.lock"))).toBe(true);
+  });
+
+  it("keeps a verified download when the update stops after it, and uses it on the next attempt", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    // A candidate an earlier update left, which a running session holds.
+    strandCandidate("1.1.0");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    try {
+      await expect(updateDistribution(ID, options)).rejects.toMatchObject({
+        retryable: true,
+      });
+    } finally {
+      releaseLease();
+    }
+    expect(archives(requested)).toHaveLength(1);
+    expect(readdirSync(join(appsDir(), ".downloads"))).toHaveLength(1);
+    const retried = await updateDistribution(ID, options);
+    expect(retried.status).toBe("updated");
+    // The kept archive was used, and removed once the update committed.
+    expect(archives(requested)).toHaveLength(1);
+    expect(existsSync(join(appsDir(), ".downloads"))).toBe(false);
+  });
+
+  it("does not trust a kept download whose bytes are not the signed archive", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    strandCandidate("1.1.0");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    const requested: string[] = [];
+    const options = overHttps(channelDir, requested);
+    try {
+      await updateDistribution(ID, options).catch(() => {});
+    } finally {
+      releaseLease();
+    }
+    const kept = join(
+      appsDir(),
+      ".downloads",
+      `acmepi-1.1.0-${currentTarget()}.tar.gz`,
+    );
+    const bytes = readFileSync(kept);
+    bytes[bytes.length - 1] = (bytes[bytes.length - 1] as number) ^ 0xff;
+    writeFileSync(kept, bytes);
+    expect((await updateDistribution(ID, options)).status).toBe("updated");
+    expect(archives(requested)).toHaveLength(2);
+  });
+
   it("fetches through the declared https source", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive);
@@ -3399,11 +3619,59 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     });
   });
 
-  it("is never part of an update, which only sets directories aside", async () => {
+  it("is not part of an update or rollback that opts out of it", async () => {
     const { opts } = await strewn();
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun, reclaim: false });
     await updateDistribution(ID, opts);
     expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+  });
+
+  it("runs at the end of a successful rollback and update, and never removes the active release or the rollback target", async () => {
+    const { opts } = await strewn();
+    const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(rolled.notices.join("\n")).toMatch(
+      /Removed 2 obsolete release directories \(.*0\.9\.0.*\)/,
+    );
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    write(join(appsDir(), "0.8.0", "bin", "run.js"), "o".repeat(1000));
+    const updated = await updateDistribution(ID, {
+      ...(opts.source ? { source: opts.source } : {}),
+      runCheck: fakeRun,
+    });
+    expect(updated.notices.join("\n")).toMatch(
+      /Removed 1 obsolete release director/,
+    );
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.1.0",
+      previous: "1.0.0",
+    });
+  });
+
+  it("does not fail a rollback when it cannot remove a release", async () => {
+    await strewn();
+    const hold = holdRuntimeLease(ID, "0.9.0");
+    try {
+      const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+      expect(rolled.notices.join("\n")).toMatch(
+        /Left 0\.9\.0 in place \(a running session holds it\)/,
+      );
+      expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+    } finally {
+      hold();
+    }
+  });
+
+  it("removes a kept download only once it is a day old", async () => {
+    await strewn();
+    const kept = join(appsDir(), ".downloads");
+    write(join(kept, "acmepi-1.2.0.tar.gz"), "x".repeat(10));
+    expect(reclaimObsoleteVersions(ID).removed).not.toContain(".downloads");
+    expect(existsSync(kept)).toBe(true);
+    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(kept, old, old);
+    reclaimObsoleteVersions(ID);
+    expect(existsSync(kept)).toBe(false);
   });
 });
 
@@ -3866,6 +4134,90 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(memory.refs()).toEqual([]);
     expect(existsSync(receipt.commandPath)).toBe(false);
     expect(existsSync(state)).toBe(false);
+  });
+
+  describe("the branded uninstall command", () => {
+    async function installed() {
+      const receipt = await installDistribution(
+        (await release("1.0.0")).archive,
+      );
+      const out: string[] = [];
+      const err: string[] = [];
+      const ctx = {
+        metadata: activeLock(readInstallReceipt(ID)),
+        distributionDir: receipt.payload,
+        stateDir: stateDir(),
+        mode: "personal" as const,
+        out: (message: string) => out.push(message),
+        err: (message: string) => err.push(message),
+      };
+      write(join(stateDir(), "sessions", "s1.jsonl"), '{"type":"message"}\n');
+      return { receipt, ctx, out, err };
+    }
+
+    it("removes the install from the running command, ignoring its own lease, and says what stays", async () => {
+      const { receipt, ctx, out } = await installed();
+      const releaseLease = holdRuntimeLease(ID, "1.0.0");
+      try {
+        await runUninstall(ctx, []);
+      } finally {
+        releaseLease();
+      }
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+      const text = out.join("\n");
+      expect(text).toContain(`kept     ${stateDir()}`);
+      expect(text).toContain("signed out: no sign-in is stored");
+      expect(text).toContain("acmepi uninstall --purge --yes");
+      expect(text).toContain(`purge ${ID} --yes`);
+    });
+
+    it("refuses a signed-in distribution until logout, deleting nothing, unless told to leave the sign-in", async () => {
+      const { receipt, ctx, out } = await installed();
+      write(
+        join(stateDir(), "credentials-metadata", "inference.json"),
+        JSON.stringify({
+          schema: "piship-credential-metadata/v1",
+          credential_ref: `piship:${ID}:inference#1`,
+        }),
+      );
+      const error = await rejection(runUninstall(ctx, []));
+      expect(error.message).toMatch(/still signed in \(a runtime credential\)/);
+      expect(error.userAction).toMatch(
+        /Run acmepi logout, then acmepi uninstall again/,
+      );
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      await runUninstall(ctx, ["--without-logout"]);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
+    });
+
+    it("deletes the data only with --purge --yes", async () => {
+      const { receipt, ctx, out } = await installed();
+      const error = await rejection(runUninstall(ctx, ["--purge"]));
+      expect(error.userAction).toContain("acmepi uninstall --purge --yes");
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      expect((await rejection(runUninstall(ctx, ["--yes"]))).message).toMatch(
+        /^Usage: acmepi uninstall/,
+      );
+      await runUninstall(ctx, ["--purge", "--yes"]);
+      expect(existsSync(stateDir())).toBe(false);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(out.join("\n")).toContain(`deleted  ${stateDir()}`);
+    });
+
+    it("prints the exact command to run from a new terminal on Windows, changing nothing", async () => {
+      const { receipt, ctx } = await installed();
+      const error = await rejection(
+        runUninstall(ctx, ["--purge", "--yes"], { platform: "win32" }),
+      );
+      expect(error.userAction).toBe(
+        `Open a new terminal and run: node "${join(ctx.distributionDir, "piship.mjs")}" uninstall ${ID} --purge --yes`,
+      );
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      expect(existsSync(stateDir())).toBe(true);
+    });
   });
 
   it("names sandbox logout when only a stored sandbox credential is signed in", async () => {

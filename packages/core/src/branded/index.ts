@@ -19,4 +19,5 @@ export {
   runLogin,
   runLogout,
 } from "./login.js";
+export { runUninstall } from "./uninstall.js";
 export { runSandbox } from "./sandbox.js";

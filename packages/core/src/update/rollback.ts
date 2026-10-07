@@ -6,6 +6,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { refreshInstalledLauncher } from "../install/launcher.js";
+import { reclaimAfterCommit } from "../install/reclaim.js";
 import {
   acquireLock,
   activeLock,
@@ -38,6 +39,19 @@ export interface RollbackResult {
 export async function rollbackDistribution(
   id: string,
   options: LifecycleOptions = {},
+): Promise<RollbackResult> {
+  const result = await performRollback(id, options);
+  // The lifecycle lock is released: obsolete releases are removed now.
+  if (options.reclaim === false) return result;
+  const notices = reclaimAfterCommit(id);
+  return notices.length > 0
+    ? { ...result, notices: [...result.notices, ...notices] }
+    : result;
+}
+
+async function performRollback(
+  id: string,
+  options: LifecycleOptions,
 ): Promise<RollbackResult> {
   requireManaged(readInstallReceipt(id));
   const lifecycle = acquireLock(id, "ROLLBACK_FAILED");

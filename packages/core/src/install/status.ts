@@ -64,6 +64,7 @@ export function lifecycleStatus(
     "launch.mjs",
     ".lifecycle.lock",
     ".runtime-leases",
+    ".downloads",
   ]);
   const leftovers = existsSync(apps)
     ? readdirSync(apps).filter((name) => !known.has(name))

@@ -1,10 +1,14 @@
 import {
+  existsSync,
+  lstatSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
+import { uptime } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
@@ -13,7 +17,7 @@ import { hashFilesInParallel, workerCount } from "./parallel-files.js";
 import { readInstallReceipt } from "./install/receipt.js";
 import { manifestDigest } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
-import { installHome } from "./state-paths.js";
+import { installHome, runtimeStateDirectory } from "./state-paths.js";
 
 /** SHA-256 of every payload file except the inventory itself, by `/` path. */
 export function payloadInventory(root: string): Record<string, string> {
@@ -232,16 +236,119 @@ export function verifyPayloadContents(
 export function verifyLaunchPayload(directory: string): DistributionLock {
   const root = resolve(directory);
   const target = JSON.parse(
-    readFileSync(join(root, "metadata", "target.json"), "utf8"),
+    readPayloadFile(root, "metadata/target.json").toString("utf8"),
   ) as { platform: string; arch: string };
   if (target.platform !== process.platform || target.arch !== process.arch)
     throw new Error(
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
     );
-  const bytes = readFileSync(join(root, "piship.lock"));
+  const bytes = readPayloadFile(root, "piship.lock");
   checkInstalledLock(root, bytes);
   const lock = JSON.parse(bytes.toString("utf8")) as DistributionLock;
-  return lock.verifyAtLaunch === true ? verifyPayload(root) : lock;
+  if (lock.verifyAtLaunch === true) return verifyPayload(root);
+  checkFilesPresent(root);
+  return lock;
+}
+
+/**
+ * A file every launch reads. One that is missing or empty (a power loss or
+ * a crash can leave a file of a recent write at length zero) is an
+ * integrity failure with the repair command, not a raw ENOENT or a JSON
+ * parse error.
+ */
+function readPayloadFile(root: string, relative: string): Buffer {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(join(root, relative));
+  } catch (error) {
+    if (
+      ["ENOENT", "ENOTDIR"].includes(
+        (error as NodeJS.ErrnoException).code ?? "",
+      )
+    )
+      throw payloadIntegrityError(root, {
+        added: [],
+        modified: [],
+        missing: [relative],
+      });
+    throw error;
+  }
+  if (bytes.length === 0)
+    throw payloadIntegrityError(root, {
+      added: [],
+      modified: [`${relative} (empty)`],
+      missing: [],
+    });
+  return bytes;
+}
+
+const EMPTY_SHA256 = hash("");
+
+/**
+ * Whether the installed payload at `root` of this install home is checked
+ * once per boot: every file the inventory names must exist and, unless the
+ * inventory records the empty file, be non-empty. This stats the files and
+ * hashes nothing; it finds what a power loss leaves (missing or zero-length
+ * files) in about a hundred milliseconds, so it is not repeated at every
+ * launch. A marker in the distribution's cache directory records the boot it
+ * ran in; without that directory (the first launch) it runs again.
+ */
+function checkFilesPresent(root: string): void {
+  const id = basename(dirname(root));
+  if (!sameDirectory(dirname(dirname(root)), join(installHome(), "apps")))
+    return;
+  let marker: string | undefined;
+  const boot = Math.round(Date.now() - uptime() * 1000);
+  try {
+    const cache = join(runtimeStateDirectory({ value: id }), "cache");
+    if (existsSync(cache)) marker = join(cache, "payload-files.json");
+  } catch {
+    return;
+  }
+  if (marker) {
+    try {
+      const seen = JSON.parse(readFileSync(marker, "utf8")) as {
+        boot?: number;
+        payload?: string;
+      };
+      if (
+        seen.payload === root &&
+        typeof seen.boot === "number" &&
+        Math.abs(seen.boot - boot) < 120_000
+      )
+        return;
+    } catch {
+      // No marker yet.
+    }
+  }
+  let expected: Record<string, string>;
+  try {
+    expected = JSON.parse(
+      readFileSync(join(root, "metadata", "inventory.json"), "utf8"),
+    ) as Record<string, string>;
+  } catch {
+    throw payloadIntegrityError(root, {
+      added: [],
+      modified: ["metadata/inventory.json (empty or unreadable)"],
+      missing: [],
+    });
+  }
+  const missing: string[] = [];
+  const modified: string[] = [];
+  for (const [path, digest] of Object.entries(expected)) {
+    const stat = lstatSync(join(root, path), { throwIfNoEntry: false });
+    if (!stat) missing.push(path);
+    else if (stat.size === 0 && digest !== EMPTY_SHA256)
+      modified.push(`${path} (empty)`);
+  }
+  if (missing.length || modified.length)
+    throw payloadIntegrityError(root, { added: [], modified, missing });
+  if (marker)
+    try {
+      writeFileSync(marker, JSON.stringify({ boot, payload: root }));
+    } catch {
+      // Checked again at the next launch.
+    }
 }
 
 function sameDirectory(a: string, b: string): boolean {
