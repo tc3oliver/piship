@@ -156,17 +156,36 @@ describe("init", () => {
       expect(manifest.governance).toBeDefined();
       expect(manifest.governance?.sandbox.required).toBe(false);
       const projectTrust = manifest.governance?.policy.projectTrust;
-      for (const origin of ["external", "unknown"] as const)
-        expect(projectTrust?.[origin].dimensions).toEqual({
-          passiveContext: "deny",
-          instructions: "deny",
-          skills: "deny",
-          agents: "deny",
-          hooks: "deny",
-          extensions: "deny",
-          mcp: "deny",
-          providers: "deny",
-        });
+      const closed = {
+        passiveContext: "deny",
+        instructions: "deny",
+        skills: "deny",
+        agents: "deny",
+        hooks: "deny",
+        extensions: "deny",
+        mcp: "deny",
+        providers: "deny",
+      };
+      // A person's own projects must work: instructions and skills load
+      // (asked for an unknown origin), code asks, and hooks, agents, and
+      // providers stay denied.
+      const own = {
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+        agents: "deny",
+        hooks: "deny",
+        extensions: "ask",
+        mcp: "ask",
+        providers: "deny",
+      };
+      expect(projectTrust?.external.dimensions).toEqual(managed ? closed : own);
+      expect(projectTrust?.unknown.dimensions).toEqual(
+        managed ? closed : { ...own, instructions: "ask", skills: "ask" },
+      );
+      expect(manifest.runtime.searchTools).toEqual(
+        managed ? undefined : { mode: "bundled" },
+      );
       expect(manifest.lifecycle?.updates).toMatchObject({
         channel: "stable",
         channels: ["stable"],

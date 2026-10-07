@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-c35949687355b5a3e9c0185760da1a0ba82fd4a1573fca46b7da83b5bcffe4e6"
+    "sha256": "sha256-da3b9d7534384d060a6b9853d8d0cd98b3052b1a162fe8e7fda23828b8cb64db"
   },
   "app": {
     "id": "mypi",
@@ -1157,38 +1157,38 @@
           "company": {
             "match": [],
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           },
           "external": {
             "match": [],
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           },
           "unknown": {
             "dimensions": {
-              "passiveContext": "deny",
-              "instructions": "deny",
-              "skills": "deny",
+              "passiveContext": "allow",
+              "instructions": "ask",
+              "skills": "ask",
               "agents": "deny",
               "hooks": "deny",
-              "extensions": "deny",
-              "mcp": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
               "providers": "deny"
             }
           }
@@ -1308,7 +1308,7 @@
   },
   "digests": {
     "resources": "sha256-b9cdb60f5867ee4434078b4622208042f67f00c3e87a51d7b1f247ed59ef8297",
-    "policy": "sha256-52d96bdc7f9d559792d7c4a12fc51c42949d62ac43e5a9f13b2b9e903b97f1f3",
+    "policy": "sha256-7435ced39803db3fdd4c6b77101a8bd017812c256d60e663948da51cc75ef23a",
     "capabilities": "sha256-4022bc787f6db8d35c5a068d80546a5c3b3dd8720fe1bf6ecb7ae4b84a0b0791",
     "mcp": "sha256-65af22410e85b8f0d829d26eda36536a2dd54c1bc83e0babda98acd352d888b2",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",

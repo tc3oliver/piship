@@ -34,6 +34,11 @@ function createAmbientResources(root: string): void {
     join(root, ".pi"),
   ];
   for (const home of homes) {
+    // The personal template loads a project theme (passive context), so the
+    // placeholder one would be read and rejected. Only the user-level
+    // themes are ambient here; project skills, extensions, and instructions
+    // stay unloaded because a headless launch resolves `ask` to deny.
+    const projectHome = home === join(root, ".pi");
     const skill = join(home, "skills", "ambient");
     mkdirSync(skill, { recursive: true });
     writeFileSync(
@@ -45,6 +50,7 @@ function createAmbientResources(root: string): void {
       ["prompts", "ambient.md", "Ambient prompt\n"],
       ["themes", "ambient.json", "{}\n"],
     ] as const) {
+      if (projectHome && directory === "themes") continue;
       mkdirSync(join(home, directory), { recursive: true });
       writeFileSync(join(home, directory, filename), content);
     }

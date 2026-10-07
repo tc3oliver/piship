@@ -49,17 +49,25 @@ resources:
 policy:
   default: allow
   projectTrust:
-    company: &closed
-      passiveContext: deny
-      instructions: deny
-      skills: deny
+    company: &own
+      passiveContext: allow
+      instructions: allow
+      skills: allow
       agents: deny
       hooks: deny
-      extensions: deny
-      mcp: deny
+      extensions: ask
+      mcp: ask
       providers: deny
-    external: *closed
-    unknown: *closed
+    external: *own
+    unknown:
+      passiveContext: allow
+      instructions: ask
+      skills: ask
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
 
 mcp:
   mode: off
