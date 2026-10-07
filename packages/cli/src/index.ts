@@ -49,6 +49,7 @@ import {
   payloadApp,
   payloadStateSchemas,
   pemSigner,
+  probeSearchToolUpstream,
   PISHIP_VERSION,
   pathHint,
   progressReporter,
@@ -528,6 +529,21 @@ function parseInitOptions(
   return { managed, ...(id === undefined ? {} : { id }) };
 }
 /**
+ * Whether `piship init --personal` can bundle `fd` and `rg`, which `piship
+ * lock` then downloads from GitHub. `PISHIP_INIT_PROBE=reachable|unreachable`
+ * answers in place of the network request: a test hook, so a test never
+ * touches the network. Any other value probes.
+ */
+async function searchToolsDownloadable(): Promise<boolean> {
+  const hook = process.env.PISHIP_INIT_PROBE;
+  if (hook === "reachable") return true;
+  if (hook === "unreachable") return false;
+  return probeSearchToolUpstream();
+}
+/** Printed when `init` leaves `runtime.searchTools` out. */
+const SEARCH_TOOLS_SKIPPED =
+  "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.";
+/**
  * `dev` and `test` iterate on a manifest, so they do not stop at a lock
  * that is missing or stale. With no lock yet nothing was reviewed, so it is
  * created. A stale lock is relocked unless the manifest declares Pi
@@ -668,10 +684,15 @@ export async function runCli(
   try {
     if (command === "init") {
       const { managed, id } = parseInitOptions(rest) ?? { managed: false };
+      // Probed before anything is written; a directory that init will refuse
+      // costs the probe at most its timeout.
+      const bundleSearchTools = managed || (await searchToolsDownloadable());
       const created = initDistribution(target, {
         managed,
+        bundleSearchTools,
         ...(id === undefined ? {} : { id }),
       });
+      if (!bundleSearchTools) output.stderr(SEARCH_TOOLS_SKIPPED);
       const self = pishipCommand();
       output.stdout(
         managed

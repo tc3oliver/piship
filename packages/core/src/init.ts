@@ -125,7 +125,18 @@ updates:
  */
 export function initDistribution(
   directory: string,
-  options: { personal?: boolean; managed?: boolean; id?: string } = {},
+  options: {
+    personal?: boolean;
+    managed?: boolean;
+    id?: string;
+    /**
+     * Whether the personal template bundles `fd` and `rg`
+     * (`runtime.searchTools`, and github.com in `release.sources`). True by
+     * default; `piship init` passes false when GitHub is not reachable, so the
+     * first `piship lock` does not fail there. The managed template ignores it.
+     */
+    bundleSearchTools?: boolean;
+  } = {},
 ): string {
   if (options.personal && options.managed)
     throw new Error(
@@ -229,17 +240,22 @@ resources:
       - ./resources/AGENTS.md
 ${initGovernance(true, id)}`,
     );
-  } else
+  } else {
+    const bundle = options.bundleSearchTools !== false;
     writeFileSync(
       join(root, "piship.yaml"),
-      `${header}runtime:
+      `${header}${
+        bundle
+          ? `runtime:
   # fd and rg ship in the payload, pinned and digest-checked. Without them
   # Pi downloads them on the first prompt and waits 24 to 30 seconds. \`piship
   # lock\` downloads them once per release target, so it needs network access
   # to github.com (listed under release.sources below).
   searchTools:
     mode: bundled
-deployment:
+`
+          : ""
+      }deployment:
   mode: personal
 # Pi-native providers and auth, kept in this distribution's isolated state.
 identity:
@@ -253,9 +269,10 @@ resources:
     user:
       - ./resources/AGENTS.md
 ${initGovernance(false, id)}release:
-  sources: [https://registry.npmjs.org, https://github.com]
+  sources: [https://registry.npmjs.org${bundle ? ", https://github.com" : ""}]
 `,
     );
+  }
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
   return join(root, "piship.yaml");
 }

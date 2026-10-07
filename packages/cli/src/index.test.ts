@@ -1132,6 +1132,53 @@ describe("init", () => {
     },
   );
 
+  describe("bundling fd and rg", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("bundles them when GitHub is reachable", async () => {
+      vi.stubEnv("PISHIP_INIT_PROBE", "reachable");
+      const directory = join(temp, "reachable-agent");
+      const result = await run(["init", directory, "--personal"]);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const text = readFileSync(join(directory, "piship.yaml"), "utf8");
+      expect(text).toContain("  searchTools:\n    mode: bundled\n");
+      expect(text).toContain("https://github.com");
+    });
+
+    it("leaves them out and says so when GitHub is not reachable", async () => {
+      vi.stubEnv("PISHIP_INIT_PROBE", "unreachable");
+      const directory = join(temp, "offline-agent");
+      const result = await run(["init", directory, "--personal"]);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe(
+        "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.",
+      );
+      expect(result.stdout).toContain(
+        `Created ${join(directory, "piship.yaml")}`,
+      );
+      const text = readFileSync(join(directory, "piship.yaml"), "utf8");
+      expect(text).not.toContain("searchTools");
+      expect(text).not.toContain("github.com");
+      const validated = await run(["validate", join(directory, "piship.yaml")]);
+      expect(validated.status).toBe(0);
+      expect(validated.stdout).not.toContain("Bundled search tools");
+    });
+
+    it("does not probe for a managed distribution", async () => {
+      vi.stubEnv("PISHIP_INIT_PROBE", "unreachable");
+      const result = await run([
+        "init",
+        join(temp, "managed-agent"),
+        "--managed",
+      ]);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    });
+  });
+
   it("refuses --personal with --managed in either order", async () => {
     for (const flags of [
       ["--personal", "--managed"],

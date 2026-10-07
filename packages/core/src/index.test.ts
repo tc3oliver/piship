@@ -266,6 +266,43 @@ describe("init", () => {
     180000,
   );
 
+  it("bundles fd and rg and lists github.com by default, and leaves both out on request", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-"));
+    roots.push(root);
+    const bundled = readFileSync(
+      initDistribution(join(root, "bundled-agent")),
+      "utf8",
+    );
+    expect(bundled).toContain("runtime:\n");
+    expect(bundled).toContain("  searchTools:\n    mode: bundled\n");
+    expect(bundled).toContain(
+      "sources: [https://registry.npmjs.org, https://github.com]",
+    );
+    const path = initDistribution(join(root, "plain-agent"), {
+      bundleSearchTools: false,
+    });
+    const plain = readFileSync(path, "utf8");
+    expect(plain).not.toMatch(/^runtime:/m);
+    expect(plain).not.toContain("searchTools");
+    expect(plain).not.toContain("github.com");
+    expect(plain).toContain("sources: [https://registry.npmjs.org]");
+    const manifest = readManifest(path);
+    expect(manifest.runtime.searchTools).toBeUndefined();
+    checkPiVersion(manifest);
+    // It locks offline: nothing in it needs a download.
+    lockManifest(path);
+    expect(requireCurrentLock(path).searchTools).toBeUndefined();
+    // The managed template has no search tools either way.
+    const managed = readFileSync(
+      initDistribution(join(root, "managed-agent"), {
+        managed: true,
+        bundleSearchTools: true,
+      }),
+      "utf8",
+    );
+    expect(managed).not.toContain("searchTools");
+  });
+
   it("writes a managed MCP example that validates once uncommented", () => {
     const root = mkdtempSync(join(tmpdir(), "piship-init-"));
     roots.push(root);

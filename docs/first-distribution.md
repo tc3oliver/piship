@@ -34,6 +34,8 @@ $PISHIP init ./my_agent --id my-agent
 
 Without `--id` the error suggests the id to use. `init` writes a personal distribution; `--managed` writes a company template.
 
+A personal distribution bundles Pi's search tools, `fd` and `rg` (`runtime.searchTools`), which `piship lock` downloads from GitHub. So `init` first checks, with a request of at most 3 seconds that follows `HTTPS_PROXY` and `NO_PROXY`, that github.com answers from where it runs. If it does not (an intranet without GitHub access, say), `init` leaves out `runtime.searchTools` and `https://github.com` in `release.sources`, so the first `lock` needs no download, and says so on stderr. Pi's `@` file completion and its find and grep tools then need `fd` and `rg` on `PATH`. Add the two entries later to bundle them ([bundled search tools](manifest.md#bundled-search-tools-v1alpha6)).
+
 The manifest does not state `runtime.pi`. Left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest. State it only to refuse any other Pi.
 
 ## 2. Validate it

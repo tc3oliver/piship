@@ -59,9 +59,15 @@ export { readSearchToolArchive } from "./extract.js";
 /** Where the payload holds the executables: `tools/fd`, `tools/rg.exe`. */
 export const SEARCH_TOOL_PAYLOAD_DIRECTORY = "tools";
 
+/** The upstream release host the official `fd` and `rg` archives come from. */
+const UPSTREAM_HOST = "github.com";
+/** What `piship init` probes to learn whether `piship lock` can download. */
+export const SEARCH_TOOL_UPSTREAM_URL = `https://${UPSTREAM_HOST}/`;
+const PROBE_TIMEOUT_MS = 3000;
+
 /** Hosts a release download may redirect to: GitHub's release asset storage. */
 const ASSET_HOSTS = new Set([
-  "github.com",
+  UPSTREAM_HOST,
   "objects.githubusercontent.com",
   "release-assets.githubusercontent.com",
 ]);
@@ -241,6 +247,36 @@ async function download(
         { component: "lock" },
       );
     return body;
+  }
+}
+
+export interface SearchToolProbeOptions {
+  /** The address to reach; the upstream release host by default. */
+  readonly url?: string;
+  /** Gives up after this many milliseconds; 3000 by default. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Whether the search tool upstream host answers from here: a short GET under
+ * the default network policy, so the proxy environment and the machine's
+ * trust roots apply as they do to `piship lock`. Any HTTP answer, whatever
+ * its status, means reachable; a failed connection, TLS handshake or proxy
+ * tunnel, or no answer within the timeout, means it is not. It never throws.
+ */
+export async function probeSearchToolUpstream(
+  options: SearchToolProbeOptions = {},
+): Promise<boolean> {
+  try {
+    const fetcher = createManagedFetch(DEFAULT_NETWORK_POLICY, "init");
+    const response = await fetcher(options.url ?? SEARCH_TOOL_UPSTREAM_URL, {
+      method: "GET",
+      signal: AbortSignal.timeout(options.timeoutMs ?? PROBE_TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => {});
+    return true;
+  } catch {
+    return false;
   }
 }
 
