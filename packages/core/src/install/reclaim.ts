@@ -219,6 +219,18 @@ export function reclaimObsoleteVersions(
       deleted: 0,
       freedBytes: 0,
     };
+    // A download an update kept for a retry that never came.
+    const kept = join(apps, ".downloads");
+    const keptStat = lstatSync(kept, { throwIfNoEntry: false });
+    if (
+      keptStat?.isDirectory() &&
+      Date.now() - keptStat.mtimeMs > DOWNLOAD_KEPT_MS
+    )
+      try {
+        removeTree(kept, run);
+      } catch {
+        // Left for the next run.
+      }
     const removed: string[] = [];
     const skipped: { name: string; reason: string }[] = [];
     const remaining: string[] = [];
@@ -259,6 +271,31 @@ export function reclaimObsoleteVersions(
     };
   } finally {
     hold.release();
+  }
+}
+
+/** How long the end of an update or rollback may spend removing old releases. */
+const AFTER_COMMIT_BUDGET_MS = 1500;
+/** A kept download is dropped after this long: nobody is retrying any more. */
+const DOWNLOAD_KEPT_MS = 24 * 60 * 60_000;
+
+/**
+ * Remove what the installation no longer records, right after an update or
+ * rollback committed, so old versions do not pile up until someone runs
+ * `doctor`. Bounded by a short budget (what is left is continued by the next
+ * run) and never throws: a failure becomes a notice. Returns notices.
+ */
+export function reclaimAfterCommit(id: string): string[] {
+  try {
+    const result = reclaimObsoleteVersions(id, {
+      budgetMs: Math.min(budgetFromEnvironment(), AFTER_COMMIT_BUDGET_MS),
+    });
+    const text = describeReclaimed(result);
+    return text ? [text] : [];
+  } catch (error) {
+    return [
+      `Could not remove old releases (${error instanceof Error ? error.message : String(error)}); doctor retries`,
+    ];
   }
 }
 

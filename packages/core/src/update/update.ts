@@ -25,6 +25,7 @@ import {
 } from "../install/receipt.js";
 import { renameWithRetry } from "../install/files.js";
 import { refreshInstalledLauncher } from "../install/launcher.js";
+import { reclaimAfterCommit } from "../install/reclaim.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import {
   advanceTrustState,
@@ -289,6 +290,21 @@ function newestFor(
 export async function updateDistribution(
   id: string,
   options: UpdateOptions = {},
+): Promise<UpdateResult> {
+  const result = await performUpdate(id, options);
+  // The lifecycle lock is released: what the installation no longer records
+  // (the release before the one rolled back to, and the like) is removed now
+  // and not left for `doctor`.
+  if (result.status !== "updated" || options.reclaim === false) return result;
+  const notices = reclaimAfterCommit(id);
+  return notices.length > 0
+    ? { ...result, notices: [...result.notices, ...notices] }
+    : result;
+}
+
+async function performUpdate(
+  id: string,
+  options: UpdateOptions,
 ): Promise<UpdateResult> {
   raiseThreadpool();
   requireManaged(readInstallReceipt(id));

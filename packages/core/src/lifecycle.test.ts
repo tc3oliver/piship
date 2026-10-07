@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   symlinkSync,
   unlinkSync,
   watch,
@@ -352,7 +353,13 @@ async function fixture(
   cpSync(join(channelDir, "stable.json"), join(old, "stable.json"));
   cpSync(join(channelDir, "stable.json.sig"), join(old, "stable.json.sig"));
   await sign(channelDir, [b.archive]);
-  const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+  // The tests of what an update leaves on disk look at it before any
+  // reclaiming; the reclaim after a commit has its own tests.
+  const opts: UpdateOptions = {
+    source: channelDir,
+    runCheck: fakeRun,
+    reclaim: false,
+  };
   return { a, b, channelDir, old, opts };
 }
 
@@ -3527,11 +3534,59 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     });
   });
 
-  it("is never part of an update, which only sets directories aside", async () => {
+  it("is not part of an update or rollback that opts out of it", async () => {
     const { opts } = await strewn();
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, { runCheck: fakeRun, reclaim: false });
     await updateDistribution(ID, opts);
     expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+  });
+
+  it("runs at the end of a successful rollback and update, and never removes the active release or the rollback target", async () => {
+    const { opts } = await strewn();
+    const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(rolled.notices.join("\n")).toMatch(
+      /Removed 2 obsolete release directories \(.*0\.9\.0.*\)/,
+    );
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    write(join(appsDir(), "0.8.0", "bin", "run.js"), "o".repeat(1000));
+    const updated = await updateDistribution(ID, {
+      ...(opts.source ? { source: opts.source } : {}),
+      runCheck: fakeRun,
+    });
+    expect(updated.notices.join("\n")).toMatch(
+      /Removed 1 obsolete release director/,
+    );
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.1.0",
+      previous: "1.0.0",
+    });
+  });
+
+  it("does not fail a rollback when it cannot remove a release", async () => {
+    await strewn();
+    const hold = holdRuntimeLease(ID, "0.9.0");
+    try {
+      const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+      expect(rolled.notices.join("\n")).toMatch(
+        /Left 0\.9\.0 in place \(a running session holds it\)/,
+      );
+      expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+    } finally {
+      hold();
+    }
+  });
+
+  it("removes a kept download only once it is a day old", async () => {
+    await strewn();
+    const kept = join(appsDir(), ".downloads");
+    write(join(kept, "acmepi-1.2.0.tar.gz"), "x".repeat(10));
+    expect(reclaimObsoleteVersions(ID).removed).not.toContain(".downloads");
+    expect(existsSync(kept)).toBe(true);
+    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    utimesSync(kept, old, old);
+    reclaimObsoleteVersions(ID);
+    expect(existsSync(kept)).toBe(false);
   });
 });
 
