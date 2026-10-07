@@ -91,6 +91,9 @@ describe("CLI", () => {
       expect(readFileSync(manifest, "utf8")).toMatch(
         new RegExp(`^schema: ${LATEST_SCHEMA}\n`),
       );
+      // The test environment makes `init` leave out the bundled fd and rg, so
+      // the `lock` below needs no download from GitHub.
+      expect(readFileSync(manifest, "utf8")).not.toContain("searchTools");
       const validated = cli("validate", manifest);
       expect(validated.status, validated.stderr).toBe(0);
       expect(validated.stdout).toContain(
