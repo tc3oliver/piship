@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Added
+
+- `login` accepts the OAuth redirect URL (or the bare `code`) pasted into the terminal, so a machine with no browser, such as a remote shell, signs in without an SSH port forward ([identity](docs/identity.md#remote-shells), [security](docs/security.md#pasted-redirect-url)). It races the loopback listener, and the pasted address must be this sign-in's redirect with its `state`; the code exchange and the error mapping are the same. `LoginContext` gains the optional `readRedirectUrl`. No manifest, lock, or schema change. The waiting hint now names pasting first and keeps the port forward as the alternative.
+
 ### Fixed
 
 - Sandbox conformance kit: the wait for a command that has printed nothing before the timeout and dispose checks abort it now counts only time the event loop was responsive. A stall at start (a busy host, a backend that works synchronously in the kit's process) no longer aborts a command the backend was not yet given a turn to start, which misreported a backend that ignores cancellation before start as failing the timeout check too. The timing constants are unchanged.

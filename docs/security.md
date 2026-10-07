@@ -380,6 +380,10 @@ What it cannot prove:
 - **Revocation at the end of a job.** A credential stays valid at the gateway until it expires unless the job runs `logout` (which revokes it where the broker supports it) or the broker issues short-lived credentials.
 - **Confinement of the adapter.** Like any adapter or extension, the workload adapter is in-process code; PiShip cannot stop it from starting a browser or using other credentials on its own. Loading it is a code-trust decision.
 
+### Pasted redirect URL
+
+When a machine has no browser, `login` accepts the redirect address pasted into the terminal ([identity](identity.md#remote-shells)). It carries a single-use authorization code that is bound to the sign-in by PKCE and by `state`; it is useless without the verifier that stays in the `login` process, and a pasted address with another `state` or another redirect is refused and never exchanged. Do not share it or paste it anywhere else: until the exchange it is a credential in flight. PiShip does not log or echo what was pasted, and its messages never repeat the pasted query.
+
 ## Security test map
 
 Each of the thirteen security cases of the test plan has a test at the boundary it claims, not at a mock of the code under test. Tests under `tests/security` run in `npm test`; `tests/e2e` runs the real branded command against local fixtures (Portable E2E); `tests/enterprise-reference` and `examples/enterprise-reference/tests` run against a live Keycloak, credential broker, and LiteLLM (Reference E2E, needs Docker). A test is named by its file and its title.

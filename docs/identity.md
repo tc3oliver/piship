@@ -38,7 +38,11 @@ The branded `login` prints the authorization URL and tries to open a browser; se
 
 ### Remote shells
 
-The redirect is a loopback address on the machine that runs `login`, so the browser must run there or reach it. In a remote shell (`SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY` set), `login` says so and prints the port forward to run, in another terminal, on the computer with the browser, for example:
+The redirect is a loopback address on the machine that runs `login`, so the browser must run there, reach it, or hand the result back by hand. In a remote shell (`SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY` set) or with `PISHIP_NO_BROWSER=1`, `login` prints both ways below.
+
+**Paste the address (no port forward).** Open the printed URL in a browser on any computer and sign in. The browser then goes to `127.0.0.1:8765` and shows "can't connect"; that is expected. Copy the full address from the browser's address bar (or only its `code` value), paste it into the terminal where `login` waits, and press Enter. The pasted address must be this sign-in's redirect (the same scheme, host, port, and path) and carry this sign-in's `state`; anything else is refused with a short message and `login` keeps waiting, as it does for a stray loopback request. A bare `code` has no `state` to check and relies on PKCE. The loopback listener and the paste race: whichever finishes first ends the other, and the code is exchanged exactly as for a loopback callback, with the same `state`, `nonce`, and PKCE checks and the same error mapping (a pasted `error=` is reported like a callback's). Nothing is added to the manifest or the lock. Stdin that is closed or at end of input offers no paste and leaves the loopback as it is.
+
+**Forward the port.** In another terminal on the computer with the browser, for example:
 
 ```sh
 ssh -N -L 8765:127.0.0.1:8765 <remote host>
