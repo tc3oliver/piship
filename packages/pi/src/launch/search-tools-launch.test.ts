@@ -163,13 +163,12 @@ describe("a bundled search tool problem is a warning at start", () => {
     return { found, installed };
   };
 
-  it("skips a tool the lock has no entry for and still installs the other", () => {
+  it("quietly leaves out a tool the lock pins for other targets only, and still installs the other", () => {
     const { dir, lock } = payload({ unlocked: "rg" });
     const agentDir = join(temp, "agent");
     const { found, installed } = problems(lock, dir, agentDir);
     expect(installed.map((item) => item.tool)).toEqual(["fd"]);
-    expect(found.map(([tool]) => tool)).toEqual(["rg"]);
-    expect(codeOf(found[0]?.[1])).toBe("LOCK_INVALID");
+    expect(found).toEqual([]);
     expect(existsSync(join(agentDir, "bin", `fd${exe}`))).toBe(true);
   });
 
