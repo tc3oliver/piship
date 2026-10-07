@@ -377,6 +377,8 @@ function literalWindowsShimSource(launcher: string): string {
   return `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`;
 }
 
+const isAscii = (text: string) => /^[ -~]*$/.test(text);
+
 /**
  * The launcher path as a `.cmd` shim may spell it. cmd.exe reads the file in
  * the console's OEM code page, but PiShip writes it as UTF-8, so a non-ASCII
@@ -386,14 +388,14 @@ function literalWindowsShimSource(launcher: string): string {
  * cannot be written safely and fails here, naming the way out.
  */
 export function windowsShimPath(launcher: string, home: string): string {
-  if (!/[^\x00-\x7f]/.test(launcher)) return launcher;
+  if (isAscii(launcher)) return launcher;
   const profile = home.replace(/[\\/]+$/, "");
   const rest = launcher.slice(profile.length);
   if (
     profile &&
     launcher.slice(0, profile.length).toLowerCase() === profile.toLowerCase() &&
     /^[\\/]/.test(rest) &&
-    !/[^\x00-\x7f]/.test(rest)
+    isAscii(rest)
   )
     return `%USERPROFILE%${rest}`;
   throw new PiShipError(

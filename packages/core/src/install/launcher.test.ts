@@ -305,7 +305,7 @@ describe("the command shim", () => {
       'node "%USERPROFILE%\\AppData\\Local\\piship\\apps\\acmepi\\launch.mjs" %*',
     );
     // Every byte of the shim is ASCII, so the code page cannot change it.
-    expect(/^[\x00-\x7f]*$/.test(text)).toBe(true);
+    expect(Buffer.byteLength(text)).toBe(text.length);
     // Case-insensitive on Windows; an ASCII path is left as it is.
     expect(windowsShimPath(`c:\\users\\zoë\\x\\launch.mjs`, home)).toBe(
       "%USERPROFILE%\\x\\launch.mjs",
