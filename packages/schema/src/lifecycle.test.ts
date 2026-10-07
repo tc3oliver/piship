@@ -12,6 +12,7 @@ import {
   RELEASE_CHANNELS,
   RELEASE_TARGETS,
   SUPPORTED_SCHEMAS,
+  launchWarnings,
   migrateManifestSource,
   parseManifest,
   parseManifestHeader,
@@ -433,11 +434,18 @@ describe("v1alpha4 updates validation", () => {
         }),
       ).updates.source,
     ).toBe(`\${ACME_UPDATE_SOURCE}`);
-    rejects(
-      personal({ variables: ["ACME_UPDATE_SOURCE"] }),
-      "variables[0]",
-      "ACME_UPDATE_SOURCE is declared but not referenced",
-    );
+    expect(
+      launchWarnings(
+        parseManifest(personal({ variables: ["ACME_UPDATE_SOURCE"] })),
+      ),
+    ).toEqual([
+      {
+        path: "variables[0]",
+        message: expect.stringContaining(
+          "ACME_UPDATE_SOURCE is declared but not referenced",
+        ),
+      },
+    ]);
   });
 });
 

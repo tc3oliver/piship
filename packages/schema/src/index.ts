@@ -561,15 +561,7 @@ export function parseManifest(value: unknown): Manifest {
           data = parseData(root.data);
         }
       }
-      access = parseAccess(
-        root,
-        deploymentMode,
-        [
-          ...(governance ? governanceReferences(governance) : []),
-          ...(lifecycle ? lifecycleReferences(lifecycle) : []),
-        ],
-        { v6 },
-      );
+      access = parseAccess(root, deploymentMode, { v6 });
       assertLaunchable({ mode: deploymentMode, access, governance });
     });
   const pi =

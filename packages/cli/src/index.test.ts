@@ -533,6 +533,16 @@ describe("validate", () => {
     expect(older.stderr).toContain("policy.userAuto");
   });
 
+  it("warns about an unused variable and still validates", async () => {
+    const result = await validate({ variables: ["ACME_UNUSED"] });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Manifest is valid.");
+    expect(result.stdout).not.toContain("Runtime variables");
+    expect(result.stderr).toContain(
+      "Warning: variables[0]: ACME_UNUSED is declared but not referenced",
+    );
+  });
+
   it("prints no variable lines for plain URLs", async () => {
     const result = await validate({});
     expect(result.stdout).not.toContain("Runtime variables");

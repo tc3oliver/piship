@@ -1147,14 +1147,12 @@ const ACCESS_KEYS = [
 ] as const;
 
 /**
- * Parse the v1alpha2 access sections of a manifest root. `extraReferences`
- * are variables referenced by other sections (v1alpha3 governance) so they
- * count as used.
+ * Parse the v1alpha2 access sections of a manifest root. A declared variable
+ * that nothing references is not an error: `launchWarnings` reports it.
  */
 export function parseAccess(
   root: Json,
   mode: DeploymentMode,
-  extraReferences: readonly string[] = [],
   /**
    * piship/v1alpha6 and later: model catalog `type` and `virtual`, and the
    * endpoints' `httpTransport`.
@@ -1175,22 +1173,6 @@ export function parseAccess(
   const models = parseModels(root.models, mode, inference, options.v6);
   const config = parseConfig(root.config, models);
   const network = parseNetwork(root.network, mode, variables);
-  const used = new Set<string>(extraReferences);
-  const collect = (text: string | undefined) => {
-    if (text) for (const name of referencedVariables(text)) used.add(name);
-  };
-  if (identity.mode === "oidc") {
-    collect(identity.oidc.issuer);
-    collect(identity.oidc.clientId);
-    collect(identity.oidc.audience);
-  }
-  collect(credential.broker?.endpoint);
-  collect(credential.broker?.revokeEndpoint);
-  collect(inference.baseUrl);
-  for (const path of network.tls.additionalCA) collect(path);
-  for (const [index, name] of variables.entries())
-    if (!used.has(name))
-      fail(`variables[${index}]`, `${name} is declared but not referenced`);
   return {
     identity,
     credential,
