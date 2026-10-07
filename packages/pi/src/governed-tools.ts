@@ -1011,7 +1011,3 @@ export function governedTools(
       : [withChannel(gov, { ...tool, exposure } as ToolDefinition)];
   });
 }
-
-export function isBlockedError(error: unknown): boolean {
-  return error instanceof BlockedError;
-}

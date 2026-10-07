@@ -139,10 +139,6 @@ export function resolveRequestedModel(
   return { model, source: "catalog" };
 }
 
-export interface GatewayFailure {
-  readonly error: PiShipError;
-}
-
 /** The OpenAI-style error object of a gateway answer's body. */
 export interface GatewayErrorBody {
   readonly type?: string;

@@ -13,7 +13,6 @@ export const RUNTIME_REFERENCE_FIELDS = [
   "inference.baseUrl",
   "network.tls.additionalCA",
 ] as const;
-export type RuntimeReferenceField = (typeof RUNTIME_REFERENCE_FIELDS)[number];
 
 // Linear-time pattern: a reference body is only name characters, so malformed
 // input (for example repeated "${{") cannot trigger backtracking.
