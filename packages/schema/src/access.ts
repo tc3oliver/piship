@@ -8,7 +8,6 @@ import {
   checkTemplate,
   checkVariableName,
   hasRuntimeReference,
-  referencedVariables,
 } from "./variables.js";
 
 export type DeploymentMode = "personal" | "managed";

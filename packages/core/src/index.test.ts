@@ -16,7 +16,12 @@ import {
   checkPiVersion,
   distributionStateDirectory,
   initDistribution,
+  isDistributionId,
   lockManifest,
+  lockNeedsNetwork,
+  lockStatus,
+  pishipCommand,
+  suggestDistributionId,
   requireCurrentLock,
   resolveLock,
   runtimeStateDirectory,
@@ -70,6 +75,25 @@ describe("distribution core", () => {
     expect(() => requireCurrentLock(path)).toThrow("Lockfile missing");
     lockManifest(path);
     expect(requireCurrentLock(path).app.id).toBe("mypi");
+  });
+  it("tells a missing lock from a stale one and a current one", () => {
+    const { dir, path } = fixture();
+    expect(lockStatus(path)).toBe("missing");
+    lockManifest(path);
+    expect(lockStatus(path)).toBe("current");
+    writeFileSync(join(dir, "resources", "AGENTS.md"), "changed\n");
+    expect(lockStatus(path)).toBe("stale");
+    expect(lockNeedsNetwork(readManifest(path))).toBe(false);
+  });
+  it("needs the network to relock only for packages and search tools", () => {
+    const { path } = fixture();
+    const manifest = readManifest(path);
+    expect(
+      lockNeedsNetwork({
+        ...manifest,
+        runtime: { ...manifest.runtime, searchTools: { mode: "bundled" } },
+      } as typeof manifest),
+    ).toBe(true);
   });
   it("uses the pinned Pi when runtime.pi is left out", () => {
     const { path } = fixture();
@@ -317,5 +341,42 @@ describe("managed init", () => {
         manifest.access?.variables.every((name) => !/TOKEN/.test(name)),
       ).toBe(true);
     }
+  });
+});
+
+describe("distribution ids", () => {
+  it.each([
+    ["my_agent", "my-agent"],
+    ["agent.v2", "agent-v2"],
+    ["My Agent!", "my-agent"],
+    ["2fast", "app-2fast"],
+    ["--x--", "x"],
+  ])("suggests %s as %s", (name, id) => {
+    expect(isDistributionId(name)).toBe(false);
+    expect(suggestDistributionId(name)).toBe(id);
+    expect(isDistributionId(id)).toBe(true);
+  });
+  it("has no suggestion when nothing usable is left", () => {
+    expect(suggestDistributionId("___")).toBeUndefined();
+  });
+  it("names the suggestion where a bad id is refused", () => {
+    expect(() => distributionStateDirectory({ value: "my_agent" })).toThrow(
+      "use my-agent",
+    );
+  });
+});
+
+describe("the command PiShip prints for its next step", () => {
+  it("names the CLI script by path, quoted when it needs it", () => {
+    expect(pishipCommand("/opt/piship/packages/cli/dist/bin.js")).toBe(
+      "node /opt/piship/packages/cli/dist/bin.js",
+    );
+    expect(pishipCommand("/opt/my tools/piship.mjs")).toBe(
+      'node "/opt/my tools/piship.mjs"',
+    );
+  });
+  it("falls back to piship when the running script is not PiShip", () => {
+    expect(pishipCommand("/usr/bin/vitest")).toBe("piship");
+    expect(pishipCommand(undefined)).toBe("piship");
   });
 });

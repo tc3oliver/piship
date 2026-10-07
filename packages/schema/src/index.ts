@@ -22,7 +22,6 @@ import { locateErrors } from "./locate.js";
 import { unknownFieldMessage } from "./suggest.js";
 import {
   GOVERNANCE_KEYS,
-  governanceReferences,
   parseCacheWarming,
   parseGovernance,
   parseRuntimeTools,
@@ -31,7 +30,6 @@ import {
 } from "./governance-parse.js";
 import {
   LIFECYCLE_KEYS,
-  lifecycleReferences,
   parseLifecycle,
   type LifecycleManifest,
 } from "./lifecycle.js";
@@ -59,6 +57,7 @@ export * from "./http-transport.js";
 export * from "./data.js";
 export * from "./versions.js";
 export { nearestField } from "./suggest.js";
+export { skillFrontmatter } from "./skill-frontmatter.js";
 export {
   MANIFEST_MIGRATIONS,
   MIGRATED_BOOTSTRAP_EXPIRES,

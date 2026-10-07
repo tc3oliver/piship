@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { checkVariableName, LATEST_SCHEMA } from "@piship/schema";
-import { distributionStateDirectory } from "./state-paths.js";
+import { pishipCommand } from "./invocation.js";
+import { isDistributionId, suggestDistributionId } from "./state-paths.js";
 
 /**
  * Governance and lifecycle sections shared by both init templates: explicit
@@ -95,7 +96,7 @@ updates:
  */
 export function initDistribution(
   directory: string,
-  options: { personal?: boolean; managed?: boolean } = {},
+  options: { personal?: boolean; managed?: boolean; id?: string } = {},
 ): string {
   if (options.personal && options.managed)
     throw new Error(
@@ -104,8 +105,16 @@ export function initDistribution(
   const root = resolve(directory);
   if (existsSync(root) && readdirSync(root).length)
     throw new Error(`Directory is not empty: ${root}`);
-  const id = basename(root).toLowerCase();
-  distributionStateDirectory({ value: id });
+  const id = options.id ?? basename(root).toLowerCase();
+  if (!isDistributionId(id)) {
+    const suggestion = suggestDistributionId(id);
+    const quoted = JSON.stringify(id);
+    throw new Error(
+      options.id === undefined
+        ? `The directory name ${quoted} is not a valid distribution id, which must start with a lowercase letter and contain only lowercase letters, digits and single hyphens. ${suggestion ? `Keep the directory and name the distribution: ${pishipCommand()} init ${directory} --id ${suggestion}` : `Name it with --id <id>`}`
+        : `${quoted} is not a valid distribution id: it must start with a lowercase letter and contain only lowercase letters, digits and single hyphens.${suggestion ? ` Try --id ${suggestion}` : ""}`,
+    );
+  }
   mkdirSync(join(root, "resources"), { recursive: true });
   const header = `schema: ${LATEST_SCHEMA}
 app:

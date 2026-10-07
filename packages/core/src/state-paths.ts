@@ -18,11 +18,31 @@ import {
 import { PiShipError } from "@piship/contracts";
 import type { DistributionId } from "./lock-schema.js";
 
+const DISTRIBUTION_ID = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
+/** Whether `value` is usable as a distribution id (and as its command name). */
+export function isDistributionId(value: string): boolean {
+  return DISTRIBUTION_ID.test(value);
+}
+/**
+ * The nearest valid distribution id for a name that is not one: lowercase,
+ * every other run of characters a single hyphen, a letter first. Undefined
+ * when nothing usable is left.
+ */
+export function suggestDistributionId(value: string): string | undefined {
+  const words = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!words) return undefined;
+  return isDistributionId(words) ? words : `app-${words}`;
+}
 export function distributionStateDirectory(id: DistributionId): string {
-  if (!/^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id.value))
+  if (!isDistributionId(id.value)) {
+    const suggestion = suggestDistributionId(id.value);
     throw new Error(
-      "Distribution id must contain lowercase letters, digits or hyphens",
+      `Distribution id ${JSON.stringify(id.value)} must start with a lowercase letter and contain only lowercase letters, digits and single hyphens${suggestion ? `; use ${suggestion}` : ""}`,
     );
+  }
   return `.piship/${id.value}`;
 }
 export function stateHome(): string {
