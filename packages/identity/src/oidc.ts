@@ -49,6 +49,23 @@ export interface OidcIdentityOptions {
 
 /** Never poll faster than this, whatever `interval` the provider asks for. */
 const MIN_POLL_INTERVAL_SECONDS = 1;
+const MAX_VERIFICATION_URI_LENGTH = 2048;
+const USER_CODE = /^[A-Za-z0-9 _-]{1,32}$/;
+// Control characters: C0, DEL, C1, and the Unicode line and paragraph separators.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
+const UNSAFE_URI_CHARACTER = /[\s\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * Text from the identity provider, made safe to print to a terminal: no
+ * control character (an escape sequence cannot start), at most `max`
+ * characters.
+ */
+export function terminalSafe(text: string, max = 200): string {
+  const clean = text.replace(CONTROL, "");
+  return clean.length > max ? `${clean.slice(0, max)}...` : clean;
+}
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
 function sleepFor(ms: number, signal: AbortSignal): Promise<void> {
@@ -137,11 +154,13 @@ function mapError(error: unknown, action: string): PiShipError {
     );
   }
   // oauth4webapi puts the precise failed check (claim, state, signature) in the cause.
-  const detail =
+  const detail = terminalSafe(
     cause instanceof Error && cause.message
       ? cause.message
-      : ((error as Error)?.message ?? String(error));
+      : ((error as Error)?.message ?? String(error)),
+  );
   if (error instanceof client.AuthorizationResponseError) {
+    const errorCode = terminalSafe(error.error, 64);
     const denied = error.error === "access_denied";
     // These name the request PiShip built from the configuration, not the
     // person signing in: a wrong client ID, redirect URI, or scope.
@@ -154,7 +173,7 @@ function mapError(error: unknown, action: string): PiShipError {
     ].includes(error.error);
     return new PiShipError(
       "IDENTITY_INVALID",
-      `${action}: the identity provider ${denied ? "denied" : "rejected"} the request (${error.error})`,
+      `${action}: the identity provider ${denied ? "denied" : "rejected"} the request (${errorCode})`,
       {
         component: "identity",
         userAction: registration
@@ -167,7 +186,7 @@ function mapError(error: unknown, action: string): PiShipError {
     const expired = error.error === "invalid_grant";
     return new PiShipError(
       expired ? "IDENTITY_EXPIRED" : "IDENTITY_INVALID",
-      `${action}: token endpoint returned ${error.error}`,
+      `${action}: token endpoint returned ${terminalSafe(error.error, 64)}`,
       {
         component: "identity",
         userAction: expired ? "Run login again" : "Contact your administrator",
@@ -349,6 +368,49 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
     return this.#config;
   }
 
+  /**
+   * A verification URI is shown to the person and opened in a browser, and it
+   * comes from the provider's response: it must be a plain URL on https (plain
+   * HTTP only where the manifest allows it for this host), without
+   * credentials or control characters, and not oversized. The error never
+   * carries the value.
+   */
+  #verificationUri(value: unknown): string {
+    const refuse = () =>
+      new PiShipError(
+        "IDENTITY_INVALID",
+        "The identity provider returned an unusable verification URL",
+        { component: "identity", userAction: "Contact your administrator" },
+      );
+    if (
+      typeof value !== "string" ||
+      value.length > MAX_VERIFICATION_URI_LENGTH ||
+      UNSAFE_URI_CHARACTER.test(value)
+    )
+      throw refuse();
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw refuse();
+    }
+    const issuer = new URL(this.options.issuer);
+    const plainAllowed =
+      (this.options.plainHttp === true && isPrivateNetworkHost(url.hostname)) ||
+      (issuer.protocol === "http:" &&
+        isLoopbackHost(issuer.hostname) &&
+        isLoopbackHost(url.hostname));
+    if (
+      (url.protocol !== "https:" &&
+        !(url.protocol === "http:" && plainAllowed)) ||
+      url.username ||
+      url.password ||
+      url.href.length > MAX_VERIFICATION_URI_LENGTH
+    )
+      throw refuse();
+    return url.href;
+  }
+
   async login(ctx: LoginContext): Promise<IdentitySession> {
     const config = await this.configuration();
     if (this.#device) return this.#deviceLogin(config, ctx);
@@ -450,6 +512,18 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         signal,
         client.initiateDeviceAuthorization(config, parameters),
       );
+      // Nothing the provider sent is shown or opened before it is checked.
+      const verificationUri = this.#verificationUri(device.verification_uri);
+      const verificationUriComplete =
+        device.verification_uri_complete === undefined
+          ? undefined
+          : this.#verificationUri(device.verification_uri_complete);
+      if (!USER_CODE.test(String(device.user_code)))
+        throw new PiShipError(
+          "IDENTITY_INVALID",
+          "The identity provider returned an unusable user code",
+          { component: "identity", userAction: "Contact your administrator" },
+        );
       // The code is good until the provider's expiry or this login's own
       // deadline, whichever comes first; after the expiry it cannot succeed.
       const expiry = setTimeout(
@@ -458,11 +532,9 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       );
       try {
         await ctx.presentDeviceCode({
-          verificationUri: device.verification_uri,
+          verificationUri,
           userCode: device.user_code,
-          ...(device.verification_uri_complete
-            ? { verificationUriComplete: device.verification_uri_complete }
-            : {}),
+          ...(verificationUriComplete ? { verificationUriComplete } : {}),
           expiresInSeconds: Math.max(
             0,
             Math.min(

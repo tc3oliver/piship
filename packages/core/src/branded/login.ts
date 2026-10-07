@@ -3,12 +3,12 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { LocalMetrics } from "@piship/audit";
 import {
-  type DeviceCodePrompt,
-  PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
+  type DeviceCodePrompt,
   formatError,
   isLoopbackHost,
+  PiShipError,
   principalId,
   redact,
   sanitizeManagedEnvironment,
@@ -30,26 +30,30 @@ import {
   DEFAULT_LOGIN_TIMEOUT_MS,
   type IdentityMetadata,
   parseIdentityMetadata,
+  terminalSafe,
 } from "@piship/identity";
 import type { AccessManifest } from "@piship/schema";
 import {
   type AccessEvent,
-  type DistributionAccess,
   accessStatePaths,
+  type DistributionAccess,
   networkPolicyFor,
   SandboxCredential,
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
 import { removeAccessTemporaries } from "../install/temporaries.js";
-import { sweepDistributionData } from "./data.js";
 import {
-  type BrandedContext,
   auditAccess,
+  type BrandedContext,
   eventDetail,
   openAccess,
   recordAudit,
   saveMetrics,
 } from "./context.js";
+import { sweepDistributionData } from "./data.js";
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point.
+const OPENABLE_URL = /^https?:\/\/[^\s\u0000-\u001f\u007f-\u009f]+$/i;
 
 function openBrowser(url: string): void {
   if (process.env.PISHIP_NO_BROWSER === "1") return;
@@ -121,14 +125,17 @@ export function deviceCodeMessage(prompt: DeviceCodePrompt): string {
     prompt.expiresInSeconds >= 90
       ? `${Math.round(prompt.expiresInSeconds / 60)} minutes`
       : `${Math.round(prompt.expiresInSeconds)} seconds`;
+  // The text comes from the identity provider: no control character reaches
+  // the terminal, whatever the caller passed.
+  const text = (value: string, max: number) => terminalSafe(value, max);
   return [
     "To sign in, open this URL in a browser on any device:",
-    `  ${prompt.verificationUri}`,
-    `and enter this code: ${prompt.userCode}`,
+    `  ${text(prompt.verificationUri, 2048)}`,
+    `and enter this code: ${text(prompt.userCode, 32)}`,
     ...(prompt.verificationUriComplete
       ? [
           `Or open this URL, which has the code in it:`,
-          `  ${prompt.verificationUriComplete}`,
+          `  ${text(prompt.verificationUriComplete, 2048)}`,
         ]
       : []),
     `Waiting up to ${wait} for you to finish. Press Ctrl-C to cancel.`,
@@ -249,10 +256,10 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
             process.env.SSH_CONNECTION ||
             process.env.SSH_CLIENT ||
             process.env.SSH_TTY;
-          if (!remote)
-            openBrowser(
-              prompt.verificationUriComplete ?? prompt.verificationUri,
-            );
+          // Only a URL that is plainly http(s) is handed to the system opener.
+          const target =
+            prompt.verificationUriComplete ?? prompt.verificationUri;
+          if (!remote && OPENABLE_URL.test(target)) openBrowser(target);
         },
         readSecret: readSecretInput,
         signal,

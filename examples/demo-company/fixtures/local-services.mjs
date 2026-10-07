@@ -228,6 +228,11 @@ export async function startLocalServices(options = {}) {
     deviceInterval: 1,
     deviceExpiresIn: 900,
     deviceComplete: false,
+    // What the provider sends in place of the usual values, to test how the
+    // client treats text it did not write.
+    deviceUserCode: undefined,
+    deviceVerificationUri: undefined,
+    deviceVerificationUriComplete: undefined,
     devicePolls: [],
     brokerBaseUrl: undefined,
     credentialTtl: 3600,
@@ -606,11 +611,13 @@ export async function startLocalServices(options = {}) {
       });
       return json(response, 200, {
         device_code: deviceCode,
-        user_code: "DEMO-CODE",
-        verification_uri: `${issuer}/device`,
-        ...(knobs.deviceComplete
+        user_code: knobs.deviceUserCode ?? "DEMO-CODE",
+        verification_uri: knobs.deviceVerificationUri ?? `${issuer}/device`,
+        ...(knobs.deviceComplete || knobs.deviceVerificationUriComplete
           ? {
-              verification_uri_complete: `${issuer}/device?user_code=DEMO-CODE`,
+              verification_uri_complete:
+                knobs.deviceVerificationUriComplete ??
+                `${issuer}/device?user_code=DEMO-CODE`,
             }
           : {}),
         expires_in: knobs.deviceExpiresIn,

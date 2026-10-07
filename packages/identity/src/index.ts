@@ -17,10 +17,14 @@ export type { WorkloadIdentityProvider } from "@piship/contracts";
 export { RETAINED_CLAIMS, retainClaims } from "./claims.js";
 export {
   DEFAULT_LOGIN_TIMEOUT_MS,
-  startLoopbackReceiver,
   type LoopbackReceiver,
+  startLoopbackReceiver,
 } from "./loopback.js";
-export { OidcPkceIdentityProvider, type OidcIdentityOptions } from "./oidc.js";
+export {
+  type OidcIdentityOptions,
+  OidcPkceIdentityProvider,
+  terminalSafe,
+} from "./oidc.js";
 
 export const IDENTITY_METADATA_SCHEMA = "piship-identity-metadata/v1";
 

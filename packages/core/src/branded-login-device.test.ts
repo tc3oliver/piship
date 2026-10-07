@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import type { BrandedContext } from "./branded/context.js";
-import { runLogin } from "./branded/login.js";
+import { deviceCodeMessage, runLogin } from "./branded/login.js";
 import { resolveLock } from "./index.js";
 
 const browser = vi.hoisted(() => ({ spawned: [] as string[][] }));
@@ -175,5 +175,51 @@ describe("login with identity.oidc.flow: device_code", () => {
       message: "Sign-in was cancelled",
     });
     expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  describe("text from the identity provider", () => {
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the point.
+    const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
+
+    it("is stripped of control characters and cut short when printed", () => {
+      const message = deviceCodeMessage({
+        verificationUri: "https://login.example/\u001b[2Jdevice",
+        userCode: "AB\rCD\u009b",
+        verificationUriComplete: `https://login.example/${"a".repeat(3000)}`,
+        expiresInSeconds: 300,
+      });
+      expect(message).not.toMatch(CONTROL);
+      expect(message).toContain("https://login.example/[2Jdevice");
+      expect(message).toContain("ABCD");
+      expect(message.length).toBeLessThan(2500 * 2);
+    });
+
+    it.each([
+      ["a file: URL", "deviceVerificationUri", "file:///etc/passwd"],
+      [
+        "a URL with credentials",
+        "deviceVerificationUri",
+        "https://user:secret@login.example/device",
+      ],
+      [
+        "a URL with an escape sequence",
+        "deviceVerificationUriComplete",
+        "https://login.example/\u001b[31mdevice",
+      ],
+      ["a user code with an escape sequence", "deviceUserCode", "\u001b[2JAB"],
+    ])(
+      "is refused, with no browser and nothing printed, for %s",
+      async (_name, knob, value) => {
+        services.knobs[knob] = value;
+        const { ctx, err } = context();
+        await expect(runLogin(ctx)).rejects.toMatchObject({
+          code: "IDENTITY_INVALID",
+        });
+        expect(browser.spawned).toEqual([]);
+        const printed = err.join("\n");
+        expect(printed).not.toMatch(CONTROL);
+        expect(printed).not.toMatch(/file:|secret|login\.example/);
+      },
+    );
   });
 });
