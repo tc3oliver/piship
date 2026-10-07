@@ -4,11 +4,12 @@ import type { LaunchContext } from "../launch/context.js";
 const core = vi.hoisted(() => ({
   reclaimObsoleteVersions: vi.fn(),
   describeReclaimed: vi.fn(),
+  verifyPayload: vi.fn(),
 }));
 
 vi.mock("@piship/core", async (original) => ({
   ...(await original<typeof import("@piship/core")>()),
-  verifyPayload: vi.fn(),
+  verifyPayload: core.verifyPayload,
   sweepStateTemporaries: vi.fn(),
   reclaimLaunchTemporaries: vi.fn(() => undefined),
   refreshInstalledLauncher: vi.fn(),
@@ -49,6 +50,16 @@ describe("doctor reclaims obsolete release directories", () => {
     expect(core.reclaimObsoleteVersions).toHaveBeenCalledWith("acmepi");
     expect(core.describeReclaimed).toHaveBeenCalledWith(result);
     expect(err).toEqual(["Removed 1 obsolete release directory."]);
+  });
+
+  it("continues to the report, and changes nothing, when the payload fails verification", async () => {
+    core.reclaimObsoleteVersions.mockClear();
+    core.verifyPayload.mockImplementationOnce(() => {
+      throw new Error("Payload files changed");
+    });
+    const { ctx } = context();
+    await expect(runDoctor(ctx)).rejects.toThrow("stop after maintenance");
+    expect(core.reclaimObsoleteVersions).not.toHaveBeenCalled();
   });
 
   it("says nothing when there was nothing to say, and never on --help", async () => {

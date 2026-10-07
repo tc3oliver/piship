@@ -332,6 +332,8 @@ export interface DoctorData {
   readonly governance?: GovernanceData;
   /** Local metrics after every check ran. */
   readonly metrics: MetricsSnapshot;
+  /** Why the full payload verification failed, when it did. */
+  readonly integrityProblem?: string;
 }
 
 /**

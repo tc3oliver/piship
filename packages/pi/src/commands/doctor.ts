@@ -1,4 +1,4 @@
-import { PiShipError } from "@piship/contracts";
+import { formatError, PiShipError } from "@piship/contracts";
 import {
   verifyPayload,
   describeReclaimed,
@@ -73,18 +73,32 @@ export async function runDoctor(
       "CONFIG_INVALID",
       `Usage: ${command} doctor [--json]`,
     );
-  // Full payload verification and abandoned temporary maintenance are
-  // requested diagnostics, never a prerequisite for entering Pi.
-  verifyPayload(ctx.distributionDir);
+  // Full payload verification is a requested diagnostic, never a prerequisite
+  // for entering Pi. A payload that fails it is one failed row of the report,
+  // not the end of the report: sign-in, network, and update still print, and
+  // an installation found damaged is not changed first.
+  let integrityProblem: string | undefined;
+  try {
+    verifyPayload(ctx.distributionDir);
+  } catch (error) {
+    integrityProblem = formatError(error);
+  }
   sweepStateTemporaries(ctx.stateDir);
   const notice = reclaimLaunchTemporaries(ctx.metadata.app.id);
   if (notice) ctx.err(notice);
-  // Release directories nothing records any more, removed within a time
-  // budget: install and update never delete them.
-  const reclaimed = describeReclaimed(
-    reclaimObsoleteVersions(ctx.metadata.app.id),
-  );
-  if (reclaimed) ctx.err(reclaimed);
+  if (integrityProblem === undefined)
+    try {
+      // Release directories nothing records any more, removed within a
+      // longer budget than the end of an update or rollback has.
+      const reclaimed = describeReclaimed(
+        reclaimObsoleteVersions(ctx.metadata.app.id),
+      );
+      if (reclaimed) ctx.err(reclaimed);
+    } catch (error) {
+      ctx.err(
+        `Could not remove obsolete releases: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   // The shared file store is a cache of file bytes, never what an installed
   // release runs from. This is the only place it is collected or verified.
   try {
@@ -97,8 +111,20 @@ export async function runDoctor(
   }
   // An installed launcher an earlier PiShip wrote is replaced, as at the end
   // of a session, so the report below names the one that runs next.
-  refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
-  const report = renderDoctor(await collectDoctorData(ctx));
+  if (integrityProblem === undefined)
+    try {
+      refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
+    } catch (error) {
+      ctx.err(
+        `Could not replace the installed launcher: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  const collected = await collectDoctorData(ctx);
+  const report = renderDoctor(
+    integrityProblem === undefined
+      ? collected
+      : { ...collected, integrityProblem },
+  );
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),
   );
