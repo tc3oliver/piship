@@ -119,8 +119,6 @@ export const AUDIT_GOVERNANCE_DETAIL_KEYS = [
   "router",
   "package",
 ] as const;
-export type AuditGovernanceDetailKey =
-  (typeof AUDIT_GOVERNANCE_DETAIL_KEYS)[number];
 
 /** Content classes a distribution may opt in to capturing. Off by default. */
 export interface AuditCapture {

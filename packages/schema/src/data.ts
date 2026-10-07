@@ -26,19 +26,6 @@ export const DATA_CONTRACT_VERSION = "piship-data/v1" as const;
 export const DATA_CLASSES = ["sessions", "audit", "cache", "temp"] as const;
 export type DataClass = (typeof DATA_CLASSES)[number];
 
-/**
- * How the distribution's retention bounds a user's: a `maximum` may be
- * shortened, a `minimum` (audit) may be lengthened.
- */
-export const DATA_RETENTION_BOUNDS: Readonly<
-  Record<DataClass, "minimum" | "maximum">
-> = {
-  sessions: "maximum",
-  audit: "minimum",
-  cache: "maximum",
-  temp: "maximum",
-};
-
 export const DATA_UNINSTALL_PURGE = ["none", "all"] as const;
 export type DataUninstallPurge = (typeof DATA_UNINSTALL_PURGE)[number];
 

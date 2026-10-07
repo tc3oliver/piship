@@ -312,15 +312,6 @@ export function scanModulesMany(
   return results;
 }
 
-/** `scanModulesMany` for one job. */
-export function scanModules(
-  esbuild: EsbuildApi,
-  root: string,
-  files: readonly string[],
-): ScanResult {
-  return scanModulesMany(esbuild, [{ root, files }])[0] as ScanResult;
-}
-
 /**
  * Constructs that locate code or files when they run, which no static import
  * list accounts for. A text match, deliberately loose: a false positive keeps

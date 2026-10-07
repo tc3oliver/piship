@@ -14,9 +14,6 @@ import {
 /** Top-level manifest sections added by piship/v1alpha4 (kept by v1alpha5). */
 export const LIFECYCLE_KEYS = ["updates", "release"] as const;
 
-/** Lifecycle fields that accept `${NAME}` runtime references. */
-export const LIFECYCLE_RUNTIME_REFERENCE_FIELDS = ["updates.source"] as const;
-
 /**
  * How the update channel may be reached (piship/v1alpha5
  * `updates.transport`): `https` (the default) keeps plain HTTP to loopback
