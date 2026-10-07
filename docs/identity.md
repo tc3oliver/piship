@@ -13,14 +13,14 @@ interface IdentityProvider {
 }
 ```
 
-`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `WorkloadIdentityProvider` is defined in `@piship/contracts` (and reaches adapter authors through `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged and adds the `isWorkloadIdentityProvider` guard.
+`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. `LoginContext.presentDeviceCode` is an optional second callback for the built-in `device_code` flow: it receives `{ verificationUri, userCode, verificationUriComplete?, expiresInSeconds }`. An identity adapter never needs it and is unaffected: it is an extra optional member that an adapter may ignore. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `WorkloadIdentityProvider` is defined in `@piship/contracts` (and reaches adapter authors through `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged and adds the `isWorkloadIdentityProvider` guard.
 
 ## Modes
 
 | `identity.mode` | Behavior |
 | --- | --- |
 | `none` | No enterprise identity, so no principal: credentials and state are bound to nobody and are not compared with anyone at launch. Personal only |
-| `oidc` | Built-in OIDC Authorization Code + PKCE |
+| `oidc` | Built-in OIDC: Authorization Code + PKCE (the default), or the device authorization grant (`flow: device_code`) |
 | `adapter` | A packaged module that default-exports a factory `(context) => IdentityProvider`, where `context` has `distributionId`, the managed `fetch`, and resolved `endpoints`. The adapter is locked and integrity-checked like other resources. Its `login`, `refresh`, and `logout` each have a deadline and a signal that aborts at it ([deadlines](adapter-sdk.md#deadlines)) |
 
 ## OIDC
@@ -34,9 +34,13 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 - Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer; otherwise the refresh fails with `IDENTITY_INVALID` and the stored session is kept. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
 - On `logout`, refresh and access tokens are revoked when the provider advertises a revocation endpoint.
 
+The rest of this section describes the default `authorization_code_pkce` flow; [device code](#device-code) describes the other.
+
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. Below the URL it says where the browser must return (the redirect), how long it waits (5 minutes), and that Ctrl-C cancels; Ctrl-C ends the wait as a cancelled sign-in (`IDENTITY_REQUIRED`) and closes the listener, and a second Ctrl-C ends the process. An identity provider that does not know the client ID or the redirect URI shows its own error page and, as OAuth requires, never redirects back, so `login` cannot detect it: the hint says to press Ctrl-C and have the client registration checked when the browser shows a provider error instead of a sign-in page.
 
 ### Remote shells
+
+This applies to `authorization_code_pkce`. With [`flow: device_code`](#device-code) nothing listens on this machine, so no port forward is needed: enter the code in a browser on any computer.
 
 The redirect is a loopback address on the machine that runs `login`, so the browser must run there or reach it. In a remote shell (`SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY` set), `login` says so and prints the port forward to run, in another terminal, on the computer with the browser, for example:
 
@@ -45,6 +49,29 @@ ssh -N -L 8765:127.0.0.1:8765 <remote host>
 ```
 
 Then open the printed URL in that browser: the provider redirects it to `127.0.0.1:8765`, which the forward carries to the waiting `login`. The local port must be free on the browser's computer too. With a redirect that has no port (an ephemeral port), the port is known only once `login` prints the URL; start the forward then. Otherwise run `login` on the computer with the browser. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
+
+### Device code
+
+`identity.oidc.flow: device_code` ([manifest](manifest.md#identity-flows)) signs in with the OAuth 2.0 Device Authorization Grant (RFC 8628), for a machine where the browser cannot reach a loopback port: an SSH session, a container, a headless workstation.
+
+1. Discovery must name a `device_authorization_endpoint`; otherwise `login` fails with `CONFIG_INVALID` and sends nothing. The request goes through the managed fetch like every other OIDC request, so the proxy, CA, `network.allowHosts`, and `httpTransport` rules apply to it as to the token endpoint ([security](security.md#network-and-tls)).
+2. PiShip posts `client_id`, `scope`, and `audience` (when set) and receives a device code, a user code, a verification URI, an expiry, and an interval.
+3. The branded `login` prints, on stderr, the URL, the user code, how long it waits, and that Ctrl-C cancels, with a reminder to enter the code only because you ran `login` just now. It tries to open the verification URL (the complete one, with the code in it, when the provider gives it) unless `PISHIP_NO_BROWSER=1` is set or the shell is remote (`SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY`), where it only prints.
+4. PiShip polls the token endpoint every `interval` seconds, never faster than once a second. `authorization_pending` keeps waiting, `slow_down` adds 5 seconds to the interval for the rest of the sign-in, and the wait ends at the earlier of the provider's expiry and 5 minutes.
+5. The token response goes through the same validation as the code flow's: issuer, audience, authorized party, expiry and not-before with 30 seconds of tolerance, and the signature (`enableNonRepudiationChecks`). A response without an ID token is refused.
+
+What differs from the code flow, and why: there is no `redirect_uri`, `state`, `nonce`, or PKCE, because nothing returns through a browser redirect. The ID token arrives in the response to PiShip's own request to the token endpoint, bound to the device code that only this process holds. What the device flow gives up is the browser's proof that the person who approved is the person at this terminal; [security](security.md#device-code-sign-in) covers that.
+
+The session, its claims allowlist, the principal `(iss, sub)`, refresh, and logout are the same code as for the code flow: after sign-in nothing tells the two apart.
+
+| Situation | Result |
+| --- | --- |
+| The person declines | `IDENTITY_INVALID` ("declined") |
+| The code expires, 5 minutes pass, or Ctrl-C | `IDENTITY_REQUIRED` ("timed out", "the device code expired", or "was cancelled"); the timers are cleared |
+| No `device_authorization_endpoint` in discovery | `CONFIG_INVALID` |
+| A caller that cannot show a code (no `presentDeviceCode`) | `CONFIG_UNAVAILABLE` |
+
+The user code is a short-lived one-time code, not a secret, but it is printed to the terminal only: it is not written to the state directory, the audit log, or any other file. The device code is a secret of this sign-in and appears in no message.
 
 Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The allowlist is `RETAINED_CLAIMS`, defined in `@piship/contracts` (and exported by `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged with `retainClaims`, the filter. The tokens are one secret in the configured secret store, under a generation reference.
 
@@ -116,6 +143,7 @@ The runtime credential still comes from `credential.provider: http-broker`, with
 | Situation | Code |
 | --- | --- |
 | Not signed in, sign-in cancelled or timed out | `IDENTITY_REQUIRED` |
+| The sign-in was declined, expired, or cancelled | see [device code](#device-code) |
 | The registered redirect port is in use (another `login` still running, say) or cannot be bound | `CONFIG_UNAVAILABLE`, naming the port and how to find what holds it |
 | Denied or rejected authorization, failed ID token or discovery check, revocation failure. A provider error that names the client registration (`unauthorized_client`, `invalid_client`, `invalid_request`, `invalid_scope`, `unsupported_response_type`) says to check the client ID, redirect URI, and scopes | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |

@@ -317,7 +317,7 @@ What each party owns, for the controls in this document. "PiShip guarantee" hold
 
 | Concern | PiShip guarantee | Distribution owner | External IdP, gateway, broker | OS, administrator, endpoint (outside the threat model) |
 | --- | --- | --- | --- | --- |
-| Identity | OIDC with PKCE and a validated ID token; the identity of a session never changes silently; no credential survives a change of user | Issuer, client, and claims in the manifest; who may sign in | Authentication, MFA, account lifecycle, token revocation | A user or process with access to the user's session or keychain |
+| Identity | OIDC with PKCE, or the device flow ([device code sign-in](#device-code-sign-in)), and a validated ID token; the identity of a session never changes silently; no credential survives a change of user | Issuer, client, and claims in the manifest; who may sign in | Authentication, MFA, account lifecycle, token revocation | A user or process with access to the user's session or keychain |
 | Credentials | Stored in the platform secret store, bound to the principal, revoked at logout, never in a snapshot, report, or rollback | Broker endpoint, credential class and lifetime, `acknowledgePlaintext` for a file store | Issuing, scoping, and revoking runtime credentials | The secret store's own protection; a debugger or administrator reading process memory |
 | Inference and models | Only declared, entitled models; the declared gateway only; ambient provider keys never sent in managed mode | The model list and routes, the gateway | Model access, rate limits, upstream provider keys, logging | The provider's handling of prompts |
 | Policy | Enforced decisions for every action with a runtime seam; an action without one is reported `unsupported`, never enforced | The policy, `policy.enforced`, defaults | | Anyone who can edit the installed payload or state |
@@ -330,6 +330,23 @@ What each party owns, for the controls in this document. "PiShip guarantee" hold
 | Migration | `migrate --check` changes nothing; ambiguous configuration is reported for review and never rewritten; no credential or resolved value enters a migrated manifest | Reviewing every reported item | | |
 | Dependency sharing and closure bundling | Same name, version, integrity, and bytes only; Node resolution, the lock's logical graph, the SBOM, the notices, and the install-script review unchanged; every file in the inventory | Choosing Pi packages; reviewing the footprint report | | |
 | Runtime store | A cache of bytes, never a trust root; an installation is whole and a launch never opens it; collection only from `doctor` | Whether to enable it (`PISHIP_STORE`) | | A process with the user's write access can change the store as it can change the install |
+
+## Device code sign-in
+
+`identity.oidc.flow: device_code` ([identity](identity.md#device-code)) trades the loopback redirect for a code that the person enters at the identity provider. It is opt-in per distribution, in the manifest, and not a runtime choice.
+
+**Threat: device code phishing.** The flow has no redirect that ties the browser to the terminal. An attacker who starts a device sign-in at the identity provider with a public client of their own, then persuades a victim to enter the attacker's code and sign in, receives the victim's tokens at the attacker's own poller. The victim's browser shows a legitimate provider page. PiShip does not make this impossible, because the protection is the provider's: the provider authenticates the person, applies conditional access, and decides which clients may use the grant. What PiShip does:
+
+- **The code is always one the person's own `login` just requested.** PiShip never asks for a code, never accepts one from another process, a URL, a file, or a model response, and never starts a device sign-in except from the `login` command a person ran. `login` prints a reminder to enter the code only because you ran it just now.
+- **Short life.** The code is good until the provider's expiry or 5 minutes, whichever is first, and a sign-in that ends by cancellation, expiry, or a decline stops polling at once.
+- **Only the managed client.** The request carries the `client_id` of the distribution's own public client and the scopes and audience in the manifest. The grant is offered only when the owner chose `flow: device_code` and the identity provider's registration for that client allows it; an owner who keeps `authorization_code_pkce` is unaffected. Restricting who may use the device grant at the provider (conditional access, allowed client IDs, a Microsoft Entra policy that blocks device code flow for other applications) is the identity provider's control and the owner's job.
+- **Principal checks stay.** The session is bound to `(iss, sub)` as ever; signing in as another principal clears the previous credential ([user switching](#user-switching)).
+
+**What a code is and is not.** The user code is a one-time sign-in code, not a secret and not a credential: it is shown on the terminal and nowhere else (not in the state directory, the audit log, the session metadata, or an error). The device code is a bearer for this sign-in; it is held in memory for the length of the sign-in and appears in no message, log, or error. Tokens are handled as in the code flow.
+
+**What is the same.** The ID token's issuer, audience, authorized party, expiry, and signature are checked by the same library code as the code flow. There is no `state` or `nonce`: no browser redirect carries the response, and the tokens come back in PiShip's own authenticated-by-TLS request to the token endpoint, bound to a device code only this process holds. All requests, the device authorization endpoint included, use the managed fetch, so TLS verification, `network.allowHosts`, proxy, CA, and `httpTransport` rules hold, and a discovery document that names an endpoint on another host needs that host in `allowHosts`.
+
+**Limits.** PiShip cannot tell whether the person entering the code is at this terminal. A user who enters a code sent to them by someone else defeats the flow, as with every device flow; user education and provider-side policy are the mitigations. In a remote shell the terminal is the only place the code is shown: anyone who can read that terminal can read a code that is still valid, which signs in the person who enters it, not the reader.
 
 ## Logout and revocation
 

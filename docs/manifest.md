@@ -32,7 +32,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `deployment.mode` | `managed` or `personal` |
 | `variables` | Names allowed in `${NAME}` runtime references (see below) |
 | `identity.mode` | `none`, `oidc`, or `adapter` |
-| `identity.oidc` | `issuer`, `clientId`, `flow: authorization_code_pkce` (only value), `scopes` (default `[openid, profile, email]`; must include `openid`), optional `audience`, and `redirectUri`, a loopback `http://127.0.0.1:<port>/<path>` or `[::1]` URI. `clientSecret` is rejected: native clients are public |
+| `identity.oidc` | `issuer`, `clientId`, `flow`: `authorization_code_pkce` (the default) or, from `piship/v1`, `device_code` ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)); `scopes` (default `[openid, profile, email]`; must include `openid`); optional `audience`; and `redirectUri`, a loopback `http://127.0.0.1:<port>/<path>` or `[::1]` URI that `authorization_code_pkce` requires and `device_code` refuses. `clientSecret` is rejected: native clients are public. See [identity flows](#identity-flows) |
 | `identity.adapter` | `./` path to an `.mjs` or `.js` module that default-exports an `IdentityProvider` factory |
 | `credential.provider` | `http-broker`, `local-secret`, `pi-native`, `none`, or `adapter` |
 | `credential.broker` | `endpoint` and optional `revokeEndpoint` (with `http-broker` only) |
@@ -496,7 +496,7 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `mcp.servers.<id>.httpTransport` | `https` | `https` or `http-allowed` (`streamable-http` only): also permit plain HTTP to a private or internal host ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
 | `inference.httpTransport` | `https` | `https` or `http-allowed`: `inference.baseUrl` may also be plain HTTP to a private or internal host ([below](#plain-http-to-internal-endpoints-v1alpha6)) |
 | `credential.broker.httpTransport` | `https` | The same for `credential.broker.endpoint` and `revokeEndpoint` |
-| `identity.oidc.httpTransport` | `https` | The same for `identity.oidc.issuer` and every endpoint its discovery document names; the redirect stays a loopback URI |
+| `identity.oidc.httpTransport` | `https` | The same for `identity.oidc.issuer` and every endpoint its discovery document names (the device authorization endpoint too); the redirect stays a loopback URI |
 | `audit.sinks[].httpTransport` | `https` | The same for one `http` sink's `url` |
 | `sandbox.httpTransport` | `https` | The same for `sandbox.endpoint` and `sandbox.router` of a remote provider; not with `sandbox.credential: runtime` |
 | `mcp.servers.<id>.headers` | none | `streamable-http` only: request headers whose value is a claim (`sub`, `preferred_username`, or a verified `email`) of the signed-in OIDC identity, as `<Header-Name>: { identityClaim: <claim> }` ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
@@ -516,6 +516,31 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 Policy gains the actions `model.select` (the v1alpha5 `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` ([Policy](#policy)).
 
 Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), bundled search tools ([below](#bundled-search-tools-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
+
+### Identity flows
+
+`identity.oidc.flow` selects how a person signs in with the built-in OIDC provider. Both flows are public-client flows and share `issuer`, `clientId`, `audience`, `scopes`, and `httpTransport`.
+
+| `flow` | Schema | `redirectUri` | Sign-in |
+| --- | --- | --- | --- |
+| `authorization_code_pkce` (default) | every schema with `identity.oidc` | Required: a loopback URI | The browser returns to a port that `login` listens on. In a remote shell the port must be forwarded |
+| `device_code` | `piship/v1` | Refused: `validate` fails on the field | `login` prints a short code and a URL; the person enters the code in any browser, on any computer. No local port is opened ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)) |
+
+```yaml
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${ACME_OIDC_ISSUER}
+    clientId: ${ACME_OIDC_CLIENT_ID}
+    flow: device_code
+    scopes: [openid, profile, email]
+```
+
+- `redirectUri` is refused, not ignored, with `device_code`: a redirect that the distribution owner believes is registered and used, and is not, hides a configuration mistake. Remove it.
+- The identity provider must advertise a `device_authorization_endpoint` in its discovery document, and its client registration must allow the device flow (for Microsoft Entra ID: the app registration's "Allow public client flows" is on). Without the endpoint `login` fails with `CONFIG_INVALID` before it shows a code.
+- `device_code` is accepted by `piship/v1` only. `piship/v1alpha6` and older keep `authorization_code_pkce` as the only value, so a v1alpha6 manifest means what it always meant; `piship migrate` to `piship/v1` does not add the flow.
+- The lock records `flow` as it records it today (always, as the parsed manifest has it); a manifest that does not use `device_code` locks to the same bytes as before. `piship diff` reports a change of flow as high risk.
+- A runtime built before this value existed refuses a manifest that uses it: `validate`, `lock`, and `build` fail on `identity.oidc.flow` there. An installed distribution therefore updates to a release that uses `device_code` only from a release whose runtime knows it, the same rule as for every addition ([support policy](support-policy.md#manifest-versions-and-the-migration-window)).
 
 ### MCP plain HTTP and identity headers (v1alpha6)
 
@@ -587,7 +612,7 @@ network:
 | --- | --- | --- |
 | `inference.httpTransport` | `inference.baseUrl` | The gateway credential (a bearer) on every request, and every prompt, file excerpt, tool result, and response |
 | `credential.broker.httpTransport` | `credential.broker.endpoint`, `revokeEndpoint` | The identity access token PiShip presents, and the gateway credential the broker issues |
-| `identity.oidc.httpTransport` | The issuer, and each endpoint its discovery document names (authorization, token, JWKS, revocation, end session) | The authorization code, ID and access tokens, and the refresh token. The authorization page the browser opens may be plain HTTP too |
+| `identity.oidc.httpTransport` | The issuer, and each endpoint its discovery document names (authorization, device authorization, token, JWKS, revocation, end session) | The authorization code, ID and access tokens, and the refresh token. The authorization page the browser opens may be plain HTTP too |
 | `audit.sinks[].httpTransport` | That sink's `url` | Audit events, including any captured content |
 | `sandbox.httpTransport` | `sandbox.endpoint`, `sandbox.router` (and, for e2b-compatible, its command host `<port>-<id>.<domain>` under the endpoint's domain) | Commands, their output, files sent to the sandbox, and a `stored` sandbox credential |
 
@@ -600,7 +625,7 @@ The rules are the MCP server's ([above](#mcp-plain-http-and-identity-headers-v1a
 - A plain-HTTP request is sent to an `HTTP_PROXY` in clear, so an opted-in request is refused with `NETWORK_DENIED` when it would go through a proxy that is not itself a private or internal host; `NO_PROXY` is honored as the proxy agent applies it. Add the host to `NO_PROXY` to reach it directly. `doctor` reports an opted-in host that would be refused this way. This applies to every opt-in, MCP servers and `updates.transport` included.
 - For e2b-compatible, the command host is matched by name (`<digits>-<id>.<domain>` on port 80, where the domain is the endpoint's host without a leading `api.`), because the sandbox ID is known only once the sandbox exists. An IP-literal endpoint has no such domain, so its command host cannot be reached over plain HTTP; use a name under `.internal` or `.corp`.
 - The private-only network policy applies unchanged; in managed mode a governance host still needs `network.allowHosts`.
-- `identity.oidc.redirectUri` stays a loopback URI. `credential: runtime` on an MCP server and `sandbox.credential: runtime` stay refused with plain HTTP: the gateway credential goes over plain HTTP only to the gateway itself, even when the MCP server or sandbox shares the gateway's origin.
+- `identity.oidc.redirectUri` stays a loopback URI (`authorization_code_pkce` only). With `flow: device_code`, `device_authorization_endpoint` is one of the discovered endpoints and follows the same rule. `credential: runtime` on an MCP server and `sandbox.credential: runtime` stay refused with plain HTTP: the gateway credential goes over plain HTTP only to the gateway itself, even when the MCP server or sandbox shares the gateway's origin.
 - `validate` warns what travels unencrypted, and about a `.local` or single-label host name. `config explain` shows each field that is set, `doctor` shows each opted-in endpoint by host and warns when it resolves to plain HTTP, and `piship diff` reports turning one on as high risk.
 
 What this costs is in [security](security.md#plain-http-to-internal-endpoints): prefer https, and keep the gateway credential's lifetime short.
