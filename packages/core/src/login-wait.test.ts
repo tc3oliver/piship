@@ -15,7 +15,7 @@ describe("login waiting hint", () => {
   it("names the return address, the timeout, how to cancel, and a provider error page, in English and Chinese", () => {
     const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
       timeoutMs: 300_000,
-      env: {},
+      paste: false,
     });
     expect(hint).toContain(
       "Waiting up to 5 minutes for the browser to return to http://127.0.0.1:8765/callback",
@@ -31,44 +31,22 @@ describe("login waiting hint", () => {
     expect(hint).not.toContain("貼");
   });
 
-  it.each([
-    ["SSH_CONNECTION", "10.0.0.2 52000 10.0.0.9 22"],
-    ["SSH_CLIENT", "10.0.0.2 52000 22"],
-    ["SSH_TTY", "/dev/pts/1"],
-    ["PISHIP_NO_BROWSER", "1"],
-  ])(
-    "offers pasting the address, in both languages, and never tells the user to run ssh (%s)",
-    (name, value) => {
-      const hint = loginWaitingHint(
-        authorize("http://127.0.0.1:8765/callback"),
-        { timeoutMs: 300_000, env: { [name]: value } },
-      );
-      expect(hint).toContain("paste the full address");
-      expect(hint).toContain("press Enter");
-      expect(hint).toContain("貼到這裡，按 Enter");
-      expect(hint).not.toMatch(/ssh/i);
-      expect(hint).not.toMatch(/forward|轉發/i);
-    },
-  );
-
-  it.each([
-    [{}, false],
-    [{ PISHIP_NO_BROWSER: "0" }, false],
-    [{ PISHIP_NO_BROWSER: "1" }, true],
-    [{ SSH_CONNECTION: "10.0.0.2 52000 10.0.0.9 22" }, true],
-    [{ SSH_CLIENT: "10.0.0.2 52000 22" }, true],
-    [{ SSH_TTY: "/dev/pts/1" }, true],
-  ])(
-    "listens for a pasted redirect only where the browser cannot return (%j)",
-    (env, expected) => {
-      expect(pasteFallbackEnabled(env)).toBe(expected);
-    },
-  );
+  it("offers pasting the address in both languages, and never tells the user to run ssh", () => {
+    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
+      timeoutMs: 300_000,
+      paste: true,
+    });
+    expect(hint).toContain("paste the full address");
+    expect(hint).toContain("press Enter");
+    expect(hint).toContain("貼到這裡，按 Enter");
+    expect(hint).not.toMatch(/ssh/i);
+    expect(hint).not.toMatch(/forward|轉發/i);
+  });
 
   it("keeps the hint short", () => {
     const hint = loginWaitingHint(authorize("http://[::1]:9000/cb"), {
       timeoutMs: 300_000,
-      env: { SSH_TTY: "/dev/pts/1" },
+      paste: true,
     });
     expect(hint.split("\n")).toHaveLength(6);
     expect(hint).toContain("http://[::1]:9000/cb");
@@ -76,11 +54,82 @@ describe("login waiting hint", () => {
 
   it("does not claim a return address or a timeout it does not know", () => {
     const hint = loginWaitingHint("https://idp.example/device?code=ABCD", {
-      env: { SSH_TTY: "/dev/pts/1" },
+      paste: true,
     });
     expect(hint).toBe(
       "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.\n等待在瀏覽器完成登入，按 Ctrl-C 取消。",
     );
+  });
+});
+
+describe("paste fallback detection", () => {
+  const none = () => false;
+  it.each([
+    ["no signal on macOS", {}, "darwin", none, false],
+    ["no signal on Windows", {}, "win32", none, false],
+    ["a Linux desktop with X11", { DISPLAY: ":0" }, "linux", none, false],
+    [
+      "a Linux desktop with Wayland",
+      { WAYLAND_DISPLAY: "wayland-0" },
+      "linux",
+      none,
+      false,
+    ],
+    [
+      "WSL without a display",
+      { WSL_DISTRO_NAME: "Ubuntu" },
+      "linux",
+      none,
+      false,
+    ],
+    [
+      "PISHIP_NO_BROWSER=0",
+      { PISHIP_NO_BROWSER: "0", DISPLAY: ":0" },
+      "linux",
+      none,
+      false,
+    ],
+    ["PISHIP_NO_BROWSER=1", { PISHIP_NO_BROWSER: "1" }, "darwin", none, true],
+    [
+      "SSH_CONNECTION",
+      { SSH_CONNECTION: "10.0.0.2 52000 10.0.0.9 22" },
+      "darwin",
+      none,
+      true,
+    ],
+    ["SSH_CLIENT", { SSH_CLIENT: "10.0.0.2 52000 22" }, "darwin", none, true],
+    ["SSH_TTY", { SSH_TTY: "/dev/pts/1" }, "darwin", none, true],
+    ["Linux with no display", {}, "linux", none, true],
+    [
+      "a Docker container with a display variable",
+      { DISPLAY: ":0" },
+      "linux",
+      (p: string) => p === "/.dockerenv",
+      true,
+    ],
+    [
+      "a Podman container with a display variable",
+      { DISPLAY: ":0" },
+      "linux",
+      (p: string) => p === "/run/.containerenv",
+      true,
+    ],
+    [
+      "a Kubernetes pod with a display variable",
+      { DISPLAY: ":0", KUBERNETES_SERVICE_HOST: "10.0.0.1" },
+      "linux",
+      none,
+      true,
+    ],
+    [
+      "a container marker on macOS",
+      { KUBERNETES_SERVICE_HOST: "10.0.0.1" },
+      "darwin",
+      none,
+      false,
+    ],
+  ] as const)("%s", (_name, env, platform, exists, expected) => {
+    expect(pasteFallbackEnabled(env, { platform, exists })).toBe(expected);
   });
 });
 

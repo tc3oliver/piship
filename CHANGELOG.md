@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Added
 
-- `login` accepts the OAuth redirect URL (or the bare `code`) pasted into the terminal, so a machine with no browser, such as a remote shell, signs in without an SSH port forward ([identity](docs/identity.md#remote-shells), [security](docs/security.md#pasted-redirect-url)). It is offered in a remote shell or with `PISHIP_NO_BROWSER=1`, and races the loopback listener there; the pasted address must be this sign-in's redirect with its `state`; the code exchange and the error mapping are the same. `LoginContext` gains the optional `readRedirectUrl`. No manifest, lock, or schema change. In those cases the waiting hint says to paste the address and no longer suggests an SSH port forward; the hint is now printed in English and Traditional Chinese, and with a local browser it adds nothing about pasting.
+- `login` accepts the OAuth redirect URL (or the bare `code`) pasted into the terminal, so a machine with no browser, such as a remote shell, signs in without an SSH port forward ([identity](docs/identity.md#remote-shells), [security](docs/security.md#pasted-redirect-url)). It is offered with `PISHIP_NO_BROWSER=1`, in a remote shell, on a display-less Linux session, or in a container, and races the loopback listener there; the pasted address must be this sign-in's redirect with its `state`; the code exchange and the error mapping are the same. `LoginContext` gains the optional `readRedirectUrl`. No manifest, lock, or schema change. In those cases the waiting hint says to paste the address and no longer suggests an SSH port forward; the hint is now printed in English and Traditional Chinese, and with a local browser it adds nothing about pasting.
 
 ## v0.11.0
 

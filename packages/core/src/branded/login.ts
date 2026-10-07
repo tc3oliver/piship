@@ -74,13 +74,32 @@ function isRemoteShell(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Whether `login` listens for a pasted redirect. Only where the browser
- * cannot return to this machine: a remote shell, or `PISHIP_NO_BROWSER=1`.
- * With a local browser nothing reads stdin, so a stray line typed while the
- * sign-in page is open cannot end the login.
+ * Whether `login` listens for a pasted redirect: where the browser cannot
+ * return to this machine. That is a remote shell, `PISHIP_NO_BROWSER=1`, a
+ * Linux session with no display, or a container. There is no way to know for
+ * certain that the browser is elsewhere, so these are the signals that rarely
+ * misfire; with a local browser nothing reads stdin, so a stray line typed
+ * while the sign-in page is open cannot end the login. WSL is not treated as
+ * headless: it reaches a browser on the Windows side.
  */
-export function pasteFallbackEnabled(env: NodeJS.ProcessEnv): boolean {
-  return isRemoteShell(env) || env.PISHIP_NO_BROWSER === "1";
+export function pasteFallbackEnabled(
+  env: NodeJS.ProcessEnv,
+  host: {
+    platform?: NodeJS.Platform;
+    exists?: (path: string) => boolean;
+  } = {},
+): boolean {
+  if (env.PISHIP_NO_BROWSER === "1" || isRemoteShell(env)) return true;
+  if ((host.platform ?? process.platform) !== "linux") return false;
+  if (env.WSL_DISTRO_NAME) return false;
+  const exists = host.exists ?? existsSync;
+  if (
+    env.KUBERNETES_SERVICE_HOST ||
+    exists("/.dockerenv") ||
+    exists("/run/.containerenv")
+  )
+    return true;
+  return !env.DISPLAY && !env.WAYLAND_DISPLAY;
 }
 
 /**
@@ -116,7 +135,7 @@ export function readRedirectLine(
  */
 export function loginWaitingHint(
   url: string,
-  options: { timeoutMs?: number; env: NodeJS.ProcessEnv },
+  options: { timeoutMs?: number; paste: boolean },
 ): string {
   const plain = [
     "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
@@ -141,7 +160,7 @@ export function loginWaitingHint(
     "If the browser shows an identity provider error, press Ctrl-C and ask your administrator to check the client ID and redirect URI.",
     "若瀏覽器顯示身分提供者的錯誤，請按 Ctrl-C，並請管理員檢查 client ID 與 redirect URI。",
   ];
-  if (pasteFallbackEnabled(options.env))
+  if (options.paste)
     lines.push(
       `No browser here? Open the URL on any computer, sign in, then paste the full address it ends on (\u201ccan't connect\u201d is expected) here and press Enter.`,
       "這裡沒有瀏覽器？在任何電腦開啟網址登入，把最後的完整網址（顯示「無法連線」屬正常）貼到這裡，按 Enter。",
@@ -241,6 +260,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
   // The built-in OIDC login waits for the default timeout; an identity
   // adapter's own wait is not known here.
   const builtIn = ctx.metadata.access.identity.mode === "oidc";
+  const paste = pasteFallbackEnabled(process.env);
   try {
     result = await untilInterrupted((signal) =>
       access.login({
@@ -249,15 +269,13 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
           ctx.err(
             loginWaitingHint(url, {
               ...(builtIn ? { timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS } : {}),
-              env: process.env,
+              paste,
             }),
           );
           openBrowser(url);
         },
         readSecret: readSecretInput,
-        ...(pasteFallbackEnabled(process.env)
-          ? { readRedirectUrl: readRedirectLine }
-          : {}),
+        ...(paste ? { readRedirectUrl: readRedirectLine } : {}),
         signal,
       }),
     ).finally(() => saveMetrics(metrics));
