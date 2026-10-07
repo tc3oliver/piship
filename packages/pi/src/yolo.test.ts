@@ -77,7 +77,7 @@ interface Setup {
   readonly yolo?: boolean;
   /** Switch the stored auto mode on before the session opens. */
   readonly stored?: boolean;
-  readonly onYoloEnd?: () => void;
+  readonly onYoloEnd?: () => string | undefined;
 }
 
 /**
@@ -455,6 +455,22 @@ describe("--yolo in a managed session", () => {
     expect(
       events().filter((event) => event.event === "policy.auto_enabled"),
     ).toEqual([expect.objectContaining({ detail: { source: "yolo" } })]);
+  });
+
+  it("auto off passes on that the provider's approvals stay on for a session that shares them", async () => {
+    const { session } = await open({
+      mode: "managed",
+      userAuto: "allowed",
+      yolo: true,
+      onYoloEnd: () =>
+        "The permission provider's own approvals stay on until the other --yolo session ends.",
+    });
+    const off = await session.switchUserAuto(false);
+    expect(session.yolo).toBe(false);
+    expect(off.warning).toContain(
+      "approvals stay on until the other --yolo session ends",
+    );
+    await session.close();
   });
 
   it("auto off clears stored mode and audits even if provider restoration fails", async () => {

@@ -47,6 +47,7 @@ import {
   launchVirtualModels,
   type Model,
 } from "./model-runtime.js";
+import { entitlementNotice } from "./entitlement-notice.js";
 import { providerErrorRedaction } from "./redaction.js";
 import { governVirtualModels } from "./virtual-models.js";
 import {
@@ -236,14 +237,28 @@ async function startRuntime(
         // The gateway refused the model with 403: what the credential is
         // entitled to may have changed, so re-read it once. The rejected
         // request is not replayed, and the new entitlement applies from the
-        // next launch.
+        // next launch: the session says so when it differs from this one's.
+        let reread = false;
         await access
           ?.refreshEntitlement()
+          .then(() => {
+            reread = true;
+          })
           .catch((error: Error) =>
             ctx.err(
               `Notice: the model entitlement could not be re-read: ${formatError(error)}`,
             ),
           );
+        if (!access || !reread) return;
+        const refused = (event.message as { model?: string }).model;
+        const notice = entitlementNotice({
+          before: activated?.credential.ref?.models,
+          after: (await access.credentialManager()).readMetadata()?.models,
+          refused,
+          command: ctx.metadata.app.command,
+        });
+        if (gov) gov.notice(notice);
+        else ctx.err(`Notice: ${notice}`);
       });
       pi.on("model_select", (event) => {
         if (activated && access)
