@@ -33,6 +33,7 @@ import {
   deferredDownloadNotice,
   deferredToolDownloads,
   installSearchTools,
+  searchToolProblemNotice,
 } from "./launch/search-tools.js";
 
 export {
@@ -197,18 +198,6 @@ export async function launchPiDistribution(
       );
     }
   });
-  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
-  // Pi's agent directory here before Pi was imported (environment.ts).
-  startupMark("search_tools_start");
-  installSearchTools(metadata, options.distributionDir, agentDir);
-  // Pi's interactive mode would wait for a download of a missing fd or rg.
-  const deferred = deferredToolDownloads(metadata, agentDir);
-  if (deferred.length) {
-    process.env.PI_OFFLINE = "1";
-    console.error(deferredDownloadNotice(deferred));
-    startupNote("tool_downloads_deferred", deferred.join(","));
-  }
-  startupMark("search_tools_done");
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),
@@ -274,6 +263,36 @@ export async function launchPiDistribution(
     );
     return;
   }
+  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
+  // Pi's agent directory here before Pi was imported (environment.ts). A
+  // problem with them (a lock without the target, a missing payload file, a
+  // read-only agent directory, a payload copy that does not match the lock)
+  // is a warning, never a failure: the command goes on without the tool, and
+  // never runs one that is not the pinned executable. `--version` and
+  // `--help` do not need them and never touch the agent directory.
+  startupMark("search_tools_start");
+  try {
+    installSearchTools(
+      metadata,
+      options.distributionDir,
+      agentDir,
+      undefined,
+      (tool, error) => ctx.err(searchToolProblemNotice(tool, error)),
+    );
+  } catch (error) {
+    // Reading the receipt or the tool directory failed as a whole.
+    ctx.err(
+      `Warning: the bundled search tools could not be checked (${error instanceof Error ? error.message : String(error)}). This start goes on without them.`,
+    );
+  }
+  // Pi's interactive mode would wait for a download of a missing fd or rg.
+  const deferred = deferredToolDownloads(metadata, agentDir);
+  if (deferred.length) {
+    process.env.PI_OFFLINE = "1";
+    console.error(deferredDownloadNotice(deferred));
+    startupNote("tool_downloads_deferred", deferred.join(","));
+  }
+  startupMark("search_tools_done");
   if (!sessionOption) {
     if (args.length === 1 && command === "login") return runLogin(ctx);
     if (args.length === 1 && command === "logout") return runLogout(ctx);
