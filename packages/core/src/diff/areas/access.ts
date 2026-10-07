@@ -53,6 +53,10 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
       yo.audience,
       endpoint,
     );
+    out.scalar("access", "identity flow", xo.flow, yo.flow, [
+      "high",
+      "Sign-in flow changed; how a person proves who they are differs.",
+    ]);
     out.scalar(
       "access",
       "identity redirectUri",

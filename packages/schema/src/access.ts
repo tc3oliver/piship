@@ -12,25 +12,32 @@ import {
 
 export type DeploymentMode = "personal" | "managed";
 
+export type IdentityOidc = {
+  readonly issuer: string;
+  readonly clientId: string;
+  readonly scopes: readonly string[];
+  readonly audience?: string;
+  /**
+   * piship/v1alpha6: `http-allowed` also permits plain HTTP to a
+   * private or internal host for the issuer and every endpoint its
+   * discovery document names. Absent means `https`.
+   */
+  readonly httpTransport?: HttpTransport;
+} & (
+  | {
+      readonly flow: "authorization_code_pkce";
+      readonly redirectUri: string;
+    }
+  | {
+      /** piship/v1: RFC 8628 device authorization; there is no redirect. */
+      readonly flow: "device_code";
+      readonly redirectUri?: never;
+    }
+);
+
 export type IdentityConfig =
   | { readonly mode: "none" }
-  | {
-      readonly mode: "oidc";
-      readonly oidc: {
-        readonly issuer: string;
-        readonly clientId: string;
-        readonly flow: "authorization_code_pkce";
-        readonly scopes: readonly string[];
-        readonly audience?: string;
-        readonly redirectUri: string;
-        /**
-         * piship/v1alpha6: `http-allowed` also permits plain HTTP to a
-         * private or internal host for the issuer and every endpoint its
-         * discovery document names. Absent means `https`.
-         */
-        readonly httpTransport?: HttpTransport;
-      };
-    }
+  | { readonly mode: "oidc"; readonly oidc: IdentityOidc }
   | { readonly mode: "adapter"; readonly adapter: string };
 
 export type CredentialProviderName =
@@ -369,6 +376,7 @@ function parseIdentity(
   mode: DeploymentMode,
   variables: readonly string[],
   v6 = false,
+  v1 = false,
 ): IdentityConfig {
   if (value === undefined) {
     if (mode === "managed")
@@ -415,10 +423,14 @@ function parseIdentity(
       "Native clients are public; an embedded client secret is not confidential and is not accepted",
     );
   const flow = oidc.flow ?? "authorization_code_pkce";
-  if (flow !== "authorization_code_pkce")
+  if (flow !== "authorization_code_pkce" && !(v1 && flow === "device_code"))
     fail(
       "identity.oidc.flow",
-      "Only authorization_code_pkce is supported for native managed login",
+      v1
+        ? "Expected authorization_code_pkce or device_code"
+        : flow === "device_code"
+          ? "device_code needs schema piship/v1; this schema supports only authorization_code_pkce"
+          : "Only authorization_code_pkce is supported for native managed login",
     );
   const scopes = stringList(
     oidc.scopes ?? ["openid", "profile", "email"],
@@ -432,16 +444,25 @@ function parseIdentity(
   );
   if (!scopes.includes("openid"))
     fail("identity.oidc.scopes", "OIDC login requires the openid scope");
-  const redirect = plainString(oidc.redirectUri, "identity.oidc.redirectUri");
-  const url = checkUrl(redirect, "identity.oidc.redirectUri");
-  if (
-    url.protocol !== "http:" ||
-    !/^(127\.0\.0\.1|\[::1\])$/.test(url.hostname)
-  )
-    fail(
-      "identity.oidc.redirectUri",
-      "Use a registered loopback redirect such as http://127.0.0.1:8765/callback (RFC 8252)",
-    );
+  let redirect: string | undefined;
+  if (flow === "device_code") {
+    if (oidc.redirectUri !== undefined)
+      fail(
+        "identity.oidc.redirectUri",
+        "device_code has no redirect; remove redirectUri (it applies only to authorization_code_pkce)",
+      );
+  } else {
+    redirect = plainString(oidc.redirectUri, "identity.oidc.redirectUri");
+    const url = checkUrl(redirect, "identity.oidc.redirectUri");
+    if (
+      url.protocol !== "http:" ||
+      !/^(127\.0\.0\.1|\[::1\])$/.test(url.hostname)
+    )
+      fail(
+        "identity.oidc.redirectUri",
+        "Use a registered loopback redirect such as http://127.0.0.1:8765/callback (RFC 8252)",
+      );
+  }
   return {
     mode: "oidc",
     oidc: {
@@ -458,7 +479,7 @@ function parseIdentity(
         variables,
         "id",
       ),
-      flow: "authorization_code_pkce",
+      flow: flow as IdentityOidc["flow"],
       scopes,
       ...(oidc.audience === undefined
         ? {}
@@ -470,9 +491,9 @@ function parseIdentity(
               "id",
             ),
           }),
-      redirectUri: redirect,
+      ...(redirect === undefined ? {} : { redirectUri: redirect }),
       ...(transport === "http-allowed" ? { httpTransport: transport } : {}),
-    },
+    } as IdentityOidc,
   };
 }
 
@@ -1131,10 +1152,16 @@ export function parseAccess(
    * piship/v1alpha6 and later: model catalog `type` and `virtual`, and the
    * endpoints' `httpTransport`.
    */
-  options: { readonly v6?: boolean } = {},
+  options: { readonly v6?: boolean; readonly v1?: boolean } = {},
 ): AccessManifest {
   const variables = parseVariables(root.variables);
-  const identity = parseIdentity(root.identity, mode, variables, options.v6);
+  const identity = parseIdentity(
+    root.identity,
+    mode,
+    variables,
+    options.v6,
+    options.v1,
+  );
   const inference = parseInference(root.inference, mode, variables, options.v6);
   const credential = parseCredential(
     root.credential,

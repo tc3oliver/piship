@@ -448,7 +448,7 @@ export function parseManifest(value: unknown): Manifest {
           ...(governance ? governanceReferences(governance) : []),
           ...(lifecycle ? lifecycleReferences(lifecycle) : []),
         ],
-        { v6 },
+        { v6, v1: schema === PISHIP_SCHEMA_V1 },
       );
       assertLaunchable({ mode, access, governance });
     } catch (error) {

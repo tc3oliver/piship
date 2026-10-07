@@ -12,9 +12,31 @@ import type { SecretValue } from "./secret.js";
 
 // ---------------------------------------------------------------- identity
 
+/**
+ * What a person needs to finish an RFC 8628 device sign-in on any browser.
+ * The user code is a short-lived one-time code, not a secret, but it is shown
+ * to the person only and kept out of persistent state.
+ */
+export interface DeviceCodePrompt {
+  readonly verificationUri: string;
+  readonly userCode: string;
+  /** The verification URI with the code in it, when the provider gives one. */
+  readonly verificationUriComplete?: string;
+  /** How long the sign-in waits for the code to be entered. */
+  readonly expiresInSeconds: number;
+}
+
 export interface LoginContext {
   /** Present the authorization URL to the user (open a browser or print it). */
   readonly openUrl: (url: string) => void | Promise<void>;
+  /**
+   * Present a device code and where to enter it. Only the built-in OIDC
+   * `device_code` flow calls it; an adapter never needs it, and a context
+   * without it cannot run that flow.
+   */
+  readonly presentDeviceCode?: (
+    prompt: DeviceCodePrompt,
+  ) => void | Promise<void>;
   /**
    * Cancels the sign-in. An identity adapter's `login()` receives one that
    * also aborts at PiShip's deadline for the call.

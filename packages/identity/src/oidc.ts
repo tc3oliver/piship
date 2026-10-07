@@ -11,15 +11,20 @@ import {
   SecretValue,
 } from "@piship/contracts";
 import { retainClaims } from "./claims.js";
-import { startLoopbackReceiver } from "./loopback.js";
+import { DEFAULT_LOGIN_TIMEOUT_MS, startLoopbackReceiver } from "./loopback.js";
 
 export interface OidcIdentityOptions {
   readonly issuer: string;
   readonly clientId: string;
   readonly scopes: readonly string[];
   readonly audience?: string;
-  /** Registered loopback redirect; port 0/omitted selects an ephemeral port. */
-  readonly redirectUri: string;
+  /** `authorization_code_pkce` (default) or RFC 8628 `device_code`. */
+  readonly flow?: "authorization_code_pkce" | "device_code";
+  /**
+   * Registered loopback redirect; port 0/omitted selects an ephemeral port.
+   * Required for `authorization_code_pkce`, unused by `device_code`.
+   */
+  readonly redirectUri?: string;
   /** Managed fetch honoring proxy, CA, and private-only policy. */
   readonly fetch: ManagedFetch;
   /**
@@ -38,6 +43,39 @@ export interface OidcIdentityOptions {
   readonly onDiscoveredEndpoints?: (urls: readonly string[]) => void;
   readonly timeoutSeconds?: number;
   readonly clockToleranceSeconds?: number;
+  /** Replaces the device-flow poll wait; for tests that must not really wait. */
+  readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** Never poll faster than this, whatever `interval` the provider asks for. */
+const MIN_POLL_INTERVAL_SECONDS = 1;
+const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+
+function sleepFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** Settle with `work`, or reject at once when `signal` aborts. */
+function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    work
+      .finally(() => signal.removeEventListener("abort", abort))
+      .then(resolve, reject);
+  });
 }
 
 function mapError(error: unknown, action: string): PiShipError {
@@ -236,11 +274,18 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
 export class OidcPkceIdentityProvider implements IdentityProvider {
   readonly kind = "oidc";
   #config: Promise<client.Configuration> | undefined;
+  readonly #device: boolean;
   constructor(readonly options: OidcIdentityOptions) {
     if (options.scopes.indexOf("openid") < 0)
       throw new PiShipError(
         "CONFIG_INVALID",
         "OIDC login requires the openid scope",
+      );
+    this.#device = options.flow === "device_code";
+    if (!this.#device && !options.redirectUri)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "OIDC authorization_code_pkce login requires a redirect URI",
       );
   }
 
@@ -255,8 +300,12 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
           issuer,
           this.options.clientId,
           {
-            redirect_uris: [this.options.redirectUri],
-            response_types: ["code"],
+            ...(this.#device
+              ? {}
+              : {
+                  redirect_uris: [this.options.redirectUri ?? ""],
+                  response_types: ["code"],
+                }),
             token_endpoint_auth_method: "none",
             [client.clockTolerance]: this.options.clockToleranceSeconds ?? 30,
           },
@@ -280,7 +329,12 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         }
         const methods =
           config.serverMetadata().code_challenge_methods_supported;
-        if (Array.isArray(methods) && !methods.includes("S256"))
+        // The device flow does not use PKCE.
+        if (
+          !this.#device &&
+          Array.isArray(methods) &&
+          !methods.includes("S256")
+        )
           throw new PiShipError(
             "IDENTITY_INVALID",
             "The identity provider does not support PKCE S256",
@@ -297,15 +351,19 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
 
   async login(ctx: LoginContext): Promise<IdentitySession> {
     const config = await this.configuration();
+    if (this.#device) return this.#deviceLogin(config, ctx);
     // The listener refuses a callback without this state and keeps waiting,
     // so a stray request cannot end the sign-in; the state is still checked
     // again below with the code exchange.
     const state = client.randomState();
-    const receiver = await startLoopbackReceiver(this.options.redirectUri, {
-      state,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
-      ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}),
-    });
+    const receiver = await startLoopbackReceiver(
+      this.options.redirectUri ?? "",
+      {
+        state,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}),
+      },
+    );
     try {
       const verifier = client.randomPKCECodeVerifier();
       const nonce = client.randomNonce();
@@ -335,6 +393,138 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       }
     } finally {
       await receiver.close();
+    }
+  }
+
+  /**
+   * RFC 8628 device authorization. The person enters the user code at the
+   * provider from any browser; this process only polls the token endpoint,
+   * so no local port is involved. There is no `state` or `nonce`: nothing
+   * returns through a browser redirect, and the ID token arrives in the
+   * response to PiShip's own token request, bound to this `device_code`.
+   * Every other ID token check is the same as the code flow's, because the
+   * response goes through the same library validation.
+   */
+  async #deviceLogin(
+    config: client.Configuration,
+    ctx: LoginContext,
+  ): Promise<IdentitySession> {
+    if (!config.serverMetadata().device_authorization_endpoint)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "The identity provider does not advertise a device_authorization_endpoint, which identity.oidc.flow: device_code needs",
+        {
+          component: "identity",
+          userAction:
+            "Use flow authorization_code_pkce, or ask your administrator to enable the device code flow at the identity provider",
+        },
+      );
+    if (!ctx.presentDeviceCode)
+      throw new PiShipError(
+        "CONFIG_UNAVAILABLE",
+        "This sign-in cannot show a device code, which identity.oidc.flow: device_code needs",
+        { component: "identity" },
+      );
+    // Cancellation and the deadline are one signal; its reason says which.
+    const stop = new AbortController();
+    const timer = setTimeout(
+      () => stop.abort("timeout"),
+      ctx.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+    );
+    const cancel = () => stop.abort("cancel");
+    if (ctx.signal?.aborted) cancel();
+    ctx.signal?.addEventListener("abort", cancel, { once: true });
+    const { signal } = stop;
+    const ended = (how: string, retry: string) =>
+      new PiShipError("IDENTITY_REQUIRED", `Sign-in ${how}`, {
+        component: "identity",
+        ...(retry ? { userAction: retry } : {}),
+      });
+    try {
+      signal.throwIfAborted();
+      const parameters: Record<string, string> = {
+        scope: this.options.scopes.join(" "),
+      };
+      if (this.options.audience) parameters.audience = this.options.audience;
+      const device = await raceAbort(
+        signal,
+        client.initiateDeviceAuthorization(config, parameters),
+      );
+      // The code is good until the provider's expiry or this login's own
+      // deadline, whichever comes first; after the expiry it cannot succeed.
+      const expiry = setTimeout(
+        () => stop.abort("expired"),
+        Math.max(0, device.expires_in * 1000),
+      );
+      try {
+        await ctx.presentDeviceCode({
+          verificationUri: device.verification_uri,
+          userCode: device.user_code,
+          ...(device.verification_uri_complete
+            ? { verificationUriComplete: device.verification_uri_complete }
+            : {}),
+          expiresInSeconds: Math.max(
+            0,
+            Math.min(
+              device.expires_in,
+              (ctx.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS) / 1000,
+            ),
+          ),
+        });
+        let interval = Math.max(
+          device.interval ?? 5,
+          MIN_POLL_INTERVAL_SECONDS,
+        );
+        const sleep = this.options.sleep ?? sleepFor;
+        for (;;) {
+          await sleep(interval * 1000, signal);
+          try {
+            const tokens = await raceAbort(
+              signal,
+              client.genericGrantRequest(config, DEVICE_GRANT, {
+                device_code: device.device_code,
+              }),
+            );
+            return session(tokens);
+          } catch (error) {
+            if (!(error instanceof client.ResponseBodyError)) throw error;
+            if (error.error === "slow_down") interval += 5;
+            else if (error.error !== "authorization_pending") throw error;
+          }
+        }
+      } finally {
+        clearTimeout(expiry);
+      }
+    } catch (error) {
+      if (signal.aborted)
+        throw signal.reason === "cancel"
+          ? ended("was cancelled", "")
+          : ended(
+              signal.reason === "expired"
+                ? "timed out: the device code expired"
+                : "timed out",
+              "Run login again and enter the new code promptly",
+            );
+      if (error instanceof client.ResponseBodyError) {
+        if (error.error === "access_denied")
+          throw new PiShipError(
+            "IDENTITY_INVALID",
+            "Sign-in failed: the sign-in request was declined (access_denied)",
+            {
+              component: "identity",
+              userAction: "Run login again or contact your administrator",
+            },
+          );
+        if (error.error === "expired_token")
+          throw ended(
+            "timed out: the device code expired",
+            "Run login again and enter the new code promptly",
+          );
+      }
+      throw mapError(error, "Sign-in failed");
+    } finally {
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", cancel);
     }
   }
 

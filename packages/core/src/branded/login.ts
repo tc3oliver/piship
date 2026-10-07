@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { LocalMetrics } from "@piship/audit";
 import {
+  type DeviceCodePrompt,
   PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
@@ -110,6 +111,32 @@ export function loginWaitingHint(
 }
 
 /**
+ * What `login` prints for a device sign-in (RFC 8628). The code is a
+ * one-time sign-in code, not a secret, and goes to the terminal only. The
+ * warning is the mitigation for device-code phishing: a code someone else
+ * handed over signs that someone in, not you.
+ */
+export function deviceCodeMessage(prompt: DeviceCodePrompt): string {
+  const wait =
+    prompt.expiresInSeconds >= 90
+      ? `${Math.round(prompt.expiresInSeconds / 60)} minutes`
+      : `${Math.round(prompt.expiresInSeconds)} seconds`;
+  return [
+    "To sign in, open this URL in a browser on any device:",
+    `  ${prompt.verificationUri}`,
+    `and enter this code: ${prompt.userCode}`,
+    ...(prompt.verificationUriComplete
+      ? [
+          `Or open this URL, which has the code in it:`,
+          `  ${prompt.verificationUriComplete}`,
+        ]
+      : []),
+    `Waiting up to ${wait} for you to finish. Press Ctrl-C to cancel.`,
+    "Enter this code only because you ran login just now: a code someone else sent you would sign them in as you.",
+  ].join("\n");
+}
+
+/**
  * Run `work` with a signal that Ctrl-C aborts, so a login waiting for the
  * browser ends as a cancelled sign-in and closes its listener. The handler is
  * there once, so a second Ctrl-C gets Node's default and ends the process.
@@ -213,6 +240,19 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
             }),
           );
           openBrowser(url);
+        },
+        presentDeviceCode: (prompt) => {
+          ctx.err(deviceCodeMessage(prompt));
+          // A remote shell has no browser to open here; xdg-open could start
+          // a terminal browser in the same terminal.
+          const remote =
+            process.env.SSH_CONNECTION ||
+            process.env.SSH_CLIENT ||
+            process.env.SSH_TTY;
+          if (!remote)
+            openBrowser(
+              prompt.verificationUriComplete ?? prompt.verificationUri,
+            );
         },
         readSecret: readSecretInput,
         signal,

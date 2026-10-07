@@ -247,16 +247,23 @@ export async function explainConfiguration(
       rows.push(
         {
           key: "identity.oidc.flow",
-          value: "authorization_code_pkce (S256)",
+          value:
+            access.identity.oidc.flow === "device_code"
+              ? "device_code (RFC 8628)"
+              : "authorization_code_pkce (S256)",
           source: "distribution-enforced",
           overridable: false,
         },
-        {
-          key: "identity.oidc.redirectUri",
-          value: access.identity.oidc.redirectUri,
-          source: "distribution-enforced",
-          overridable: false,
-        },
+        ...(access.identity.oidc.redirectUri === undefined
+          ? []
+          : [
+              {
+                key: "identity.oidc.redirectUri",
+                value: access.identity.oidc.redirectUri,
+                source: "distribution-enforced" as const,
+                overridable: false,
+              },
+            ]),
         {
           key: "identity.oidc.scopes",
           value: access.identity.oidc.scopes,

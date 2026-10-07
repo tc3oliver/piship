@@ -652,7 +652,10 @@ export class DistributionAccess {
         ...(this.endpoints.audience
           ? { audience: this.endpoints.audience }
           : {}),
-        redirectUri: identity.oidc.redirectUri,
+        flow: identity.oidc.flow,
+        ...(identity.oidc.redirectUri
+          ? { redirectUri: identity.oidc.redirectUri }
+          : {}),
         fetch: this.#identityFetch,
         ...(this.#identityPlainHttp
           ? {
@@ -1426,6 +1429,7 @@ export class DistributionAccess {
    */
   async login(ctx: {
     openUrl: LoginContext["openUrl"];
+    presentDeviceCode?: LoginContext["presentDeviceCode"];
     readSecret?: (prompt: string) => Promise<string>;
     signal?: AbortSignal;
   }): Promise<{
@@ -1442,6 +1446,9 @@ export class DistributionAccess {
           ? this.#obtainWorkload(provider, ctx.signal)
           : provider.login({
               openUrl: ctx.openUrl,
+              ...(ctx.presentDeviceCode
+                ? { presentDeviceCode: ctx.presentDeviceCode }
+                : {}),
               ...(ctx.signal ? { signal: ctx.signal } : {}),
             }),
       );
