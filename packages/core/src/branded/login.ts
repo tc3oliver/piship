@@ -74,6 +74,16 @@ function isRemoteShell(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
+ * Whether `login` listens for a pasted redirect. Only where the browser
+ * cannot return to this machine: a remote shell, or `PISHIP_NO_BROWSER=1`.
+ * With a local browser nothing reads stdin, so a stray line typed while the
+ * sign-in page is open cannot end the login.
+ */
+export function pasteFallbackEnabled(env: NodeJS.ProcessEnv): boolean {
+  return isRemoteShell(env) || env.PISHIP_NO_BROWSER === "1";
+}
+
+/**
  * Read one pasted line from stdin for the login's paste fallback. It ends
  * (stdin closes its interface and is paused again) when `signal` aborts, and
  * stays pending when stdin ends without a line, so the loopback keeps working.
@@ -98,17 +108,20 @@ export function readRedirectLine(
 }
 
 /**
- * What `login` prints under the authorization URL while it waits. A loopback
- * `redirect_uri` in the URL names where the browser must return; in a remote
- * shell (SSH) that address is on this machine, not the browser's, so the
- * port must be forwarded. The timeout is named only when it is known.
+ * What `login` prints under the authorization URL while it waits, in English
+ * and Traditional Chinese, one pair of lines per message. A loopback
+ * `redirect_uri` in the URL names where the browser must return. Where it
+ * cannot return (see `pasteFallbackEnabled`) the hint says to paste the
+ * address instead. The timeout is named only when it is known.
  */
 export function loginWaitingHint(
   url: string,
   options: { timeoutMs?: number; env: NodeJS.ProcessEnv },
 ): string {
-  const plain =
-    "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.";
+  const plain = [
+    "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
+    "等待在瀏覽器完成登入，按 Ctrl-C 取消。",
+  ].join("\n");
   let redirect: URL;
   try {
     redirect = new URL(new URL(url).searchParams.get("redirect_uri") ?? "");
@@ -121,26 +134,17 @@ export function loginWaitingHint(
     options.timeoutMs === undefined
       ? undefined
       : Math.round(options.timeoutMs / 60_000);
+  const target = `${redirect.origin}${redirect.pathname}`;
   const lines = [
-    `Waiting${minutes ? ` up to ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} for the browser to return to ${redirect.origin}${redirect.pathname}. Press Ctrl-C to cancel.`,
-    "If the browser shows an error from the identity provider instead of a sign-in page, sign-in cannot complete: press Ctrl-C and ask your administrator to check the client ID and its registered redirect URI.",
+    `Waiting${minutes ? ` up to ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} for the browser to return to ${target}. Press Ctrl-C to cancel.`,
+    `等待瀏覽器返回 ${target}${minutes ? `（最多 ${minutes} 分鐘）` : ""}，按 Ctrl-C 取消。`,
+    "If the browser shows an identity provider error, press Ctrl-C and ask your administrator to check the client ID and redirect URI.",
+    "若瀏覽器顯示身分提供者的錯誤，請按 Ctrl-C，並請管理員檢查 client ID 與 redirect URI。",
   ];
-  const { env } = options;
-  if (isRemoteShell(env) || env.PISHIP_NO_BROWSER === "1") {
+  if (pasteFallbackEnabled(options.env))
     lines.push(
-      `No browser here? Open the URL on any computer, sign in, then copy the full address from the browser (it will show "can't connect" on ${redirect.host}) and paste it here, then press Enter.`,
-    );
-    if (isRemoteShell(env)) {
-      const port = redirect.port || "80";
-      lines.push(
-        `Or, in this remote shell, forward the port: the browser must reach ${redirect.host} on this machine, so on the computer with the browser run this in another terminal, then open the URL there:`,
-        `  ssh -N -L ${port}:${redirect.hostname}:${port} <this host>`,
-        "Or run login on the computer with the browser.",
-      );
-    }
-  } else
-    lines.push(
-      "If the browser cannot return here, copy the full address it ends on and paste it here, then press Enter.",
+      `No browser here? Open the URL on any computer, sign in, then paste the full address it ends on (\u201ccan't connect\u201d is expected) here and press Enter.`,
+      "這裡沒有瀏覽器？在任何電腦開啟網址登入，把最後的完整網址（顯示「無法連線」屬正常）貼到這裡，按 Enter。",
     );
   return lines.join("\n");
 }
@@ -251,7 +255,9 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
           openBrowser(url);
         },
         readSecret: readSecretInput,
-        readRedirectUrl: readRedirectLine,
+        ...(pasteFallbackEnabled(process.env)
+          ? { readRedirectUrl: readRedirectLine }
+          : {}),
         signal,
       }),
     ).finally(() => saveMetrics(metrics));

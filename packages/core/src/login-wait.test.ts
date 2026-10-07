@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   loginWaitingHint,
+  pasteFallbackEnabled,
   readRedirectLine,
   untilInterrupted,
 } from "./branded/login.js";
@@ -11,7 +12,7 @@ const authorize = (redirect: string) =>
   `https://idp.example/authorize?client_id=acme&redirect_uri=${encodeURIComponent(redirect)}&state=s`;
 
 describe("login waiting hint", () => {
-  it("names the return address, the timeout, how to cancel, and a provider error page", () => {
+  it("names the return address, the timeout, how to cancel, and a provider error page, in English and Chinese", () => {
     const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
       timeoutMs: 300_000,
       env: {},
@@ -20,50 +21,57 @@ describe("login waiting hint", () => {
       "Waiting up to 5 minutes for the browser to return to http://127.0.0.1:8765/callback",
     );
     expect(hint).toContain("Press Ctrl-C to cancel");
-    expect(hint).toMatch(/error from the identity provider.*client ID/s);
+    expect(hint).toMatch(/identity provider error.*client ID/s);
+    expect(hint).toContain(
+      "等待瀏覽器返回 http://127.0.0.1:8765/callback（最多 5 分鐘），按 Ctrl-C 取消。",
+    );
+    expect(hint).toContain("身分提供者的錯誤");
     expect(hint).not.toMatch(/ssh/i);
+    expect(hint).not.toContain("paste");
+    expect(hint).not.toContain("貼");
   });
 
   it.each([
     ["SSH_CONNECTION", "10.0.0.2 52000 10.0.0.9 22"],
     ["SSH_CLIENT", "10.0.0.2 52000 22"],
     ["SSH_TTY", "/dev/pts/1"],
+    ["PISHIP_NO_BROWSER", "1"],
   ])(
-    "tells a remote shell (%s) to forward the redirect port",
+    "offers pasting the address, in both languages, and never tells the user to run ssh (%s)",
     (name, value) => {
       const hint = loginWaitingHint(
         authorize("http://127.0.0.1:8765/callback"),
         { timeoutMs: 300_000, env: { [name]: value } },
       );
-      expect(hint).toContain("remote shell");
-      expect(hint).toContain("ssh -N -L 8765:127.0.0.1:8765");
+      expect(hint).toContain("paste the full address");
+      expect(hint).toContain("press Enter");
+      expect(hint).toContain("貼到這裡，按 Enter");
+      expect(hint).not.toMatch(/ssh/i);
+      expect(hint).not.toMatch(/forward|轉發/i);
     },
   );
 
   it.each([
-    ["a remote shell", { SSH_TTY: "/dev/pts/1" }],
-    ["PISHIP_NO_BROWSER=1", { PISHIP_NO_BROWSER: "1" }],
-  ])("offers pasting the address first for %s", (_name, env) => {
-    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
-      env,
-    });
-    expect(hint).toContain("paste it here, then press Enter");
-    expect(hint).toContain("127.0.0.1:8765");
-  });
+    [{}, false],
+    [{ PISHIP_NO_BROWSER: "0" }, false],
+    [{ PISHIP_NO_BROWSER: "1" }, true],
+    [{ SSH_CONNECTION: "10.0.0.2 52000 10.0.0.9 22" }, true],
+    [{ SSH_CLIENT: "10.0.0.2 52000 22" }, true],
+    [{ SSH_TTY: "/dev/pts/1" }, true],
+  ])(
+    "listens for a pasted redirect only where the browser cannot return (%j)",
+    (env, expected) => {
+      expect(pasteFallbackEnabled(env)).toBe(expected);
+    },
+  );
 
-  it("mentions pasting concisely outside a remote shell", () => {
-    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
-      env: {},
-    });
-    expect(hint).toContain("paste it here");
-    expect(hint).not.toMatch(/ssh/i);
-  });
-
-  it("forwards an IPv6 loopback redirect to the same address", () => {
+  it("keeps the hint short", () => {
     const hint = loginWaitingHint(authorize("http://[::1]:9000/cb"), {
+      timeoutMs: 300_000,
       env: { SSH_TTY: "/dev/pts/1" },
     });
-    expect(hint).toContain("ssh -N -L 9000:[::1]:9000");
+    expect(hint.split("\n")).toHaveLength(6);
+    expect(hint).toContain("http://[::1]:9000/cb");
   });
 
   it("does not claim a return address or a timeout it does not know", () => {
@@ -71,7 +79,7 @@ describe("login waiting hint", () => {
       env: { SSH_TTY: "/dev/pts/1" },
     });
     expect(hint).toBe(
-      "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
+      "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.\n等待在瀏覽器完成登入，按 Ctrl-C 取消。",
     );
   });
 });
