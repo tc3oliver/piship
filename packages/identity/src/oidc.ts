@@ -50,6 +50,8 @@ export interface OidcIdentityOptions {
 /** Never poll faster than this, nor slower than that, whatever the provider asks for. */
 const MIN_POLL_INTERVAL_SECONDS = 1;
 const MAX_POLL_INTERVAL_SECONDS = 60;
+/** After this many failed polls in a row (outage, rate limit, network) the sign-in fails. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 /** `setTimeout` fires after 1 ms for a delay beyond this. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_VERIFICATION_URI_LENGTH = 2048;
@@ -207,6 +209,35 @@ function mapError(error: unknown, action: string): PiShipError {
     component: "identity",
     userAction: "Check the configured issuer and client registration",
   });
+}
+
+/**
+ * A poll failure worth asking again after: a provider outage, a rate limit,
+ * or a network failure. An ID token that fails its checks, a decline, and a
+ * refusal by the network policy are not.
+ */
+function transientFailure(error: unknown): PiShipError | undefined {
+  const mapped = mapError(error, "Sign-in failed");
+  if (
+    mapped.code === "GATEWAY_UNREACHABLE" ||
+    mapped.code === "GATEWAY_RATE_LIMITED"
+  )
+    return mapped;
+  for (
+    let current: unknown = error;
+    current;
+    current = (current as { cause?: unknown }).cause
+  ) {
+    const code = (current as { code?: unknown }).code;
+    if (
+      typeof code === "string" &&
+      /^(ECONN|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|UND_ERR_)/.test(code)
+    )
+      return mapped;
+    if (current instanceof TypeError && current.message === "fetch failed")
+      return mapped;
+  }
+  return undefined;
 }
 
 function session(
@@ -566,6 +597,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
           );
         let interval = clampInterval(device.interval ?? 5);
         const sleep = this.options.sleep ?? sleepFor;
+        let failures = 0;
         for (;;) {
           await sleep(interval * 1000, signal);
           try {
@@ -577,10 +609,26 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
             );
             return session(tokens);
           } catch (error) {
-            if (!(error instanceof client.ResponseBodyError)) throw error;
-            if (error.error === "slow_down")
-              interval = clampInterval(interval + 5);
-            else if (error.error !== "authorization_pending") throw error;
+            if (signal.aborted) throw error;
+            if (error instanceof client.ResponseBodyError) {
+              if (error.error === "slow_down")
+                interval = clampInterval(interval + 5);
+              if (
+                error.error === "slow_down" ||
+                error.error === "authorization_pending"
+              ) {
+                failures = 0;
+                continue;
+              }
+            }
+            // An outage, a rate limit, or a network failure says nothing about
+            // the sign-in: wait and ask again, a few times, within the deadline.
+            const transient = transientFailure(error);
+            if (!transient || ++failures >= MAX_CONSECUTIVE_POLL_FAILURES)
+              throw error;
+            interval = clampInterval(
+              Math.max(interval, (transient.retryAfterMs ?? 0) / 1000),
+            );
           }
         }
       } finally {

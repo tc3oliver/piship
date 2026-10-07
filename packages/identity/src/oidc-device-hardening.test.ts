@@ -308,3 +308,108 @@ describe("cancel and deadline abort the requests, not only the wait", () => {
     expect(services.state.devicePolls).toEqual([]);
   });
 });
+
+describe("a poll that fails for a reason that says nothing about the sign-in is asked again", () => {
+  const outage = (status: number, retryAfter?: number) => ({
+    status,
+    ...(retryAfter === undefined ? {} : { retryAfter }),
+  });
+  const tokenRequests = () => requestsTo("/idp/token").length;
+
+  it.each([502, 503, 500])(
+    "asks again after an HTTP %i, and signs in",
+    async (status) => {
+      services.knobs.tokenFaults = [outage(status), outage(status)];
+      const session = await provider().login(context().ctx);
+      expect(session.subject).toBe("demo-user-1");
+      expect(tokenRequests()).toBe(3);
+    },
+  );
+
+  it("waits for the Retry-After of a 429, within the cap", async () => {
+    services.knobs.tokenFaults = [outage(429, 7), outage(429, 100_000)];
+    const waits: number[] = [];
+    await provider({
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    }).login(context().ctx);
+    expect(waits).toEqual([1000, 7000, 60_000]);
+  });
+
+  it("asks again after a network failure", async () => {
+    const base = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    let failures = 2;
+    const session = await provider({
+      fetch: ((url, init) => {
+        if (String(url).endsWith("/idp/token") && failures-- > 0)
+          return Promise.reject(
+            new TypeError("fetch failed", {
+              cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+            }),
+          );
+        return base(url, init);
+      }) as ManagedFetch,
+    }).login(context().ctx);
+    expect(session.subject).toBe("demo-user-1");
+  });
+
+  it("gives up after five failures in a row, with the provider's error", async () => {
+    services.knobs.tokenStatus = 503;
+    await expect(provider().login(context().ctx)).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+    });
+    expect(tokenRequests()).toBe(5);
+  });
+
+  it("gives up on a rate limit with GATEWAY_RATE_LIMITED", async () => {
+    services.knobs.tokenStatus = 429;
+    await expect(provider().login(context().ctx)).rejects.toMatchObject({
+      code: "GATEWAY_RATE_LIMITED",
+    });
+    expect(tokenRequests()).toBe(5);
+  });
+
+  it("counts failures in a row: a pending answer starts the count over", async () => {
+    services.knobs.tokenFaults = [
+      ...Array(4).fill(outage(503)),
+      {},
+      ...Array(4).fill(outage(503)),
+    ];
+    services.knobs.devicePolls = ["authorization_pending"];
+    const session = await provider().login(context().ctx);
+    expect(session.subject).toBe("demo-user-1");
+  });
+
+  it("still ends at the deadline while the provider is down", async () => {
+    services.knobs.tokenStatus = 503;
+    await expect(
+      provider({ sleep: () => pause(60) }).login(
+        context({ timeoutMs: 150 }).ctx,
+      ),
+    ).rejects.toMatchObject({ message: "Sign-in timed out" });
+    expect(tokenRequests()).toBeLessThan(5);
+  });
+
+  it.each([
+    ["invalid_request", 400],
+    ["invalid_client", 401],
+    ["unauthorized_client", 400],
+    ["access_denied", 400],
+  ])("does not ask again after %s", async (error, status) => {
+    services.knobs.tokenFaults = [{ status, body: { error } }];
+    await expect(provider().login(context().ctx)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+    });
+    expect(tokenRequests()).toBe(1);
+  });
+
+  it("does not ask again after an ID token that fails its checks", async () => {
+    services.knobs.idTokenAudience = "another-client";
+    await expect(provider().login(context().ctx)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+    });
+    expect(tokenRequests()).toBe(1);
+  });
+});
