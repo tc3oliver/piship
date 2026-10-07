@@ -47,8 +47,11 @@ export interface OidcIdentityOptions {
   readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
-/** Never poll faster than this, whatever `interval` the provider asks for. */
+/** Never poll faster than this, nor slower than that, whatever the provider asks for. */
 const MIN_POLL_INTERVAL_SECONDS = 1;
+const MAX_POLL_INTERVAL_SECONDS = 60;
+/** `setTimeout` fires after 1 ms for a delay beyond this. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const MAX_VERIFICATION_URI_LENGTH = 2048;
 const USER_CODE = /^[A-Za-z0-9 _-]{1,32}$/;
 // Control characters: C0, DEL, C1, and the Unicode line and paragraph separators.
@@ -85,6 +88,8 @@ function sleepFor(ms: number, signal: AbortSignal): Promise<void> {
 
 /** Settle with `work`, or reject at once when `signal` aborts. */
 function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  // An abort can reject `work` after this has settled; that is not unhandled.
+  work.catch(() => {});
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason);
     if (signal.aborted) return abort();
@@ -489,10 +494,11 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       );
     // Cancellation and the deadline are one signal; its reason says which.
     const stop = new AbortController();
-    const timer = setTimeout(
-      () => stop.abort("timeout"),
+    const loginMs = Math.min(
       ctx.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+      MAX_TIMER_MS,
     );
+    const timer = setTimeout(() => stop.abort("timeout"), loginMs);
     const cancel = () => stop.abort("cancel");
     if (ctx.signal?.aborted) cancel();
     ctx.signal?.addEventListener("abort", cancel, { once: true });
@@ -526,27 +532,27 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         );
       // The code is good until the provider's expiry or this login's own
       // deadline, whichever comes first; after the expiry it cannot succeed.
-      const expiry = setTimeout(
-        () => stop.abort("expired"),
+      const expiresMs = Math.min(
         Math.max(0, device.expires_in * 1000),
+        MAX_TIMER_MS,
       );
+      const expiry = setTimeout(() => stop.abort("expired"), expiresMs);
       try {
         await ctx.presentDeviceCode({
           verificationUri,
           userCode: device.user_code,
           ...(verificationUriComplete ? { verificationUriComplete } : {}),
-          expiresInSeconds: Math.max(
-            0,
-            Math.min(
-              device.expires_in,
-              (ctx.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS) / 1000,
-            ),
-          ),
+          expiresInSeconds: Math.min(expiresMs, loginMs) / 1000,
         });
-        let interval = Math.max(
-          device.interval ?? 5,
-          MIN_POLL_INTERVAL_SECONDS,
-        );
+        const clampInterval = (seconds: number) =>
+          Math.min(
+            Math.max(
+              Number.isFinite(seconds) ? seconds : 5,
+              MIN_POLL_INTERVAL_SECONDS,
+            ),
+            MAX_POLL_INTERVAL_SECONDS,
+          );
+        let interval = clampInterval(device.interval ?? 5);
         const sleep = this.options.sleep ?? sleepFor;
         for (;;) {
           await sleep(interval * 1000, signal);
@@ -560,7 +566,8 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
             return session(tokens);
           } catch (error) {
             if (!(error instanceof client.ResponseBodyError)) throw error;
-            if (error.error === "slow_down") interval += 5;
+            if (error.error === "slow_down")
+              interval = clampInterval(interval + 5);
             else if (error.error !== "authorization_pending") throw error;
           }
         }

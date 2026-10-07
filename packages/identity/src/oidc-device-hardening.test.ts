@@ -24,6 +24,7 @@ afterEach(async () => {
 });
 
 const noWait = async () => {};
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function provider(overrides: Record<string, unknown> = {}) {
   return new OidcPkceIdentityProvider({
@@ -189,5 +190,60 @@ describe("text the provider sends is checked before it is shown or opened", () =
     expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
     expect((error as Error).message).not.toMatch(CONTROL);
     expect((error as Error).message.length).toBeLessThan(200);
+  });
+});
+
+describe("numbers the provider and the caller send are bounded", () => {
+  it("polls at most a minute apart and at least a second apart, however large or small the interval", async () => {
+    services.knobs.deviceInterval = 1e9;
+    const waits: number[] = [];
+    await provider({
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    }).login(context().ctx);
+    expect(waits).toEqual([60_000]);
+  });
+
+  it("caps the interval after repeated slow_down too", async () => {
+    services.knobs.devicePolls = Array(20).fill("slow_down");
+    const waits: number[] = [];
+    await provider({
+      sleep: async (ms: number) => {
+        waits.push(ms);
+      },
+    }).login(context().ctx);
+    expect(Math.max(...waits)).toBe(60_000);
+    expect(waits).toHaveLength(21);
+  });
+
+  it("does not expire at once when expires_in is huge", async () => {
+    services.knobs.deviceExpiresIn = 1e10;
+    const { ctx, shown } = context();
+    const session = await provider({
+      sleep: () => pause(30),
+    }).login(ctx);
+    expect(session.subject).toBe("demo-user-1");
+    expect(shown[0]?.expiresInSeconds).toBe(300);
+  });
+
+  it("does not time out at once when the login deadline is huge", async () => {
+    const { ctx, shown } = context({ timeoutMs: 1e12 });
+    const session = await provider({ sleep: () => pause(30) }).login(ctx);
+    expect(session.subject).toBe("demo-user-1");
+    expect(shown[0]?.expiresInSeconds).toBe(900);
+  });
+
+  it("still ends at the login deadline while slow_down keeps asking for more", async () => {
+    services.knobs.devicePolls = Array(500).fill("slow_down");
+    await expect(
+      provider({ sleep: () => pause(30) }).login(
+        context({ timeoutMs: 300 }).ctx,
+      ),
+    ).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "Sign-in timed out",
+    });
+    expect(services.state.devicePolls.length).toBeLessThan(40);
   });
 });
