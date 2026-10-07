@@ -779,7 +779,7 @@ After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted
 
 ### Migrating from v1alpha5 to v1alpha6
 
-v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0 and on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
+v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0, v0.12.0, and on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
 
 1. Run `piship migrate piship.yaml --check`. It prints every change and exits non-zero when one changes an effective decision.
 2. Review the plan, then run `piship migrate piship.yaml --write`.
