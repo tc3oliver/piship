@@ -30,11 +30,15 @@ export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./store/index.js";
 export { raiseThreadpool } from "./threadpool.js";
+export { pishipCommand } from "./invocation.js";
 export * from "./update/index.js";
 export {
   channelTrustFromLock,
   checkPiVersion,
   lockManifest,
+  lockNeedsNetwork,
+  lockStatus,
+  type LockStatus,
   requireCurrentLock,
   resolveLock,
 } from "./lock.js";
@@ -84,6 +88,7 @@ export {
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
+export { checkSkills, type SkillWarning } from "./skills-check.js";
 export {
   checkSearchTools,
   checkSearchToolSources,
@@ -110,9 +115,11 @@ export {
   binHome,
   distributionStateDirectory,
   installHome,
+  isDistributionId,
   isTestCreatedState,
   runtimeStateDirectory,
   stateHome,
+  suggestDistributionId,
   testStateMarker,
   withTestState,
 } from "./state-paths.js";

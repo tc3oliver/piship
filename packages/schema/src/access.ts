@@ -1,3 +1,4 @@
+import { unknownFieldMessage } from "./suggest.js";
 import {
   HTTP_TRANSPORTS,
   type HttpTransport,
@@ -7,7 +8,6 @@ import {
   checkTemplate,
   checkVariableName,
   hasRuntimeReference,
-  referencedVariables,
 } from "./variables.js";
 
 export type DeploymentMode = "personal" | "managed";
@@ -176,6 +176,8 @@ export interface AccessManifest {
 }
 
 export class AccessFieldError extends Error {
+  /** Further problems found beside this one in the same pass. */
+  more: readonly AccessFieldError[] = [];
   constructor(
     readonly kind: "invalid field" | "unsafe path/name" | "conflict",
     readonly field: string,
@@ -184,6 +186,31 @@ export class AccessFieldError extends Error {
     super(message);
     this.name = "AccessFieldError";
   }
+}
+/**
+ * Fail on the unknown keys of a record, all of them in one error: the first
+ * is the error, the rest ride in `more`. Each carries a suggestion.
+ */
+export function failUnknown(
+  path: string,
+  unknown: readonly string[],
+  allowed: readonly string[],
+  secrets?: RegExp,
+): never {
+  const errors = unknown.map(
+    (key) =>
+      new AccessFieldError(
+        "invalid field",
+        `${path}.${key}`,
+        secrets?.test(key)
+          ? "Secrets are never declared in piship.yaml"
+          : unknownFieldMessage(key, allowed),
+      ),
+  );
+  const [first] = errors;
+  if (!first) throw new Error("failUnknown needs an unknown key");
+  first.more = errors.slice(1);
+  throw first;
 }
 
 type Json = Record<string, unknown>;
@@ -202,8 +229,8 @@ function record(
   allowed: readonly string[],
 ): Json {
   if (!isRecord(value)) fail(path, "Expected an object");
-  for (const key of Object.keys(value))
-    if (!allowed.includes(key)) fail(`${path}.${key}`, "Unknown field");
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) failUnknown(path, unknown, allowed);
   return value;
 }
 function plainString(value: unknown, path: string): string {
@@ -1119,14 +1146,12 @@ const ACCESS_KEYS = [
 ] as const;
 
 /**
- * Parse the v1alpha2 access sections of a manifest root. `extraReferences`
- * are variables referenced by other sections (v1alpha3 governance) so they
- * count as used.
+ * Parse the v1alpha2 access sections of a manifest root. A declared variable
+ * that nothing references is not an error: `launchWarnings` reports it.
  */
 export function parseAccess(
   root: Json,
   mode: DeploymentMode,
-  extraReferences: readonly string[] = [],
   /**
    * piship/v1alpha6 and later: model catalog `type` and `virtual`, and the
    * endpoints' `httpTransport`.
@@ -1147,22 +1172,6 @@ export function parseAccess(
   const models = parseModels(root.models, mode, inference, options.v6);
   const config = parseConfig(root.config, models);
   const network = parseNetwork(root.network, mode, variables);
-  const used = new Set<string>(extraReferences);
-  const collect = (text: string | undefined) => {
-    if (text) for (const name of referencedVariables(text)) used.add(name);
-  };
-  if (identity.mode === "oidc") {
-    collect(identity.oidc.issuer);
-    collect(identity.oidc.clientId);
-    collect(identity.oidc.audience);
-  }
-  collect(credential.broker?.endpoint);
-  collect(credential.broker?.revokeEndpoint);
-  collect(inference.baseUrl);
-  for (const path of network.tls.additionalCA) collect(path);
-  for (const [index, name] of variables.entries())
-    if (!used.has(name))
-      fail(`variables[${index}]`, `${name} is declared but not referenced`);
   return {
     identity,
     credential,

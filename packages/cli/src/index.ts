@@ -4,7 +4,7 @@ import {
   spawn,
   spawnSync,
 } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
   binHome,
@@ -13,6 +13,7 @@ import {
   checkEnforceability,
   checkDataContract,
   checkSearchTools,
+  checkSkills,
   checkToolExposure,
   checkGovernance,
   checkPiVersion,
@@ -36,9 +37,13 @@ import {
   inspection,
   installDistribution,
   isEncryptedPrivateKey,
+  isLocalBuildOnThisHost,
   isUnqualifiedPayload,
   keyFingerprint,
   lockManifest,
+  lockNeedsNetwork,
+  lockStatus,
+  pishipCommand,
   markLocalBuild,
   nextTrustRoot,
   payloadApp,
@@ -57,7 +62,7 @@ import {
   runtimeStateDirectory,
   SEARCH_TOOL_SPECS,
   signChannel,
-  UNQUALIFIED_BUILD_NOTICE,
+  unqualifiedBuildNotice,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
   verifyPayload,
@@ -77,6 +82,7 @@ import {
   runtimeVariableUse,
   readManifest,
   ManifestError,
+  type Manifest,
   checkManifestMigration,
   migrateManifestSource,
   readManifestSource,
@@ -113,7 +119,7 @@ const summaries = {
 const commands = Object.keys(summaries) as (keyof typeof summaries)[];
 /** Usage of the commands that take one target and fixed options. */
 const simpleUsage: Record<string, string> = {
-  init: "init <directory> [--personal | --managed]",
+  init: "init <directory> [--personal | --managed] [--id <id>]",
   dev: "dev <manifest> [--smoke]",
   validate: "validate <manifest>",
   lock: "lock <manifest>",
@@ -503,6 +509,86 @@ function artifactFor(target: string): string {
   if (existsSync(path) && statSync(path).isDirectory()) return path;
   return readInstallReceipt(target).payload;
 }
+/** The options of `init`: `--personal`, `--managed`, and `--id <id>`. */
+function parseInitOptions(
+  rest: readonly string[],
+): { managed: boolean; id?: string } | undefined {
+  let managed = false;
+  let id: string | undefined;
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index];
+    if (arg === "--managed") managed = true;
+    else if (arg === "--personal") continue;
+    else if (arg === "--id" && id === undefined) {
+      id = rest[index + 1];
+      if (id === undefined || id.startsWith("--")) return undefined;
+      index += 1;
+    } else return undefined;
+  }
+  return { managed, ...(id === undefined ? {} : { id }) };
+}
+/**
+ * `dev` and `test` iterate on a manifest, so they do not stop at a lock
+ * that is missing or stale. With no lock yet nothing was reviewed, so it is
+ * created. A stale lock is relocked unless the manifest declares Pi
+ * packages or bundled search tools: relocking those resolves and pins
+ * network content, so it stays a deliberate step. `build` and `release`
+ * keep requiring a current lock.
+ */
+async function prepareLock(
+  target: string,
+  manifest: Manifest,
+  output: CliOutput,
+): Promise<void> {
+  const status = lockStatus(target);
+  if (status === "current") return;
+  const lockCommand = `${pishipCommand()} lock ${target}`;
+  if (status === "stale" && lockNeedsNetwork(manifest))
+    throw new Error(
+      `Lockfile is stale: the manifest or a resource changed since piship.lock was written. This manifest declares Pi packages or bundled search tools, which locking resolves over the network and pins, so relock on purpose: ${lockCommand}`,
+    );
+  const progress = progressReporter(output.stderr);
+  await downloadSearchToolArchives(target, progress ? { progress } : {});
+  lockManifest(target);
+  output.stderr(
+    status === "missing"
+      ? "Created piship.lock: none existed, so nothing was reviewed yet. Review it and commit it with piship.yaml."
+      : "Relocked piship.lock: the manifest or a resource changed since it was written.",
+  );
+}
+/**
+ * What to do after an install, by deployment mode: a managed distribution
+ * needs its runtime variables set and a `login`; a personal one with Pi's
+ * own providers signs in inside Pi.
+ */
+export function installNext(receipt: {
+  app: { command: string };
+  payload: string;
+}) {
+  const command = receipt.app.command;
+  let lock: DistributionLock | undefined;
+  try {
+    lock = JSON.parse(
+      readFileSync(join(receipt.payload, "piship.lock"), "utf8"),
+    ) as DistributionLock;
+  } catch {
+    // The receipt is enough to start the command; only the advice is generic.
+  }
+  if (lock?.deployment.mode === "managed") {
+    const variables = lock.access?.variables ?? [];
+    return `Next: ${variables.length ? `set ${variables.join(", ")} in the environment that starts ${command}, then ` : ""}run ${command} login, then ${command}. ${command} --help lists its commands.`;
+  }
+  if (
+    lock &&
+    (lock.access?.credential.provider === "pi-native" || !lock.access)
+  )
+    return `Next: run ${command}, then sign in inside Pi with /login. ${command} --help lists its commands.`;
+  return `Next: run ${command} --help to see its commands, then ${command} to start.`;
+}
+/** What to do about a `runtime.pi` that is not the pinned Pi. */
+function piPinReview(stated: string): string {
+  return `runtime.pi is ${stated} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until you remove the runtime.pi line (the build then uses the pinned Pi, and the field cannot go stale again) or set it to "${PI_VERSION}" after re-verifying the distribution (docs/compatibility.md, "Upgrading Pi")`;
+}
 export async function runCli(
   args: readonly string[],
   output: CliOutput,
@@ -565,6 +651,11 @@ export async function runCli(
       `Choose one of --personal or --managed, not both.\nUsage: piship ${simpleUsage.init}`,
     );
     return 2;
+  } else if (command === "init") {
+    if (!target || !parseInitOptions(rest)) {
+      output.stderr(`Usage: piship ${simpleUsage.init}`);
+      return 2;
+    }
   } else if (
     !target ||
     (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
@@ -575,12 +666,16 @@ export async function runCli(
   if (!target) return 2;
   try {
     if (command === "init") {
-      const managed = rest[0] === "--managed";
-      const created = initDistribution(target, { managed });
+      const { managed, id } = parseInitOptions(rest) ?? { managed: false };
+      const created = initDistribution(target, {
+        managed,
+        ...(id === undefined ? {} : { id }),
+      });
+      const self = pishipCommand();
       output.stdout(
         managed
-          ? `Created ${created}\nNext: piship validate ${created}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
-          : `Created ${created}\nNext: piship validate ${created}, then piship test ${created}.`,
+          ? `Created ${created}\nNext: ${self} validate ${created}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
+          : `Created ${created}\nNext: ${self} validate ${created}, then ${self} test ${created} (the first test writes piship.lock; build and release need that lock to be current).`,
       );
     } else if (command === "validate") {
       const manifest = readManifest(target);
@@ -630,7 +725,10 @@ export async function runCli(
             : []),
         ].join("\n"),
       );
-      for (const warning of launchWarnings(manifest))
+      for (const warning of [
+        ...launchWarnings(manifest),
+        ...checkSkills(manifest, target),
+      ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       for (const item of unenforced)
         output.stderr(
@@ -668,11 +766,9 @@ export async function runCli(
         const pin = readManifest(target).runtime.pi;
         const review = [
           ...check.review,
-          ...(pin === PI_VERSION
+          ...(pin === undefined || pin === PI_VERSION
             ? []
-            : [
-                `runtime.pi is ${pin} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until the pin is updated and the distribution is re-verified (docs/compatibility.md, "Upgrading Pi")`,
-              ]),
+            : [piPinReview(pin)]),
         ];
         if (!check.changes.length && !review.length)
           output.stdout(`Already ${check.to}; nothing to migrate.`);
@@ -704,6 +800,11 @@ export async function runCli(
           output.stdout(
             `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${list(plan.changes)}\n\n${plan.source}`,
           );
+        // A stale Pi pin is the usual reason to run this after a PiShip
+        // upgrade, so say how to fix it even when nothing else changes.
+        const pin = readManifest(target).runtime.pi;
+        if (pin !== undefined && pin !== PI_VERSION)
+          output.stderr(`Note: ${piPinReview(pin)}`);
       }
     } else if (command === "config") {
       const configTarget = rest[0] ?? "";
@@ -776,9 +877,9 @@ export async function runCli(
         ...(progress ? { progress } : {}),
       });
       markLocalBuild(built);
-      output.stderr(UNQUALIFIED_BUILD_NOTICE);
+      output.stderr(unqualifiedBuildNotice());
       output.stdout(
-        `Built ${built}\nNext: piship test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
+        `Built ${built}\nNext: ${pishipCommand()} test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
       );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
@@ -816,9 +917,13 @@ export async function runCli(
       output.stdout(
         rest.includes("--json")
           ? JSON.stringify(info, null, 2)
-          : `${formatInspection(info)}\nRun piship inspect ${target} --json for the full locked configuration.`,
+          : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${target} --json for the full locked configuration.`,
       );
     } else if (command === "dev" || command === "test") {
+      const manifest = readManifest(target);
+      for (const warning of checkSkills(manifest, target))
+        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+      await prepareLock(target, manifest, output);
       await downloadLockedSearchTools(requireCurrentLock(target));
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
@@ -917,7 +1022,12 @@ async function runLifecycle(
 ): Promise<number> {
   const [first = "", second = ""] = positional;
   if (command === "install") {
-    if (isUnqualifiedPayload(resolve(first)))
+    // The build said what it is; saying it again at the install that follows
+    // on the same machine only repeats it.
+    if (
+      isUnqualifiedPayload(resolve(first)) &&
+      !isLocalBuildOnThisHost(resolve(first))
+    )
       output.stderr(
         `Warning: ${first} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, or recorded tests. Install it for local testing only; use the release piship release builds, or your publisher's, for anything else.`,
       );
@@ -938,7 +1048,7 @@ async function runLifecycle(
       [
         `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
         pathHint(dirname(receipt.commandPath)),
-        `Next: run ${receipt.app.command} --help to see its commands, then ${receipt.app.command} to start.`,
+        installNext(receipt),
       ]
         .filter(Boolean)
         .join("\n"),

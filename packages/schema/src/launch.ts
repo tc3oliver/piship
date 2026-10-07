@@ -446,12 +446,22 @@ export function runtimeVariableUse(manifest: Manifest): {
   readonly launch: readonly string[];
   readonly update: readonly string[];
 } {
-  const updateOnly = new Set(
-    manifest.lifecycle ? lifecycleReferences(manifest.lifecycle) : [],
-  );
+  const { launch, update } = variableReferences(manifest);
+  const variables = manifest.access?.variables ?? [];
+  return {
+    launch: variables.filter((name) => launch.has(name)),
+    update: variables.filter((name) => !launch.has(name) && update.has(name)),
+  };
+}
+/** The variable names the manifest references, by when they are read. */
+function variableReferences(manifest: Manifest): {
+  readonly launch: ReadonlySet<string>;
+  readonly update: ReadonlySet<string>;
+} {
   const access = manifest.access;
+  const launch = new Set<string>();
   if (access) {
-    const launch = [
+    for (const text of [
       ...(access.identity.mode === "oidc"
         ? [
             access.identity.oidc.issuer,
@@ -463,16 +473,36 @@ export function runtimeVariableUse(manifest: Manifest): {
       access.credential.broker?.revokeEndpoint,
       access.inference.baseUrl,
       ...access.network.tls.additionalCA,
-    ].flatMap((text) => (text ? referencedVariables(text) : []));
+    ])
+      for (const name of text ? referencedVariables(text) : [])
+        launch.add(name);
     if (manifest.governance)
-      launch.push(...governanceReferences(manifest.governance));
-    for (const name of launch) updateOnly.delete(name);
+      for (const name of governanceReferences(manifest.governance))
+        launch.add(name);
   }
-  const variables = access?.variables ?? [];
   return {
-    launch: variables.filter((name) => !updateOnly.has(name)),
-    update: variables.filter((name) => updateOnly.has(name)),
+    launch,
+    update: new Set(
+      manifest.lifecycle ? lifecycleReferences(manifest.lifecycle) : [],
+    ),
   };
+}
+/**
+ * Declared variables that nothing references. They change nothing at launch,
+ * so they are reported by `launchWarnings` and never refuse the manifest.
+ */
+function unusedVariables(manifest: Manifest): ValidationDiagnostic[] {
+  const { launch, update } = variableReferences(manifest);
+  return (manifest.access?.variables ?? []).flatMap((name, index) =>
+    launch.has(name) || update.has(name)
+      ? []
+      : [
+          {
+            path: `variables[${index}]`,
+            message: `${name} is declared but not referenced; remove it from variables, or use \${${name}} in a field that accepts a runtime reference`,
+          },
+        ],
+  );
 }
 
 /**
@@ -482,6 +512,7 @@ export function runtimeVariableUse(manifest: Manifest): {
  */
 export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
+    ...unusedVariables(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

@@ -2,7 +2,7 @@
 // (`updates`) and release policy (`release`).
 import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
-import { AccessFieldError } from "./access.js";
+import { AccessFieldError, failUnknown } from "./access.js";
 import { PRIVATE_HOSTS } from "./http-transport.js";
 import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 import {
@@ -196,12 +196,8 @@ function record(
   allowed: readonly string[],
 ): Json {
   if (!isRecord(value)) fail(path, "Expected an object");
-  for (const key of Object.keys(value))
-    if (!allowed.includes(key)) {
-      if (SECRET_FIELD.test(key))
-        fail(`${path}.${key}`, "Secrets are never declared in piship.yaml");
-      fail(`${path}.${key}`, "Unknown field");
-    }
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) failUnknown(path, unknown, allowed, SECRET_FIELD);
   return value;
 }
 function optionalRecord(

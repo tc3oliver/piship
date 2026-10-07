@@ -198,16 +198,19 @@ describe("CLI", () => {
       });
     expect(dev("init", join(temp, "dev-agent")).status).toBe(0);
     expect(dev("dev", manifest, "--unknown").status).toBe(2);
-    // The lock is validated first: without it nothing is built or launched.
-    const unlocked = dev("dev", manifest, "--smoke");
+    // `build` keeps requiring a lock: without one nothing is built.
+    const unlocked = dev("build", manifest);
     expect(unlocked.status).toBe(1);
     expect(unlocked.stderr).toContain("Lockfile missing");
     expect(existsSync(join(temp, "dist", "dev-agent"))).toBe(false);
-    expect(dev("lock", manifest).status).toBe(0);
+    // `dev` creates the lock that was never written, and says so.
+    createAmbientResources(temp);
     // Ambient Pi and workspace resources must not reach the isolated launch.
     createAmbientResources(temp);
     const result = dev("dev", manifest, "--smoke");
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("Created piship.lock");
+    expect(existsSync(join(temp, "dev-agent", "piship.lock"))).toBe(true);
     expect(JSON.parse(result.stdout)).toMatchObject({
       skills: [],
       extensions: 0,
@@ -216,11 +219,18 @@ describe("CLI", () => {
       existsSync(join(temp, "dist", "dev-agent", "metadata", "inventory.json")),
     ).toBe(true);
     expect(existsSync(join(temp, "state", "dev-agent"))).toBe(true);
-    // A resource change after locking is caught before anything launches.
+    // A current lock is used as it is.
+    expect(dev("dev", manifest, "--smoke").stderr).not.toContain("piship.lock");
+    // A resource change after locking is relocked by `dev` (nothing needs the
+    // network) and refused by `build`, which requires a lock that is current.
     writeFileSync(join(temp, "dev-agent", "resources", "AGENTS.md"), "edit\n");
-    const stale = dev("dev", manifest, "--smoke");
+    const stale = dev("build", manifest);
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("Lockfile is stale");
+    const relocked = dev("dev", manifest, "--smoke");
+    expect(relocked.status, relocked.stderr).toBe(0);
+    expect(relocked.stderr).toContain("Relocked piship.lock");
+    expect(dev("build", manifest).status).toBe(0);
   }, 360000);
   it("installs after piship test without --use-existing-state, and only once", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-first-run-"));
@@ -243,7 +253,8 @@ describe("CLI", () => {
     expect(run(bin, "lock", manifest).status).toBe(0);
     const built = run(bin, "build", manifest);
     expect(built.status, built.stderr).toBe(0);
-    expect(built.stdout).toContain(`Next: piship test ${manifest}`);
+    // The next step names the real command, not a `piship` that is not on PATH.
+    expect(built.stdout).toContain(`Next: node ${bin} test ${manifest}`);
     // A local build says it is not the qualified artifact, beside its output.
     expect(built.stderr).toContain("unqualified local build");
     expect(
@@ -268,7 +279,10 @@ describe("CLI", () => {
     const manager = join(payload, "piship.mjs");
     const installed = run(manager, "install", payload);
     expect(installed.status, installed.stderr).toBe(0);
-    expect(installed.stderr).toContain("unqualified local build");
+    // The build on this machine already said what it is; the install does not
+    // repeat it. A personal distribution signs in inside Pi.
+    expect(installed.stderr).not.toContain("unqualified local build");
+    expect(installed.stdout).toContain("sign in inside Pi with /login");
     // Once installed, the state is the install's: after an uninstall it is
     // pre-existing state like any other and must be adopted explicitly.
     expect(run(manager, "uninstall", "first-run").status).toBe(0);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   BUILTIN_PROVIDER_VERSION,
+  launchWarnings,
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
   ManifestError,
@@ -664,13 +665,15 @@ describe("v1alpha3 full managed example", () => {
     });
   });
   it("counts governance runtime references as used variables", () => {
-    rejects(
-      managed({
-        variables: [...managedAccess.variables, "ACMECODE_AUDIT_URL"],
-      }),
-      "variables[3]",
-      "declared but not referenced",
-    );
+    expect(
+      launchWarnings(
+        parseManifest(
+          managed({
+            variables: [...managedAccess.variables, "ACMECODE_AUDIT_URL"],
+          }),
+        ),
+      ).map((warning) => warning.path),
+    ).toEqual(["variables[3]"]);
   });
   it("requires governance runtime references to be declared", () => {
     const input = structuredClone(full);

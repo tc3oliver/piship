@@ -11,9 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PI_VERSION } from "@piship/core";
+import { markLocalBuild, PI_VERSION } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli, runtimeCacheLine } from "./index.js";
+import { installNext, runCli, runtimeCacheLine } from "./index.js";
 
 const ID = "mypi";
 let temp: string;
@@ -533,6 +533,16 @@ describe("validate", () => {
     expect(older.stderr).toContain("policy.userAuto");
   });
 
+  it("warns about an unused variable and still validates", async () => {
+    const result = await validate({ variables: ["ACME_UNUSED"] });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Manifest is valid.");
+    expect(result.stdout).not.toContain("Runtime variables");
+    expect(result.stderr).toContain(
+      "Warning: variables[0]: ACME_UNUSED is declared but not referenced",
+    );
+  });
+
   it("prints no variable lines for plain URLs", async () => {
     const result = await validate({});
     expect(result.stdout).not.toContain("Runtime variables");
@@ -640,6 +650,24 @@ describe("file system errors", () => {
     expect(verified.status).toBe(1);
     expect(verified.stderr).toContain("unqualified local build, not a release");
     expect(verified.stderr).toContain("Action: Run piship release");
+    // A build made on this machine said what it is when it was built; the
+    // install that follows does not say it again.
+    markLocalBuild(build);
+    expect((await run(["install", build])).stderr).not.toContain(
+      "unqualified local build",
+    );
+    // A marker that names another machine is a payload someone copied here.
+    writeFileSync(
+      `${build}.piship-qualification.json`,
+      JSON.stringify({
+        schema: "piship-qualification/v1",
+        qualification: "unqualified-local",
+        host: "another-machine.invalid",
+      }),
+    );
+    expect((await run(["install", build])).stderr).toContain(
+      "unqualified local build, not a release",
+    );
     // A directory that is no build at all gets no such warning.
     const other = join(temp, "other");
     mkdirSync(other);
@@ -984,8 +1012,58 @@ describe("init", () => {
     ).toBe(0);
     const manifest = join(directory, "piship.yaml");
     expect(stdout.join("\n")).toBe(
-      `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest}.`,
+      `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest} (the first test writes piship.lock; build and release need that lock to be current).`,
     );
+  });
+
+  it("names the real command when it runs from bin.js", async () => {
+    const original = process.argv[1];
+    process.argv[1] = join(temp, "my dir", "bin.js");
+    try {
+      const result = await run(["init", join(temp, "agent")]);
+      expect(result.stdout).toContain(
+        `Next: node "${join(temp, "my dir", "bin.js")}" validate `,
+      );
+      expect(result.stdout).not.toContain("Next: piship");
+    } finally {
+      process.argv[1] = original as string;
+    }
+  });
+
+  it("refuses a directory name that is no distribution id and suggests one", async () => {
+    for (const [name, id] of [
+      ["my_agent", "my-agent"],
+      ["agent.v2", "agent-v2"],
+      ["2fast", "app-2fast"],
+    ] as const) {
+      const directory = join(temp, name);
+      const result = await run(["init", directory]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`not a valid distribution id`);
+      expect(result.stderr).toContain(`init ${directory} --id ${id}`);
+      expect(existsSync(directory)).toBe(false);
+    }
+  });
+
+  it("takes the distribution id from --id instead of the directory name", async () => {
+    const directory = join(temp, "my_agent");
+    const result = await run(["init", directory, "--id", "my-agent"]);
+    expect(result.status).toBe(0);
+    const text = readFileSync(join(directory, "piship.yaml"), "utf8");
+    expect(text).toContain("  id: my-agent\n");
+    expect(text).toContain("  command: my-agent\n");
+    expect(
+      (await run(["validate", join(directory, "piship.yaml")])).status,
+    ).toBe(0);
+    // --id is checked as well, with its own suggestion, and combines with --managed.
+    const bad = await run(["init", join(temp, "other"), "--id", "My_Agent"]);
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toContain("Try --id my-agent");
+    expect(
+      (await run(["init", join(temp, "managed"), "--managed", "--id", "co-ai"]))
+        .status,
+    ).toBe(0);
+    expect((await run(["init", join(temp, "x"), "--id"])).status).toBe(2);
   });
 
   async function run(args: string[]) {
@@ -1274,6 +1352,59 @@ describe("the runtime cache line of piship release", () => {
   it("is one short line when the runtime was built cold", () => {
     expect(runtimeCacheLine({ status: "disabled" })).toBe(
       "runtime cache: disabled",
+    );
+  });
+});
+
+describe("what to do after an install", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-next-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+  const receipt = (lock: unknown) => {
+    if (lock !== undefined)
+      writeFileSync(join(temp, "piship.lock"), JSON.stringify(lock));
+    return { app: { command: "acme" }, payload: temp };
+  };
+
+  it("tells a managed distribution to set its variables, then log in", () => {
+    const next = installNext(
+      receipt({
+        deployment: { mode: "managed" },
+        access: { variables: ["ACME_ISSUER", "ACME_GATEWAY"] },
+      }),
+    );
+    expect(next).toContain(
+      "set ACME_ISSUER, ACME_GATEWAY in the environment that starts acme, then run acme login",
+    );
+  });
+
+  it("skips the variables when a managed distribution has none", () => {
+    expect(
+      installNext(
+        receipt({ deployment: { mode: "managed" }, access: { variables: [] } }),
+      ),
+    ).toMatch(/^Next: run acme login, then acme\./);
+  });
+
+  it("tells a Pi-native personal distribution to sign in inside Pi", () => {
+    for (const lock of [
+      {
+        deployment: { mode: "personal" },
+        access: { credential: { provider: "pi-native" }, variables: [] },
+      },
+      { deployment: { mode: "personal" } },
+    ])
+      expect(installNext(receipt(lock))).toContain(
+        "sign in inside Pi with /login",
+      );
+  });
+
+  it("falls back to the generic next step when the lock cannot be read", () => {
+    expect(installNext({ app: { command: "acme" }, payload: temp })).toBe(
+      "Next: run acme --help to see its commands, then acme to start.",
     );
   });
 });
