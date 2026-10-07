@@ -52,13 +52,14 @@ describe("doctor reclaims obsolete release directories", () => {
     expect(err).toEqual(["Removed 1 obsolete release directory."]);
   });
 
-  it("continues to the report, and changes nothing, when the payload fails verification", async () => {
+  it("ends at once, and changes nothing, when the payload fails verification", async () => {
     core.reclaimObsoleteVersions.mockClear();
     core.verifyPayload.mockImplementationOnce(() => {
       throw new Error("Payload files changed");
     });
     const { ctx } = context();
-    await expect(runDoctor(ctx)).rejects.toThrow("stop after maintenance");
+    // The rest of the report loads payload code, so it must not start.
+    await expect(runDoctor(ctx)).rejects.toThrow("Payload files changed");
     expect(core.reclaimObsoleteVersions).not.toHaveBeenCalled();
   });
 
