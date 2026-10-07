@@ -23,19 +23,13 @@ All notable changes to this project are documented in this file. Each section is
 - `update` uses a retained release or a kept download whose digest equals the signed entry instead of downloading it again, `update --check` over a URL no longer downloads the archive, and `update` and `rollback` remove obsolete releases when they commit. `doctor` reports a failed payload verification as one row and goes on, and shows free space.
 - A bundled `fd` or `rg` problem is a warning instead of a failure, and `--version` is no longer blocked by it; a payload copy that does not match the lock is still never run. A damaged or oversized most recent session starts a new one, and a damaged `preferences.json` is moved aside as `.damaged-<time>` and defaults are used.
 - Two `--yolo` sessions share the permission provider. A resumed session whose model is no longer allowed switches to the first allowed one. A failed optional MCP server, a refused file-tool path, and a model refused with 403 each say what happened and what to do. Shell commands in the sandbox get their package caches in the session's temporary directory.
+- A personal launch that has neither `fd` nor `rg` on `PATH` or bundled still runs Pi with `PI_OFFLINE=1` rather than wait for their download, and now says so once at launch: it names the tools, notes that Pi's model catalog refresh and `/bug` are off too, and gives the three ways out (install them, `PISHIP_ALLOW_TOOL_DOWNLOAD=1`, or `runtime.searchTools`).
 
 ### Fixed
 
 - A proxy variable without a scheme (`HTTPS_PROXY=proxy.corp:8080`) crashed every launch with a raw URL error; it now gets `http://` and a notice.
 - Every unset runtime variable is reported at once. A personal launch with `NODE_TLS_REJECT_UNAUTHORIZED=0` goes on with verification on instead of stopping. A full, read-only or busy disk, and a download cut short, are explained and retryable.
 - On Windows the `.cmd` shim works for a non-ASCII user name, and a constrained PowerShell fails at once and names the file store. A build for a target the lock does not pin builds without `fd` and `rg`.
-
-### Changed
-
-- A personal launch that has neither `fd` nor `rg` on `PATH` or bundled still runs Pi with `PI_OFFLINE=1` rather than wait for their download, and now says so once at launch: it names the tools, notes that Pi's model catalog refresh and `/bug` are off too, and gives the three ways out (install them, `PISHIP_ALLOW_TOOL_DOWNLOAD=1`, or `runtime.searchTools`).
-
-### Fixed
-
 - The Windows credential helper no longer echoes a stored value back through stderr when the text after `chunks:` is not a number: the count is parsed as digits only and bounded, a bad one gets a fixed message, and a target with a space, line break, or other control character is refused before it is written.
 
 ## v0.11.0
