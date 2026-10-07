@@ -460,7 +460,9 @@ describe("file-tool denial labels", () => {
       try {
         await expect(
           gatePath(gov, "filesystem.read", join(secret, "key"), "read"),
-        ).rejects.toThrow(/outside what this distribution lets tools read/);
+        ).rejects.toThrow(
+          /outside what this distribution lets tools read\. Change sandbox\.filesystem\.read\.deny in your piship\.yaml/,
+        );
         expect(events).toEqual([
           expect.objectContaining({
             rule: "sandbox.filesystem.read.deny",
@@ -472,6 +474,22 @@ describe("file-tool denial labels", () => {
       }
     },
   );
+
+  it("says which path, which manifest key, and who changes it", async () => {
+    const { gov, root } = fakeSession(["filesystem-write-allowlist"]);
+    try {
+      const outside = join(root, "elsewhere", "x");
+      await expect(
+        gatePath(gov, "filesystem.write", outside, "write"),
+      ).rejects.toThrow(
+        new RegExp(
+          `${outside.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is outside the directories this distribution lets tools write\\. Change sandbox\\.filesystem\\.write\\.allow in your piship\\.yaml`,
+        ),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /**

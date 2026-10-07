@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GovernanceSession } from "./governance-session.js";
 import { governedBashOperations } from "./governed-tools.js";
-import { SandboxFailureScanner } from "./sandbox-hint.js";
+import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -34,6 +34,17 @@ function hintFor(
   scanner.feed(output.replaceAll("<root>", p.root));
   return scanner.hint();
 }
+
+describe("manifestChange", () => {
+  it("names the owner of a managed distribution and the user of a personal one", () => {
+    expect(manifestChange("managed", "sandbox.network.mode")).toBe(
+      "Ask the distribution owner to change sandbox.network.mode.",
+    );
+    expect(manifestChange("personal", "sandbox.network.mode")).toBe(
+      "Change sandbox.network.mode in your piship.yaml.",
+    );
+  });
+});
 
 describe("SandboxFailureScanner", () => {
   it("names the read-only path and the manifest key", () => {

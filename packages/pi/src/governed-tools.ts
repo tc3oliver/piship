@@ -52,7 +52,7 @@ import {
 import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
-import { SandboxFailureScanner } from "./sandbox-hint.js";
+import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
 /** True when `path` is `root` or below it. */
@@ -281,8 +281,8 @@ export async function gatePath(
       });
       throw blocked(
         hidden
-          ? `${path} is outside what this distribution lets tools read.`
-          : `${path} is outside the directories this distribution lets tools write.`,
+          ? `${path} is outside what this distribution lets tools read. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.read.deny")}`
+          : `${path} is outside the directories this distribution lets tools write. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.write.allow")}`,
       );
     }
   }

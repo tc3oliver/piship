@@ -32,7 +32,10 @@ export interface SandboxHintContext {
 }
 
 /** The one next action: who changes which manifest key. */
-function change(mode: SandboxHintContext["mode"], key: string): string {
+export function manifestChange(
+  mode: SandboxHintContext["mode"],
+  key: string,
+): string {
   return mode === "managed"
     ? `Ask the distribution owner to change ${key}.`
     : `Change ${key} in your piship.yaml.`;
@@ -92,15 +95,15 @@ export class SandboxFailureScanner {
     for (const named of this.#filesystem) {
       const path = realpathNearest(named);
       if (profile.readDeny.some((denied) => isWithin(path, denied)))
-        return `[PiShip sandbox: ${named} is hidden from shell commands. ${change(mode, "sandbox.filesystem.read.deny")}]`;
+        return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")}]`;
       // A file the launching user cannot read is an ordinary permission
       // error on a read, not a sandbox decision.
       if (existsSync(path) && !readable(path)) continue;
       if (!profile.writeAllow.some((allowed) => isWithin(path, allowed)))
-        return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${change(mode, "sandbox.filesystem.write.allow")}]`;
+        return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")}]`;
     }
     if (this.#networkSeen && profile.network === "deny")
-      return `[PiShip sandbox: ${this.#network ? `${this.#network} cannot be reached` : "the host cannot be reached"} because shell commands have no network access. ${change(mode, "sandbox.network.mode")}]`;
+      return `[PiShip sandbox: ${this.#network ? `${this.#network} cannot be reached` : "the host cannot be reached"} because shell commands have no network access. ${manifestChange(mode, "sandbox.network.mode")}]`;
     return undefined;
   }
 }
