@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAgentSession,
@@ -49,6 +49,7 @@ import {
 } from "./model-runtime.js";
 import { entitlementNotice } from "./entitlement-notice.js";
 import { childToolOptions, type SubagentChild } from "./subagent-child.js";
+import { publishSubagentOwner } from "./subagent-owner.js";
 import { providerErrorRedaction } from "./redaction.js";
 import { governVirtualModels } from "./virtual-models.js";
 import {
@@ -505,6 +506,23 @@ async function startRuntime(
 }
 
 /**
+ * Lets this session's subagent tool start children (launch/subagent-owner.ts).
+ * A session that cannot publish still runs; its children are refused.
+ */
+function publishChildren(ctx: LaunchContext, gov: GovernanceSession | null) {
+  try {
+    publishSubagentOwner(ctx.stateDir, {
+      session: gov?.sessionId ?? "",
+      workspace: realpathSync.native(process.cwd()),
+    });
+  } catch (error) {
+    ctx.err(
+      `Notice: subagents are unavailable in this session: ${formatError(error)}`,
+    );
+  }
+}
+
+/**
  * Starts the Pi runtime on the session `openSession` chose. The returned
  * ownership is released when the session ends (or, at the latest, when the
  * process exits).
@@ -517,6 +535,7 @@ export async function startGoverned(
 ) {
   let ownership: SessionOwnership | undefined;
   try {
+    if (!session.child) publishChildren(ctx, gov);
     const opened = session.child
       ? { ...openChildSession(process.cwd(), session.child), notice: undefined }
       : openSession(process.cwd(), session.sessionDir, {

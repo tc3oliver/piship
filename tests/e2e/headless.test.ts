@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -17,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
+import { publishSubagentOwner } from "../../packages/pi/dist/launch/subagent-owner.js";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
 // Headless and workload path on the local fixtures: the AcmeCode demo with
@@ -364,11 +366,27 @@ describe("headless workload distribution (local fixtures)", () => {
     // PI_CODE_SUBAGENT=1) takes the same governed launch: the broker
     // credential, the model allowlist, and the print mode's JSON events.
     // Without the marker the arguments are refused as before.
-    const child = (rest: string[], marker = "1") =>
+    // The record a running session publishes, with the nonce its subagent
+    // tool hands its children; the marker alone is not enough.
+    const parentEnv: NodeJS.ProcessEnv = {};
+    publishSubagentOwner(
+      acmeState,
+      { session: "parent-session", workspace: realpathSync(temp) },
+      parentEnv,
+    );
+    const child = (rest: string[], marker = "1", nonce = true) =>
       branded(command, ["--mode", "json", "-p", ...rest], {
         cwd: temp,
-        env: { ...env, PI_CODE_SUBAGENT: marker },
+        env: {
+          ...env,
+          PI_CODE_SUBAGENT: marker,
+          ...(nonce ? parentEnv : {}),
+        },
       });
+    const unproven = await child(["Task: canary-task"], "1", false);
+    expect(unproven.status).toBe(1);
+    expect(unproven.stderr).toContain("not started by a running session");
+    expect(unproven.stderr).not.toContain("canary-task");
     const unmarked = await child(["Task: canary-task"], "");
     expect(unmarked.status).toBe(1);
     expect(unmarked.stderr).toContain("Unknown branded command option");

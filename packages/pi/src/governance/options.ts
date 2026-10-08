@@ -97,8 +97,11 @@ export interface GovernanceOptions {
    * `GovernanceSession.open` refuses it otherwise.
    */
   readonly yolo?: boolean;
-  /** A pi-code subagent child launch; recorded on `session.start`. */
-  readonly subagent?: boolean;
+  /**
+   * A pi-code subagent child launch and the session that started it;
+   * recorded on `session.start`.
+   */
+  readonly subagent?: { readonly parentSession: string };
   /**
    * Called when `/auto off` ends `--yolo` for the rest of the session: the
    * permission provider's own auto-approval, switched on with it, goes off

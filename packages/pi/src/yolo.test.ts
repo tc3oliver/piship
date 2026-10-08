@@ -75,7 +75,7 @@ interface Setup {
   readonly mode: "managed" | "personal";
   readonly userAuto?: "allowed" | "off";
   readonly yolo?: boolean;
-  readonly subagent?: boolean;
+  readonly subagent?: { readonly parentSession: string };
   /** Switch the stored auto mode on before the session opens. */
   readonly stored?: boolean;
   readonly onYoloEnd?: () => string | undefined;
@@ -145,7 +145,7 @@ function distribution(setup: Setup) {
     piVersion: PI_VERSION,
     interactive: false,
     ...(setup.yolo ? { yolo: true } : {}),
-    ...(setup.subagent ? { subagent: true } : {}),
+    ...(setup.subagent ? { subagent: setup.subagent } : {}),
     ...(setup.onYoloEnd ? { onYoloEnd: setup.onYoloEnd } : {}),
     fetch: (() => {
       throw new Error("no network in unit tests");
@@ -229,15 +229,22 @@ function tool(session: GovernanceSession, workspace: string, name: string) {
 }
 
 describe("a subagent child's session.start", () => {
-  it("records subagent: true, only for a child, and never the task", async () => {
-    const child = await open({ mode: "personal", subagent: true });
+  it("records subagent: true and the parent session, only for a child, and never the task", async () => {
+    const child = await open({
+      mode: "personal",
+      subagent: { parentSession: "parent-7" },
+    });
     const plain = await open({ mode: "personal" });
     await child.session.close();
     await plain.session.close();
     const start = (events: () => AuditEvent[]) =>
       events().find((event) => event.event === "session.start");
-    expect(start(child.events)?.detail).toMatchObject({ subagent: true });
+    expect(start(child.events)?.detail).toMatchObject({
+      subagent: true,
+      parentSession: "parent-7",
+    });
     expect(start(plain.events)?.detail).not.toHaveProperty("subagent");
+    expect(start(plain.events)?.detail).not.toHaveProperty("parentSession");
     expect(JSON.stringify(start(child.events))).not.toContain("prompt");
   });
 });

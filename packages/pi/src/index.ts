@@ -40,6 +40,11 @@ import {
   unknownOptionMessage,
 } from "./launch/subagent-child.js";
 import {
+  assertChildWorkspace,
+  authenticateSubagentChild,
+  type SubagentParent,
+} from "./launch/subagent-owner.js";
+import {
   deferredDownloadNotice,
   deferredToolDownloads,
   installSearchTools,
@@ -120,9 +125,17 @@ export async function launchPiDistribution(
   // under PI_CODE_SUBAGENT=1. The options are parsed by allowlist before
   // anything starts; the child then takes the launch below as a session with
   // no arguments, and ends in Pi's print mode (see launch/subagent-child.ts).
-  const child = isSubagentChild(args, process.env)
-    ? parseSubagentChild(args, process.env)
-    : undefined;
+  // It also proves a running session of this distribution started the child
+  // and puts the child in that session's workspace (launch/subagent-owner.ts),
+  // before the arguments are looked at.
+  let parent: SubagentParent | undefined;
+  if (isSubagentChild(args, process.env)) {
+    parent = authenticateSubagentChild(
+      runtimeStateDirectory({ value: metadata.app.id }),
+    );
+    assertChildWorkspace(parent.workspace);
+  }
+  const child = parent ? parseSubagentChild(args, process.env) : undefined;
   if (child) args = [];
   // A child's model is passed to the access check from `child` itself.
   let requestedModel: string | undefined;
@@ -243,7 +256,7 @@ export async function launchPiDistribution(
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
-    ...(child ? { subagent: true } : {}),
+    ...(child && parent ? { subagent: { parentSession: parent.session } } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),

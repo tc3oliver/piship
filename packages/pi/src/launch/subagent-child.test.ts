@@ -5,6 +5,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync as realpath,
   rmSync,
   symlinkSync,
@@ -22,6 +23,11 @@ import type { DistributionLock } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preparePiEnvironment } from "../environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "../index.js";
+import {
+  publishSubagentOwner,
+  SUBAGENT_NONCE_ENV,
+  SUBAGENT_OWNER_DIRECTORY,
+} from "./subagent-owner.js";
 import {
   childToolOptions,
   inTemp,
@@ -395,6 +401,7 @@ describe("the launch", () => {
       ["PISHIP_STATE_HOME", saved.home],
       ["PI_CODING_AGENT_DIR", saved.agentDir],
       ["PI_CODE_SUBAGENT", saved.marker],
+      [SUBAGENT_NONCE_ENV, undefined],
     ] as const)
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -440,14 +447,47 @@ describe("the launch", () => {
     expect(error?.message).toMatch(/^Unknown branded command option: -p hi/);
   });
 
+  /** What a running session of the distribution publishes for its children. */
+  const startSession = (workspace = realpath(process.cwd())) =>
+    publishSubagentOwner(join(state, "acmecode"), {
+      session: "parent-1",
+      workspace,
+    });
+
   it("refuses an option outside the allowlist before any state exists", async () => {
     process.env.PI_CODE_SUBAGENT = "1";
     for (const flag of ["--yolo", "--api-key", "--extension"]) {
+      startSession();
       const error = await failure([...BASE, flag, "x", "Task: canary-task"]);
       expect(error?.code).toBe("CONFIG_INVALID");
       expect(error?.message).toContain(flag);
       expect(error?.message).not.toContain("canary-task");
+      // Only the parent's own record: the child wrote nothing.
+      expect(readdirSync(join(state, "acmecode"))).toEqual([
+        SUBAGENT_OWNER_DIRECTORY,
+      ]);
+      expect(process.env).not.toHaveProperty(SUBAGENT_NONCE_ENV);
+    }
+  });
+
+  it("refuses the marker without a running session's nonce, before any state exists", async () => {
+    process.env.PI_CODE_SUBAGENT = "1";
+    for (const nonce of [undefined, "d".repeat(64)]) {
+      if (nonce) process.env[SUBAGENT_NONCE_ENV] = nonce;
+      const error = await failure([...BASE, "Task: canary-task"]);
+      expect(error?.code).toBe("CONFIG_INVALID");
+      expect(error?.message).toContain("not started by a running session");
+      expect(error?.message).not.toContain("canary-task");
       expect(existsSync(join(state, "acmecode"))).toBe(false);
     }
+  });
+
+  it("refuses a child whose directory is outside its parent's workspace", async () => {
+    process.env.PI_CODE_SUBAGENT = "1";
+    startSession(join(state, "another-project"));
+    const error = await failure([...BASE, "Task: canary-task"]);
+    expect(error?.code).toBe("CONFIG_INVALID");
+    expect(error?.message).toContain("outside its parent's workspace");
+    expect(error?.message).not.toContain("canary-task");
   });
 });
