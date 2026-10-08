@@ -87,6 +87,19 @@ function area(name: string) {
   const workspace = join(base, "workspace");
   for (const path of [state, home, workspace])
     mkdirSync(path, { recursive: true });
+  // On Windows, Chrome does not open its DevTools port when USERPROFILE points
+  // at a folder without the standard user folders, so the browser test timed
+  // out at "Timed out waiting for Chrome DevTools ... ECONNREFUSED" on every
+  // hosted runner. A person's real profile always has them.
+  if (process.platform === "win32")
+    for (const folder of [
+      join("AppData", "Local"),
+      join("AppData", "Roaming"),
+      "Documents",
+      "Desktop",
+      "Downloads",
+    ])
+      mkdirSync(join(home, folder), { recursive: true });
   return {
     base,
     workspace,
