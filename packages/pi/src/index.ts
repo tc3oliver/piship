@@ -66,6 +66,8 @@ export {
   inspectGovernance,
 } from "./governance-session.js";
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
+// What a session publishes for its subagent children; a test stands in for one.
+export { publishSubagentOwner } from "./launch/subagent-owner.js";
 
 export const PINNED_PI_VERSION = "1.0.3" as const;
 /**

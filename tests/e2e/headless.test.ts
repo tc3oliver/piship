@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
-import { publishSubagentOwner } from "../../packages/pi/dist/launch/subagent-owner.js";
+import { publishSubagentOwner } from "@piship/pi";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
 // Headless and workload path on the local fixtures: the AcmeCode demo with
