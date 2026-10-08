@@ -92,6 +92,22 @@ export function inTemp(
   );
 }
 
+/**
+ * The refusal of arguments the branded command does not take. A child's
+ * arguments end in the task, which a parent may log, so those are not
+ * repeated; anything else is shown as typed, as it always was.
+ */
+export function unknownOptionMessage(
+  args: readonly string[],
+  command: string,
+): string {
+  const shown =
+    args[0] === "--mode" && args[1] === "json" && args[2] === "-p"
+      ? "--mode json -p ..."
+      : args.join(" ");
+  return `Unknown branded command option: ${shown}\n${command} has no non-interactive prompt mode; see ${command} --help.`;
+}
+
 /** A launch's PiShip messages go to stderr for a child: stdout is its JSON events. */
 export const launchOutput = (child: boolean) => (message: string) =>
   child ? console.error(message) : console.log(message);

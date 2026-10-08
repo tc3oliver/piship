@@ -37,6 +37,7 @@ import {
   isSubagentChild,
   launchOutput,
   parseSubagentChild,
+  unknownOptionMessage,
 } from "./launch/subagent-child.js";
 import {
   deferredDownloadNotice,
@@ -363,9 +364,7 @@ export async function launchPiDistribution(
   const smoke =
     args.length === 1 && (command === "--smoke" || command === "--smoke-model");
   if (args.length > 0 && !smoke)
-    throw new Error(
-      `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
-    );
+    throw new Error(unknownOptionMessage(args, metadata.app.command));
   // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(

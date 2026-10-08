@@ -372,6 +372,7 @@ describe("headless workload distribution (local fixtures)", () => {
     const unmarked = await child(["Task: canary-task"], "");
     expect(unmarked.status).toBe(1);
     expect(unmarked.stderr).toContain("Unknown branded command option");
+    expect(unmarked.stderr).not.toContain("canary-task");
     const childYolo = await child(["--yolo", "Task: canary-task"]);
     expect(childYolo.status).toBe(1);
     expect(childYolo.stderr).toContain("not available to a subagent child");

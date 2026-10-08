@@ -425,11 +425,13 @@ describe("the launch", () => {
 
   it("is unchanged without the marker: the same error as before", async () => {
     delete process.env.PI_CODE_SUBAGENT;
-    const error = await failure([...BASE, "--model", "m", "Task: x"]);
+    const error = await failure([...BASE, "--model", "m", "Task: canary-task"]);
     expect(error?.message).toMatch(
-      /^Unknown branded command option: --mode json/,
+      /^Unknown branded command option: --mode json -p \.\.\.\n/,
     );
     expect(error?.message).toContain("no non-interactive prompt mode");
+    // The task is the last argument and is not repeated.
+    expect(error?.message).not.toContain("canary-task");
   });
 
   it("is unchanged under the marker when the arguments are not a child's", async () => {
