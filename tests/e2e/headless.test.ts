@@ -421,6 +421,42 @@ describe("headless workload distribution (local fixtures)", () => {
       `Bearer ${credentialSecret("vk_demo_1")}`,
     );
 
+    // A fan-out of parallel children shares one state directory: the
+    // identity and credential, the audit log, the metrics file, and the
+    // package-configuration lock. All of them start, run, and leave whole
+    // files behind.
+    const fan = await Promise.all(
+      [1, 2, 3, 4].map((n) => child(["--no-session", `Task: say hello ${n}`])),
+    );
+    for (const result of fan) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).not.toContain("being changed by another launch");
+    }
+    const audit = readFileSync(join(acmeState, "logs", "audit.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      // A torn or interleaved append would not parse.
+      .map((line: string) => JSON.parse(line));
+    const starts = audit.filter(
+      (event: { event: string; detail?: { subagent?: boolean } }) =>
+        event.event === "session.start" && event.detail?.subagent === true,
+    );
+    // The earlier child and the four of the fan-out, each from this parent.
+    expect(starts.length).toBeGreaterThanOrEqual(5);
+    expect(
+      new Set(
+        starts.map(
+          (event: { detail: { parentSession: string } }) =>
+            event.detail.parentSession,
+        ),
+      ),
+    ).toEqual(new Set(["parent-session"]));
+    const ids = audit.map((event: { id: string }) => event.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(() =>
+      JSON.parse(readFileSync(join(acmeState, "logs", "metrics.json"), "utf8")),
+    ).not.toThrow();
+
     // 3. Managed policy stays enforced: model allowlist and entitlement,
     //    and the network policy for the adapter's own requests.
     const personalModel = await run(["--model", "openai/gpt-4o", "--smoke"]);
@@ -507,6 +543,25 @@ describe("headless workload distribution (local fixtures)", () => {
     });
     expect(services.state.revokedCredentials).toContain("vk_demo_6");
     expect(scan(stateHome, previousSecrets)).toEqual([]);
+
+    // 6b. A fan-out of children that all find the credential inside its
+    //     renewal window renews it together: each ends cleanly, and what the
+    //     renewals replaced is revoked and left nowhere in the state.
+    services.knobs.credentialTtl = 120;
+    issue("svc-deploy-2");
+    expect((await run(["login"])).status).toBe(0);
+    const issued = [...services.state.credentials.keys()] as string[];
+    const renewing = await Promise.all(
+      [1, 2, 3, 4].map((n) => child(["--no-session", `Task: renew ${n}`])),
+    );
+    for (const result of renewing) expect(result.status, result.stderr).toBe(0);
+    expect(services.state.credentials.size).toBeGreaterThan(issued.length);
+    const live = await smoke();
+    expect(live.access.identity.subject).toBe("svc-deploy-2");
+    const replaced = (services.state.revokedCredentials as string[]).map((id) =>
+      credentialSecret(id),
+    );
+    expect(scan(stateHome, replaced.filter(Boolean))).toEqual([]);
 
     // 7. No browser, no authorization page, no identity provider request,
     //    and no personal credential anywhere, in any run.
