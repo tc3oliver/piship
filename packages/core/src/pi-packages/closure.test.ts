@@ -17,6 +17,7 @@ import {
   analyzeClosure,
   bundleClosure,
   CLOSURE_DIRECTORY,
+  closureKey,
   type FallbackReason,
   pretranspileClosures,
 } from "./closure.js";
@@ -627,5 +628,123 @@ describe("pretranspiling a TypeScript closure", () => {
     expect((error as { code?: string }).code).toBe("CONFIG_INVALID");
     expect(String((error as Error).message)).toMatch(message);
     expect(tree(fixture.root)).toEqual(before);
+  });
+});
+
+describe("pretranspile scope and failures", () => {
+  const WRITTEN = [
+    "node_modules/ext/extensions/other.js",
+    "node_modules/ext/lib/values.js",
+  ];
+
+  it("follows only the package's own imports: a dependency with a native file does not matter", () => {
+    const plain = pretranspile(typescriptPackage());
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts":
+        "import dep from 'dep';\nexport const other = (): string => dep;\n",
+      "node_modules/ext/node_modules/dep/package.json": JSON.stringify({
+        name: "dep",
+        version: "1.0.0",
+        type: "module",
+        main: "index.js",
+      }),
+      "node_modules/ext/node_modules/dep/index.js":
+        "import addon from './addon.node';\nexport default addon;\n",
+      "node_modules/ext/node_modules/dep/addon.node": "not a real addon",
+      // A tsconfig above the package must not be read.
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { jsx: "preserve", target: "es5", baseUrl: "nowhere" },
+      }),
+    });
+    const result = pretranspile(fixture);
+    expect(result?.written).toEqual(plain?.written);
+    expect(result?.written).toEqual(WRITTEN);
+  });
+
+  it("fails on a decorator, which Node cannot read, and writes nothing", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts":
+        "function dec(target: unknown) { return target; }\n@dec\nclass Thing {}\nexport const other = (): string => String(Thing);\n",
+    });
+    const before = tree(fixture.root);
+    let error: unknown;
+    try {
+      pretranspile(fixture);
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect(String((error as Error).message)).toMatch(
+      /extensions\/other\.js.*cannot read/,
+    );
+    expect(tree(fixture.root)).toEqual(before);
+  });
+
+  it("fails, writing nothing, when a package has nothing to write", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/main.ts": "export default () => 1;\n",
+      "node_modules/ext/extensions/other.ts": "export const other = 1;\n",
+    });
+    const before = tree(fixture.root);
+    expect(() => pretranspile(fixture)).toThrow(/no TypeScript module/);
+    expect(tree(fixture.root)).toEqual(before);
+  });
+
+  it("writes .mts as .mjs, follows dynamic import, and drops an un-annotated type import", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/main.ts": `import { other } from "./other.js";
+export default async () => ({ other, late: (await import("../lib/late.js")).late });
+`,
+      "node_modules/ext/extensions/other.ts": `import { Shape } from "../lib/types.js";
+import { helper } from "../lib/helper.mjs";
+const shape: Shape = { size: 1 };
+export const other = helper(shape.size);
+`,
+      "node_modules/ext/lib/types.ts":
+        "export interface Shape { size: number }\n",
+      "node_modules/ext/lib/helper.mts":
+        "export const helper = (n: number): number => n + 1;\n",
+      "node_modules/ext/lib/late.ts": "export const late: string = 'late';\n",
+    });
+    const result = pretranspile(fixture);
+    expect(result?.written).toEqual([
+      "node_modules/ext/extensions/other.js",
+      "node_modules/ext/lib/helper.mjs",
+      "node_modules/ext/lib/late.js",
+    ]);
+    // esbuild erases the un-annotated type import, so types.ts is never reached.
+    expect(
+      existsSync(join(fixture.root, "node_modules/ext/lib/types.js")),
+    ).toBe(false);
+    const other = readFileSync(
+      join(fixture.root, "node_modules/ext/extensions/other.js"),
+      "utf8",
+    );
+    expect(other).not.toMatch(/types\.js|Shape/);
+    expect(other).toMatch(/helper\.mjs/);
+  });
+});
+
+describe("closureKey", () => {
+  it.each([
+    ["/r/pkg", "node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "node_modules\\ext\\a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "./node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "/r/pkg/node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    [
+      "C:\\Users\\me\\pkg",
+      "c:\\users\\me\\pkg\\node_modules\\ext\\a.ts",
+      "node_modules/ext/a.ts",
+    ],
+    ["c:/Users/me/pkg/", "C:\\Users\\me\\pkg\\lib\\a.ts", "lib/a.ts"],
+    [
+      "C:\\Users\\me\\pkg",
+      "C:\\Users\\me\\pkg2\\a.ts",
+      "C:/Users/me/pkg2/a.ts",
+    ],
+    // POSIX roots stay case sensitive.
+    ["/r/Pkg", "/r/pkg/a.ts", "/r/pkg/a.ts"],
+  ])("%s + %s", (root, path, expected) => {
+    expect(closureKey(root, path)).toBe(expected);
   });
 });

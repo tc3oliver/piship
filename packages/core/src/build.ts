@@ -569,7 +569,7 @@ export function buildDistribution(
         esbuild,
       ).forEach((result, index) => {
         options.progress?.(
-          `${transpiling[index]?.locked.id}: ${result.written.length} TypeScript modules written as JavaScript${result.kept.length ? `, ${result.kept.length} already had JavaScript` : ""}`,
+          `pi package pretranspile: ${transpiling[index]?.locked.id}: ${result.written.length} modules written${result.kept.length ? `, ${result.kept.length} kept (JavaScript exists)` : ""}`,
         );
       });
       debugTiming("pi package pretranspile", phase);
