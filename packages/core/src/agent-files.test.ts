@@ -18,7 +18,6 @@ import {
 import { execFile, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { processHostToken } from "@piship/contracts";
 import type { PackageAgentFile } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -519,9 +518,9 @@ describe("a session auto-approval", () => {
 
 // Parallel session launches (a subagent's children) share one transaction lock.
 describe("parallel session launches", () => {
-  const dist = fileURLToPath(
-    new URL("../dist/agent-files.js", import.meta.url),
-  );
+  // A file: URL, which `import()` takes on every platform (a Windows path
+  // such as D:\a\... is read as a URL with the scheme "d:").
+  const dist = new URL("../dist/agent-files.js", import.meta.url).href;
   const child = `
     const [dist, dir, json, start] = process.argv.slice(1);
     const { applyAgentFiles } = await import(dist);
