@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. Each section is
 ### Fixed
 
 - pi-code's `subagent` tool works in a distribution: its child processes run `<command> --mode json -p --no-session [options] <task>` under `PI_CODE_SUBAGENT=1`, which the branded launcher refused ("Unknown branded command option"), so every subagent ended "(no output)". The child now takes the same governed launch (identity, credential, policy, exposure, project trust, sandbox, audit) and runs Pi's print mode in JSON. Only the options pi-code passes are accepted, by allowlist, and only under the marker; anything else, such as `--yolo`, is refused by name, a model outside `models.allowed` fails with `MODEL_DENIED`, tools and prompts can only be narrowed, and a launch without the marker is refused as before ([security](docs/security.md#subagent-child-launch)).
+- Launches that start a session at the same time (a subagent's parallel children) wait up to about three seconds for the package-configuration lock instead of failing at once with "Package configuration is being changed by another launch"; after that the same error is reported.
 
 ## v0.12.0
 
