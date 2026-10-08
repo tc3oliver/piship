@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Fixed
+
+- pi-code's `subagent` tool works in a distribution: its child processes run `<command> --mode json -p --no-session [options] <task>` under `PI_CODE_SUBAGENT=1`, which the branded launcher refused ("Unknown branded command option"), so every subagent ended "(no output)". The child now takes the same governed launch (identity, credential, policy, exposure, project trust, sandbox, audit) and runs Pi's print mode in JSON. Only the options pi-code passes are accepted, by allowlist, and only under the marker; anything else, such as `--yolo`, is refused by name, a model outside `models.allowed` fails with `MODEL_DENIED`, tools and prompts can only be narrowed, and a launch without the marker is refused as before ([security](docs/security.md#subagent-child-launch)).
+
 ## v0.12.0
 
 Minor milestone on Pi 1.0.3 and the stable `piship/v1` contracts (`piship/v1alpha6` stays accepted for the migration window). It removes the crashes, dead ends and repeated prompts a user meets from install to daily use, makes plain HTTP to private hosts work by default, and keeps every credential, integrity, sandbox and deny control as it was. A manifest that leaves out `runtime.pi` is accepted from this version, so a distribution that omits it needs one bridge release that still states it. Changes since v0.11.0:
