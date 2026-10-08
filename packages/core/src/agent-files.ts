@@ -530,51 +530,137 @@ function olderThan(path: string, ms: number): boolean {
   }
 }
 
+/**
+ * Takes the lock with its owner record already inside: the record is written
+ * in a directory of its own, which one rename puts at the lock's path, so no
+ * other launch can see a lock that its holder is still filling. False when
+ * the lock is held (the rename cannot replace a directory that has an owner
+ * record in it).
+ */
+function claim(guard: string): boolean {
+  // POSIX renames over an empty directory; one without an owner record (an
+  // older release's, still being filled) is not ours to replace.
+  if (existsSync(guard)) return false;
+  const staging = `${guard}.${randomUUID()}.new`;
+  mkdirSync(staging, { mode: 0o700 });
+  try {
+    writeFileSync(
+      join(staging, "owner.json"),
+      JSON.stringify({ pid: process.pid }),
+      { mode: 0o600, flag: "wx" },
+    );
+    renameSync(staging, guard);
+    return true;
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    // Held by another launch (a holder that let go in the meantime is found
+    // on the next attempt).
+    const code = (error as NodeJS.ErrnoException).code;
+    if (
+      existsSync(guard) ||
+      code === "ENOTEMPTY" ||
+      code === "EEXIST" ||
+      code === "EPERM"
+    )
+      return false;
+    throw error;
+  }
+}
+
+/**
+ * The pid in an owner record; "missing" when there is none (or it is not
+ * readable as one); "unknown" when reading it failed for any reason but
+ * absence, so the holder cannot be told dead.
+ */
+function readOwner(path: string): number | "missing" | "unknown" {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "missing"
+      : "unknown";
+  }
+  try {
+    const pid = (JSON.parse(text) as { pid?: unknown } | null)?.pid;
+    return typeof pid === "number" ? pid : "missing";
+  } catch {
+    return "missing";
+  }
+}
+
+/**
+ * Removes a directory nobody owns, by renaming it away first so that only
+ * one process does. A directory that turns out to have been replaced by a
+ * fresh one in the meantime is put back.
+ */
+function discardStale(path: string, recheck: boolean): void {
+  const away = `${path}.${randomUUID()}.stale`;
+  try {
+    renameSync(path, away);
+  } catch {
+    return;
+  }
+  if (recheck && !olderThan(away, AGENT_FILES_OWNERLESS_STALE_MS))
+    try {
+      renameSync(away, path);
+      return;
+    } catch {
+      // Something else is there now: this one is removed below.
+    }
+  rmSync(away, { recursive: true, force: true });
+}
+
+/** Staging and discarded directories a process that died left beside the lock. */
+function sweepStaging(agentDir: string): void {
+  for (const entry of readdirSync(agentDir)) {
+    if (!/^\.piship-agent-files-lock\..*\.(?:new|stale)$/.test(entry)) continue;
+    const path = join(agentDir, entry);
+    if (olderThan(path, AGENT_FILES_OWNERLESS_STALE_MS))
+      rmSync(path, { recursive: true, force: true });
+  }
+}
+
 function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const guard = filePath(agentDir, ".piship-agent-files-lock");
   const recovery = filePath(agentDir, ".piship-agent-files-recovery");
   const busy = () => new AgentFilesBusyError();
-  if (existsSync(recovery)) throw busy();
-  try {
-    mkdirSync(guard, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  if (existsSync(recovery)) {
+    // A recovery that never finished (its process died) must not block for good.
+    if (!olderThan(recovery, AGENT_FILES_OWNERLESS_STALE_MS)) throw busy();
+    // Only one process wins the rename; the age is looked at again after it.
+    discardStale(recovery, true);
+  }
+  if (!claim(guard)) {
     try {
       mkdirSync(recovery, { mode: 0o700 });
     } catch {
       throw busy();
     }
     try {
-      const holder = readJsonObject(
-        filePath(agentDir, ".piship-agent-files-lock/owner.json"),
-      );
-      if (holder && typeof holder.pid === "number") {
-        if (liveProcess(holder.pid)) throw busy();
+      const holder = readOwner(join(guard, "owner.json"));
+      if (holder === "unknown") {
+        // Unreadable for a reason other than absence (a scanner holding it
+        // open on Windows): its holder may be alive. Not ours to take.
+        throw busy();
+      }
+      if (typeof holder === "number") {
+        if (liveProcess(holder)) throw busy();
       } else if (!olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)) {
-        // Being written by its holder, or gone: not ours to take yet.
+        // No owner record: one an older release was still writing, or gone.
         throw busy();
       }
       // Every acquirer checks recovery after recording its live owner, so no
       // newcomer can mutate the config while this dead directory is removed.
-      const abandoned = `${guard}.${randomUUID()}.stale`;
-      renameSync(guard, abandoned);
-      rmSync(abandoned, { recursive: true });
+      discardStale(guard, false);
+      sweepStaging(agentDir);
     } finally {
       rmSync(recovery, { recursive: true });
     }
-    try {
-      mkdirSync(guard, { mode: 0o700 });
-    } catch {
-      throw busy();
-    }
+    if (!claim(guard)) throw busy();
   }
   try {
-    writeFileSync(
-      join(guard, "owner.json"),
-      JSON.stringify({ pid: process.pid }),
-      { mode: 0o600, flag: "wx" },
-    );
     if (existsSync(recovery)) throw busy();
     try {
       return operation();
@@ -590,7 +676,9 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
       );
     }
   } finally {
-    rmSync(guard, { recursive: true });
+    // Renamed away whole, never emptied in place: a directory with its owner
+    // record taken out would be one a rename can replace.
+    discardStale(guard, false);
   }
 }
 

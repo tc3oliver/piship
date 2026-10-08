@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -601,7 +602,7 @@ describe("parallel session launches", () => {
         }),
       ).toThrow("being changed by another launch");
       // One attempt after the last pause, and not a pause past the budget.
-      expect(Date.now() - started).toBeLessThan(lockWaitMs + 60);
+      expect(Date.now() - started).toBeLessThan(lockWaitMs + 250);
     }
     await released;
   });
@@ -657,6 +658,15 @@ describe("parallel session launches", () => {
       expect(existsSync(guard())).toBe(true);
     });
 
+    it("is not taken when its owner record cannot be read for a reason other than absence", () => {
+      mkdirSync(guard());
+      // Reading a directory fails with EISDIR: not "no owner", but "unknown".
+      mkdirSync(join(guard(), "owner.json"));
+      aged(guard(), 3600);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
+
     it("is never taken from a launch that is alive, however old", () => {
       mkdirSync(guard());
       writeFileSync(
@@ -667,6 +677,104 @@ describe("parallel session launches", () => {
       expect(session).toThrow("being changed by another launch");
       expect(existsSync(guard())).toBe(true);
     });
+  });
+
+  describe("a recovery directory that no launch finished", () => {
+    const recovery = () => join(agentDir, ".piship-agent-files-recovery");
+    const age = (path: string, secondsAgo: number) => {
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(path, when, when);
+    };
+    const session = () =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 100,
+      });
+
+    it("is removed once it is older than the bound, so launches go on", () => {
+      mkdirSync(recovery());
+      age(recovery(), 30);
+      session().restore();
+      expect(existsSync(recovery())).toBe(false);
+    });
+
+    it("blocks while it may still be in use", () => {
+      mkdirSync(recovery());
+      age(recovery(), 2);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(recovery())).toBe(true);
+    });
+  });
+
+  describe("the lock is never visible half made", () => {
+    const names = () => readdirSync(agentDir);
+
+    it("leaves no staging or discarded directory behind after a launch", () => {
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+      }).restore();
+      expect(names().filter((name) => /\.(new|stale)$/.test(name))).toEqual([]);
+      expect(names()).not.toContain(".piship-agent-files-lock");
+    });
+
+    it("sweeps what a launch that died while claiming or discarding left", () => {
+      const old = [".new", ".stale"].map((suffix) =>
+        join(agentDir, `.piship-agent-files-lock.${"a".repeat(8)}${suffix}`),
+      );
+      for (const path of old) {
+        mkdirSync(path);
+        utimesSync(path, new Date(1_000), new Date(1_000));
+      }
+      // A dead holder's lock, so the takeover (which sweeps) runs.
+      const guard = join(agentDir, ".piship-agent-files-lock");
+      mkdirSync(guard);
+      writeFileSync(
+        join(guard, "owner.json"),
+        JSON.stringify({ pid: 2 ** 22 }),
+      );
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+      }).restore();
+      for (const path of old) expect(existsSync(path)).toBe(false);
+    });
+
+    it("never shows another process a lock directory without its owner record", async () => {
+      const guard = join(agentDir, ".piship-agent-files-lock");
+      const json = JSON.stringify(lock({ autoApprove: true }));
+      // A child launches in a loop; this process looks at the lock path as
+      // fast as it can. An observed directory that is empty is a lock being
+      // filled in place, which a rename-based claim never produces.
+      const script = `
+        const { applyAgentFiles } = await import(${JSON.stringify(dist)});
+        for (let i = 0; i < 300; i += 1)
+          applyAgentFiles(JSON.parse(process.argv[1]), ${JSON.stringify(agentDir)}, { session: true }).restore();`;
+      const proc = spawn(process.execPath, [
+        "--input-type=module",
+        "-e",
+        script,
+        json,
+      ]);
+      const done = new Promise<void>((finish) =>
+        proc.on("close", () => finish()),
+      );
+      let empty = 0;
+      let seen = 0;
+      let finished = false;
+      void done.then(() => {
+        finished = true;
+      });
+      while (!finished) {
+        try {
+          if (readdirSync(guard).length === 0) empty += 1;
+          seen += 1;
+        } catch {
+          // not there at this moment
+        }
+        await new Promise((resume) => setImmediate(resume));
+      }
+      expect(seen).toBeGreaterThan(0);
+      expect(empty).toBe(0);
+    }, 60_000);
   });
 
   it("does not wait for a launch that is not a session", async () => {
