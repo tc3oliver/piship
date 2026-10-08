@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -18,11 +19,13 @@ import { execFile, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { processHostToken } from "@piship/contracts";
 import type { PackageAgentFile } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   agentFileContent,
   agentFileDigest,
+  agentFilesLockHooks,
   applyAgentFiles,
   applyPackageEnvironment,
   inspectAgentFiles,
@@ -676,6 +679,117 @@ describe("parallel session launches", () => {
       aged(guard(), 3600);
       expect(session).toThrow("being changed by another launch");
       expect(existsSync(guard())).toBe(true);
+    });
+  });
+
+  describe("the lock under failure and interleaving", () => {
+    const guard = () => join(agentDir, ".piship-agent-files-lock");
+    const ownerOf = () =>
+      JSON.parse(readFileSync(join(guard(), "owner.json"), "utf8"));
+    const fail = (code: string) =>
+      Object.assign(new Error(`${code}: injected`), { code });
+    const session = (lockWaitMs = 0) =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs,
+      });
+    /** A lock directory as a holder with this owner record would leave it. */
+    const holdAs = (owner: Record<string, unknown>) => {
+      rmSync(guard(), { recursive: true, force: true });
+      mkdirSync(guard());
+      writeFileSync(join(guard(), "owner.json"), JSON.stringify(owner));
+    };
+    afterEach(() => {
+      for (const key of Object.keys(agentFilesLockHooks))
+        delete (agentFilesLockHooks as Record<string, unknown>)[key];
+    });
+
+    it("retries a release whose rename fails, then lets go", () => {
+      let failures = 2;
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard() && failures-- > 0) throw fail("EPERM");
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(failures).toBeLessThan(0);
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("removes the lock in place when the rename keeps failing", () => {
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) throw fail("EBUSY");
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("surfaces an error only when the rename and the removal both fail", () => {
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) throw fail("EPERM");
+        renameSync(from, to);
+      };
+      agentFilesLockHooks.rm = (path) => {
+        if (path === guard()) throw fail("EBUSY");
+        rmSync(path, { recursive: true, force: true });
+      };
+      expect(() => session()).toThrow("could not be released");
+      // What a person is told to delete is there, and is ours.
+      expect(ownerOf().pid).toBe(process.pid);
+    });
+
+    it("does not remove a lock that is no longer its own when it lets go", () => {
+      agentFilesLockHooks.beforeRelease = () =>
+        holdAs({ pid: process.pid, token: "another-holder" });
+      // (Not restored: restoring needs the lock, which is another's now.)
+      session();
+      expect(ownerOf().token).toBe("another-holder");
+    });
+
+    it("puts back a lock a stalled recovery finds replaced by another holder's", () => {
+      holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      // The recovery read the dead holder's record, then stalled; meanwhile
+      // another launch took the lock.
+      agentFilesLockHooks.afterOwnerRead = () =>
+        holdAs({ pid: process.pid, token: "new-holder" });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("new-holder");
+    });
+
+    it("takes the lock of a dead holder whose process ID another process now has", () => {
+      holdAs({
+        pid: process.pid,
+        token: "dead-holder",
+        identity: null,
+        // The holder started a day before this process did.
+        started: Date.now() - 24 * 60 * 60 * 1000,
+        host: processHostToken(),
+      });
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("still treats a holder it cannot tell from its record as alive", () => {
+      holdAs({ pid: process.pid, token: "holder" });
+      expect(() => session()).toThrow("being changed by another launch");
+    });
+
+    it("tries a claim again once when its staging directory was swept, then reports busy", () => {
+      let sweeps = 1;
+      agentFilesLockHooks.rename = (from, to) => {
+        if (to === guard() && sweeps-- > 0) {
+          rmSync(from, { recursive: true });
+          throw fail("ENOENT");
+        }
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(sweeps).toBeLessThan(0);
+      sweeps = 2;
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(
+        readdirSync(agentDir).filter((name) => name.endsWith(".new")),
+      ).toEqual([]);
     });
   });
 

@@ -3,7 +3,7 @@
 // tells the two apart, so an owner record naming both is not mistaken for
 // live after a crash and a reuse of the ID.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   processAlive,
   processHostToken,
@@ -165,6 +165,11 @@ function startMs(identity: string): number | undefined {
   return Number(identity) * 1000;
 }
 
+// `ps` by its absolute path where the system has one there, so a PATH the
+// caller controls does not choose what answers; a system without /bin/ps
+// falls back to the PATH lookup.
+const PS = existsSync("/bin/ps") ? "/bin/ps" : "ps";
+
 function lookup(pid: number): string | undefined {
   try {
     if (process.platform === "linux") {
@@ -192,7 +197,7 @@ function lookup(pid: number): string | undefined {
     }
     // `ps` prints the start time in the caller's time zone and locale; a
     // fixed environment makes one process read the same for every caller.
-    const value = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+    const value = execFileSync(PS, ["-p", String(pid), "-o", "lstart="], {
       encoding: "utf8",
       timeout: 5000,
       env: { ...process.env, TZ: "UTC0", LC_ALL: "C" },

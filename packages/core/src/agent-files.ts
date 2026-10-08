@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, processHostToken } from "@piship/contracts";
 import { writeFileAtomic } from "@piship/credentials";
 import type {
   AgentFileMode,
@@ -25,6 +25,11 @@ import type {
   PackageEnvironmentValue,
 } from "@piship/schema";
 import type { DistributionLock, LockedAgentFile } from "./lock-schema.js";
+import {
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
+} from "./process-identity.js";
 
 /** The bytes written for a declared file: its JSON in declared key order. */
 export function agentFileContent(json: unknown): string {
@@ -530,49 +535,94 @@ function olderThan(path: string, ms: number): boolean {
   }
 }
 
+/** What a lock's `owner.json` says about the launch that holds it. */
+interface LockOwner {
+  readonly pid: number;
+  /** Random per claim: tells this holder's lock from a later holder's at the same path. */
+  readonly token: string | null;
+  /** The holder's start identity and time, and host (absent in an older release's record). */
+  readonly identity: string | null;
+  readonly started: number | null;
+  readonly host: string | null;
+}
+
+/**
+ * The file operations the lock goes through, and two points inside it, for
+ * tests to inject a failure or an interleaving. Unset in production.
+ */
+export const agentFilesLockHooks: {
+  rename?: (from: string, to: string) => void;
+  rm?: (path: string) => void;
+  /** After a taker read the owner it is about to discard. */
+  afterOwnerRead?: () => void;
+  /** Before the holder releases its lock. */
+  beforeRelease?: () => void;
+} = {};
+const rename = (from: string, to: string) =>
+  (agentFilesLockHooks.rename ?? renameSync)(from, to);
+const removeTree = (path: string) =>
+  (
+    agentFilesLockHooks.rm ??
+    ((target) => rmSync(target, { recursive: true, force: true }))
+  )(path);
+
 /**
  * Takes the lock with its owner record already inside: the record is written
  * in a directory of its own, which one rename puts at the lock's path, so no
- * other launch can see a lock that its holder is still filling. False when
- * the lock is held (the rename cannot replace a directory that has an owner
- * record in it).
+ * other launch can see a lock that its holder is still filling. Returns the
+ * record, or false when the lock is held (the rename cannot replace a
+ * directory that has an owner record in it).
  */
-function claim(guard: string): boolean {
-  // POSIX renames over an empty directory; one without an owner record (an
-  // older release's, still being filled) is not ours to replace.
-  if (existsSync(guard)) return false;
-  const staging = `${guard}.${randomUUID()}.new`;
-  mkdirSync(staging, { mode: 0o700 });
-  try {
-    writeFileSync(
-      join(staging, "owner.json"),
-      JSON.stringify({ pid: process.pid }),
-      { mode: 0o600, flag: "wx" },
-    );
-    renameSync(staging, guard);
-    return true;
-  } catch (error) {
-    rmSync(staging, { recursive: true, force: true });
-    // Held by another launch (a holder that let go in the meantime is found
-    // on the next attempt).
-    const code = (error as NodeJS.ErrnoException).code;
-    if (
-      existsSync(guard) ||
-      code === "ENOTEMPTY" ||
-      code === "EEXIST" ||
-      code === "EPERM"
-    )
-      return false;
-    throw error;
+function claim(guard: string): LockOwner | false {
+  for (let attempt = 0; ; attempt += 1) {
+    // POSIX renames over an empty directory; one without an owner record (an
+    // older release's, still being filled) is not ours to replace.
+    if (existsSync(guard)) return false;
+    const held: LockOwner = {
+      pid: process.pid,
+      token: randomUUID(),
+      identity: recordedIdentity(),
+      started: recordedStart(),
+      host: processHostToken(),
+    };
+    const staging = `${guard}.${randomUUID()}.new`;
+    mkdirSync(staging, { mode: 0o700 });
+    try {
+      writeFileSync(join(staging, "owner.json"), JSON.stringify(held), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      rename(staging, guard);
+      return held;
+    } catch (error) {
+      rmSync(staging, { recursive: true, force: true });
+      // Held by another launch (a holder that let go in the meantime is found
+      // on the next attempt).
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        existsSync(guard) ||
+        code === "ENOTEMPTY" ||
+        code === "EEXIST" ||
+        code === "EPERM"
+      )
+        return false;
+      // The staging directory was swept (it looked abandoned): once more,
+      // then the lock is simply busy.
+      if (code === "ENOENT") {
+        if (attempt === 0) continue;
+        throw new AgentFilesBusyError();
+      }
+      throw error;
+    }
   }
 }
 
 /**
- * The pid in an owner record; "missing" when there is none (or it is not
+ * The owner record of a lock; "missing" when there is none (or it is not
  * readable as one); "unknown" when reading it failed for any reason but
  * absence, so the holder cannot be told dead.
  */
-function readOwner(path: string): number | "missing" | "unknown" {
+function readOwner(path: string): LockOwner | "missing" | "unknown" {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -582,33 +632,146 @@ function readOwner(path: string): number | "missing" | "unknown" {
       : "unknown";
   }
   try {
-    const pid = (JSON.parse(text) as { pid?: unknown } | null)?.pid;
-    return typeof pid === "number" ? pid : "missing";
+    const value = JSON.parse(text) as Record<string, unknown> | null;
+    if (typeof value?.pid !== "number") return "missing";
+    const text_ = (field: string) =>
+      typeof value[field] === "string" ? (value[field] as string) : null;
+    return {
+      pid: value.pid,
+      token: text_("token"),
+      identity: text_("identity"),
+      started: typeof value.started === "number" ? value.started : null,
+      host: text_("host"),
+    };
   } catch {
     return "missing";
   }
 }
 
 /**
- * Removes a directory nobody owns, by renaming it away first so that only
- * one process does. A directory that turns out to have been replaced by a
- * fresh one in the meantime is put back.
+ * Whether the process a record names still runs and is the one that wrote
+ * it: a process ID that exists may belong to an unrelated process that was
+ * given it after the holder died, which the start identity (or time) tells.
+ * An older record without them is as live as its process ID.
  */
-function discardStale(path: string, recheck: boolean): void {
+function holderRuns(owner: LockOwner): boolean {
+  return (
+    liveProcess(owner.pid) &&
+    recordedProcessGone({
+      pid: owner.pid,
+      identity: owner.identity,
+      host: owner.host,
+      started: owner.started,
+    }) !== true
+  );
+}
+
+const sameOwner = (
+  found: LockOwner | "missing" | "unknown",
+  expected: LockOwner | "missing",
+) =>
+  expected === "missing"
+    ? found === "missing"
+    : typeof found === "object" &&
+      found.pid === expected.pid &&
+      found.token === expected.token;
+
+/**
+ * Takes a lock down by renaming it away first, so that only one process
+ * does, and then checking that what it renamed is the owner it meant to
+ * remove: a lock that was replaced by another holder's in the meantime (a
+ * recovery that stalled past its time limit) is put back, not deleted.
+ * "gone" when nothing was there; "changed" when it was not the expected
+ * owner's; a rename that fails for another reason throws.
+ */
+function takeDown(
+  path: string,
+  expected: LockOwner | "missing",
+): "removed" | "changed" | "gone" {
   const away = `${path}.${randomUUID()}.stale`;
   try {
-    renameSync(path, away);
+    rename(path, away);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
+    throw error;
+  }
+  if (!sameOwner(readOwner(join(away, "owner.json")), expected)) {
+    try {
+      // Exclusive: it fails if something took the path since.
+      rename(away, path);
+    } catch {
+      // The displaced holder lost its lock to a newer one; its release finds
+      // the lock is no longer its own and leaves it alone.
+    }
+    return "changed";
+  }
+  try {
+    removeTree(away);
+  } catch {
+    // Moved out of the way; a later takeover sweeps what is left.
+  }
+  return "removed";
+}
+
+/**
+ * Removes a recovery directory a launch that died left: renamed away so that
+ * one process does it, and put back when it turns out not to be old.
+ */
+function discardRecovery(path: string): void {
+  const away = `${path}.${randomUUID()}.stale`;
+  try {
+    rename(path, away);
   } catch {
     return;
   }
-  if (recheck && !olderThan(away, AGENT_FILES_OWNERLESS_STALE_MS))
+  if (!olderThan(away, AGENT_FILES_OWNERLESS_STALE_MS))
     try {
-      renameSync(away, path);
+      rename(away, path);
       return;
     } catch {
       // Something else is there now: this one is removed below.
     }
-  rmSync(away, { recursive: true, force: true });
+  try {
+    removeTree(away);
+  } catch {
+    // swept later
+  }
+}
+
+/**
+ * Lets go of the lock this launch holds. The rename is retried (on Windows
+ * a scanner holding the directory fails it for a moment), then the lock is
+ * removed in place; only if both fail is the error surfaced, since a lock
+ * left behind with a live holder blocks every later launch.
+ */
+function release(guard: string, held: LockOwner): void {
+  agentFilesLockHooks.beforeRelease?.();
+  const ownerFile = join(guard, "owner.json");
+  // Not ours any more (or gone): nothing to remove.
+  if (!sameOwner(readOwner(ownerFile), held)) return;
+  let failure: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      takeDown(guard, held);
+      return;
+    } catch (error) {
+      failure = error;
+      pause(20 * 2 ** attempt);
+    }
+  }
+  try {
+    if (sameOwner(readOwner(ownerFile), held)) removeTree(guard);
+    return;
+  } catch (error) {
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "The package configuration lock could not be released",
+      {
+        userAction: `Close any program that holds ${guard} open, then delete that directory`,
+        cause: error ?? failure,
+      },
+    );
+  }
 }
 
 /** Staging and discarded directories a process that died left beside the lock. */
@@ -630,9 +793,10 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
     // A recovery that never finished (its process died) must not block for good.
     if (!olderThan(recovery, AGENT_FILES_OWNERLESS_STALE_MS)) throw busy();
     // Only one process wins the rename; the age is looked at again after it.
-    discardStale(recovery, true);
+    discardRecovery(recovery);
   }
-  if (!claim(guard)) {
+  let held = claim(guard);
+  if (!held) {
     try {
       mkdirSync(recovery, { mode: 0o700 });
     } catch {
@@ -640,25 +804,35 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
     }
     try {
       const holder = readOwner(join(guard, "owner.json"));
+      agentFilesLockHooks.afterOwnerRead?.();
       if (holder === "unknown") {
         // Unreadable for a reason other than absence (a scanner holding it
         // open on Windows): its holder may be alive. Not ours to take.
         throw busy();
       }
-      if (typeof holder === "number") {
-        if (liveProcess(holder)) throw busy();
+      if (typeof holder === "object") {
+        if (holderRuns(holder)) throw busy();
       } else if (!olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)) {
         // No owner record: one an older release was still writing, or gone.
         throw busy();
       }
       // Every acquirer checks recovery after recording its live owner, so no
       // newcomer can mutate the config while this dead directory is removed.
-      discardStale(guard, false);
+      // The lock that is taken down is the one that was read: if a stalled
+      // recovery lets another holder in meanwhile, that one is put back.
+      let outcome: ReturnType<typeof takeDown>;
+      try {
+        outcome = takeDown(guard, holder);
+      } catch {
+        throw busy();
+      }
+      if (outcome === "changed") throw busy();
       sweepStaging(agentDir);
     } finally {
-      rmSync(recovery, { recursive: true });
+      rmSync(recovery, { recursive: true, force: true });
     }
-    if (!claim(guard)) throw busy();
+    held = claim(guard);
+    if (!held) throw busy();
   }
   try {
     if (existsSync(recovery)) throw busy();
@@ -678,7 +852,7 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   } finally {
     // Renamed away whole, never emptied in place: a directory with its owner
     // record taken out would be one a rename can replace.
-    discardStale(guard, false);
+    release(guard, held);
   }
 }
 
