@@ -196,6 +196,24 @@ export function activateExposure(
     ]);
 }
 
+/**
+ * The table of a session whose tools an allowlist bounds (a subagent child's
+ * `--tools`). Codemode runs scripts that call any tool, and tool search
+ * activates any deferred one, so with either active the allowlist would bound
+ * nothing: both stay registered but inactive, and the integrity check does
+ * not require them (it reads this table's `mandatoryActive`).
+ */
+export function boundedByAllowlist(
+  table: ToolExposureTable,
+): ToolExposureTable {
+  return {
+    ...table,
+    codemodeOn: false,
+    toolSearchOn: false,
+    mandatoryActive: () => [],
+  };
+}
+
 /** `live` exposes a tool more widely than the `resolved` exposure. */
 export function widerExposure(
   live: ToolExposure,

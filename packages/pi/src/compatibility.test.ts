@@ -57,6 +57,7 @@ import {
   UNRESOLVED_EXPOSURE_RULE,
 } from "./builtins.js";
 import {
+  boundedByAllowlist,
   buildExposureTable,
   DEFAULT_EXPOSURE_CONFIG,
   type ExposureConfig,
@@ -82,9 +83,11 @@ import {
 } from "./launch/redaction.js";
 import {
   type EnforcedRuntime,
+  enforcedRuntime,
   governCacheWarming,
   runtimeIntegrityExtension,
 } from "./launch/runtime-integrity.js";
+import { childToolOptions } from "./launch/subagent-child.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 // The scheduled Pi latest canary installs the newest published Pi over the
@@ -2086,6 +2089,8 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       ui?: Record<string, unknown>;
       sessionManager?: SessionManager;
       mode?: "managed";
+      /** A subagent child started with `--tools`. */
+      childTools?: string[];
     } = {},
   ) {
     const distribution = join(temp, "distribution");
@@ -2190,11 +2195,15 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       ],
     });
     await resourceLoader.reload();
-    const table = buildExposureTable(
+    const built = buildExposureTable(
       gov,
       config,
       extensionToolsOf(resourceLoader),
     );
+    const child = options.childTools
+      ? { prompt: "task", tools: options.childTools }
+      : undefined;
+    const table = child ? boundedByAllowlist(built) : built;
     gov.exposure = table;
     gov.piExtensions = () => resourceLoader.getExtensions().extensions;
     const selected = runtime.getModel("acmecode", "acme/coder");
@@ -2210,7 +2219,13 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       resourceLoader,
       noTools: "builtin",
       customTools: governedTools(gov, workspace, table),
-      excludeTools: table.excluded(),
+      ...(child
+        ? childToolOptions(
+            child,
+            table.excluded(),
+            enforcedRuntime(gov, undefined).mandatoryTools,
+          )
+        : { excludeTools: table.excluded() }),
     });
     activateExposure(agent, table);
     await agent.bindExtensions(
@@ -2476,6 +2491,22 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
           event.event === "tool.request" && event.resource === "codemode",
       ),
     ).toHaveLength(2);
+    agent.dispose();
+  });
+
+  it("a child started with --tools read cannot reach other tools through Codemode or tool search", async () => {
+    const on = { codemode: "on", toolSearch: "on" } as const;
+    const whole = await governed({ config: on });
+    // Without a bound the launch activates both, and through them every tool.
+    expect(whole.agent.getActiveToolNames()).toEqual(
+      expect.arrayContaining(["codemode", "tool_search"]),
+    );
+    whole.agent.dispose();
+    const { agent, gov } = await governed({ config: on, childTools: ["read"] });
+    expect(agent.getActiveToolNames()).toEqual(["read"]);
+    // Neither is required either, so the integrity check does not bring
+    // them back.
+    expect(enforcedRuntime(gov, undefined).mandatoryTools).toEqual([]);
     agent.dispose();
   });
 

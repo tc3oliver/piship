@@ -26,6 +26,7 @@ import {
 } from "../governance.js";
 import {
   activateExposure,
+  boundedByAllowlist,
   buildExposureTable,
   exposureConfigOf,
   exposureFactories,
@@ -392,7 +393,7 @@ async function startRuntime(
     // Hidden and denied tools, and Pi's ungoverned base tools, are excluded
     // from the session; an extension tool wider than the manifest allows
     // fails the launch.
-    const table =
+    const built =
       gov && exposureConfig
         ? buildExposureTable(
             gov,
@@ -400,6 +401,9 @@ async function startRuntime(
             extensionToolsOf(resourceLoader),
           )
         : null;
+    // A child's `--tools` is a bound: Codemode and tool search would reach
+    // tools it leaves out, so they stay inactive in such a child.
+    const table = built && child?.tools ? boundedByAllowlist(built) : built;
     if (gov) {
       gov.exposure = table;
       gov.piExtensions = () => resourceLoader.getExtensions().extensions;
