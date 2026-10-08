@@ -25,7 +25,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   agentFileContent,
   agentFileDigest,
-  agentFilesLockHooks,
   applyAgentFiles,
   applyPackageEnvironment,
   inspectAgentFiles,
@@ -33,6 +32,7 @@ import {
   packageEnvironment,
   sessionAutoApproveTarget,
 } from "./agent-files.js";
+import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock } from "./lock-schema.js";
 
 const PATH = "extensions/provider/config.json";
@@ -746,14 +746,72 @@ describe("parallel session launches", () => {
       expect(ownerOf().token).toBe("another-holder");
     });
 
-    it("puts back a lock a stalled recovery finds replaced by another holder's", () => {
+    it("never moves a lock a stalled recovery finds replaced by another holder's", () => {
       holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      const moved: string[] = [];
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) moved.push(from);
+        renameSync(from, to);
+      };
       // The recovery read the dead holder's record, then stalled; meanwhile
-      // another launch took the lock.
+      // another launch took the lock and is running its operation.
       agentFilesLockHooks.afterOwnerRead = () =>
         holdAs({ pid: process.pid, token: "new-holder" });
       expect(() => session()).toThrow("being changed by another launch");
       expect(ownerOf().token).toBe("new-holder");
+      // Not renamed away and put back: not touched at all.
+      expect(moved).toEqual([]);
+    });
+
+    it("marks its recovery directory as in use again before it takes a lock down", () => {
+      holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      const recovery = join(agentDir, ".piship-agent-files-recovery");
+      let idle = Number.NaN;
+      // The owner check was slow: the directory looks abandoned by now.
+      agentFilesLockHooks.afterOwnerRead = () => {
+        const old = new Date(Date.now() - 60_000);
+        utimesSync(recovery, old, old);
+      };
+      agentFilesLockHooks.afterHolderCheck = () => {
+        idle = Date.now() - statSync(recovery).mtimeMs;
+      };
+      session().restore();
+      expect(idle).toBeLessThan(5_000);
+    });
+
+    it("retries a release when the owner record cannot be read for a moment, and does not leave the lock", () => {
+      let moves = 0;
+      agentFilesLockHooks.rename = (from, to) => {
+        const record = (dir: string) => join(dir, "owner.json");
+        if (from === guard()) {
+          moves += 1;
+          renameSync(from, to);
+          if (moves === 1) {
+            // A scanner holds the record: it reads as unreadable, not absent.
+            renameSync(record(to), `${record(to)}.kept`);
+            mkdirSync(record(to));
+          }
+          return;
+        }
+        if (to === guard() && from.endsWith(".stale")) {
+          // Put back: the scanner has let go by now.
+          rmSync(record(from), { recursive: true, force: true });
+          renameSync(`${record(from)}.kept`, record(from));
+        }
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(moves).toBeGreaterThanOrEqual(2);
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("reports a release it cannot do because the owner record stays unreadable", () => {
+      agentFilesLockHooks.beforeRelease = () => {
+        renameSync(join(guard(), "owner.json"), join(guard(), "kept.json"));
+        mkdirSync(join(guard(), "owner.json"));
+      };
+      expect(() => session()).toThrow("could not be released");
+      expect(existsSync(guard())).toBe(true);
     });
 
     it("takes the lock of a dead holder whose process ID another process now has", () => {
@@ -812,6 +870,24 @@ describe("parallel session launches", () => {
       expect(existsSync(recovery())).toBe(false);
     });
 
+    it("does not replace a fresh recovery directory made while it discarded the old one", () => {
+      mkdirSync(recovery());
+      age(recovery(), 30);
+      let fresh = -1;
+      agentFilesLockHooks.rename = (from, to) => {
+        renameSync(from, to);
+        if (from === recovery()) {
+          // The directory moved looks fresh again, and another launch has
+          // made a recovery of its own at the path.
+          age(to, 0);
+          mkdirSync(recovery());
+          fresh = statSync(recovery()).ino;
+        }
+      };
+      expect(session).toThrow("being changed by another launch");
+      expect(statSync(recovery()).ino).toBe(fresh);
+    });
+
     it("blocks while it may still be in use", () => {
       mkdirSync(recovery());
       age(recovery(), 2);
@@ -832,9 +908,11 @@ describe("parallel session launches", () => {
     });
 
     it("sweeps what a launch that died while claiming or discarding left", () => {
-      const old = [".new", ".stale"].map((suffix) =>
-        join(agentDir, `.piship-agent-files-lock.${"a".repeat(8)}${suffix}`),
-      );
+      const old = [
+        ".piship-agent-files-lock.aaaaaaaa.new",
+        ".piship-agent-files-lock.aaaaaaaa.stale",
+        ".piship-agent-files-recovery.aaaaaaaa.stale",
+      ].map((name) => join(agentDir, name));
       for (const path of old) {
         mkdirSync(path);
         utimesSync(path, new Date(1_000), new Date(1_000));

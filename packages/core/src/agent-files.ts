@@ -14,6 +14,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,6 +25,7 @@ import type {
   PackageAgentFile,
   PackageEnvironmentValue,
 } from "@piship/schema";
+import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock, LockedAgentFile } from "./lock-schema.js";
 import {
   recordedIdentity,
@@ -546,18 +548,6 @@ interface LockOwner {
   readonly host: string | null;
 }
 
-/**
- * The file operations the lock goes through, and two points inside it, for
- * tests to inject a failure or an interleaving. Unset in production.
- */
-export const agentFilesLockHooks: {
-  rename?: (from: string, to: string) => void;
-  rm?: (path: string) => void;
-  /** After a taker read the owner it is about to discard. */
-  afterOwnerRead?: () => void;
-  /** Before the holder releases its lock. */
-  beforeRelease?: () => void;
-} = {};
 const rename = (from: string, to: string) =>
   (agentFilesLockHooks.rename ?? renameSync)(from, to);
 const removeTree = (path: string) =>
@@ -677,17 +667,23 @@ const sameOwner = (
       found.token === expected.token;
 
 /**
- * Takes a lock down by renaming it away first, so that only one process
- * does, and then checking that what it renamed is the owner it meant to
- * remove: a lock that was replaced by another holder's in the meantime (a
- * recovery that stalled past its time limit) is put back, not deleted.
- * "gone" when nothing was there; "changed" when it was not the expected
- * owner's; a rename that fails for another reason throws.
+ * Takes a lock down: the owner is read in place first and the lock is only
+ * moved if it is the one expected, then it is renamed away (so that only one
+ * process does it) and the owner is read once more from the renamed
+ * directory; a lock that is not the expected owner's is never removed, and is
+ * put back if it was moved. "gone" when nothing was there; "changed" when it
+ * was another owner's; "unknown" when the owner could not be read (a scanner
+ * holding the file on Windows), which says nothing about whose it is. A
+ * rename that fails for another reason throws.
  */
 function takeDown(
   path: string,
   expected: LockOwner | "missing",
-): "removed" | "changed" | "gone" {
+): "removed" | "changed" | "gone" | "unknown" {
+  if (!existsSync(path)) return "gone";
+  const before = readOwner(join(path, "owner.json"));
+  if (before === "unknown") return "unknown";
+  if (!sameOwner(before, expected)) return "changed";
   const away = `${path}.${randomUUID()}.stale`;
   try {
     rename(path, away);
@@ -695,15 +691,17 @@ function takeDown(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
     throw error;
   }
-  if (!sameOwner(readOwner(join(away, "owner.json")), expected)) {
+  const found = readOwner(join(away, "owner.json"));
+  if (!sameOwner(found, expected)) {
     try {
-      // Exclusive: it fails if something took the path since.
-      rename(away, path);
+      // Only where nothing took the path since (a rename over an empty
+      // directory would replace it).
+      if (!existsSync(path)) rename(away, path);
     } catch {
       // The displaced holder lost its lock to a newer one; its release finds
       // the lock is no longer its own and leaves it alone.
     }
-    return "changed";
+    return found === "unknown" ? "unknown" : "changed";
   }
   try {
     removeTree(away);
@@ -715,7 +713,8 @@ function takeDown(
 
 /**
  * Removes a recovery directory a launch that died left: renamed away so that
- * one process does it, and put back when it turns out not to be old.
+ * one process does it, and put back when it turns out not to be old (unless
+ * a fresh one has been made since, which is then the other launch's).
  */
 function discardRecovery(path: string): void {
   const away = `${path}.${randomUUID()}.stale`;
@@ -726,8 +725,10 @@ function discardRecovery(path: string): void {
   }
   if (!olderThan(away, AGENT_FILES_OWNERLESS_STALE_MS))
     try {
-      rename(away, path);
-      return;
+      if (!existsSync(path)) {
+        rename(away, path);
+        return;
+      }
     } catch {
       // Something else is there now: this one is removed below.
     }
@@ -738,29 +739,40 @@ function discardRecovery(path: string): void {
   }
 }
 
+/** Marks the recovery directory as in use, so that a slow recoverer does not look dead. */
+function touch(path: string): void {
+  try {
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {
+    // gone: the next check finds out
+  }
+}
+
 /**
  * Lets go of the lock this launch holds. The rename is retried (on Windows
- * a scanner holding the directory fails it for a moment), then the lock is
- * removed in place; only if both fail is the error surfaced, since a lock
- * left behind with a live holder blocks every later launch.
+ * a scanner holding the directory fails it for a moment, or hides the owner
+ * record), then the lock is removed in place; only if both fail is the error
+ * surfaced, since a lock left behind with a live holder blocks every later
+ * launch.
  */
 function release(guard: string, held: LockOwner): void {
   agentFilesLockHooks.beforeRelease?.();
   const ownerFile = join(guard, "owner.json");
-  // Not ours any more (or gone): nothing to remove.
-  if (!sameOwner(readOwner(ownerFile), held)) return;
   let failure: unknown;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      takeDown(guard, held);
-      return;
+      // Gone or another owner's: nothing of ours to remove.
+      if (takeDown(guard, held) !== "unknown") return;
     } catch (error) {
       failure = error;
-      pause(20 * 2 ** attempt);
     }
+    pause(20 * 2 ** attempt);
   }
   try {
-    if (sameOwner(readOwner(ownerFile), held)) removeTree(guard);
+    const found = readOwner(ownerFile);
+    if (found === "unknown") throw new Error("the owner record is unreadable");
+    if (sameOwner(found, held)) removeTree(guard);
     return;
   } catch (error) {
     throw new PiShipError(
@@ -768,7 +780,7 @@ function release(guard: string, held: LockOwner): void {
       "The package configuration lock could not be released",
       {
         userAction: `Close any program that holds ${guard} open, then delete that directory`,
-        cause: error ?? failure,
+        cause: failure ?? error,
       },
     );
   }
@@ -777,7 +789,10 @@ function release(guard: string, held: LockOwner): void {
 /** Staging and discarded directories a process that died left beside the lock. */
 function sweepStaging(agentDir: string): void {
   for (const entry of readdirSync(agentDir)) {
-    if (!/^\.piship-agent-files-lock\..*\.(?:new|stale)$/.test(entry)) continue;
+    if (
+      !/^\.piship-agent-files-(?:lock|recovery)\..*\.(?:new|stale)$/.test(entry)
+    )
+      continue;
     const path = join(agentDir, entry);
     if (olderThan(path, AGENT_FILES_OWNERLESS_STALE_MS))
       rmSync(path, { recursive: true, force: true });
@@ -816,6 +831,11 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
         // No owner record: one an older release was still writing, or gone.
         throw busy();
       }
+      // The check above can be slow (a process lookup that starts a process);
+      // the recovery directory is marked as in use again before the lock is
+      // touched, so that it does not look abandoned to a launch that waited.
+      touch(recovery);
+      agentFilesLockHooks.afterHolderCheck?.();
       // Every acquirer checks recovery after recording its live owner, so no
       // newcomer can mutate the config while this dead directory is removed.
       // The lock that is taken down is the one that was read: if a stalled
@@ -826,7 +846,7 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
       } catch {
         throw busy();
       }
-      if (outcome === "changed") throw busy();
+      if (outcome === "changed" || outcome === "unknown") throw busy();
       sweepStaging(agentDir);
     } finally {
       rmSync(recovery, { recursive: true, force: true });
