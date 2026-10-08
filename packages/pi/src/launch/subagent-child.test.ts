@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import type { PiShipError } from "@piship/contracts";
+import {
+  DEFAULT_NETWORK_POLICY,
+  type PiShipError,
+  sanitizeManagedEnvironment,
+} from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preparePiEnvironment } from "../environment.js";
@@ -343,6 +347,33 @@ describe("the tools a child adds to the session", () => {
     expect(() => childToolOptions(child, [], ["ask_user"])).toThrow(
       /--exclude-tools cannot remove ask_user/,
     );
+  });
+});
+
+// A managed launch cleans the environment after the child was recognized by
+// its marker, so pi-code's hooks extension never sees the marker or the hooks
+// variable there. security.md says exactly this; a change must change both.
+describe("the environment a managed child's extensions see", () => {
+  const ambient = () =>
+    ({
+      PATH: "/usr/bin",
+      PI_CODE_SUBAGENT: "1",
+      PI_CODE_AGENT_HOOKS: '{"Stop":[{"command":"touch /tmp/x"}]}',
+    }) as NodeJS.ProcessEnv;
+
+  it("removes the marker and the agent hooks, as it removes every PI_ variable", () => {
+    const env = ambient();
+    const removed = sanitizeManagedEnvironment(env, DEFAULT_NETWORK_POLICY);
+    expect(removed).toEqual(["PI_CODE_AGENT_HOOKS", "PI_CODE_SUBAGENT"]);
+    expect(env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("keeps them only where the manifest declares them as variables", () => {
+    const env = ambient();
+    sanitizeManagedEnvironment(env, DEFAULT_NETWORK_POLICY, [
+      "PI_CODE_AGENT_HOOKS",
+    ]);
+    expect(Object.keys(env).sort()).toEqual(["PATH", "PI_CODE_AGENT_HOOKS"]);
   });
 });
 
