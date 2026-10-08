@@ -593,7 +593,11 @@ function claim(guard: string): LockOwner | false {
         existsSync(guard) ||
         code === "ENOTEMPTY" ||
         code === "EEXIST" ||
-        code === "EPERM"
+        // Windows: a directory cannot be renamed onto an existing one, or
+        // while another process (or a scanner) has a handle inside it.
+        code === "EPERM" ||
+        code === "EACCES" ||
+        code === "EBUSY"
       )
         return false;
       // The staging directory was swept (it looked abandoned): once more,
