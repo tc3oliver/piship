@@ -90,6 +90,9 @@ const JAVASCRIPT = /\.(?:js|mjs|cjs)$/;
 const TYPESCRIPT = /\.(?:ts|mts|cts)$/;
 const SELF_LOCATION =
   /\b__dirname\b|\b__filename\b|\bimport\s*\.\s*meta\s*\.\s*(?:url|dirname|filename)\b/;
+// The part of SELF_LOCATION an ES module does not have: `import.meta` works in
+// a module read natively, `__dirname` does not.
+const CJS_LOCATION = /\b__dirname\b|\b__filename\b/;
 
 function listTree(root: string): string[] {
   const files: string[] = [];
@@ -113,6 +116,8 @@ interface Graph {
         readonly path: string;
         readonly kind: string;
         readonly external?: boolean;
+        /** The specifier as written, when esbuild resolved it to another path. */
+        readonly original?: string;
       }[];
     }
   >;
@@ -564,6 +569,12 @@ export interface TranspileResult {
   readonly written: readonly string[];
   /** Closure modules left as they are because a JavaScript sibling exists. */
   readonly kept: readonly string[];
+  /**
+   * What works under Pi's loader but not when Node imports the written files
+   * itself (docs/manifest.md, "pretranspile"). The build goes on: the files
+   * are written for the loader.
+   */
+  readonly warnings: readonly string[];
 }
 
 const TRANSPILED: Readonly<Record<string, string>> = {
@@ -628,6 +639,8 @@ export function pretranspileClosures(
     );
     const own = `${options.packagePath}/`;
     const imported = new Set<string>();
+    // How each module is named by the imports that reach it.
+    const spellings = new Map<string, Set<string>>();
     for (const [file, input] of inputs)
       for (const item of input.imports) {
         if (item.external) continue;
@@ -635,6 +648,14 @@ export function pretranspileClosures(
         if (item.kind === "require-call" && transpiledName(target))
           throw unsupported(options.id, `${file} requires ${target}`);
         imported.add(target);
+        if (item.original && /^\.\.?\//.test(item.original)) {
+          const kind = /\.m?js$/.test(item.original)
+            ? "x.js"
+            : /\.m?ts$/.test(item.original)
+              ? "x.ts"
+              : "x";
+          spellings.set(target, (spellings.get(target) ?? new Set()).add(kind));
+        }
       }
     const files = [...imported]
       .filter(
@@ -658,6 +679,7 @@ export function pretranspileClosures(
         (file) => !exists(transpiledName(file) as string),
       ),
       kept: files.filter((file) => exists(transpiledName(file) as string)),
+      split: files.filter((file) => (spellings.get(file)?.size ?? 0) > 1),
     };
   });
   const builds = plans.flatMap((plan, index) =>
@@ -680,6 +702,7 @@ export function pretranspileClosures(
             platform: "node",
             target: "esnext",
             sourcemap: false,
+            metafile: true,
             logLevel: "silent",
             tsconfigRaw: {},
           } as Record<string, unknown>,
@@ -692,6 +715,8 @@ export function pretranspileClosures(
     : [];
   const written: string[][] = list.map(() => []);
   const outputs: { path: string; text: string; index: number }[] = [];
+  // What each written module exports, by absolute path.
+  const exported = new Map<string, ReadonlySet<string>>();
   builds.forEach((build, position) => {
     const outcome = outcomes[position] as BuildOutcome;
     const id = (list[build.index] as { id: string }).id;
@@ -701,6 +726,13 @@ export function pretranspileClosures(
         outcome.failure.errors[0]?.text ??
           outcome.failure.message.split("\n")[0] ??
           "esbuild failed",
+      );
+    for (const [path, output] of Object.entries(
+      outcome.build.metafile?.outputs ?? {},
+    ))
+      exported.set(
+        resolve(roots[build.index] as string, path),
+        new Set(output.exports),
       );
     for (const file of outcome.build.outputFiles ?? []) {
       outputs.push({ path: file.path, text: file.text, index: build.index });
@@ -724,8 +756,111 @@ export function pretranspileClosures(
   return plans.map((plan, index) => ({
     written: (written[index] as string[]).sort(),
     kept: plan.kept,
+    warnings: nativeImportProblems(
+      outputs.filter((output) => output.index === index),
+      exported,
+      roots[index] as string,
+      plan.split,
+    ),
   }));
 }
+
+// A named import or re-export from a relative module, as esbuild writes it
+// (one statement at the start of a line).
+const NAMED_IMPORT =
+  /^(?:import|export)\s+(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*["'](\.\.?\/[^"']+)["']/gm;
+
+/** Whether a free name is declared in the module (`const require = createRequire(...)`). */
+const declares = (text: string, name: string) =>
+  new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}\\b`).test(text);
+
+/**
+ * What Pi's loader (jiti) accepts in the written files and Node's own module
+ * loader does not. The files are written for the loader, so these are
+ * reported, not refused:
+ *
+ * - a named import or re-export of a name the transpiled module does not
+ *   export: `export { T } from "./a.js"` survives esbuild when `T` is a type,
+ *   and the loader reads it as `undefined` where Node fails to link;
+ * - `__dirname`, `__filename`, or `require` used without being declared, which
+ *   an ES module does not have;
+ * - a package.json without `"type": "module"`, which makes Node read a
+ *   written `.js` file as CommonJS;
+ * - a module imported both as `./x` and as `./x.js`, which the loader may
+ *   resolve to `x.ts` and to the written `x.js`: two instances of one module.
+ */
+function nativeImportProblems(
+  outputs: readonly { path: string; text: string }[],
+  exported: ReadonlyMap<string, ReadonlySet<string>>,
+  root: string,
+  split: readonly string[],
+): string[] {
+  const problems: string[] = [];
+  const name = (path: string) => closureKey(root, path);
+  for (const { path, text } of outputs) {
+    for (const match of text.matchAll(NAMED_IMPORT)) {
+      const target = resolve(dirname(path), match[2] as string);
+      const names = exported.get(target);
+      // `export *` hides what a module exports from its own metafile entry.
+      if (!names || /^export\s*\*/m.test(outputText(outputs, target))) continue;
+      const missing = (match[1] as string)
+        .split(",")
+        .map((item) => item.trim().split(/\s+as\s+/)[0] as string)
+        .filter((item) => item && !names.has(item));
+      if (missing.length)
+        problems.push(
+          `${name(path)} imports ${missing.join(", ")} from ${name(target)}, which does not export ${missing.length > 1 ? "them" : "it"} once transpiled (a type imported or re-exported as a value); Node fails to link it`,
+        );
+    }
+    for (const global of ["__dirname", "__filename", "require"] as const) {
+      const used =
+        global === "require"
+          ? /(?<![.\w$])require\s*(?:\.|\)|;|$)/m.test(text)
+          : CJS_LOCATION.test(text) && new RegExp(`\\b${global}\\b`).test(text);
+      if (used && !declares(text, global))
+        problems.push(
+          `${name(path)} uses ${global}, which an ES module does not have; Node fails on it`,
+        );
+    }
+  }
+  const typed = new Set<string>();
+  for (const { path } of outputs) {
+    if (!path.endsWith(".js")) continue;
+    let directory = dirname(path);
+    for (;;) {
+      const manifest = join(directory, "package.json");
+      if (existsSync(manifest)) {
+        let type: unknown;
+        try {
+          type = (
+            JSON.parse(readFileSync(manifest, "utf8")) as { type?: unknown }
+          ).type;
+        } catch {
+          // read as CommonJS, like a manifest without a type
+        }
+        if (type !== "module" && !typed.has(manifest)) {
+          typed.add(manifest);
+          problems.push(
+            `${name(manifest)} has no "type": "module", so Node reads the written .js files below it as CommonJS`,
+          );
+        }
+        break;
+      }
+      if (directory === root || dirname(directory) === directory) break;
+      directory = dirname(directory);
+    }
+  }
+  for (const file of split)
+    problems.push(
+      `${file} is imported both as ./x and as ./x.js (or ./x.ts): the loader can resolve them to two files, so two instances of the module`,
+    );
+  return problems.sort();
+}
+
+const outputText = (
+  outputs: readonly { path: string; text: string }[],
+  path: string,
+) => outputs.find((output) => resolve(output.path) === path)?.text ?? "";
 
 /**
  * Every output is parsed as an ES module by the Node that builds, in one

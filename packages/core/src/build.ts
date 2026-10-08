@@ -571,6 +571,10 @@ export function buildDistribution(
         options.progress?.(
           `pi package pretranspile: ${transpiling[index]?.locked.id}: ${result.written.length} modules written${result.kept.length ? `, ${result.kept.length} kept (JavaScript exists)` : ""}`,
         );
+        for (const warning of result.warnings)
+          options.progress?.(
+            `Warning: pi package pretranspile: ${transpiling[index]?.locked.id}: ${warning}`,
+          );
       });
       debugTiming("pi package pretranspile", phase);
       phase = process.hrtime.bigint();

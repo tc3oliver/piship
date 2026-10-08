@@ -558,6 +558,7 @@ describe("pretranspiling a TypeScript closure", () => {
         "node_modules/ext/lib/values.js",
       ],
       kept: ["node_modules/ext/lib/kept.ts"],
+      warnings: [],
     });
     expect(tree(fixture.root)).toEqual(
       [...before, ...(result?.written ?? [])].sort(),
@@ -728,6 +729,88 @@ export const other = helper(shape.size);
     );
     expect(other).not.toMatch(/types\.js|Shape/);
     expect(other).toMatch(/helper\.mjs/);
+  });
+});
+
+describe("pretranspile warns where Node, not Pi's loader, would fail", () => {
+  const OTHER = "node_modules/ext/extensions/other.ts";
+  const warnings = (overrides: Record<string, string>) =>
+    pretranspile(typescriptPackage(overrides))?.warnings ?? [];
+
+  it("says nothing for a package Node can import as it is", () => {
+    expect(warnings({})).toEqual([]);
+    // Declared by the module itself, and import.meta, are fine in an ES module.
+    expect(
+      warnings({
+        [OTHER]: `import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const require = createRequire(import.meta.url);
+export const other = (): string => __dirname + require.resolve("node:fs");
+`,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names a type re-exported as a value, which Node fails to link", () => {
+    expect(
+      warnings({
+        [OTHER]: `export { Shape } from "../lib/types.js";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /extensions\/other\.js imports Shape from node_modules\/ext\/lib\/types\.js.*does not export it/,
+      ),
+    ]);
+    // A real export of the same module is not one.
+    expect(
+      warnings({
+        [OTHER]: `export { value } from "../lib/values.js";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names __dirname, __filename, and require left in the output", () => {
+    const found = warnings({
+      [OTHER]:
+        "export const other = (): string => __dirname + __filename + typeof require;\n",
+    });
+    expect(found).toHaveLength(3);
+    for (const name of ["__dirname", "__filename", "require"])
+      expect(found.join("\n")).toContain(`extensions/other.js uses ${name}`);
+  });
+
+  it("names a package.json without type: module", () => {
+    expect(
+      warnings({
+        "node_modules/ext/package.json": JSON.stringify({
+          name: "ext",
+          version: "1.0.0",
+        }),
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /node_modules\/ext\/package\.json has no "type": "module"/,
+      ),
+    ]);
+  });
+
+  it("names a module imported both as ./x and as ./x.js", () => {
+    expect(
+      warnings({
+        [OTHER]: `import { value } from "../lib/values";
+export const other = (): number => value;
+`,
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /node_modules\/ext\/lib\/values\.ts is imported both/,
+      ),
+    ]);
   });
 });
 
