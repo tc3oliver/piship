@@ -323,21 +323,26 @@ describe("what a child cannot ask for", () => {
     );
   });
 
-  it("refuses a system prompt file owned by another user", () => {
-    const dir = temp("pi-subagent-");
-    const file = join(dir, "prompt-a.md");
-    writeFileSync(file, "x");
-    const uid = vi
-      .spyOn(process, "getuid")
-      .mockReturnValue((process.getuid?.() ?? 0) + 1);
-    try {
-      expect(refused(["--system-prompt", file, "t"]).message).toContain(
-        "system prompt file",
-      );
-    } finally {
-      uid.mockRestore();
-    }
-  });
+  // Ownership by user ID is POSIX only: Windows has no process.getuid, the
+  // code skips the check there (the reading test above covers that branch).
+  it.skipIf(process.platform === "win32")(
+    "refuses a system prompt file owned by another user",
+    () => {
+      const dir = temp("pi-subagent-");
+      const file = join(dir, "prompt-a.md");
+      writeFileSync(file, "x");
+      const uid = vi
+        .spyOn(process, "getuid")
+        .mockReturnValue((process.getuid?.() ?? 0) + 1);
+      try {
+        expect(refused(["--system-prompt", file, "t"]).message).toContain(
+          "system prompt file",
+        );
+      } finally {
+        uid.mockRestore();
+      }
+    },
+  );
 
   it("refuses a session outside pi-code's temporary directory", () => {
     const id = "pi-code-bg-0123abcd-4567cdef";
