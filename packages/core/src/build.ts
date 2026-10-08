@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
 import { readManifest, releaseOptions } from "@piship/schema";
 import { authoringBuildInput } from "./authoring-input.js";
@@ -31,6 +31,7 @@ import {
   removeNpmBins,
   stripRuntimeIrrelevant,
 } from "./payload.js";
+import { pretranspileClosures } from "./pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import {
   optimizePiPackages,
@@ -545,6 +546,33 @@ export function buildDistribution(
       });
       options.onPackageFootprint?.(footprint);
       debugTiming("pi package footprint", phase);
+      phase = process.hrtime.bigint();
+    }
+    // After the footprint: a closure written as JavaScript would read as
+    // bundle-safe there, and bundling decisions stay as documented.
+    const transpiling = vendored.filter((item) => item.locked.pretranspile);
+    if (transpiling.length) {
+      options.progress?.(
+        `Writing the TypeScript closure of ${transpiling.map((item) => item.locked.id).join(", ")} as JavaScript`,
+      );
+      const esbuild = loadEsbuild(join(stage, "package.json"));
+      pretranspileClosures(
+        transpiling.map((item) => ({
+          id: item.locked.id,
+          root: item.directory,
+          packagePath: relative(item.directory, item.packageRoot)
+            .split(sep)
+            .join("/"),
+          resources: item.locked.resources,
+          esbuild,
+        })),
+        esbuild,
+      ).forEach((result, index) => {
+        options.progress?.(
+          `${transpiling[index]?.locked.id}: ${result.written.length} TypeScript modules written as JavaScript${result.kept.length ? `, ${result.kept.length} already had JavaScript` : ""}`,
+        );
+      });
+      debugTiming("pi package pretranspile", phase);
       phase = process.hrtime.bigint();
     }
     if (bundling) {

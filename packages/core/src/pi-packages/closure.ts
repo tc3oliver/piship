@@ -16,6 +16,7 @@
 // directly, and no other file left behind that imports a bundled module. Any
 // closure that fails a test keeps its vendored files and says which test.
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -31,6 +32,7 @@ import {
   type ScanResult,
   scanModulesMany,
 } from "./module-scan.js";
+import { packageError } from "./refs.js";
 import type { LockedPackageResource } from "./types.js";
 
 /** Where the shared chunks of a package's bundled closure are written. */
@@ -207,15 +209,15 @@ function prepare(options: ClosureOptions): State {
   return state;
 }
 
-const graphBuild = (state: State): Record<string, unknown> => ({
-  ...bundleOptions(state.root),
+const graphBuild = (
+  root: string,
+  entryPaths: readonly string[],
+): Record<string, unknown> => ({
+  ...bundleOptions(root),
   entryPoints: Object.fromEntries(
-    state.entryPaths.map((entry) => [
-      entry,
-      join(state.root, ...entry.split("/")),
-    ]),
+    entryPaths.map((entry) => [entry, join(root, ...entry.split("/"))]),
   ),
-  outdir: join(state.root, CLOSURE_DIRECTORY, ".scan"),
+  outdir: join(root, CLOSURE_DIRECTORY, ".scan"),
 });
 
 /** What the import graph says: what is replaced, what is bundled away, what is refused. */
@@ -379,7 +381,9 @@ export function analyzeClosures(
   const states = list.map(prepare);
   const live = () => states.filter((state) => !state.result);
   const graphing = live();
-  const graphs = esbuild.buildAll(graphing.map(graphBuild));
+  const graphs = esbuild.buildAll(
+    graphing.map((state) => graphBuild(state.root, state.entryPaths)),
+  );
   graphing.forEach((state, index) => {
     readGraph(state, graphs[index] as BuildOutcome);
   });
@@ -519,3 +523,167 @@ export function bundleClosure(
     chunks,
   };
 }
+
+/** What `pretranspileClosures` did for one package, `/`-separated from its root. */
+export interface TranspileResult {
+  /** The `.js` (or `.mjs`) files written beside their TypeScript sources. */
+  readonly written: readonly string[];
+  /** Closure modules left as they are because a JavaScript sibling exists. */
+  readonly kept: readonly string[];
+}
+
+const TRANSPILED: Readonly<Record<string, string>> = {
+  ".ts": ".js",
+  ".mts": ".mjs",
+};
+
+/** The output a TypeScript module gets, or undefined when it gets none. */
+function transpiledName(file: string): string | undefined {
+  if (/\.d\.m?ts$/.test(file)) return undefined;
+  const extension = /\.m?ts$/.exec(file)?.[0];
+  return extension
+    ? file.slice(0, -extension.length) + TRANSPILED[extension]
+    : undefined;
+}
+
+/**
+ * Writes each TypeScript module of a package's own files that its extensions
+ * import (directly or not) as JavaScript beside it: `lib/x.ts` gets `lib/x.js`,
+ * so an import written `./x.js` names a file that exists. One file per module,
+ * in place, so `import.meta` and relative paths mean what they meant; type-only
+ * imports are erased, JSON stays JSON, and nothing else is rewritten. The
+ * extension files themselves are never touched, a module whose JavaScript
+ * sibling already exists is kept, and a module that needs CommonJS (`require`,
+ * `export =`, `module.exports`) or does not parse fails the build: its ESM
+ * output would not be the module it was.
+ *
+ * Deterministic for a given esbuild: no source maps, a fixed target, no
+ * tsconfig read from the package (Pi's loader reads none either).
+ */
+export function pretranspileClosures(
+  list: readonly (ClosureOptions & { readonly id: string })[],
+  esbuild: EsbuildApi,
+): TranspileResult[] {
+  const roots = list.map((options) => resolve(options.root));
+  const entries = list.map((options) =>
+    options.resources
+      .filter((resource) => resource.kind === "extensions")
+      .map((resource) => `${options.packagePath}/${resource.path}`),
+  );
+  const graphs = esbuild.buildAll(
+    list.map((_, index) =>
+      graphBuild(roots[index] as string, entries[index] as string[]),
+    ),
+  );
+  const plans = list.map((options, index) => {
+    const outcome = graphs[index] as BuildOutcome;
+    if ("failure" in outcome)
+      throw packageError(
+        "CONFIG_INVALID",
+        options.id,
+        `its TypeScript closure cannot be read for pretranspile: ${outcome.failure.errors[0]?.text ?? outcome.failure.message.split("\n")[0]}`,
+        "Fix the import, or remove pretranspile from the package",
+      );
+    const graph = outcome.build.metafile as Graph;
+    const own = `${options.packagePath}/`;
+    const imported = new Set<string>();
+    for (const [file, input] of Object.entries(graph.inputs))
+      for (const item of input.imports) {
+        if (item.external) continue;
+        const target = posixPath(item.path);
+        if (item.kind === "require-call" && transpiledName(target))
+          throw unsupported(
+            options.id,
+            `${posixPath(file)} requires ${target}`,
+          );
+        imported.add(target);
+      }
+    const files = [...imported]
+      .filter(
+        (file) =>
+          file.startsWith(own) &&
+          !file.slice(own.length).split("/").includes("node_modules") &&
+          transpiledName(file),
+      )
+      .sort();
+    for (const file of files) {
+      if (graph.inputs[file]?.format === "cjs")
+        throw unsupported(options.id, `${file} is a CommonJS module`);
+      const usesRequire = graph.inputs[file]?.imports.some(
+        (item) => item.kind === "require-call",
+      );
+      if (usesRequire) throw unsupported(options.id, `${file} calls require`);
+    }
+    const root = roots[index] as string;
+    const exists = (file: string) => existsSync(join(root, ...file.split("/")));
+    return {
+      transpile: files.filter(
+        (file) => !exists(transpiledName(file) as string),
+      ),
+      kept: files.filter((file) => exists(transpiledName(file) as string)),
+    };
+  });
+  const builds = plans.flatMap((plan, index) =>
+    Object.keys(TRANSPILED).flatMap((extension) => {
+      const files = plan.transpile.filter((file) => file.endsWith(extension));
+      if (!files.length) return [];
+      const root = roots[index] as string;
+      return [
+        {
+          index,
+          options: {
+            absWorkingDir: root,
+            entryPoints: files.map((file) => join(root, ...file.split("/"))),
+            outbase: root,
+            outdir: root,
+            outExtension: { ".js": TRANSPILED[extension] },
+            write: false,
+            bundle: false,
+            format: "esm",
+            platform: "node",
+            target: "esnext",
+            sourcemap: false,
+            logLevel: "silent",
+            tsconfigRaw: {},
+          } as Record<string, unknown>,
+        },
+      ];
+    }),
+  );
+  const outcomes = builds.length
+    ? esbuild.buildAll(builds.map((build) => build.options))
+    : [];
+  const written: string[][] = list.map(() => []);
+  const outputs: { path: string; text: string }[] = [];
+  builds.forEach((build, position) => {
+    const outcome = outcomes[position] as BuildOutcome;
+    const id = (list[build.index] as { id: string }).id;
+    if ("failure" in outcome)
+      throw unsupported(
+        id,
+        outcome.failure.errors[0]?.text ??
+          outcome.failure.message.split("\n")[0] ??
+          "esbuild failed",
+      );
+    for (const file of outcome.build.outputFiles ?? []) {
+      outputs.push({ path: file.path, text: file.text });
+      (written[build.index] as string[]).push(
+        posixPath(relative(roots[build.index] as string, file.path)),
+      );
+    }
+  });
+  // Every module is transpiled before any file is written.
+  for (const output of outputs) writeFileSync(output.path, output.text);
+  return plans.map((plan, index) => ({
+    written: (written[index] as string[]).sort(),
+    kept: plan.kept,
+  }));
+}
+
+const unsupported = (id: string, detail: string) =>
+  packageError(
+    "CONFIG_INVALID",
+    id,
+    `pretranspile cannot write an ES module for ${detail}`,
+    "Remove pretranspile from the package, which then loads as TypeScript",
+  );

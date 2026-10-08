@@ -18,6 +18,7 @@ import {
   bundleClosure,
   CLOSURE_DIRECTORY,
   type FallbackReason,
+  pretranspileClosures,
 } from "./closure.js";
 import {
   describeFootprint,
@@ -470,5 +471,161 @@ describe("the footprint report", () => {
       bundle: false,
     });
     expect(off.closures).toEqual([]);
+  });
+});
+
+/** A TypeScript package: imports written `./x.js` where only `x.ts` exists. */
+const TYPESCRIPT_PACKAGE: Record<string, string> = {
+  "node_modules/ext/package.json": JSON.stringify({
+    name: "ext",
+    version: "1.0.0",
+    type: "module",
+  }),
+  "node_modules/ext/extensions/main.ts": `import type { Shape } from "../lib/types.js";
+import { Mode, value, where } from "../lib/values.js";
+import { other } from "./other.js";
+import data from "../lib/data.json" with { type: "json" };
+import { kept } from "../lib/kept.ts";
+const ready: Shape = { size: await Promise.resolve(value) };
+export default () => ({ ready, other: other(), mode: Mode.On, where, data, kept });
+`,
+  "node_modules/ext/extensions/other.ts":
+    "export const other = (): string => 'other';\n",
+  "node_modules/ext/lib/types.ts": "export interface Shape { size: number }\n",
+  "node_modules/ext/lib/values.ts": `export enum Mode { Off, On }
+export const value: number = 2;
+export const where: string | undefined = import.meta.dirname;
+`,
+  "node_modules/ext/lib/data.json": JSON.stringify({ ok: true }),
+  "node_modules/ext/lib/kept.ts": "export const kept = 'ts';\n",
+  "node_modules/ext/lib/kept.js": "export const kept = 'js';\n",
+  "node_modules/ext/lib/unused.ts": "export const unused = 1;\n",
+  "package.json": JSON.stringify({ name: "piship-package-x" }),
+};
+
+function typescriptPackage(overrides: Record<string, string> = {}) {
+  const root = mkdtempSync(join(tmpdir(), "piship-pretranspile-"));
+  roots.push(root);
+  for (const [path, content] of Object.entries({
+    ...TYPESCRIPT_PACKAGE,
+    ...overrides,
+  })) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+  const resources = ["extensions/main.ts", "extensions/other.ts"].map(
+    (path) => ({
+      kind: "extensions" as const,
+      path,
+      sha256: createHash("sha256")
+        .update(readFileSync(join(root, "node_modules/ext", path)))
+        .digest("hex"),
+    }),
+  );
+  return { root, resources };
+}
+
+const pretranspile = (fixture: ReturnType<typeof typescriptPackage>) =>
+  pretranspileClosures(
+    [
+      {
+        id: "ext",
+        root: fixture.root,
+        packagePath: "node_modules/ext",
+        resources: fixture.resources,
+        esbuild,
+      },
+    ],
+    esbuild,
+  )[0];
+
+describe("pretranspiling a TypeScript closure", () => {
+  it("writes each imported module as JavaScript beside it, and nothing else", () => {
+    const fixture = typescriptPackage();
+    const before = tree(fixture.root);
+    const result = pretranspile(fixture);
+    expect(result).toEqual({
+      // `other.ts` is an extension another one imports; `main.ts` is imported by none.
+      written: [
+        "node_modules/ext/extensions/other.js",
+        "node_modules/ext/lib/values.js",
+      ],
+      kept: ["node_modules/ext/lib/kept.ts"],
+    });
+    expect(tree(fixture.root)).toEqual(
+      [...before, ...(result?.written ?? [])].sort(),
+    );
+    // The extension files are the locked bytes, the existing sibling is untouched.
+    for (const resource of fixture.resources)
+      expect(
+        createHash("sha256")
+          .update(
+            readFileSync(join(fixture.root, "node_modules/ext", resource.path)),
+          )
+          .digest("hex"),
+      ).toBe(resource.sha256);
+    expect(
+      readFileSync(join(fixture.root, "node_modules/ext/lib/kept.js"), "utf8"),
+    ).toBe("export const kept = 'js';\n");
+    // ES modules, loadable by Node as they are, import.meta kept.
+    const values = pathToFileURL(
+      join(fixture.root, "node_modules/ext/lib/values.js"),
+    ).href;
+    const run = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const m = await import(${JSON.stringify(values)}); console.log(JSON.stringify([m.Mode.On, m.value, m.where]));`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(run.stderr).toBe("");
+    expect(JSON.parse(run.stdout)).toEqual([
+      1,
+      2,
+      join(fixture.root, "node_modules/ext/lib"),
+    ]);
+    expect(
+      readFileSync(
+        join(fixture.root, "node_modules/ext/lib/values.js"),
+        "utf8",
+      ),
+    ).not.toMatch(/sourceMappingURL|: number/);
+  });
+
+  it("writes the same bytes from the same input", () => {
+    const first = typescriptPackage();
+    const second = typescriptPackage();
+    const written = pretranspile(first)?.written ?? [];
+    expect(pretranspile(second)?.written).toEqual(written);
+    for (const file of written)
+      expect(readFileSync(join(second.root, file))).toEqual(
+        readFileSync(join(first.root, file)),
+      );
+  });
+
+  it.each([
+    ["export =", "export = 1;\n", /CommonJS/],
+    [
+      "require",
+      "export const other = (): string => require('../lib/values.js').where;\n",
+      /requires/,
+    ],
+    ["a syntax error", "export const = ;\n", /cannot/],
+  ])("fails on %s and writes nothing", (_, source, message) => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts": source,
+    });
+    const before = tree(fixture.root);
+    let error: unknown;
+    try {
+      pretranspile(fixture);
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect(String((error as Error).message)).toMatch(message);
+    expect(tree(fixture.root)).toEqual(before);
   });
 });

@@ -184,8 +184,9 @@ export function currentPiPackages(
     const { lockfile } = packageLockFiles(base, declaration.id);
     // Spread first so every field keeps its recorded position: the stale
     // check compares the serialized lock. A missing lockfile never matches.
+    const { pretranspile: _wasPretranspiled, ...kept } = entry;
     let current: LockedPiPackage = {
-      ...entry,
+      ...kept,
       lockfileSha256: existsSync(lockfile)
         ? sha256(readFileSync(lockfile))
         : "missing",
@@ -194,6 +195,8 @@ export function currentPiPackages(
       ...(declaration.agentFiles
         ? { agentFiles: lockedAgentFiles(declaration.agentFiles) }
         : {}),
+      // Changes the payload's bytes: switching it reads as stale.
+      ...(declaration.pretranspile ? { pretranspile: true as const } : {}),
     };
     if (declaration.source === "local") {
       const source = checkLocalDeclaration(declaration, base, context.trust);
