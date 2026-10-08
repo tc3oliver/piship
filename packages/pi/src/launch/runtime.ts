@@ -49,7 +49,11 @@ import {
   type Model,
 } from "./model-runtime.js";
 import { entitlementNotice } from "./entitlement-notice.js";
-import { childToolOptions, type SubagentChild } from "./subagent-child.js";
+import {
+  assertPrivateDirectory,
+  childToolOptions,
+  type SubagentChild,
+} from "./subagent-child.js";
 import { publishSubagentOwner } from "./subagent-owner.js";
 import { providerErrorRedaction } from "./redaction.js";
 import { governVirtualModels } from "./virtual-models.js";
@@ -166,6 +170,9 @@ function openChildSession(cwd: string, child: SubagentChild) {
   if (!child.session)
     return { sessionManager: SessionManager.inMemory(cwd), ownership };
   const { id, dir } = child.session;
+  // Checked where it is used: a link, another user's, or an open directory
+  // swapped in since the arguments were read is not pi-code's session.
+  assertPrivateDirectory(dir, "session directory");
   const existing = SessionManager.findById(cwd, id, dir);
   const sessionManager = existing
     ? SessionManager.open(existing, dir, cwd)

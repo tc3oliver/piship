@@ -1,6 +1,13 @@
 // The child's options reach the places that enforce them: the access check
 // (`models.allowed`), Pi's session tools, and stdout/stderr.
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DistributionLock } from "@piship/core";
@@ -105,6 +112,61 @@ describe("a subagent child's options reach what enforces them", () => {
       excludeTools: ["bash"],
       tools: ["read"],
     });
+  });
+});
+
+describe("a child's background session directory", () => {
+  const prepared = {
+    metrics: undefined,
+    access: null,
+    activated: null,
+    removedEnvironment: [],
+  } as unknown as PreparedAccess;
+  const start = (dir: string) =>
+    startGoverned(
+      context(),
+      prepared,
+      {
+        sessionDir: "",
+        newSession: true,
+        child: {
+          prompt: "t",
+          session: { id: "pi-code-bg-0123abcd-4567cdef", dir },
+        },
+      },
+      null,
+    );
+  const directory = (mode: number) => {
+    const dir = mkdtempSync(join(temp, "pi-code-bg-session-"));
+    chmodSync(dir, mode);
+    return dir;
+  };
+
+  it.skipIf(process.platform === "win32")(
+    "is used when it is private to the user, and not when others can change it",
+    async () => {
+      await expect(start(directory(0o700))).rejects.toThrow(
+        "stop-after-createAgentSession",
+      );
+      for (const mode of [0o770, 0o707, 0o755])
+        await expect(start(directory(mode))).rejects.toThrow(
+          "session directory cannot be used",
+        );
+    },
+  );
+
+  it("is refused when it is a link or not a directory", async () => {
+    const real = directory(0o700);
+    const link = join(temp, "pi-code-bg-session-link");
+    symlinkSync(real, link);
+    await expect(start(link)).rejects.toThrow(
+      "session directory cannot be used",
+    );
+    const file = join(temp, "pi-code-bg-session-file");
+    writeFileSync(file, "");
+    await expect(start(file)).rejects.toThrow(
+      "session directory cannot be used",
+    );
   });
 });
 

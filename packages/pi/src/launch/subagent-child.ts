@@ -10,7 +10,15 @@
 // replacement system prompt) and that nothing here can switch a governance
 // control off: there is no `--yolo`, no login, no approval channel (so an ask
 // is denied), and unknown options are refused by name.
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, posix, win32 } from "node:path";
 import { PiShipError } from "@piship/contracts";
@@ -141,21 +149,67 @@ export function childToolOptions(
   };
 }
 
-// The text of pi-code's prompt-NAME.md in its pi-subagent-XXXX directory, a regular file.
+/**
+ * A directory pi-code made with `mkdtemp` (mode 0700) and nobody else may
+ * change: a real directory, not a link, owned by the current user, closed to
+ * group and others. The owner and mode checks are POSIX; on Windows the
+ * link and junction check (`lstat` follows neither) is all there is.
+ */
+export function assertPrivateDirectory(path: string, what: string): void {
+  const entry = lstatSync(path);
+  if (!entry.isDirectory()) throw refuse(`The subagent ${what} cannot be used`);
+  if (process.platform === "win32") return;
+  if (
+    (process.getuid && entry.uid !== process.getuid()) ||
+    (entry.mode & 0o077) !== 0
+  )
+    throw refuse(`The subagent ${what} cannot be used`);
+}
+
+// The text of pi-code's prompt-NAME.md in its pi-subagent-XXXX directory, a
+// regular file. It is opened without following a link and checked and read
+// through that one descriptor, so what was checked is what is read.
 function promptFile(path: string): string {
   const fail = () => refuse("The subagent system prompt file cannot be used");
   try {
     const real = realpathSync.native(path);
     if (!inTemp(dirname(real), PROMPT_DIR)) throw fail();
-    const stat = lstatSync(real);
-    if (!stat.isFile() || stat.size > MAX_PROMPT_FILE_BYTES) throw fail();
-    // One link, and ours: a file linked in from elsewhere, or planted by
-    // another user in a shared temp directory, is not pi-code's.
-    if (stat.nlink !== 1) throw fail();
-    if (process.getuid && stat.uid !== process.getuid()) throw fail();
-    return readFileSync(real, "utf8");
-  } catch (error) {
-    throw error instanceof PiShipError ? error : fail();
+    assertPrivateDirectory(dirname(real), "system prompt directory");
+    // Not blocking: opening a FIFO waits for a writer, and is refused below.
+    const fd = openSync(
+      real,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    try {
+      const file = fstatSync(fd);
+      if (!file.isFile() || file.size > MAX_PROMPT_FILE_BYTES) throw fail();
+      // One link, and ours: a file linked in from elsewhere, or planted by
+      // another user in a shared temp directory, is not pi-code's.
+      if (file.nlink !== 1) throw fail();
+      if (process.getuid && file.uid !== process.getuid()) throw fail();
+      // Bounded again as it is read: the file may have grown since fstat.
+      const buffer = Buffer.alloc(MAX_PROMPT_FILE_BYTES + 1);
+      let length = 0;
+      for (;;) {
+        const read = readSync(
+          fd,
+          buffer,
+          length,
+          buffer.length - length,
+          length,
+        );
+        if (read === 0) break;
+        length += read;
+        if (length > MAX_PROMPT_FILE_BYTES) throw fail();
+      }
+      return buffer.toString("utf8", 0, length);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    throw fail();
   }
 }
 

@@ -1,6 +1,7 @@
 // The launch pi-code's subagent tool uses for its children: accepted only
 // under the parent's marker, by allowlist, and never as a way past a control.
 import {
+  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -261,6 +262,51 @@ describe("what a child cannot ask for", () => {
       refused(["--system-prompt", join(link, "prompt-x.md"), "t"]).message,
     ).toContain("system prompt file");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a system prompt file in a directory others can change",
+    () => {
+      const dir = temp("pi-subagent-");
+      const file = join(dir, "prompt-a.md");
+      writeFileSync(file, "x");
+      for (const mode of [0o770, 0o707, 0o777]) {
+        chmodSync(dir, mode);
+        expect(refused(["--system-prompt", file, "t"]).message).toContain(
+          "system prompt file",
+        );
+      }
+      chmodSync(dir, 0o700);
+      expect(parse(["--system-prompt", file, "t"]).systemPrompt).toBe("x");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "opens the system prompt file without following a link swapped in after the path was resolved",
+    () => {
+      const dir = temp("pi-subagent-");
+      const target = join(temp("not-pi-code-"), "secret.md");
+      writeFileSync(target, "secret");
+      // The real path, as realpath returns it: only the last component is
+      // wrong, and it is what the open must not follow.
+      const link = join(realpath(dir), "prompt-link.md");
+      symlinkSync(target, link);
+      // The race: realpath saw a regular file, and a link took its place.
+      const decoy = join(dir, "prompt-decoy.md");
+      const native = realpath.native;
+      const spy = vi
+        .spyOn(realpath, "native")
+        .mockImplementation(((path: string) =>
+          path === decoy ? link : native(path)) as typeof native);
+      try {
+        expect(refused(["--system-prompt", decoy, "t"]).message).toContain(
+          "system prompt file",
+        );
+        expect(spy).toHaveBeenCalledWith(decoy);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("refuses a system prompt file with other hard links", () => {
     const dir = temp("pi-subagent-");
