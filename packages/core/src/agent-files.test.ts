@@ -930,12 +930,47 @@ describe("parallel session launches", () => {
       for (const path of old) expect(existsSync(path)).toBe(false);
     });
 
+    /**
+     * Whether the directory at `path` was seen empty while it was at `path`.
+     * A listing is not a snapshot: a directory opened at the path can be
+     * renamed away and emptied (a release) before its entries are read, and
+     * then reads as empty although it was never empty at the path. So an
+     * empty listing counts only if the path still names that same directory
+     * afterwards (same inode and creation time).
+     */
+    const emptyAtPath = (path: string): boolean => {
+      const identity = () => {
+        const stat = statSync(path);
+        return `${stat.ino}:${stat.birthtimeMs}`;
+      };
+      try {
+        const before = identity();
+        if (readdirSync(path).length > 0) return false;
+        return identity() === before;
+      } catch {
+        // not there (any more)
+        return false;
+      }
+    };
+
+    it("tells a directory emptied after it was renamed away from one that is empty at the lock path", () => {
+      const path = join(agentDir, "observed");
+      mkdirSync(path);
+      expect(emptyAtPath(path)).toBe(true);
+      writeFileSync(join(path, "owner.json"), "{}");
+      expect(emptyAtPath(path)).toBe(false);
+      rmSync(path, { recursive: true });
+      expect(emptyAtPath(path)).toBe(false);
+    });
+
     it("never shows another process a lock directory without its owner record", async () => {
       const guard = join(agentDir, ".piship-agent-files-lock");
       const json = JSON.stringify(lock({ autoApprove: true }));
       // A child launches in a loop; this process looks at the lock path as
-      // fast as it can. An observed directory that is empty is a lock being
-      // filled in place, which a rename-based claim never produces.
+      // fast as it can. A directory seen empty at the path is a lock being
+      // filled (or emptied) in place, which a rename-based claim and release
+      // never produce; one emptied after it was renamed away is not seen
+      // there (see emptyAtPath).
       const script = `
         const { applyAgentFiles } = await import(${JSON.stringify(dist)});
         for (let i = 0; i < 300; i += 1)
@@ -957,7 +992,7 @@ describe("parallel session launches", () => {
       });
       while (!finished) {
         try {
-          if (readdirSync(guard).length === 0) empty += 1;
+          if (emptyAtPath(guard)) empty += 1;
           seen += 1;
         } catch {
           // not there at this moment
