@@ -335,6 +335,17 @@ describe("a child works in its parent's workspace", () => {
       expect(() => assertChildWorkspace(first, second)).not.toThrow();
     });
 
+    /**
+     * Replaces a file git wrote. On Windows git marks its `.git` files hidden,
+     * and opening a hidden file for writing fails with EPERM; removing it and
+     * writing a new one works everywhere. (Reading it, which is all the code
+     * under test does, is not affected.)
+     */
+    const rewrite = (path: string, content: string) => {
+      rmSync(path, { force: true });
+      writeFileSync(path, content);
+    };
+
     /** The directory git keeps for a linked worktree: what its .git file names. */
     const adminOf = (worktree: string) =>
       realpathSync(
@@ -349,11 +360,8 @@ describe("a child works in its parent's workspace", () => {
       // Real paths, as the relative ones are taken between real directories.
       const worktree = realpathSync(added);
       const admin = adminOf(added);
-      writeFileSync(
-        join(worktree, ".git"),
-        `gitdir: ${relative(worktree, admin)}\n`,
-      );
-      writeFileSync(
+      rewrite(join(worktree, ".git"), `gitdir: ${relative(worktree, admin)}\n`);
+      rewrite(
         join(admin, "gitdir"),
         `${relative(admin, join(worktree, ".git"))}\n`,
       );
@@ -366,7 +374,7 @@ describe("a child works in its parent's workspace", () => {
       const nested = join(adminOf(worktree), "nested");
       mkdirSync(nested);
       writeFileSync(join(nested, "gitdir"), `${join(worktree, ".git")}\n`);
-      writeFileSync(join(worktree, ".git"), `gitdir: ${nested}\n`);
+      rewrite(join(worktree, ".git"), `gitdir: ${nested}\n`);
       expect(outside(repo, worktree)).toContain("outside");
     });
 
