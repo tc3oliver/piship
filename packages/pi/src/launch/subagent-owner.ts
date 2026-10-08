@@ -234,11 +234,17 @@ export function authenticateSubagentChild(
   return { session: record.session, workspace: record.workspace };
 }
 
+/** What a small file git wrote says (bounded, owned by us, never a FIFO). */
+const gitFile = (path: string) => readOwnedFile(path, 4096).trim();
+
 /** The target of a `.git` file (`gitdir: <path>`), as a real path. */
 function gitdirOf(dotGit: string): string | undefined {
   try {
-    const text = readOwnedFile(dotGit, 4096);
-    const target = /^gitdir:\s*(.+?)\s*$/m.exec(text)?.[1];
+    const line = gitFile(dotGit)
+      .split("\n")
+      .map((item) => item.trim())
+      .find((item) => item.startsWith("gitdir:"));
+    const target = line?.slice("gitdir:".length).trim();
     return target
       ? realpathSync.native(resolve(dirname(dotGit), target))
       : undefined;
@@ -249,19 +255,19 @@ function gitdirOf(dotGit: string): string | undefined {
 
 /**
  * The common git directory of the repository `start` is in (walking up), or
- * undefined when it is in none: the `.git` directory itself, or for a linked
- * worktree the directory its `commondir` names.
+ * undefined when it is in none or cannot be read: the `.git` directory
+ * itself, or for a linked worktree the directory its `commondir` names.
  */
 function commonGitDirectory(start: string): string | undefined {
   for (let directory = start; ; directory = dirname(directory)) {
-    const dotGit = join(directory, ".git");
-    const entry = lstatSync(dotGit, { throwIfNoEntry: false });
     try {
+      const dotGit = join(directory, ".git");
+      const entry = lstatSync(dotGit, { throwIfNoEntry: false });
       if (entry?.isDirectory()) return realpathSync.native(dotGit);
       if (entry?.isFile()) {
         const gitdir = gitdirOf(dotGit);
         if (!gitdir) return undefined;
-        const common = readFileSync(join(gitdir, "commondir"), "utf8").trim();
+        const common = gitFile(join(gitdir, "commondir"));
         return realpathSync.native(resolve(gitdir, common));
       }
     } catch {
@@ -274,22 +280,40 @@ function commonGitDirectory(start: string): string | undefined {
 /**
  * Whether `directory` is a linked worktree of the repository the workspace
  * is in, as `git worktree add` leaves one: its `.git` file names a directory
- * below the repository's `worktrees/`, and that directory names the
- * worktree's `.git` file back. A directory merely named and shaped like one
- * does not pass; a workspace outside any repository has none.
+ * directly below the repository's `worktrees/`, and that directory names the
+ * worktree's `.git` file back (as an absolute path, or relative to itself
+ * where git is set to write relative paths). A directory merely named and
+ * shaped like one does not pass; a workspace outside any repository has none;
+ * anything unreadable is a refusal.
  */
 function isWorktreeOfWorkspace(directory: string, workspace: string): boolean {
-  const common = commonGitDirectory(workspace);
-  if (!common) return false;
-  const dotGit = join(directory, ".git");
-  const gitdir = gitdirOf(dotGit);
-  if (!gitdir) return false;
-  const from = relative(join(common, "worktrees"), gitdir);
-  if (!from || from.split(/[\\/]/)[0] === ".." || isAbsolute(from))
-    return false;
   try {
-    const back = readFileSync(join(gitdir, "gitdir"), "utf8").trim();
-    return realpathSync.native(back) === realpathSync.native(dotGit);
+    const common = commonGitDirectory(workspace);
+    if (!common) return false;
+    const dotGit = join(directory, ".git");
+    const gitdir = gitdirOf(dotGit);
+    if (!gitdir) return false;
+    const below = relative(join(common, "worktrees"), gitdir).split(/[\\/]/);
+    if (
+      below.length !== 1 ||
+      !below[0] ||
+      below[0] === ".." ||
+      isAbsolute(below[0])
+    )
+      return false;
+    const back = realpathSync.native(
+      resolve(gitdir, gitFile(join(gitdir, "gitdir"))),
+    );
+    return back === realpathSync.native(dotGit);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the current user owns `path` (false if it cannot be looked at). */
+function ownedByUs(path: string): boolean {
+  try {
+    return ours(lstatSync(path).uid);
   } catch {
     return false;
   }
@@ -324,7 +348,7 @@ export function assertChildWorkspace(
     return;
   if (
     inTemp(real, WORKTREE, platform) &&
-    ours(lstatSync(real).uid) &&
+    ownedByUs(real) &&
     isWorktreeOfWorkspace(real, workspace)
   )
     return;

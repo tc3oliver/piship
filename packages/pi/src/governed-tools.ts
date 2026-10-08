@@ -600,16 +600,14 @@ export function governedBashOperations(
     // The session's subagent token is for its children, not for a command.
     const { [SUBAGENT_TOKEN_ENV]: _token, ...inherited } =
       options.env ?? process.env;
-    const base = options.env || source === "bash" ? inherited : undefined;
-    return local.exec(
-      command,
-      cwd,
-      base && network
-        ? { ...options, env: withApprovedNetwork(base, network) }
-        : base
-          ? { ...options, env: base }
-          : options,
-    );
+    // Always an explicit copy: a command given no environment would inherit
+    // the whole process environment, token included. Only an agent's command
+    // is narrowed to the approved network settings (see above).
+    const narrowed = network && (options.env || source === "bash");
+    return local.exec(command, cwd, {
+      ...options,
+      env: narrowed ? withApprovedNetwork(inherited, network) : inherited,
+    });
   };
   return {
     exec: async (command, cwd, options) => {

@@ -55,6 +55,9 @@ describe.skipIf(process.platform === "win32")(
       expect(await ask("bash")).toBe("absent:home");
       expect(await ask("bash", { ...process.env })).toBe("absent:home");
       expect(await ask("user-bash", { ...process.env })).toBe("absent:home");
+      // A user's `!` command is given no environment by Pi, and would have
+      // inherited the whole process environment.
+      expect(await ask("user-bash")).toBe("absent:home");
     });
   },
 );

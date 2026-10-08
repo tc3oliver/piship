@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertChildWorkspace,
@@ -334,6 +334,57 @@ describe("a child works in its parent's workspace", () => {
       const second = addWorktree(repo);
       expect(() => assertChildWorkspace(first, second)).not.toThrow();
     });
+
+    /** The directory git keeps for a linked worktree: what its .git file names. */
+    const adminOf = (worktree: string) =>
+      realpathSync(
+        readFileSync(join(worktree, ".git"), "utf8")
+          .replace(/^gitdir:\s*/, "")
+          .trim(),
+      );
+
+    it("is accepted where git writes relative paths in both files", () => {
+      const repo = repository();
+      const added = addWorktree(repo);
+      // Real paths, as the relative ones are taken between real directories.
+      const worktree = realpathSync(added);
+      const admin = adminOf(added);
+      writeFileSync(
+        join(worktree, ".git"),
+        `gitdir: ${relative(worktree, admin)}\n`,
+      );
+      writeFileSync(
+        join(admin, "gitdir"),
+        `${relative(admin, join(worktree, ".git"))}\n`,
+      );
+      expect(() => assertChildWorkspace(repo, worktree)).not.toThrow();
+    });
+
+    it("is refused when its .git file names a directory deeper than worktrees/<name>", () => {
+      const repo = repository();
+      const worktree = addWorktree(repo);
+      const nested = join(adminOf(worktree), "nested");
+      mkdirSync(nested);
+      writeFileSync(join(nested, "gitdir"), `${join(worktree, ".git")}\n`);
+      writeFileSync(join(worktree, ".git"), `gitdir: ${nested}\n`);
+      expect(outside(repo, worktree)).toContain("outside");
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "is refused, without waiting on it, when git's files in the workspace's repository are not files",
+      () => {
+        const repo = repository();
+        const first = addWorktree(repo);
+        const second = addWorktree(repo);
+        // The workspace is a linked worktree whose commondir is a FIFO: a
+        // plain read of it would wait for a writer for ever.
+        const commondir = join(adminOf(first), "commondir");
+        rmSync(commondir);
+        execFileSync("mkfifo", [commondir]);
+        expect(outside(first, second)).toContain("outside");
+      },
+      10_000,
+    );
 
     it("is refused for another repository's worktree, and when the workspace is no repository", () => {
       const repo = repository();
