@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -505,7 +506,12 @@ export const where: string | undefined = import.meta.dirname;
 };
 
 function typescriptPackage(overrides: Record<string, string> = {}) {
-  const root = mkdtempSync(join(tmpdir(), "piship-pretranspile-"));
+  // The real path: macOS reports its temporary directory through a symlink
+  // (/var is /private/var), and the test compares it with `import.meta` paths
+  // that Node reports resolved.
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "piship-pretranspile-")),
+  );
   roots.push(root);
   for (const [path, content] of Object.entries({
     ...TYPESCRIPT_PACKAGE,
