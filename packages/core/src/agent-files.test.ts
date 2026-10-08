@@ -12,8 +12,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { PackageAgentFile } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -507,5 +509,93 @@ describe("a session auto-approval", () => {
         sessionAutoApprove: true,
       }),
     ).toThrow(/not a JSON object/);
+  });
+});
+
+// Parallel session launches (a subagent's children) share one transaction lock.
+describe("parallel session launches", () => {
+  const dist = fileURLToPath(
+    new URL("../dist/agent-files.js", import.meta.url),
+  );
+  const child = `
+    const [dist, dir, json, start] = process.argv.slice(1);
+    const { applyAgentFiles } = await import(dist);
+    while (Date.now() < Number(start));
+    try {
+      const r = applyAgentFiles(JSON.parse(json), dir, { session: true });
+      await new Promise((done) => setTimeout(done, 50));
+      r.restore();
+      console.log("ok");
+    } catch (e) { console.log("FAIL " + e.message); }`;
+  const run = (json: string, start: number) =>
+    new Promise<string>((done) =>
+      execFile(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          child,
+          dist,
+          agentDir,
+          json,
+          String(start),
+        ],
+        (_error, stdout, stderr) => done((stdout + stderr).trim()),
+      ),
+    );
+  // A process that holds the lock (live owner) for `ms`, then lets go.
+  const holder = async (ms: number) => {
+    const guard = join(agentDir, ".piship-agent-files-lock");
+    const script = `
+      const fs = require("fs");
+      fs.mkdirSync(${JSON.stringify(guard)});
+      fs.writeFileSync(${JSON.stringify(join(guard, "owner.json"))}, JSON.stringify({ pid: process.pid }));
+      console.log("held");
+      setTimeout(() => { fs.rmSync(${JSON.stringify(guard)}, { recursive: true }); }, ${ms});`;
+    const proc = spawn(process.execPath, ["-e", script]);
+    await new Promise((ready) => proc.stdout.once("data", ready));
+    return {
+      released: new Promise<void>((done) => proc.on("close", () => done())),
+    };
+  };
+
+  it("all of 8 concurrent launches succeed", async () => {
+    const json = JSON.stringify(lock({ autoApprove: true }));
+    // every child waits for the same instant, so they all start together
+    const start = Date.now() + 1500;
+    const out = await Promise.all(
+      Array.from({ length: 8 }, () => run(json, start)),
+    );
+    expect(out).toEqual(Array(8).fill("ok"));
+  }, 60_000);
+
+  it("waits for a lock another launch releases within the budget", async () => {
+    const { released } = await holder(400);
+    const result = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      session: true,
+    });
+    result.restore();
+    await released;
+  });
+
+  it("still fails with the busy error once the budget is spent", async () => {
+    const { released } = await holder(1500);
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 150,
+      }),
+    ).toThrow("being changed by another launch");
+    await released;
+  });
+
+  it("does not wait for a launch that is not a session", async () => {
+    const { released } = await holder(600);
+    const started = Date.now();
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir),
+    ).toThrow("being changed by another launch");
+    expect(Date.now() - started).toBeLessThan(300);
+    await released;
   });
 });

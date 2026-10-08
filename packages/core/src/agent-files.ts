@@ -471,15 +471,45 @@ function liveProcess(pid: number): boolean {
 
 // Serialize the registration and configuration change, so two launches cannot
 // both decide the shared provider file is free. Sessions keep separate leases.
-function agentFilesTransaction<T>(agentDir: string, operation: () => T): T {
+const BUSY_MESSAGE =
+  "Package configuration is being changed by another launch; retry when it finishes";
+/** How long a session launch waits for another launch's transaction. */
+export const AGENT_FILES_LOCK_WAIT_MS = 3000;
+
+// ponytail: a synchronous wait, since the launch path is synchronous; the
+// holder only keeps the lock for one small file edit.
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Parallel session launches (a subagent's children) meet here at once: they
+// wait out a busy lock for `waitMs`, then report the same error as before.
+function agentFilesTransaction<T>(
+  agentDir: string,
+  operation: () => T,
+  waitMs: number,
+): T {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      return agentFilesTransactionOnce(agentDir, operation);
+    } catch (error) {
+      if (
+        !(error instanceof PiShipError) ||
+        error.message !== BUSY_MESSAGE ||
+        Date.now() >= deadline
+      )
+        throw error;
+      pause(20 + Math.floor(Math.random() * 80));
+    }
+  }
+}
+
+function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const guard = filePath(agentDir, ".piship-agent-files-lock");
   const recovery = filePath(agentDir, ".piship-agent-files-recovery");
-  const busy = () =>
-    new PiShipError(
-      "CONFIG_INVALID",
-      "Package configuration is being changed by another launch; retry when it finishes",
-    );
+  const busy = () => new PiShipError("CONFIG_INVALID", BUSY_MESSAGE);
   if (existsSync(recovery)) throw busy();
   try {
     mkdirSync(guard, { mode: 0o700 });
@@ -541,6 +571,8 @@ export function applyAgentFiles(
   options: {
     readonly sessionAutoApprove?: boolean;
     readonly session?: boolean;
+    /** Test hook: how long a session launch waits for a busy lock. */
+    readonly lockWaitMs?: number;
   } = {},
 ): AgentFilesResult {
   if (
@@ -551,57 +583,64 @@ export function applyAgentFiles(
   const owner = randomUUID();
   const leases = filePath(agentDir, ".piship-provider-sessions");
   let registered = false;
-  const result = agentFilesTransaction(agentDir, () => {
-    const target = sessionAutoApproveTarget(lock);
-    let share = false;
-    if (target && (options.session || options.sessionAutoApprove)) {
-      mkdirSync(leases, { recursive: true, mode: 0o700 });
-      for (const entry of readdirSync(leases)) {
-        const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
-        const lease = readJsonObject(path);
-        if (!lease || typeof lease.pid !== "number")
+  const waitMs = options.session
+    ? (options.lockWaitMs ?? AGENT_FILES_LOCK_WAIT_MS)
+    : 0;
+  const result = agentFilesTransaction(
+    agentDir,
+    () => {
+      const target = sessionAutoApproveTarget(lock);
+      let share = false;
+      if (target && (options.session || options.sessionAutoApprove)) {
+        mkdirSync(leases, { recursive: true, mode: 0o700 });
+        for (const entry of readdirSync(leases)) {
+          const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
+          const lease = readJsonObject(path);
+          if (!lease || typeof lease.pid !== "number")
+            throw new PiShipError(
+              "CONFIG_INVALID",
+              "Invalid permission provider session ownership record",
+              { userAction: SHARED_PROVIDER_ACTION },
+            );
+          if (!liveProcess(lease.pid)) {
+            rmSync(path);
+            continue;
+          }
+          // The provider reads one file, so a `--yolo` session and an ordinary
+          // one cannot both have what they asked for. Two `--yolo` sessions
+          // want the same thing and share the key.
+          const wants = options.sessionAutoApprove === true;
+          if (wants && lease.yolo === true) share = true;
+          if (wants === (lease.yolo === true)) continue;
           throw new PiShipError(
             "CONFIG_INVALID",
-            "Invalid permission provider session ownership record",
+            options.sessionAutoApprove
+              ? "Another session is using the permission provider, whose own approvals --yolo switches on for every session"
+              : "A --yolo session is using the permission provider, whose own approvals it switched on for every session",
             { userAction: SHARED_PROVIDER_ACTION },
           );
-        if (!liveProcess(lease.pid)) {
-          rmSync(path);
-          continue;
         }
-        // The provider reads one file, so a `--yolo` session and an ordinary
-        // one cannot both have what they asked for. Two `--yolo` sessions
-        // want the same thing and share the key.
-        const wants = options.sessionAutoApprove === true;
-        if (wants && lease.yolo === true) share = true;
-        if (wants === (lease.yolo === true)) continue;
-        throw new PiShipError(
-          "CONFIG_INVALID",
-          options.sessionAutoApprove
-            ? "Another session is using the permission provider, whose own approvals --yolo switches on for every session"
-            : "A --yolo session is using the permission provider, whose own approvals it switched on for every session",
-          { userAction: SHARED_PROVIDER_ACTION },
-        );
       }
-    }
-    const applied = applyAgentFilesLocked(lock, agentDir, {
-      ...options,
-      owner,
-      share,
-    });
-    if (target && (options.session || options.sessionAutoApprove)) {
-      writeFileSync(
-        join(leases, owner),
-        JSON.stringify({
-          pid: process.pid,
-          yolo: options.sessionAutoApprove === true,
-        }),
-        { mode: 0o600, flag: "wx" },
-      );
-      registered = true;
-    }
-    return applied;
-  });
+      const applied = applyAgentFilesLocked(lock, agentDir, {
+        ...options,
+        owner,
+        share,
+      });
+      if (target && (options.session || options.sessionAutoApprove)) {
+        writeFileSync(
+          join(leases, owner),
+          JSON.stringify({
+            pid: process.pid,
+            yolo: options.sessionAutoApprove === true,
+          }),
+          { mode: 0o600, flag: "wx" },
+        );
+        registered = true;
+      }
+      return applied;
+    },
+    waitMs,
+  );
   let ended = false;
   const leasePath = () =>
     filePath(agentDir, `.piship-provider-sessions/${owner}`);
@@ -634,34 +673,42 @@ export function applyAgentFiles(
     reports: result.reports,
     endAutoApprove: () => {
       if (ended) return undefined;
-      return agentFilesTransaction(agentDir, () => {
-        const handedOver = handOverOrTakeBack();
-        // The lease stays, so a provider's stale save is still restored at
-        // exit; it stops counting as a session that wants the key.
-        if (registered)
-          writeFileSync(
-            leasePath(),
-            JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
-            { mode: 0o600 },
-          );
-        // A session that shares the key, or hands it on, cannot switch the
-        // provider's approvals off for itself without ending the other's.
-        return handedOver || liveYoloSessions(agentDir, owner).length > 0
-          ? "The permission provider's own approvals stay on until the other --yolo session ends."
-          : undefined;
-      });
+      return agentFilesTransaction(
+        agentDir,
+        () => {
+          const handedOver = handOverOrTakeBack();
+          // The lease stays, so a provider's stale save is still restored at
+          // exit; it stops counting as a session that wants the key.
+          if (registered)
+            writeFileSync(
+              leasePath(),
+              JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
+              { mode: 0o600 },
+            );
+          // A session that shares the key, or hands it on, cannot switch the
+          // provider's approvals off for itself without ending the other's.
+          return handedOver || liveYoloSessions(agentDir, owner).length > 0
+            ? "The permission provider's own approvals stay on until the other --yolo session ends."
+            : undefined;
+        },
+        waitMs,
+      );
     },
     restore: () => {
       if (ended) return;
-      agentFilesTransaction(agentDir, () => {
-        handOverOrTakeBack();
-        result.restore();
-        if (registered)
-          rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {
-            force: true,
-          });
-        ended = true;
-      });
+      agentFilesTransaction(
+        agentDir,
+        () => {
+          handOverOrTakeBack();
+          result.restore();
+          if (registered)
+            rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {
+              force: true,
+            });
+          ended = true;
+        },
+        waitMs,
+      );
     },
   };
 }
