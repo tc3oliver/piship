@@ -103,6 +103,7 @@ export function governanceOptions(
     piVersion: VERSION,
     interactive,
     ...(ctx.yolo ? { yolo: true } : {}),
+    ...(ctx.subagent ? { subagent: true } : {}),
     ...(ctx.endProviderAutoApprove
       ? { onYoloEnd: ctx.endProviderAutoApprove }
       : {}),

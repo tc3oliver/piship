@@ -2,6 +2,7 @@
 // under the parent's marker, by allowlist, and never as a way past a control.
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   realpathSync as realpath,
@@ -11,12 +12,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import type { PiShipError } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preparePiEnvironment } from "../environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "../index.js";
-import { isSubagentChild, parseSubagentChild } from "./subagent-child.js";
+import {
+  childToolOptions,
+  inTemp,
+  isSubagentChild,
+  parseSubagentChild,
+} from "./subagent-child.js";
 
 const ENV = { PI_CODE_SUBAGENT: "1" } as NodeJS.ProcessEnv;
 const BASE = ["--mode", "json", "-p", "--no-session"];
@@ -198,6 +205,79 @@ describe("what a child cannot ask for", () => {
     ).toContain("system prompt file");
   });
 
+  it("never prints the value of an --flag=value refusal", () => {
+    const error = refused(["--api-key=sk-secret", "t"]);
+    expect(error.message).toContain("--api-key is not available");
+    expect(JSON.stringify([error.message, error.userAction])).not.toContain(
+      "sk-secret",
+    );
+    expect(refused(["--token=sk-secret-2=x", "t"]).message).not.toContain(
+      "sk-secret-2",
+    );
+  });
+
+  it("refuses a system prompt file that is a directory, a FIFO, or too large", () => {
+    const dir = temp("pi-subagent-");
+    const bad = (path: string) =>
+      refused(["--system-prompt", path, "t"]).message;
+    const folder = join(dir, "prompt-dir.md");
+    mkdirSync(folder);
+    expect(bad(folder)).toContain("system prompt file");
+    if (process.platform !== "win32") {
+      const fifo = join(dir, "prompt-fifo.md");
+      execFileSync("mkfifo", [fifo]);
+      expect(bad(fifo)).toContain("system prompt file");
+    }
+    const big = join(dir, "prompt-big.md");
+    writeFileSync(big, Buffer.alloc(1024 * 1024 + 1, "a"));
+    expect(bad(big)).toContain("system prompt file");
+    const limit = join(dir, "prompt-limit.md");
+    writeFileSync(limit, Buffer.alloc(1024 * 1024, "a"));
+    expect(parse(["--system-prompt", limit, "t"]).systemPrompt).toHaveLength(
+      1024 * 1024,
+    );
+  });
+
+  it("refuses a system prompt file reached through a symlinked parent directory", () => {
+    const outside = temp("not-pi-code-");
+    // a symlinked directory in tmp that points outside is refused
+    const target = join(outside, "pi-subagent-target");
+    mkdirSync(target);
+    writeFileSync(join(target, "prompt-x.md"), "x");
+    const link = join(tmpdir(), `pi-subagent-link${process.pid}`);
+    symlinkSync(target, link);
+    dirs.push(link);
+    expect(
+      refused(["--system-prompt", join(link, "prompt-x.md"), "t"]).message,
+    ).toContain("system prompt file");
+  });
+
+  it("refuses a system prompt file with other hard links", () => {
+    const dir = temp("pi-subagent-");
+    const file = join(dir, "prompt-a.md");
+    writeFileSync(file, "x");
+    linkSync(file, join(dir, "prompt-b.md"));
+    expect(refused(["--system-prompt", file, "t"]).message).toContain(
+      "system prompt file",
+    );
+  });
+
+  it("refuses a system prompt file owned by another user", () => {
+    const dir = temp("pi-subagent-");
+    const file = join(dir, "prompt-a.md");
+    writeFileSync(file, "x");
+    const uid = vi
+      .spyOn(process, "getuid")
+      .mockReturnValue((process.getuid?.() ?? 0) + 1);
+    try {
+      expect(refused(["--system-prompt", file, "t"]).message).toContain(
+        "system prompt file",
+      );
+    } finally {
+      uid.mockRestore();
+    }
+  });
+
   it("refuses a session outside pi-code's temporary directory", () => {
     const id = "pi-code-bg-0123abcd-4567cdef";
     const outside = temp("not-pi-code-");
@@ -217,6 +297,52 @@ describe("what a child cannot ask for", () => {
     expect(
       refused(["--session-id", id, "--session-dir", dir, "t"]).message,
     ).toContain("cannot both");
+  });
+});
+
+describe("the temporary directory comparison", () => {
+  const pattern = /^pi-subagent-[A-Za-z0-9]+$/;
+  it("compares Windows paths without case", () => {
+    const tmp = "C:\\Users\\Me\\AppData\\Local\\Temp";
+    const dir = "c:\\users\\me\\appdata\\local\\temp\\pi-subagent-abc";
+    expect(inTemp(dir, pattern, "win32", tmp)).toBe(true);
+    expect(inTemp(`${tmp}\\pi-subagent-abc`, pattern, "win32", tmp)).toBe(true);
+    expect(inTemp(`${tmp}\\x\\pi-subagent-abc`, pattern, "win32", tmp)).toBe(
+      false,
+    );
+    expect(inTemp(`${tmp}\\other-abc`, pattern, "win32", tmp)).toBe(false);
+  });
+
+  it("stays case-sensitive elsewhere", () => {
+    expect(inTemp("/TMP/pi-subagent-a", pattern, "linux", "/tmp")).toBe(false);
+    expect(inTemp("/tmp/pi-subagent-a", pattern, "linux", "/tmp")).toBe(true);
+    expect(inTemp("/tmp/x/pi-subagent-a", pattern, "linux", "/tmp")).toBe(
+      false,
+    );
+  });
+});
+
+describe("the tools a child adds to the session", () => {
+  it("adds its exclusions after exposure's, and its allowlist with the required tools", () => {
+    const child = { prompt: "t", excludeTools: ["bash"], tools: ["read"] };
+    expect(childToolOptions(child, ["web"], ["ask_user"])).toEqual({
+      excludeTools: ["web", "bash"],
+      tools: ["read", "ask_user"],
+    });
+    expect(childToolOptions(undefined, ["web"], [])).toEqual({
+      excludeTools: ["web"],
+    });
+    expect(childToolOptions(undefined, undefined, [])).toEqual({});
+    expect(childToolOptions({ prompt: "t" }, [], ["ask_user"])).toEqual({
+      excludeTools: [],
+    });
+  });
+
+  it("refuses an exclusion of a tool the launch needs", () => {
+    const child = { prompt: "t", excludeTools: ["bash", "ask_user"] };
+    expect(() => childToolOptions(child, [], ["ask_user"])).toThrow(
+      /--exclude-tools cannot remove ask_user/,
+    );
   });
 });
 

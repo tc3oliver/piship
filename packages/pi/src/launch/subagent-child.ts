@@ -12,7 +12,7 @@
 // is denied), and unknown options are refused by name.
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname } from "node:path";
+import { dirname, posix, win32 } from "node:path";
 import { PiShipError } from "@piship/contracts";
 
 export const SUBAGENT_ENV = "PI_CODE_SUBAGENT";
@@ -72,21 +72,71 @@ export function isSubagentChild(
   );
 }
 
-/** Whether `real` (a real path) is `<tmpdir>/<name matching pattern>`. */
-function inTemp(real: string, pattern: RegExp): boolean {
+/**
+ * Whether `real` (a real path) is `<tmp>/<name matching pattern>`. Windows
+ * paths differ in case only and are compared without it. `platform` and
+ * `tmp` are injectable for tests; this comparison has not been run on
+ * Windows itself.
+ */
+export function inTemp(
+  real: string,
+  pattern: RegExp,
+  platform: NodeJS.Platform = process.platform,
+  tmp: string = realpathSync.native(tmpdir()),
+): boolean {
+  const path = platform === "win32" ? win32 : posix;
+  const fold = (value: string) =>
+    platform === "win32" ? value.toLowerCase() : value;
   return (
-    pattern.test(basename(real)) && dirname(real) === realpathSync(tmpdir())
+    pattern.test(path.basename(real)) && fold(path.dirname(real)) === fold(tmp)
   );
+}
+
+/** A launch's PiShip messages go to stderr for a child: stdout is its JSON events. */
+export const launchOutput = (child: boolean) => (message: string) =>
+  child ? console.error(message) : console.log(message);
+
+/**
+ * The tool options a child adds to `createAgentSession`: its exclusions after
+ * those exposure already makes (`excluded`, absent when ungoverned), and its
+ * allowlist plus the tools the launch needs. A child cannot exclude a tool
+ * the launch needs.
+ */
+export function childToolOptions(
+  child: SubagentChild | undefined,
+  excluded: readonly string[] | undefined,
+  mandatory: readonly string[],
+): { excludeTools?: string[]; tools?: string[] } {
+  const clash = (child?.excludeTools ?? []).filter((tool) =>
+    mandatory.includes(tool),
+  );
+  if (clash.length)
+    throw refuse(
+      `--exclude-tools cannot remove ${clash.join(", ")}: this launch needs ${clash.length > 1 ? "them" : "it"}`,
+      "Leave the tool out of --exclude-tools",
+    );
+  const excludeTools =
+    excluded || child?.excludeTools
+      ? [...(excluded ?? []), ...(child?.excludeTools ?? [])]
+      : undefined;
+  return {
+    ...(excludeTools ? { excludeTools } : {}),
+    ...(child?.tools ? { tools: [...child.tools, ...mandatory] } : {}),
+  };
 }
 
 // The text of pi-code's prompt-NAME.md in its pi-subagent-XXXX directory, a regular file.
 function promptFile(path: string): string {
   const fail = () => refuse("The subagent system prompt file cannot be used");
   try {
-    const real = realpathSync(path);
+    const real = realpathSync.native(path);
     if (!inTemp(dirname(real), PROMPT_DIR)) throw fail();
     const stat = lstatSync(real);
     if (!stat.isFile() || stat.size > MAX_PROMPT_FILE_BYTES) throw fail();
+    // One link, and ours: a file linked in from elsewhere, or planted by
+    // another user in a shared temp directory, is not pi-code's.
+    if (stat.nlink !== 1) throw fail();
+    if (process.getuid && stat.uid !== process.getuid()) throw fail();
     return readFileSync(real, "utf8");
   } catch (error) {
     throw error instanceof PiShipError ? error : fail();
@@ -121,7 +171,7 @@ export function parseSubagentChild(
     }
     if (!VALUE_FLAGS.includes(flag))
       throw refuse(
-        `Option ${flag.startsWith("-") ? flag.slice(0, 40) : "(not an option)"} is not available to a subagent child`,
+        `Option ${flag.startsWith("-") ? (flag.split("=")[0] as string).slice(0, 40) : "(not an option)"} is not available to a subagent child`,
         "Subagent children accept only the options pi-code passes",
       );
     if (seen.has(flag)) throw refuse(`${flag} is given twice`);
@@ -160,7 +210,7 @@ export function parseSubagentChild(
       throw refuse("--session-id is not a pi-code background session id");
     let real: string | undefined;
     try {
-      real = realpathSync(sessionDir);
+      real = realpathSync.native(sessionDir);
     } catch {
       // refused below
     }

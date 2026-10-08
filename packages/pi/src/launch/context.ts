@@ -24,6 +24,8 @@ export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
   /** The session was started with `--yolo`. */
   readonly yolo?: boolean;
+  /** A pi-code subagent child launch (see launch/subagent-child.ts). */
+  readonly subagent?: boolean;
   /** Takes back the permission provider's auto-approval `--yolo` switched on. */
   readonly endProviderAutoApprove?: () => string | undefined;
 }

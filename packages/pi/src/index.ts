@@ -35,6 +35,7 @@ import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import {
   isSubagentChild,
+  launchOutput,
   parseSubagentChild,
 } from "./launch/subagent-child.js";
 import {
@@ -122,7 +123,8 @@ export async function launchPiDistribution(
     ? parseSubagentChild(args, process.env)
     : undefined;
   if (child) args = [];
-  let requestedModel: string | undefined = child?.model;
+  // A child's model is passed to the access check from `child` itself.
+  let requestedModel: string | undefined;
   let newSession = false;
   let yolo = false;
   // The session options come first, in any order.
@@ -233,13 +235,14 @@ export async function launchPiDistribution(
     agentDir,
     mode: metadata.deployment.mode,
     // A child's stdout is the JSON event stream only.
-    out: (message) => (child ? console.error(message) : console.log(message)),
+    out: launchOutput(!!child),
     err: (message) => console.error(message),
     // Only the interactive launch (no subcommand) may sign in on the spot.
     ...(!child && args.length === 0 && atTerminal
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
+    ...(child ? { subagent: true } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),

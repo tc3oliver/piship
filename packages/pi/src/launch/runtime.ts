@@ -48,7 +48,7 @@ import {
   type Model,
 } from "./model-runtime.js";
 import { entitlementNotice } from "./entitlement-notice.js";
-import type { SubagentChild } from "./subagent-child.js";
+import { childToolOptions, type SubagentChild } from "./subagent-child.js";
 import { providerErrorRedaction } from "./redaction.js";
 import { governVirtualModels } from "./virtual-models.js";
 import {
@@ -453,26 +453,17 @@ async function startRuntime(
         ? {
             noTools: "builtin" as const,
             customTools: governedCustomTools(gov, cwd, table),
-            excludeTools: [
-              ...(table?.excluded() ?? []),
-              ...(child?.excludeTools ?? []),
-            ],
-          }
-        : child?.excludeTools
-          ? { excludeTools: [...child.excludeTools] }
-          : {}),
-      // Pi bounds the session's tools by this list, after exposure: it can
-      // only remove tools, never add one the exclusions above remove.
-      // The integrity extension re-activates the tools the distribution
-      // requires, so they stay in the list.
-      ...(child?.tools
-        ? {
-            tools: [
-              ...child.tools,
-              ...(gov ? enforcedRuntime(gov, undefined).mandatoryTools : []),
-            ],
           }
         : {}),
+      // Pi bounds the session's tools by `tools`, after exposure: it can only
+      // remove tools, never add one the exclusions remove. The integrity
+      // extension re-activates the tools the distribution requires, so they
+      // stay in the list (and a child may not exclude them).
+      ...childToolOptions(
+        child,
+        gov ? (table?.excluded() ?? []) : undefined,
+        child && gov ? enforcedRuntime(gov, undefined).mandatoryTools : [],
+      ),
     });
     if (child?.thinking) result.session.setThinkingLevel(child.thinking);
     if (table) activateExposure(result.session, table);

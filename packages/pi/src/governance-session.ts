@@ -260,6 +260,7 @@ export class GovernanceSession {
           project: project.origin,
           sandbox: sandbox.report.level,
           ...(workspace ? { workspace: workspace.declared } : {}),
+          ...(options.subagent ? { subagent: true } : {}),
         },
       });
       session.emit("policy.loaded", {

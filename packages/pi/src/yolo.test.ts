@@ -75,6 +75,7 @@ interface Setup {
   readonly mode: "managed" | "personal";
   readonly userAuto?: "allowed" | "off";
   readonly yolo?: boolean;
+  readonly subagent?: boolean;
   /** Switch the stored auto mode on before the session opens. */
   readonly stored?: boolean;
   readonly onYoloEnd?: () => string | undefined;
@@ -144,6 +145,7 @@ function distribution(setup: Setup) {
     piVersion: PI_VERSION,
     interactive: false,
     ...(setup.yolo ? { yolo: true } : {}),
+    ...(setup.subagent ? { subagent: true } : {}),
     ...(setup.onYoloEnd ? { onYoloEnd: setup.onYoloEnd } : {}),
     fetch: (() => {
       throw new Error("no network in unit tests");
@@ -225,6 +227,20 @@ function tool(session: GovernanceSession, workspace: string, name: string) {
   return (params: unknown, ctx: ExtensionToolContext) =>
     found.execute("call", params as never, undefined, undefined, ctx);
 }
+
+describe("a subagent child's session.start", () => {
+  it("records subagent: true, only for a child, and never the task", async () => {
+    const child = await open({ mode: "personal", subagent: true });
+    const plain = await open({ mode: "personal" });
+    await child.session.close();
+    await plain.session.close();
+    const start = (events: () => AuditEvent[]) =>
+      events().find((event) => event.event === "session.start");
+    expect(start(child.events)?.detail).toMatchObject({ subagent: true });
+    expect(start(plain.events)?.detail).not.toHaveProperty("subagent");
+    expect(JSON.stringify(start(child.events))).not.toContain("prompt");
+  });
+});
 
 describe("--yolo in a personal session", () => {
   it("does nothing unless it is asked for", async () => {
