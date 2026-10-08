@@ -872,4 +872,13 @@ describe("closureKey", () => {
   ])("%s + %s", (root, path, expected) => {
     expect(closureKey(root, path)).toBe(expected);
   });
+
+  it("trims a root that ends in many slashes without backtracking", () => {
+    const started = Date.now();
+    expect(closureKey(`/r/pkg${"/".repeat(200_000)}x`, "a.ts")).toBe("a.ts");
+    expect(closureKey(`/r/pkg${"/".repeat(200_000)}`, "/r/pkg/a.ts")).toBe(
+      "a.ts",
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
 });

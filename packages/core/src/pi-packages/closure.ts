@@ -249,7 +249,8 @@ const transpileGraphBuild = (
  */
 export function closureKey(root: string, path: string): string {
   const slashed = (value: string) => value.replace(/\\/g, "/");
-  const base = slashed(root).replace(/\/+$/, "");
+  let base = slashed(root);
+  while (base.endsWith("/")) base = base.slice(0, -1);
   let key = slashed(path);
   const windows = /^[A-Za-z]:(?:\/|$)/.test(base) || base.startsWith("//");
   const head = key.slice(0, base.length + 1);
