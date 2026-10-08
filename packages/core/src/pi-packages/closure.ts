@@ -797,12 +797,21 @@ function nativeImportProblems(
 ): string[] {
   const problems: string[] = [];
   const name = (path: string) => closureKey(root, path);
+  // `export *` hides what a module exports from its own metafile entry.
+  const reexportsAll = new Set(
+    outputs
+      .filter(({ text }) => /^export\s*\*/m.test(text))
+      .map(({ path }) => resolve(path)),
+  );
   for (const { path, text } of outputs) {
     for (const match of text.matchAll(NAMED_IMPORT)) {
-      const target = resolve(dirname(path), match[2] as string);
-      const names = exported.get(target);
-      // `export *` hides what a module exports from its own metafile entry.
-      if (!names || /^export\s*\*/m.test(outputText(outputs, target))) continue;
+      const written = resolve(dirname(path), match[2] as string);
+      // `./x` as well as `./x.js`: the loader finds the written file either way.
+      const target = [written, `${written}.js`, `${written}.mjs`].find((file) =>
+        exported.has(file),
+      );
+      const names = target && exported.get(target);
+      if (!target || !names || reexportsAll.has(target)) continue;
       const missing = (match[1] as string)
         .split(",")
         .map((item) => item.trim().split(/\s+as\s+/)[0] as string)
@@ -815,7 +824,8 @@ function nativeImportProblems(
     for (const global of ["__dirname", "__filename", "require"] as const) {
       const used =
         global === "require"
-          ? /(?<![.\w$])require\s*(?:\.|\)|;|$)/m.test(text)
+          ? // A call or a property of the free name; `typeof require` is a guard.
+            /(?<![.\w$])(?<!\btypeof\s+)require\s*[(.]/.test(text)
           : CJS_LOCATION.test(text) && new RegExp(`\\b${global}\\b`).test(text);
       if (used && !declares(text, global))
         problems.push(
@@ -856,11 +866,6 @@ function nativeImportProblems(
     );
   return problems.sort();
 }
-
-const outputText = (
-  outputs: readonly { path: string; text: string }[],
-  path: string,
-) => outputs.find((output) => resolve(output.path) === path)?.text ?? "";
 
 /**
  * Every output is parsed as an ES module by the Node that builds, in one

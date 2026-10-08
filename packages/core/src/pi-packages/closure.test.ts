@@ -764,6 +764,14 @@ export const other = (): string => "other";
         /extensions\/other\.js imports Shape from node_modules\/ext\/lib\/types\.js.*does not export it/,
       ),
     ]);
+    // Written without the extension, it is the same module and the same finding.
+    expect(
+      warnings({
+        [OTHER]: `export { Shape } from "../lib/types";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([expect.stringMatching(/imports Shape from .*lib\/types\.js/)]);
     // A real export of the same module is not one.
     expect(
       warnings({
@@ -777,11 +785,27 @@ export const other = (): string => "other";
   it("names __dirname, __filename, and require left in the output", () => {
     const found = warnings({
       [OTHER]:
-        "export const other = (): string => __dirname + __filename + typeof require;\n",
+        "export const other = (): string => __dirname + __filename + require.resolve('x');\n",
     });
     expect(found).toHaveLength(3);
     for (const name of ["__dirname", "__filename", "require"])
       expect(found.join("\n")).toContain(`extensions/other.js uses ${name}`);
+  });
+
+  it("refuses a require call outright (esbuild sees it), and lets a typeof guard pass", () => {
+    // A call is a build error, not a warning: it is never written.
+    expect(() =>
+      warnings({
+        [OTHER]:
+          "export const other = (): string => String(require('node:fs'));\n",
+      }),
+    ).toThrow(/calls require/);
+    expect(
+      warnings({
+        [OTHER]:
+          "export const other = (): boolean => typeof require === 'function';\n",
+      }),
+    ).toEqual([]);
   });
 
   it("names a package.json without type: module", () => {
