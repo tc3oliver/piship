@@ -6,6 +6,8 @@ import {
   createGrepTool,
   createReadTool,
   InteractiveMode,
+  initTheme,
+  runPrintMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -29,6 +31,7 @@ import {
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
 import { liveOwner, SessionOwnership } from "../launch/session-file.js";
+import type { SubagentChild } from "../launch/subagent-child.js";
 import { endInsideDispose } from "./dispose-hook.js";
 
 /**
@@ -450,6 +453,54 @@ export async function runInteractive(
       startupMark("ui_ready");
     }
     await mode.run();
+  } catch (error) {
+    sessionFailed = true;
+    throw error;
+  } finally {
+    await end(sessionFailed);
+  }
+}
+
+/**
+ * A pi-code subagent: the same governed start as a user session, then Pi's
+ * print mode in JSON on the task. No terminal exists, so an ask that needs a
+ * person is denied and a missing sign-in fails the start (`ctx` has no
+ * inline login); the exit code is Pi's.
+ */
+export async function runSubagentChild(
+  ctx: LaunchContext,
+  child: SubagentChild,
+): Promise<void> {
+  for (const name of ["cache", "logs", "data"])
+    mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
+  const prepared = await prepareAccess(ctx, child.model);
+  startupMark("access_prepared");
+  const gov = await openGovernance(ctx, prepared, false);
+  startupMark("governance_open");
+  const { runtime, theme, ownership } = await startGoverned(
+    ctx,
+    prepared,
+    { sessionDir: "", newSession: true, child },
+    gov,
+  );
+  startupMark("pi_initialized");
+  let sessionFailed = false;
+  const piDispose = runtime.dispose.bind(runtime);
+  const end = endInsideDispose(
+    runtime,
+    (failed) =>
+      endSession(ctx, prepared, { dispose: piDispose }, gov, failed, ownership),
+    (error) => ctx.err(`Error: ${formatError(error)}`),
+  );
+  try {
+    // Extensions read the theme when the session binds them, as in Pi's own
+    // print mode; no watcher, no terminal.
+    initTheme(theme, false);
+    const code = await runPrintMode(runtime, {
+      mode: "json",
+      initialMessage: child.prompt,
+    });
+    if (code !== 0) process.exitCode = code;
   } catch (error) {
     sessionFailed = true;
     throw error;

@@ -360,6 +360,48 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(print.stderr).toContain("Unknown branded command option: -p hi");
     expect(print.stderr).toContain("no non-interactive prompt mode");
 
+    // pi-code's subagent child (`--mode json -p ... <task>` under
+    // PI_CODE_SUBAGENT=1) takes the same governed launch: the broker
+    // credential, the model allowlist, and the print mode's JSON events.
+    // Without the marker the arguments are refused as before.
+    const child = (rest: string[], marker = "1") =>
+      branded(command, ["--mode", "json", "-p", ...rest], {
+        cwd: temp,
+        env: { ...env, PI_CODE_SUBAGENT: marker },
+      });
+    const unmarked = await child(["Task: canary-task"], "");
+    expect(unmarked.status).toBe(1);
+    expect(unmarked.stderr).toContain("Unknown branded command option");
+    const childYolo = await child(["--yolo", "Task: canary-task"]);
+    expect(childYolo.status).toBe(1);
+    expect(childYolo.stderr).toContain("not available to a subagent child");
+    expect(childYolo.stderr).not.toContain("canary-task");
+    const childModel = await child([
+      "--no-session",
+      "--model",
+      "openai/gpt-4o",
+      "Task: canary-task",
+    ]);
+    expect(childModel.status).toBe(1);
+    expect(childModel.stderr).toContain("MODEL_DENIED");
+    const childRun = await child(["--no-session", "Task: say hello"]);
+    expect(childRun.status, childRun.stderr).toBe(0);
+    const events = childRun.stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line: string) => JSON.parse(line));
+    expect(events.map((event: { type: string }) => event.type)).toEqual(
+      expect.arrayContaining(["session", "agent_start", "agent_end"]),
+    );
+    const childChat = services.state.requests
+      .filter((item: { path: string }) =>
+        item.path.endsWith("/chat/completions"),
+      )
+      .at(-1);
+    expect(childChat?.authorization).toBe(
+      `Bearer ${credentialSecret("vk_demo_1")}`,
+    );
+
     // 3. Managed policy stays enforced: model allowlist and entitlement,
     //    and the network policy for the adapter's own requests.
     const personalModel = await run(["--model", "openai/gpt-4o", "--smoke"]);

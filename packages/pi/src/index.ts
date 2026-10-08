@@ -25,10 +25,18 @@ import {
 import { runDoctor } from "./commands/doctor.js";
 import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
-import { runInteractive, runSmoke } from "./commands/session.js";
+import {
+  runInteractive,
+  runSmoke,
+  runSubagentChild,
+} from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import {
+  isSubagentChild,
+  parseSubagentChild,
+} from "./launch/subagent-child.js";
 import {
   deferredDownloadNotice,
   deferredToolDownloads,
@@ -106,7 +114,15 @@ export async function launchPiDistribution(
       },
     );
   let args = [...options.args];
-  let requestedModel: string | undefined;
+  // pi-code's subagent tool runs this command as `--mode json -p ... <task>`
+  // under PI_CODE_SUBAGENT=1. The options are parsed by allowlist before
+  // anything starts; the child then takes the launch below as a session with
+  // no arguments, and ends in Pi's print mode (see launch/subagent-child.ts).
+  const child = isSubagentChild(args, process.env)
+    ? parseSubagentChild(args, process.env)
+    : undefined;
+  if (child) args = [];
+  let requestedModel: string | undefined = child?.model;
   let newSession = false;
   let yolo = false;
   // The session options come first, in any order.
@@ -149,7 +165,11 @@ export async function launchPiDistribution(
   // Pi's interactive TUI waits for keyboard input forever without a terminal,
   // and there is no non-interactive prompt mode. Refuse before any state,
   // identity session, credential or sandbox exists.
-  if (args.length === 0 && !(process.stdin.isTTY && process.stdout.isTTY)) {
+  if (
+    !child &&
+    args.length === 0 &&
+    !(process.stdin.isTTY && process.stdout.isTTY)
+  ) {
     const command = metadata.app.command;
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -212,10 +232,11 @@ export async function launchPiDistribution(
     stateDir,
     agentDir,
     mode: metadata.deployment.mode,
-    out: (message) => console.log(message),
+    // A child's stdout is the JSON event stream only.
+    out: (message) => (child ? console.error(message) : console.log(message)),
     err: (message) => console.error(message),
     // Only the interactive launch (no subcommand) may sign in on the spot.
-    ...(args.length === 0 && atTerminal
+    ...(!child && args.length === 0 && atTerminal
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
@@ -335,6 +356,7 @@ export async function launchPiDistribution(
     if (command === "auto") return runAuto(ctx, rest);
     if (command === "capabilities") return runCapabilities(ctx, rest);
   }
+  if (child) return runSubagentChild(ctx, child);
   const smoke =
     args.length === 1 && (command === "--smoke" || command === "--smoke-model");
   if (args.length > 0 && !smoke)
