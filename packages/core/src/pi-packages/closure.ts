@@ -824,8 +824,10 @@ function nativeImportProblems(
     for (const global of ["__dirname", "__filename", "require"] as const) {
       const used =
         global === "require"
-          ? // A call or a property of the free name; `typeof require` is a guard.
-            /(?<![.\w$])(?<!\btypeof\s+)require\s*[(.]/.test(text)
+          ? // The free name used as a call, a property, an argument, or a value
+            // (`(0, require)(x)`, `map(require)`, `const r = require;`);
+            // `typeof require` is a guard and passes.
+            /(?<![.\w$])(?<!\btypeof\s+)require\s*(?:[(.),;]|$)/m.test(text)
           : CJS_LOCATION.test(text) && new RegExp(`\\b${global}\\b`).test(text);
       if (used && !declares(text, global))
         problems.push(

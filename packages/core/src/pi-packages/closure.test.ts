@@ -792,6 +792,18 @@ export const other = (): string => "other";
       expect(found.join("\n")).toContain(`extensions/other.js uses ${name}`);
   });
 
+  it.each([
+    ["called through a comma expression", "(0, require)('node:fs')"],
+    ["passed as an argument", "[1].map(require)"],
+    ["held as a value", "(() => { const load = require; return load; })()"],
+    ["with its property read", "require.main"],
+  ])("names a require %s", (_, expression) => {
+    const found = warnings({
+      [OTHER]: `export const other = (): unknown => ${expression};\n`,
+    });
+    expect(found.join("\n")).toContain("extensions/other.js uses require");
+  });
+
   it("refuses a require call outright (esbuild sees it), and lets a typeof guard pass", () => {
     // A call is a build error, not a warning: it is never written.
     expect(() =>
