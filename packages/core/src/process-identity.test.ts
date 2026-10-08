@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { afterEach, expect, it } from "vitest";
 import { processIdentity, processIdentityMatches } from "./process-identity.js";
 
@@ -57,3 +57,20 @@ it.runIf(process.platform === "darwin")(
     ).toBeUndefined();
   },
 );
+
+it("writes nothing to the caller's terminal for a process that has exited", () => {
+  const gone = spawnSync(process.execPath, ["-e", "0"], { encoding: "utf8" });
+  const pid = gone.pid as number;
+  const dist = new URL("../dist/process-identity.js", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const { processIdentity } = await import(${JSON.stringify(dist)}); console.log(String(processIdentity(${pid})));`,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.stdout.trim()).toBe("undefined");
+  expect(result.stderr).toBe("");
+});

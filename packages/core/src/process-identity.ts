@@ -191,7 +191,15 @@ function lookup(pid: number): string | undefined {
           "-Command",
           `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
         ],
-        { encoding: "utf8", timeout: 5000, windowsHide: true },
+        {
+          encoding: "utf8",
+          timeout: 5000,
+          windowsHide: true,
+          // A process that has already exited is an ordinary answer ("no
+          // identity"); PowerShell's error text must not reach the caller's
+          // terminal.
+          stdio: ["ignore", "pipe", "ignore"],
+        },
       ).trim();
       return /^\d+$/.test(value) ? value : undefined;
     }
@@ -200,6 +208,7 @@ function lookup(pid: number): string | undefined {
     const value = execFileSync(PS, ["-p", String(pid), "-o", "lstart="], {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
       env: { ...process.env, TZ: "UTC0", LC_ALL: "C" },
     }).trim();
     const match = LSTART.exec(value);
