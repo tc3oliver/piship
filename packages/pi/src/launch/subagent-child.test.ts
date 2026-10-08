@@ -10,6 +10,7 @@ import {
   realpathSync as realpath,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +27,7 @@ import { preparePiEnvironment } from "../environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "../index.js";
 import {
   publishSubagentOwner,
-  SUBAGENT_NONCE_ENV,
+  SUBAGENT_TOKEN_ENV,
   SUBAGENT_OWNER_DIRECTORY,
 } from "./subagent-owner.js";
 import {
@@ -286,24 +287,28 @@ describe("what a child cannot ask for", () => {
       const dir = temp("pi-subagent-");
       const target = join(temp("not-pi-code-"), "secret.md");
       writeFileSync(target, "secret");
-      // The real path, as realpath returns it: only the last component is
-      // wrong, and it is what the open must not follow.
-      const link = join(realpath(dir), "prompt-link.md");
-      symlinkSync(target, link);
-      // The race: realpath saw a regular file, and a link took its place.
-      const decoy = join(dir, "prompt-decoy.md");
+      // A regular file that passes every check made on the path, and that is
+      // replaced by a link the moment after realpath returned it.
+      const file = join(realpath(dir), "prompt-a.md");
+      writeFileSync(file, "x");
       const native = realpath.native;
-      const spy = vi
-        .spyOn(realpath, "native")
-        .mockImplementation(((path: string) =>
-          path === decoy ? link : native(path)) as typeof native);
+      const swap = vi.spyOn(realpath, "native").mockImplementation(((
+        path: string,
+      ) => {
+        const real = native(path);
+        if (path === file) {
+          unlinkSync(file);
+          symlinkSync(target, file);
+        }
+        return real;
+      }) as typeof native);
       try {
-        expect(refused(["--system-prompt", decoy, "t"]).message).toContain(
+        expect(refused(["--system-prompt", file, "t"]).message).toContain(
           "system prompt file",
         );
-        expect(spy).toHaveBeenCalledWith(decoy);
+        expect(swap).toHaveBeenCalledWith(file);
       } finally {
-        spy.mockRestore();
+        swap.mockRestore();
       }
     },
   );
@@ -394,6 +399,27 @@ describe("the tools a child adds to the session", () => {
     });
   });
 
+  it.each(["codemode", "tool_search", "read,codemode", "tool_search,read"])(
+    "refuses --tools %s, which would reach tools the list leaves out",
+    (list) => {
+      const error = refused(["--tools", list, "Task: canary-task"]);
+      expect(error.code).toBe("CONFIG_INVALID");
+      expect(error.message).toContain("--tools cannot name");
+      expect(error.message).not.toContain("canary-task");
+      // And again where the options are applied, for a caller that skips parsing.
+      expect(() =>
+        childToolOptions({ prompt: "t", tools: list.split(",") }, [], []),
+      ).toThrow(/--tools cannot name/);
+    },
+  );
+
+  it("still takes an allowlist that names neither", () => {
+    expect(parse(["--tools", "read,grep", "t"]).tools).toEqual([
+      "read",
+      "grep",
+    ]);
+  });
+
   it("refuses an exclusion of a tool the launch needs", () => {
     const child = { prompt: "t", excludeTools: ["bash", "ask_user"] };
     expect(() => childToolOptions(child, [], ["ask_user"])).toThrow(
@@ -447,7 +473,7 @@ describe("the launch", () => {
       ["PISHIP_STATE_HOME", saved.home],
       ["PI_CODING_AGENT_DIR", saved.agentDir],
       ["PI_CODE_SUBAGENT", saved.marker],
-      [SUBAGENT_NONCE_ENV, undefined],
+      [SUBAGENT_TOKEN_ENV, undefined],
     ] as const)
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -512,14 +538,14 @@ describe("the launch", () => {
       expect(readdirSync(join(state, "acmecode"))).toEqual([
         SUBAGENT_OWNER_DIRECTORY,
       ]);
-      expect(process.env).not.toHaveProperty(SUBAGENT_NONCE_ENV);
+      expect(process.env).not.toHaveProperty(SUBAGENT_TOKEN_ENV);
     }
   });
 
   it("refuses the marker without a running session's nonce, before any state exists", async () => {
     process.env.PI_CODE_SUBAGENT = "1";
     for (const nonce of [undefined, "d".repeat(64)]) {
-      if (nonce) process.env[SUBAGENT_NONCE_ENV] = nonce;
+      if (nonce) process.env[SUBAGENT_TOKEN_ENV] = nonce;
       const error = await failure([...BASE, "Task: canary-task"]);
       expect(error?.code).toBe("CONFIG_INVALID");
       expect(error?.message).toContain("not started by a running session");

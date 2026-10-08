@@ -258,7 +258,7 @@ export async function launchPiDistribution(
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
-    ...(child && parent ? { subagent: { parentSession: parent.session } } : {}),
+    ...(parent ? { subagent: { parentSession: parent.session } } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),

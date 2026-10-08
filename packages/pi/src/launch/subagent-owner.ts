@@ -1,10 +1,10 @@
 // Who may start a subagent child. pi-code's `subagent` tool spawns the branded
 // command with `PI_CODE_SUBAGENT=1`, a marker anyone can set. A running
 // session therefore publishes a record of itself in the distribution's state
-// directory (a random nonce, its process, its session, its workspace) and
-// puts the nonce in its own environment, which pi-code's spawn passes on
+// directory (a random token, its process, its session, its workspace) and
+// puts the token in its own environment, which pi-code's spawn passes on
 // (`{ ...process.env, PI_CODE_SUBAGENT: "1" }`). A child refuses to start
-// unless the nonce names a record whose process still runs, and it works only
+// unless the token names a record whose process still runs, and it works only
 // inside that session's workspace. A person who can read the state directory
 // has the user's own files already; what this closes is a launch that no
 // session of this distribution started, and a child outside its parent's
@@ -23,19 +23,34 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { join, posix, win32 } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+  win32,
+} from "node:path";
 import { PiShipError, processAlive, processHostToken } from "@piship/contracts";
-import { inTemp } from "./subagent-child.js";
+import {
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
+} from "@piship/core";
+import { inTemp, readOwnedFile } from "./subagent-child.js";
 
 /**
- * The nonce travels in the environment. The managed launch removes `PI_*`
- * and credential-looking variables from a process, so the name is neither;
- * the child reads it before that cleanup runs and removes it itself.
+ * The token travels in the environment. Its name is one the credential
+ * filters know (`TOKEN`): the managed launch removes it from a process, and
+ * the sandbox never gives it to a command, so a model's `echo` does not see
+ * it. The child reads it before that cleanup runs and removes it itself.
  */
-export const SUBAGENT_NONCE_ENV = "PISHIP_SUBAGENT_NONCE";
+export const SUBAGENT_TOKEN_ENV = "PISHIP_SUBAGENT_TOKEN";
 export const SUBAGENT_OWNER_DIRECTORY = "subagent-owners";
 const SCHEMA = "piship-subagent-owner/v1";
-const NONCE = /^[0-9a-f]{64}$/;
+const TOKEN = /^[0-9a-f]{64}$/;
+const MAX_RECORD_BYTES = 64 * 1024;
 /** An unreadable record another launch may still be writing. */
 const PARTIAL_MS = 60_000;
 // pi-code's `isolation: worktree` gives a child a git worktree of its own
@@ -55,6 +70,9 @@ interface OwnerRecord extends SubagentParent {
   readonly nonce: string;
   readonly pid: number;
   readonly host: string;
+  /** The process's start identity (Linux) and start time, against a reused ID. */
+  readonly identity: string | null;
+  readonly started: number | null;
 }
 
 const refuse = (message: string, userAction: string) =>
@@ -75,7 +93,7 @@ function parse(text: string): OwnerRecord | undefined {
     const value = JSON.parse(text) as OwnerRecord;
     if (
       value.schema === SCHEMA &&
-      NONCE.test(value.nonce) &&
+      TOKEN.test(value.nonce) &&
       Number.isSafeInteger(value.pid) &&
       value.pid > 0 &&
       typeof value.host === "string" &&
@@ -87,6 +105,24 @@ function parse(text: string): OwnerRecord | undefined {
     // unreadable
   }
   return undefined;
+}
+
+/** Whether the process a record names still runs, and is the one that wrote it. */
+function ownerRuns(record: OwnerRecord): boolean {
+  if (record.host !== processHostToken() || !processAlive(record.pid))
+    return false;
+  // A reused process ID: the start identity (Linux) or start time (elsewhere)
+  // of the process that has it now is not the writer's. Undefined (it cannot
+  // be told) keeps the record, as a running process is never judged gone by
+  // a failed lookup.
+  return (
+    recordedProcessGone({
+      pid: record.pid,
+      identity: record.identity ?? null,
+      host: record.host,
+      started: record.started ?? null,
+    }) !== true
+  );
 }
 
 /** The record directory, created private (0700) and checked to be ours. */
@@ -102,9 +138,19 @@ function privateDirectory(path: string): void {
     chmodSync(path, 0o700);
 }
 
+const published = new Set<string>();
+/** One exit handler for every record this process holds. */
+function removeAtExit(path: string): void {
+  if (published.size === 0)
+    process.once("exit", () => {
+      for (const record of published) rmSync(record, { force: true });
+    });
+  published.add(path);
+}
+
 /**
  * Called when a session starts: publishes the owner record and exports its
- * nonce, so the children this session's subagent tool starts can prove who
+ * token, so the children this session's subagent tool starts can prove who
  * started them. The record is removed when the process exits; one a crash
  * left behind names a process that is gone and is removed by the next start.
  */
@@ -115,13 +161,12 @@ export function publishSubagentOwner(
 ): void {
   const directory = join(stateDir, SUBAGENT_OWNER_DIRECTORY);
   privateDirectory(directory);
-  const host = processHostToken();
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
     try {
       const record = parse(readFileSync(path, "utf8"));
       const stale = record
-        ? record.host === host && !processAlive(record.pid)
+        ? record.host === processHostToken() && !ownerRuns(record)
         : Date.now() - statSync(path).mtimeMs > PARTIAL_MS;
       if (stale) rmSync(path, { force: true });
     } catch {
@@ -134,7 +179,9 @@ export function publishSubagentOwner(
     schema: SCHEMA,
     nonce,
     pid: process.pid,
-    host,
+    host: processHostToken(),
+    identity: recordedIdentity(),
+    started: recordedStart(),
     ...parent,
   };
   const fd = openSync(path, "wx", 0o600);
@@ -143,49 +190,109 @@ export function publishSubagentOwner(
   } finally {
     closeSync(fd);
   }
-  env[SUBAGENT_NONCE_ENV] = nonce;
-  process.once("exit", () => rmSync(path, { force: true }));
+  env[SUBAGENT_TOKEN_ENV] = nonce;
+  removeAtExit(path);
 }
 
 /**
- * The session that started this child, or a refusal. The nonce is taken out
- * of the environment first, so nothing the child runs inherits it.
+ * The session that started this child, or a refusal. The token is taken out
+ * of the environment first, so nothing the child runs inherits it. The record
+ * is opened without following a link and checked and read through the one
+ * descriptor.
  */
 export function authenticateSubagentChild(
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): SubagentParent {
-  const nonce = env[SUBAGENT_NONCE_ENV];
-  delete env[SUBAGENT_NONCE_ENV];
-  if (!nonce || !NONCE.test(nonce)) throw unauthenticated();
+  const nonce = env[SUBAGENT_TOKEN_ENV];
+  delete env[SUBAGENT_TOKEN_ENV];
+  if (!nonce || !TOKEN.test(nonce)) throw unauthenticated();
   const directory = join(stateDir, SUBAGENT_OWNER_DIRECTORY);
   let record: OwnerRecord | undefined;
   try {
     const folder = lstatSync(directory);
-    const path = join(directory, fileName(nonce));
-    const file = lstatSync(path);
-    const posixChecks = process.platform !== "win32";
     if (
       !folder.isDirectory() ||
-      !file.isFile() ||
       !ours(folder.uid) ||
-      !ours(file.uid) ||
-      (posixChecks && ((folder.mode | file.mode) & 0o077) !== 0) ||
-      file.size > 64 * 1024
+      (process.platform !== "win32" && (folder.mode & 0o077) !== 0)
     )
       throw unauthenticated();
-    record = parse(readFileSync(path, "utf8"));
+    record = parse(
+      readOwnedFile(join(directory, fileName(nonce)), MAX_RECORD_BYTES, {
+        closed: true,
+      }),
+    );
   } catch {
     throw unauthenticated();
   }
   if (
     !record ||
     !timingSafeEqual(Buffer.from(record.nonce), Buffer.from(nonce)) ||
-    record.host !== processHostToken() ||
-    !processAlive(record.pid)
+    !ownerRuns(record)
   )
     throw unauthenticated();
   return { session: record.session, workspace: record.workspace };
+}
+
+/** The target of a `.git` file (`gitdir: <path>`), as a real path. */
+function gitdirOf(dotGit: string): string | undefined {
+  try {
+    const text = readOwnedFile(dotGit, 4096);
+    const target = /^gitdir:\s*(.+?)\s*$/m.exec(text)?.[1];
+    return target
+      ? realpathSync.native(resolve(dirname(dotGit), target))
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The common git directory of the repository `start` is in (walking up), or
+ * undefined when it is in none: the `.git` directory itself, or for a linked
+ * worktree the directory its `commondir` names.
+ */
+function commonGitDirectory(start: string): string | undefined {
+  for (let directory = start; ; directory = dirname(directory)) {
+    const dotGit = join(directory, ".git");
+    const entry = lstatSync(dotGit, { throwIfNoEntry: false });
+    try {
+      if (entry?.isDirectory()) return realpathSync.native(dotGit);
+      if (entry?.isFile()) {
+        const gitdir = gitdirOf(dotGit);
+        if (!gitdir) return undefined;
+        const common = readFileSync(join(gitdir, "commondir"), "utf8").trim();
+        return realpathSync.native(resolve(gitdir, common));
+      }
+    } catch {
+      return undefined;
+    }
+    if (dirname(directory) === directory) return undefined;
+  }
+}
+
+/**
+ * Whether `directory` is a linked worktree of the repository the workspace
+ * is in, as `git worktree add` leaves one: its `.git` file names a directory
+ * below the repository's `worktrees/`, and that directory names the
+ * worktree's `.git` file back. A directory merely named and shaped like one
+ * does not pass; a workspace outside any repository has none.
+ */
+function isWorktreeOfWorkspace(directory: string, workspace: string): boolean {
+  const common = commonGitDirectory(workspace);
+  if (!common) return false;
+  const dotGit = join(directory, ".git");
+  const gitdir = gitdirOf(dotGit);
+  if (!gitdir) return false;
+  const from = relative(join(common, "worktrees"), gitdir);
+  if (!from || from.split(/[\\/]/)[0] === ".." || isAbsolute(from))
+    return false;
+  try {
+    const back = readFileSync(join(gitdir, "gitdir"), "utf8").trim();
+    return realpathSync.native(back) === realpathSync.native(dotGit);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -215,16 +322,14 @@ export function assertChildWorkspace(
     (from.split(/[\\/]/)[0] !== ".." && !path.isAbsolute(from))
   )
     return;
-  if (inTemp(real, WORKTREE, platform)) {
-    try {
-      const stat = lstatSync(join(real, ".git"));
-      if (stat.isFile() && ours(lstatSync(real).uid)) return;
-    } catch {
-      // not a worktree
-    }
-  }
+  if (
+    inTemp(real, WORKTREE, platform) &&
+    ours(lstatSync(real).uid) &&
+    isWorktreeOfWorkspace(real, workspace)
+  )
+    return;
   throw refuse(
-    "The subagent child's working directory is outside its parent's workspace",
-    "A subagent runs in the workspace of the session that started it, or in the git worktree of an isolated agent",
+    `The subagent child's working directory ${real} is outside its parent's workspace ${workspace}`,
+    "Omit cwd in the subagent call, or start the session in that directory",
   );
 }

@@ -1,8 +1,11 @@
 // Who may start a subagent child: a record a running session published and a
 // nonce only its children received, and the workspace they may work in.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import type { PiShipError } from "@piship/contracts";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -19,7 +22,7 @@ import {
   assertChildWorkspace,
   authenticateSubagentChild,
   publishSubagentOwner,
-  SUBAGENT_NONCE_ENV,
+  SUBAGENT_TOKEN_ENV,
   SUBAGENT_OWNER_DIRECTORY,
 } from "./subagent-owner.js";
 
@@ -56,7 +59,7 @@ describe("a child proves a running session started it", () => {
   it("is told the parent's session and workspace by the nonce in its environment", () => {
     const state = temp("piship-owner-");
     const env = publish(state);
-    expect(env[SUBAGENT_NONCE_ENV]).toMatch(/^[0-9a-f]{64}$/);
+    expect(env[SUBAGENT_TOKEN_ENV]).toMatch(/^[0-9a-f]{64}$/);
     expect(authenticateSubagentChild(state, env)).toEqual(PARENT);
   });
 
@@ -64,10 +67,10 @@ describe("a child proves a running session started it", () => {
     const state = temp("piship-owner-");
     const env = publish(state);
     authenticateSubagentChild(state, env);
-    expect(env).not.toHaveProperty(SUBAGENT_NONCE_ENV);
-    const bad: NodeJS.ProcessEnv = { [SUBAGENT_NONCE_ENV]: "a".repeat(64) };
+    expect(env).not.toHaveProperty(SUBAGENT_TOKEN_ENV);
+    const bad: NodeJS.ProcessEnv = { [SUBAGENT_TOKEN_ENV]: "a".repeat(64) };
     expect(() => authenticateSubagentChild(state, bad)).toThrow();
-    expect(bad).not.toHaveProperty(SUBAGENT_NONCE_ENV);
+    expect(bad).not.toHaveProperty(SUBAGENT_TOKEN_ENV);
   });
 
   it("refuses the marker alone, a malformed nonce, and a nonce nobody published", () => {
@@ -75,9 +78,9 @@ describe("a child proves a running session started it", () => {
     publish(state);
     for (const env of [
       {},
-      { [SUBAGENT_NONCE_ENV]: "" },
-      { [SUBAGENT_NONCE_ENV]: "../../etc/passwd" },
-      { [SUBAGENT_NONCE_ENV]: "b".repeat(64) },
+      { [SUBAGENT_TOKEN_ENV]: "" },
+      { [SUBAGENT_TOKEN_ENV]: "../../etc/passwd" },
+      { [SUBAGENT_TOKEN_ENV]: "b".repeat(64) },
     ])
       expect(refusal(() => authenticateSubagentChild(state, env))).toContain(
         "not started by a running session",
@@ -86,7 +89,7 @@ describe("a child proves a running session started it", () => {
 
   it("refuses when there is no state directory yet", () => {
     const state = join(temp("piship-owner-"), "absent");
-    const env = { [SUBAGENT_NONCE_ENV]: "c".repeat(64) };
+    const env = { [SUBAGENT_TOKEN_ENV]: "c".repeat(64) };
     expect(refusal(() => authenticateSubagentChild(state, env))).toContain(
       "not started by a running session",
     );
@@ -120,6 +123,59 @@ describe("a child proves a running session started it", () => {
     expect(refusal(() => authenticateSubagentChild(state, env))).toContain(
       "not started by a running session",
     );
+  });
+
+  it("refuses a record whose process ID now belongs to a process that started at another time", () => {
+    const state = temp("piship-owner-");
+    const env = publish(state);
+    const [name] = records(state);
+    const path = join(state, SUBAGENT_OWNER_DIRECTORY, name as string);
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    // The writer was killed and its ID given to this process, which started
+    // later than the record says the writer did.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...record,
+        identity: null,
+        started: Date.now() - 24 * 60 * 60 * 1000,
+      }),
+      { mode: 0o600 },
+    );
+    expect(refusal(() => authenticateSubagentChild(state, env))).toContain(
+      "not started by a running session",
+    );
+  });
+
+  posixOnly("does not follow a link put in place of the record", () => {
+    const state = temp("piship-owner-");
+    const env = publish(state);
+    const [name] = records(state);
+    const path = join(state, SUBAGENT_OWNER_DIRECTORY, name as string);
+    // A private copy of the same valid record, elsewhere, and a link to it.
+    const copy = join(temp("piship-owner-copy-"), "record.json");
+    writeFileSync(copy, readFileSync(path), { mode: 0o600 });
+    rmSync(path);
+    symlinkSync(copy, path);
+    expect(refusal(() => authenticateSubagentChild(state, env))).toContain(
+      "not started by a running session",
+    );
+  });
+
+  posixOnly("refuses a record with other hard links, or open to others", () => {
+    const state = temp("piship-owner-");
+    const env = publish(state);
+    const [name] = records(state);
+    const path = join(state, SUBAGENT_OWNER_DIRECTORY, name as string);
+    chmodSync(path, 0o640);
+    expect(
+      refusal(() => authenticateSubagentChild(state, { ...env })),
+    ).toContain("not started by a running session");
+    chmodSync(path, 0o600);
+    linkSync(path, join(temp("piship-owner-link-"), "alias.json"));
+    expect(
+      refusal(() => authenticateSubagentChild(state, { ...env })),
+    ).toContain("not started by a running session");
   });
 
   posixOnly("keeps the record private to its user", () => {
@@ -212,25 +268,109 @@ describe("a child works in its parent's workspace", () => {
       );
   });
 
-  it("accepts the git worktree pi-code gives an isolated agent, and no other temp directory", () => {
+  it("names the directory and the workspace in its refusal, and what to do", () => {
     const project = temp("piship-workspace-");
-    const worktree = join(tmpdir(), `pi-agent-worktree-scout-${"0123abcd"}`);
-    dirs.push(worktree);
-    mkdirSync(worktree);
-    // Not a worktree yet: no .git file.
-    expect(refusal(() => assertChildWorkspace(project, worktree))).toContain(
-      "outside",
+    const elsewhere = temp("piship-elsewhere-");
+    let error: PiShipError | undefined;
+    try {
+      assertChildWorkspace(project, elsewhere);
+    } catch (caught) {
+      error = caught as PiShipError;
+    }
+    expect(error?.message).toContain(elsewhere);
+    expect(error?.message).toContain(project);
+    expect(error?.userAction).toBe(
+      "Omit cwd in the subagent call, or start the session in that directory",
     );
-    writeFileSync(join(worktree, ".git"), "gitdir: /somewhere\n");
-    expect(() => assertChildWorkspace(project, worktree)).not.toThrow();
-    // The right content under the wrong name is not pi-code's.
-    const other = join(tmpdir(), `not-pi-agent-worktree-${process.pid}`);
-    dirs.push(other);
-    mkdirSync(other);
-    writeFileSync(join(other, ".git"), "gitdir: /somewhere\n");
-    expect(refusal(() => assertChildWorkspace(project, other))).toContain(
-      "outside",
-    );
+  });
+
+  // `git worktree add`, the way pi-code's isolation: worktree creates one.
+  describe("the worktree pi-code gives an isolated agent", () => {
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args],
+        { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+    const repository = () => {
+      const dir = temp("piship-repository-");
+      git(dir, "init", "-q");
+      git(dir, "commit", "-q", "--allow-empty", "-m", "first");
+      return dir;
+    };
+    // A name pi-code's pattern accepts, unique to this run.
+    const worktreeName = () =>
+      `pi-agent-worktree-scout-${randomBytes(4).toString("hex")}`;
+    const addWorktree = (repo: string) => {
+      const dir = join(tmpdir(), worktreeName());
+      dirs.push(dir);
+      git(
+        repo,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        `b-${randomBytes(3).toString("hex")}`,
+        dir,
+      );
+      return dir;
+    };
+    const outside = (project: string, directory: string) =>
+      refusal(() => assertChildWorkspace(project, directory));
+
+    it("is accepted for the workspace's own repository, from the root or a subdirectory", () => {
+      const repo = repository();
+      mkdirSync(join(repo, "sub"));
+      const worktree = addWorktree(repo);
+      expect(() => assertChildWorkspace(repo, worktree)).not.toThrow();
+      expect(() =>
+        assertChildWorkspace(join(repo, "sub"), worktree),
+      ).not.toThrow();
+    });
+
+    it("is accepted when the workspace is itself a linked worktree of that repository", () => {
+      const repo = repository();
+      const first = addWorktree(repo);
+      const second = addWorktree(repo);
+      expect(() => assertChildWorkspace(first, second)).not.toThrow();
+    });
+
+    it("is refused for another repository's worktree, and when the workspace is no repository", () => {
+      const repo = repository();
+      const other = addWorktree(repository());
+      expect(outside(repo, other)).toContain("outside");
+      expect(outside(temp("piship-plain-"), addWorktree(repo))).toContain(
+        "outside",
+      );
+    });
+
+    it("is refused when forged: the right name and a .git file, but no worktree behind it", () => {
+      const repo = repository();
+      const real = addWorktree(repo);
+      const dotGit = readFileSync(join(real, ".git"), "utf8");
+      const forge = (content: string | undefined, name = worktreeName()) => {
+        const dir = join(tmpdir(), name);
+        dirs.push(dir);
+        mkdirSync(dir);
+        if (content !== undefined) writeFileSync(join(dir, ".git"), content);
+        return dir;
+      };
+      // No .git file; a .git file that names nothing; one that names a
+      // directory outside the repository's worktrees; and one that names a
+      // real worktree's directory, which does not name the forged one back.
+      expect(outside(repo, forge(undefined))).toContain("outside");
+      expect(outside(repo, forge("gitdir: /somewhere\n"))).toContain("outside");
+      expect(outside(repo, forge(`gitdir: ${join(repo, ".git")}\n`))).toContain(
+        "outside",
+      );
+      expect(outside(repo, forge(dotGit))).toContain("outside");
+      // The right content under the wrong name is not pi-code's either.
+      const wrong = join(tmpdir(), `not-${worktreeName()}`);
+      dirs.push(wrong);
+      mkdirSync(wrong);
+      writeFileSync(join(wrong, ".git"), dotGit);
+      expect(outside(repo, wrong)).toContain("outside");
+    });
   });
 
   it("refuses a directory that does not exist", () => {

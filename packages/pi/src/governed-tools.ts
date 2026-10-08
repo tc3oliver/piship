@@ -54,6 +54,7 @@ import {
 import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
+import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
 import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
@@ -596,14 +597,18 @@ export function governedBashOperations(
     // command carries no environment from Pi: both keep the process
     // environment.
     const network = processNetworkEnvironment();
-    const base =
-      options.env ?? (source === "bash" ? { ...process.env } : undefined);
+    // The session's subagent token is for its children, not for a command.
+    const { [SUBAGENT_TOKEN_ENV]: _token, ...inherited } =
+      options.env ?? process.env;
+    const base = options.env || source === "bash" ? inherited : undefined;
     return local.exec(
       command,
       cwd,
       base && network
         ? { ...options, env: withApprovedNetwork(base, network) }
-        : options,
+        : base
+          ? { ...options, env: base }
+          : options,
     );
   };
   return {

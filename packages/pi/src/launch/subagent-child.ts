@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, posix, win32 } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { CODEMODE_TOOL, TOOL_SEARCH_TOOL } from "../governance/exposure.js";
 
 export const SUBAGENT_ENV = "PI_CODE_SUBAGENT";
 const THINKING = [
@@ -121,6 +122,23 @@ export const launchOutput = (child: boolean) => (message: string) =>
   child ? console.error(message) : console.log(message);
 
 /**
+ * `--tools` bounds a child's tools, and Codemode and tool search reach tools
+ * the list leaves out, so a list naming either is refused. They are not made
+ * excluded instead: the check for an excluded tool Pi still registers would
+ * stop the whole child.
+ */
+function refuseUnboundingTools(tools: readonly string[]): void {
+  const named = tools.filter(
+    (tool) => tool === CODEMODE_TOOL || tool === TOOL_SEARCH_TOOL,
+  );
+  if (named.length)
+    throw refuse(
+      `--tools cannot name ${named.join(", ")}: it would reach tools the list leaves out`,
+      "Leave codemode and tool_search out of --tools",
+    );
+}
+
+/**
  * The tool options a child adds to `createAgentSession`: its exclusions after
  * those exposure already makes (`excluded`, absent when ungoverned), and its
  * allowlist plus the tools the launch needs. A child cannot exclude a tool
@@ -131,6 +149,7 @@ export function childToolOptions(
   excluded: readonly string[] | undefined,
   mandatory: readonly string[],
 ): { excludeTools?: string[]; tools?: string[] } {
+  refuseUnboundingTools(child?.tools ?? []);
   const clash = (child?.excludeTools ?? []).filter((tool) =>
     mandatory.includes(tool),
   );
@@ -166,48 +185,58 @@ export function assertPrivateDirectory(path: string, what: string): void {
     throw refuse(`The subagent ${what} cannot be used`);
 }
 
+/**
+ * The text of a regular file the current user owns, with one hard link,
+ * opened without following a link (where the platform has `O_NOFOLLOW`) and
+ * checked and read through that one descriptor, so what was checked is what
+ * is read. It is bounded by `maxBytes` as it is read too, since the file may
+ * grow after the check. With `closed`, any group or other permission bit
+ * refuses it (POSIX). Throws on any failure; callers turn that into their
+ * refusal.
+ */
+export function readOwnedFile(
+  path: string,
+  maxBytes: number,
+  options: { readonly closed?: boolean } = {},
+): string {
+  // Not blocking: opening a FIFO waits for a writer, and is refused below.
+  const fd = openSync(
+    path,
+    constants.O_RDONLY |
+      (constants.O_NOFOLLOW ?? 0) |
+      (constants.O_NONBLOCK ?? 0),
+  );
+  try {
+    const file = fstatSync(fd);
+    if (!file.isFile() || file.size > maxBytes || file.nlink !== 1)
+      throw new Error("not usable");
+    if (process.getuid && file.uid !== process.getuid())
+      throw new Error("not usable");
+    if (options.closed && process.platform !== "win32" && file.mode & 0o077)
+      throw new Error("not usable");
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    for (;;) {
+      const read = readSync(fd, buffer, length, buffer.length - length, length);
+      if (read === 0) break;
+      length += read;
+      if (length > maxBytes) throw new Error("not usable");
+    }
+    return buffer.toString("utf8", 0, length);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // The text of pi-code's prompt-NAME.md in its pi-subagent-XXXX directory, a
-// regular file. It is opened without following a link and checked and read
-// through that one descriptor, so what was checked is what is read.
+// regular file.
 function promptFile(path: string): string {
   const fail = () => refuse("The subagent system prompt file cannot be used");
   try {
     const real = realpathSync.native(path);
     if (!inTemp(dirname(real), PROMPT_DIR)) throw fail();
     assertPrivateDirectory(dirname(real), "system prompt directory");
-    // Not blocking: opening a FIFO waits for a writer, and is refused below.
-    const fd = openSync(
-      real,
-      constants.O_RDONLY |
-        (constants.O_NOFOLLOW ?? 0) |
-        (constants.O_NONBLOCK ?? 0),
-    );
-    try {
-      const file = fstatSync(fd);
-      if (!file.isFile() || file.size > MAX_PROMPT_FILE_BYTES) throw fail();
-      // One link, and ours: a file linked in from elsewhere, or planted by
-      // another user in a shared temp directory, is not pi-code's.
-      if (file.nlink !== 1) throw fail();
-      if (process.getuid && file.uid !== process.getuid()) throw fail();
-      // Bounded again as it is read: the file may have grown since fstat.
-      const buffer = Buffer.alloc(MAX_PROMPT_FILE_BYTES + 1);
-      let length = 0;
-      for (;;) {
-        const read = readSync(
-          fd,
-          buffer,
-          length,
-          buffer.length - length,
-          length,
-        );
-        if (read === 0) break;
-        length += read;
-        if (length > MAX_PROMPT_FILE_BYTES) throw fail();
-      }
-      return buffer.toString("utf8", 0, length);
-    } finally {
-      closeSync(fd);
-    }
+    return readOwnedFile(real, MAX_PROMPT_FILE_BYTES);
   } catch {
     throw fail();
   }
@@ -255,8 +284,10 @@ export function parseSubagentChild(
       if (!THINKING.includes(value as ChildThinking))
         throw refuse("--thinking is not a known level");
       thinking = value as ChildThinking;
-    } else if (flag === "--tools") tools = value.split(",").filter(Boolean);
-    else if (flag === "--exclude-tools")
+    } else if (flag === "--tools") {
+      tools = value.split(",").filter(Boolean);
+      refuseUnboundingTools(tools);
+    } else if (flag === "--exclude-tools")
       excludeTools = value.split(",").filter(Boolean);
     else if (flag === "--system-prompt") systemPrompt = promptFile(value);
     else if (flag === "--session-id") sessionId = value;
