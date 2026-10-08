@@ -967,6 +967,15 @@ describe("diffLocks", () => {
           "Pi package pi-bg file extensions/pi-bg/config.json",
         )?.risk,
       ).toBe("low");
+      // Pretranspile changes what loads; a lock without it shows no entry.
+      const transpiled = v6();
+      transpiled.packages = [{ ...pkg, pretranspile: true }];
+      expect(
+        find(diffLocks(bare, transpiled), "Pi package pi-bg pretranspile"),
+      ).toMatchObject({ before: "off", after: "on", risk: "medium" });
+      expect(
+        find(diffLocks(bare, bare), "Pi package pi-bg pretranspile"),
+      ).toBeUndefined();
     });
 
     it("reports cache warming, absent as off", () => {
