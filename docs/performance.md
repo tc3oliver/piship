@@ -63,9 +63,9 @@ On the developer example (macOS, `piship build`) the payload goes from 9,007 to 
 
 ## TypeScript Pi packages
 
-`pretranspile: true` on a package ([manifest](manifest.md#typescript-packages-pretranspile)) writes the TypeScript modules its extensions import as JavaScript beside them at build time. It is independent of `release.bundle`, runs after the closure decisions above (so a TypeScript closure is still reported `typescript-closure` and kept), and adds about 0.4 s to a build of the micode2 distribution (`pi package pretranspile` in `PISHIP_DEBUG_TIMING`).
+`pretranspile: true` on a package ([manifest](manifest.md#typescript-packages-pretranspile)) writes the TypeScript modules its extensions import as JavaScript beside them at build time. It is independent of `release.bundle`, runs after the closure decisions above (so a TypeScript closure is still reported `typescript-closure` and kept), and adds about 0.4 s to a build of a distribution with 24 extensions (`pi package pretranspile` in `PISHIP_DEBUG_TIMING`).
 
-Measured on Linux x64 (Node 24, warm page cache), the micode2 distribution (24 extensions, 23 of them pi-code 1.4.2, which ships 93 TypeScript modules and gets 75 JavaScript files), a sandboxed install of a `piship release --rebuild` archive, `<command> --smoke` with `PISHIP_DEBUG_TIMING=1`, three runs each; "cold" removes Pi's loader cache (`$TMPDIR/jiti`) first. Both rows already set `JITI_EXTENSIONS='[".js",".ts"]'` for pi-code.
+Measured on Linux x64 (Node 24, warm page cache), a distribution (24 extensions, 23 of them pi-code 1.4.2, which ships 93 TypeScript modules and gets 75 JavaScript files), a sandboxed install of a `piship release --rebuild` archive, `<command> --smoke` with `PISHIP_DEBUG_TIMING=1`, three runs each; "cold" removes Pi's loader cache (`$TMPDIR/jiti`) first. Both rows already set `JITI_EXTENSIONS='[".js",".ts"]'` for pi-code.
 
 | | `resources_loaded` warm | cold | `statx` calls (failed) | `openat` calls (failed) |
 | --- | --- | --- | --- | --- |
