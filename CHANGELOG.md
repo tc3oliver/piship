@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Added
+
+- `resources.packages[].pretranspile: true` writes the TypeScript modules a package's extensions import as JavaScript beside them at build time, so an import written `./x.js` finds a file at once instead of Pi's loader trying about eleven names for it in every extension. Off by default; a manifest without it builds as before. The extension files keep their locked bytes, the written files are in the payload inventory, the lock records the switch, and `piship diff` reports it. For the pi-code package it took `resources_loaded` from about 800 ms to 240 ms warm and 2.5 s to 1.4 s cold on Linux, with 40,000 fewer failed file lookups per start ([manifest](docs/manifest.md#typescript-packages-pretranspile), [performance](docs/performance.md#typescript-pi-packages)).
+
 ### Fixed
 
 - pi-code's `subagent` tool works in a distribution: its child processes run `<command> --mode json -p --no-session [options] <task>` under `PI_CODE_SUBAGENT=1`, which the branded launcher refused ("Unknown branded command option"), so every subagent ended "(no output)". The child now takes the same governed launch (identity, credential, policy, exposure, project trust, sandbox, audit) and runs Pi's print mode in JSON. Only the options pi-code passes are accepted, by allowlist, and only under the marker; anything else, such as `--yolo`, is refused by name, a model outside `models.allowed` fails with `MODEL_DENIED`, tools and prompts can only be narrowed, and a launch without the marker is refused as before ([security](docs/security.md#subagent-child-launch)).

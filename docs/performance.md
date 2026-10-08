@@ -61,6 +61,19 @@ Pi package dependencies: 3 shared (716 fewer files); copies kept: no-exports 38,
 
 On the developer example (macOS, `piship build`) the payload goes from 9,007 to 8,292 files and its archive from 43.8 MB to 42.0 MB (the archive of a qualified `piship release` of the same example: 43,783,864 to 41,958,539 bytes). Three dependencies are shared: zod (three copies, 592 files each, 157 kept per place), content-type 2.1.0 (six copies), and eventsource-parser. What remains is mostly dependencies that have dependencies of their own (the MCP SDK and the express stack under it, 37 packages), or no `exports` map (38 packages), where sharing would need the closure-level store of the next milestone. The step reads every vendored closure and candidate dependency (a few esbuild runs, started together) and costs about 1.0 s of a developer build on this machine; a distribution without Pi packages pays nothing. [The measurement below](#measuring-the-footprint) has the build, install, and start timings before and after.
 
+## TypeScript Pi packages
+
+`pretranspile: true` on a package ([manifest](manifest.md#typescript-packages-pretranspile)) writes the TypeScript modules its extensions import as JavaScript beside them at build time. It is independent of `release.bundle`, runs after the closure decisions above (so a TypeScript closure is still reported `typescript-closure` and kept), and adds about 0.4 s to a build of the micode2 distribution (`pi package pretranspile` in `PISHIP_DEBUG_TIMING`).
+
+Measured on Linux x64 (Node 24, warm page cache), the micode2 distribution (24 extensions, 23 of them pi-code 1.4.2, which ships 93 TypeScript modules and gets 75 JavaScript files), a sandboxed install of a `piship release --rebuild` archive, `<command> --smoke` with `PISHIP_DEBUG_TIMING=1`, three runs each; "cold" removes Pi's loader cache (`$TMPDIR/jiti`) first. Both rows already set `JITI_EXTENSIONS='[".js",".ts"]'` for pi-code.
+
+| | `resources_loaded` warm | cold | `statx` calls (failed) | `openat` calls (failed) |
+| --- | --- | --- | --- | --- |
+| Without `pretranspile` | 793-802 ms | 2,424-2,727 ms | 55,539 (41,261) | 2,382 (361) |
+| With `pretranspile` | 235-242 ms | 1,397-1,433 ms | 15,382 (2,193) | 2,949 (1,239) |
+
+The added `openat` failures are the loader looking for a `package.json` in each directory of the written `.js` files. Windows was not measured: the earlier Windows analysis found about 150 µs per file lookup under an antivirus scanner, which would make the 40,000 fewer lookups about 6 s of a start, but that is an estimate from the counts, not a measurement.
+
 ## Measuring the footprint
 
 `scripts/benchmark-footprint.mjs` runs one workload over the personal example, the managed reference (`examples/demo-company`), and the developer example, so a revision before a change and one after compare on identical inputs. Per distribution it records the payload file count and bytes, the archive bytes of the payload (as `createArchive` writes it), the installed file count (a `piship install` into an isolated home), a cold build (empty PiShip cache, `--rebuild`), a warm build (populated cache, new output) and an unchanged rebuild, the install time, and with `--startup` a first and a warm `--smoke` start; with `--release` it adds a cold and a warm `piship release` and the release archive bytes. `--runs N` repeats the whole workload and reports min, median, and max, and `--reverse` runs the distributions in the opposite order, so an order or cache bias shows when a baseline and a candidate are each measured both ways. It writes one JSON report and prints a table:

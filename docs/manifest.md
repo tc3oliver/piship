@@ -369,6 +369,27 @@ capabilities:
 
 The provider takes its class and its review evidence from the package, so a certified provider declares none of its own; its extension files are the package's `extensions`, loaded through the provider (after `provider.load` and each file's `extension.load` decision) and not with the package's other files. The capability is effective only while the package's files match the lock, its trust class and evidence admit it, and the policy allows the provider and each of its extension files; otherwise it is reported as not effective and its extensions are not loaded, with PiShip's own policy still in force. `autoApproveFile` and `autoApproveKey` are the only provider settings besides `workflow`'s: they name a top-level boolean in one of the provider package's own `agentFiles` that switches the provider's own session-wide auto-approval on. They go together and need a package provider. `<command> --yolo` ([below](#the---yolo-launch-option)) sets that key for the one launch, and the file is put back when the process exits, when `/auto off` ends yolo, and by the next launch if the process was killed before it could.
 
+#### TypeScript packages: `pretranspile`
+
+A package published as TypeScript source, whose files import each other as `./x.js` while only `x.ts` exists, makes Pi's loader try about eleven file names for every such import, and each extension loads through its own loader, so a package with many extensions repeats the work for each one: about 98,000 failed file lookups per start for pi-code 1.4.2 (41,000 with `JITI_EXTENSIONS` narrowed to `[".js",".ts"]`), which an antivirus scanner on Windows makes slow. `pretranspile: true` on the package entry has `piship build` and `piship release` write each TypeScript module that the package's extensions import as JavaScript beside it (`internal/values.ts` gets `internal/values.js`), so the import names a file that exists.
+
+```yaml
+resources:
+  packages:
+    - id: pi-code
+      source: npm
+      package: "pi-code"
+      version: 1.4.2
+      class: company
+      pretranspile: true
+```
+
+- **Off by default.** A package without the field, or with `false`, builds exactly as before; neither is recorded. `true` is recorded in the lock as `packages[].pretranspile`, so turning it on or off needs `piship lock`, and `piship diff` reports the change (medium).
+- **What is written.** Only the package's own `.ts` and `.mts` modules (not its `node_modules`, not declarations) that the import graph of its declared extension files reaches by a static or dynamic `import`, one `.js` (or `.mjs`) file per module in the same directory, with esbuild's transform (format `esm`, target `esnext`, no source maps, no tsconfig read from the package). Type-only imports are erased, JSON stays JSON, `import.meta`, top-level `await`, and relative paths keep their meaning. A module that already has a JavaScript sibling is left as it is. The extension files themselves are never written: the lock's SHA-256 values and what Pi loads by path are unchanged.
+- **What fails.** A reached module that is CommonJS (`export =`, `module.exports`), calls `require` on a module of the closure, or does not parse fails the build with `CONFIG_INVALID` and writes nothing; remove `pretranspile` from that package.
+- **Integrity.** The written files are payload files: they are in the payload inventory, so `doctor` and the install check them like any other file, and a release built twice from the same inputs has the same bytes. They are not in the package's locked tree digest, which pins the vendored package as npm installed it.
+- **What changes at run time.** The extension files still load through Pi's loader, which now finds `./x.js` at once and loads that file instead of transpiling `x.ts`. Under Pi 1.0.3 the loader still evaluates each module once per extension (it does not use Node's own module loader unless `JITI_TRY_NATIVE` is set), so module state is shared no more than before. A loader that imports the JavaScript natively would load each module once per process and share its state across extensions and across `/reload`; a package that keeps state at module level should be tested with that in mind. A distribution that sets `JITI_EXTENSIONS` for the package can keep it: the two combine ([performance](performance.md#typescript-pi-packages)).
+
 ### Bundled search tools (v1alpha6)
 
 Pi's find and grep tools and its `@` file completion run `fd` and `rg` (ripgrep). A managed launch runs Pi offline (`PI_OFFLINE=1`), so Pi never downloads them, and without them on `PATH` it prints `fd not found. Offline mode enabled, skipping download.` and falls back to slower behavior. `runtime.searchTools` makes both tools release content instead:
@@ -509,7 +530,7 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `data.purge.onUninstall` | `none` | `none` or `all`: recorded in the lock and shown by `doctor`, not yet acted on (`uninstall` keeps state either way; `purge` deletes it) |
 | `data.export.<resource>` | none | `allow`, `ask`, or `deny` for `public`, `local`, or `support`: sugar for a distribution-enforced `session.export` rule |
 | `policy.acknowledgeUnenforced` | `[]` | `"<action>:<resource>"` keys of `deny` or `ask` rules on an action no runtime seam enforces; a managed distribution needs the entry, or `validate` fails with `POLICY_UNENFORCEABLE` |
-| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, resource filters per kind, and optionally `environment` and `agentFiles` ([below](#what-a-package-is-given-environment-and-files)) |
+| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, resource filters per kind, and optionally `environment` and `agentFiles` ([below](#what-a-package-is-given-environment-and-files)) and `pretranspile` ([below](#typescript-packages-pretranspile)) |
 | `capabilities.<name>.provider.package` | none | A declared package of the provider's trust class as the provider, instead of a `./` `path`; with the `permissions` settings `autoApproveFile` and `autoApproveKey` ([below](#what-a-package-is-given-environment-and-files)) |
 | `packageTrust` | managed: npm integrity, full commit SHAs, no local paths; personal: npm integrity | `npm.requireIntegrity`, `git.hosts`, `git.requireCommitSha`, `local.paths` |
 | `release.vulnerabilities.registry` | the configured registry | An https registry URL that `npm audit` asks for advisories |
