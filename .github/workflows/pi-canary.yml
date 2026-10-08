@@ -45,6 +45,18 @@ jobs:
           # No shared npm cache: the canary must not seed the pinned jobs'
           # cache with a closure that includes an unpinned Pi.
           cache: ''
+      # npm 10, which Node 22 bundles, runs a git dependency's prepare script
+      # while resolving, so `piship lock` refuses to lock Pi packages without
+      # npm 11, and the pretranspile build test fails without it. The same
+      # step as in ci.yml, including the Windows prefix.
+      - name: Use npm 11
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npm install -g npm@11.21.0 --prefix "$(node -p "require('path').dirname(process.execPath)")"
+          else
+            npm install -g npm@11.21.0
+          fi
+          node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
       - run: npm ci
       # --no-save leaves package-lock.json untouched; the latest Pi exists
       # only in this runner's node_modules. The root overrides pin Pi's
