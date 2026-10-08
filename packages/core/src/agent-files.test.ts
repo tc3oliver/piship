@@ -6,14 +6,19 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { processHostToken } from "@piship/contracts";
 import type { PackageAgentFile } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -26,6 +31,7 @@ import {
   packageEnvironment,
   sessionAutoApproveTarget,
 } from "./agent-files.js";
+import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock } from "./lock-schema.js";
 
 const PATH = "extensions/provider/config.json";
@@ -507,5 +513,503 @@ describe("a session auto-approval", () => {
         sessionAutoApprove: true,
       }),
     ).toThrow(/not a JSON object/);
+  });
+});
+
+// Parallel session launches (a subagent's children) share one transaction lock.
+describe("parallel session launches", () => {
+  // A file: URL, which `import()` takes on every platform (a Windows path
+  // such as D:\a\... is read as a URL with the scheme "d:").
+  const dist = new URL("../dist/agent-files.js", import.meta.url).href;
+  const child = `
+    const [dist, dir, json, start] = process.argv.slice(1);
+    const { applyAgentFiles } = await import(dist);
+    while (Date.now() < Number(start));
+    try {
+      const r = applyAgentFiles(JSON.parse(json), dir, { session: true });
+      await new Promise((done) => setTimeout(done, 50));
+      r.restore();
+      console.log("ok");
+    } catch (e) { console.log("FAIL " + e.message); }`;
+  const run = (json: string, start: number) =>
+    new Promise<string>((done) =>
+      execFile(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          child,
+          dist,
+          agentDir,
+          json,
+          String(start),
+        ],
+        (_error, stdout, stderr) => done((stdout + stderr).trim()),
+      ),
+    );
+  // A process that holds the lock (live owner) for `ms`, then lets go.
+  const holder = async (ms: number) => {
+    const guard = join(agentDir, ".piship-agent-files-lock");
+    const script = `
+      const fs = require("fs");
+      fs.mkdirSync(${JSON.stringify(guard)});
+      fs.writeFileSync(${JSON.stringify(join(guard, "owner.json"))}, JSON.stringify({ pid: process.pid }));
+      console.log("held");
+      setTimeout(() => { fs.rmSync(${JSON.stringify(guard)}, { recursive: true }); }, ${ms});`;
+    const proc = spawn(process.execPath, ["-e", script]);
+    await new Promise((ready) => proc.stdout.once("data", ready));
+    return {
+      released: new Promise<void>((done) => proc.on("close", () => done())),
+    };
+  };
+
+  it("all of 8 concurrent launches succeed", async () => {
+    const json = JSON.stringify(lock({ autoApprove: true }));
+    // every child waits for the same instant, so they all start together
+    const start = Date.now() + 1500;
+    const out = await Promise.all(
+      Array.from({ length: 8 }, () => run(json, start)),
+    );
+    expect(out).toEqual(Array(8).fill("ok"));
+  }, 60_000);
+
+  it("waits for a lock another launch releases within the budget", async () => {
+    const { released } = await holder(400);
+    const result = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      session: true,
+    });
+    result.restore();
+    await released;
+  });
+
+  it("still fails with the busy error once the budget is spent", async () => {
+    const { released } = await holder(1500);
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 150,
+      }),
+    ).toThrow("being changed by another launch");
+    await released;
+  });
+
+  it("keeps its wait inside the budget, even for a budget shorter than one pause", async () => {
+    const { released } = await holder(1500);
+    for (const lockWaitMs of [0, 15, 60]) {
+      const started = Date.now();
+      expect(() =>
+        applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+          session: true,
+          lockWaitMs,
+        }),
+      ).toThrow("being changed by another launch");
+      // One attempt after the last pause, and not a pause past the budget.
+      expect(Date.now() - started).toBeLessThan(lockWaitMs + 250);
+    }
+    await released;
+  });
+
+  it("reports the busy lock as the same coded error as before", async () => {
+    const { released } = await holder(600);
+    let error: unknown;
+    try {
+      applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      name: "PiShipError",
+      code: "CONFIG_INVALID",
+      message:
+        "Package configuration is being changed by another launch; retry when it finishes",
+    });
+    await released;
+  });
+
+  describe("a lock directory that no launch owns", () => {
+    const guard = () => join(agentDir, ".piship-agent-files-lock");
+    const aged = (path: string, secondsAgo: number) => {
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(path, when, when);
+    };
+    const session = () =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 100,
+      });
+
+    it("is taken over once it is older than the bound, with no owner record", () => {
+      mkdirSync(guard());
+      aged(guard(), 30);
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("is taken over once it is older than the bound, with an owner record nobody can read", () => {
+      mkdirSync(guard());
+      writeFileSync(join(guard(), "owner.json"), "{ not json");
+      aged(guard(), 30);
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("is left alone while it may still be being written", () => {
+      mkdirSync(guard());
+      aged(guard(), 2);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
+
+    it("is not taken when its owner record cannot be read for a reason other than absence", () => {
+      mkdirSync(guard());
+      // Reading a directory fails with EISDIR: not "no owner", but "unknown".
+      mkdirSync(join(guard(), "owner.json"));
+      aged(guard(), 3600);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
+
+    it("is never taken from a launch that is alive, however old", () => {
+      mkdirSync(guard());
+      writeFileSync(
+        join(guard(), "owner.json"),
+        JSON.stringify({ pid: process.pid }),
+      );
+      aged(guard(), 3600);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
+  });
+
+  describe("the lock under failure and interleaving", () => {
+    const guard = () => join(agentDir, ".piship-agent-files-lock");
+    const ownerOf = () =>
+      JSON.parse(readFileSync(join(guard(), "owner.json"), "utf8"));
+    const fail = (code: string) =>
+      Object.assign(new Error(`${code}: injected`), { code });
+    const session = (lockWaitMs = 0) =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs,
+      });
+    /** A lock directory as a holder with this owner record would leave it. */
+    const holdAs = (owner: Record<string, unknown>) => {
+      rmSync(guard(), { recursive: true, force: true });
+      mkdirSync(guard());
+      writeFileSync(join(guard(), "owner.json"), JSON.stringify(owner));
+    };
+    afterEach(() => {
+      for (const key of Object.keys(agentFilesLockHooks))
+        delete (agentFilesLockHooks as Record<string, unknown>)[key];
+    });
+
+    it("retries a release whose rename fails, then lets go", () => {
+      let failures = 2;
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard() && failures-- > 0) throw fail("EPERM");
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(failures).toBeLessThan(0);
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("removes the lock in place when the rename keeps failing", () => {
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) throw fail("EBUSY");
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("surfaces an error only when the rename and the removal both fail", () => {
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) throw fail("EPERM");
+        renameSync(from, to);
+      };
+      agentFilesLockHooks.rm = (path) => {
+        if (path === guard()) throw fail("EBUSY");
+        rmSync(path, { recursive: true, force: true });
+      };
+      expect(() => session()).toThrow("could not be released");
+      // What a person is told to delete is there, and is ours.
+      expect(ownerOf().pid).toBe(process.pid);
+    });
+
+    it("does not remove a lock that is no longer its own when it lets go", () => {
+      agentFilesLockHooks.beforeRelease = () =>
+        holdAs({ pid: process.pid, token: "another-holder" });
+      // (Not restored: restoring needs the lock, which is another's now.)
+      session();
+      expect(ownerOf().token).toBe("another-holder");
+    });
+
+    it("never moves a lock a stalled recovery finds replaced by another holder's", () => {
+      holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      const moved: string[] = [];
+      agentFilesLockHooks.rename = (from, to) => {
+        if (from === guard()) moved.push(from);
+        renameSync(from, to);
+      };
+      // The recovery read the dead holder's record, then stalled; meanwhile
+      // another launch took the lock and is running its operation.
+      agentFilesLockHooks.afterOwnerRead = () =>
+        holdAs({ pid: process.pid, token: "new-holder" });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("new-holder");
+      // Not renamed away and put back: not touched at all.
+      expect(moved).toEqual([]);
+    });
+
+    it("marks its recovery directory as in use again before it takes a lock down", () => {
+      holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      const recovery = join(agentDir, ".piship-agent-files-recovery");
+      let idle = Number.NaN;
+      // The owner check was slow: the directory looks abandoned by now.
+      agentFilesLockHooks.afterOwnerRead = () => {
+        const old = new Date(Date.now() - 60_000);
+        utimesSync(recovery, old, old);
+      };
+      agentFilesLockHooks.afterHolderCheck = () => {
+        idle = Date.now() - statSync(recovery).mtimeMs;
+      };
+      session().restore();
+      expect(idle).toBeLessThan(5_000);
+    });
+
+    it("retries a release when the owner record cannot be read for a moment, and does not leave the lock", () => {
+      let moves = 0;
+      agentFilesLockHooks.rename = (from, to) => {
+        const record = (dir: string) => join(dir, "owner.json");
+        if (from === guard()) {
+          moves += 1;
+          renameSync(from, to);
+          if (moves === 1) {
+            // A scanner holds the record: it reads as unreadable, not absent.
+            renameSync(record(to), `${record(to)}.kept`);
+            mkdirSync(record(to));
+          }
+          return;
+        }
+        if (to === guard() && from.endsWith(".stale")) {
+          // Put back: the scanner has let go by now.
+          rmSync(record(from), { recursive: true, force: true });
+          renameSync(`${record(from)}.kept`, record(from));
+        }
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(moves).toBeGreaterThanOrEqual(2);
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("reports a release it cannot do because the owner record stays unreadable", () => {
+      agentFilesLockHooks.beforeRelease = () => {
+        renameSync(join(guard(), "owner.json"), join(guard(), "kept.json"));
+        mkdirSync(join(guard(), "owner.json"));
+      };
+      expect(() => session()).toThrow("could not be released");
+      expect(existsSync(guard())).toBe(true);
+    });
+
+    it("takes the lock of a dead holder whose process ID another process now has", () => {
+      holdAs({
+        pid: process.pid,
+        token: "dead-holder",
+        identity: null,
+        // The holder started a day before this process did.
+        started: Date.now() - 24 * 60 * 60 * 1000,
+        host: processHostToken(),
+      });
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("still treats a holder it cannot tell from its record as alive", () => {
+      holdAs({ pid: process.pid, token: "holder" });
+      expect(() => session()).toThrow("being changed by another launch");
+    });
+
+    it("tries a claim again once when its staging directory was swept, then reports busy", () => {
+      let sweeps = 1;
+      agentFilesLockHooks.rename = (from, to) => {
+        if (to === guard() && sweeps-- > 0) {
+          rmSync(from, { recursive: true });
+          throw fail("ENOENT");
+        }
+        renameSync(from, to);
+      };
+      session().restore();
+      expect(sweeps).toBeLessThan(0);
+      sweeps = 2;
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(
+        readdirSync(agentDir).filter((name) => name.endsWith(".new")),
+      ).toEqual([]);
+    });
+  });
+
+  describe("a recovery directory that no launch finished", () => {
+    const recovery = () => join(agentDir, ".piship-agent-files-recovery");
+    const age = (path: string, secondsAgo: number) => {
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(path, when, when);
+    };
+    const session = () =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 100,
+      });
+
+    it("is removed once it is older than the bound, so launches go on", () => {
+      mkdirSync(recovery());
+      age(recovery(), 30);
+      session().restore();
+      expect(existsSync(recovery())).toBe(false);
+    });
+
+    it("does not replace a fresh recovery directory made while it discarded the old one", () => {
+      mkdirSync(recovery());
+      age(recovery(), 30);
+      let fresh = -1;
+      agentFilesLockHooks.rename = (from, to) => {
+        renameSync(from, to);
+        if (from === recovery()) {
+          // The directory moved looks fresh again, and another launch has
+          // made a recovery of its own at the path.
+          age(to, 0);
+          mkdirSync(recovery());
+          fresh = statSync(recovery()).ino;
+        }
+      };
+      expect(session).toThrow("being changed by another launch");
+      expect(statSync(recovery()).ino).toBe(fresh);
+    });
+
+    it("blocks while it may still be in use", () => {
+      mkdirSync(recovery());
+      age(recovery(), 2);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(recovery())).toBe(true);
+    });
+  });
+
+  describe("the lock is never visible half made", () => {
+    const names = () => readdirSync(agentDir);
+
+    it("leaves no staging or discarded directory behind after a launch", () => {
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+      }).restore();
+      expect(names().filter((name) => /\.(new|stale)$/.test(name))).toEqual([]);
+      expect(names()).not.toContain(".piship-agent-files-lock");
+    });
+
+    it("sweeps what a launch that died while claiming or discarding left", () => {
+      const old = [
+        ".piship-agent-files-lock.aaaaaaaa.new",
+        ".piship-agent-files-lock.aaaaaaaa.stale",
+        ".piship-agent-files-recovery.aaaaaaaa.stale",
+      ].map((name) => join(agentDir, name));
+      for (const path of old) {
+        mkdirSync(path);
+        utimesSync(path, new Date(1_000), new Date(1_000));
+      }
+      // A dead holder's lock, so the takeover (which sweeps) runs.
+      const guard = join(agentDir, ".piship-agent-files-lock");
+      mkdirSync(guard);
+      writeFileSync(
+        join(guard, "owner.json"),
+        JSON.stringify({ pid: 2 ** 22 }),
+      );
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+      }).restore();
+      for (const path of old) expect(existsSync(path)).toBe(false);
+    });
+
+    /**
+     * Whether the directory at `path` was seen empty while it was at `path`.
+     * A listing is not a snapshot: a directory opened at the path can be
+     * renamed away and emptied (a release) before its entries are read, and
+     * then reads as empty although it was never empty at the path. So an
+     * empty listing counts only if the path still names that same directory
+     * afterwards (same inode and creation time).
+     */
+    const emptyAtPath = (path: string): boolean => {
+      const identity = () => {
+        const stat = statSync(path);
+        return `${stat.ino}:${stat.birthtimeMs}`;
+      };
+      try {
+        const before = identity();
+        if (readdirSync(path).length > 0) return false;
+        return identity() === before;
+      } catch {
+        // not there (any more)
+        return false;
+      }
+    };
+
+    it("tells a directory emptied after it was renamed away from one that is empty at the lock path", () => {
+      const path = join(agentDir, "observed");
+      mkdirSync(path);
+      expect(emptyAtPath(path)).toBe(true);
+      writeFileSync(join(path, "owner.json"), "{}");
+      expect(emptyAtPath(path)).toBe(false);
+      rmSync(path, { recursive: true });
+      expect(emptyAtPath(path)).toBe(false);
+    });
+
+    it("never shows another process a lock directory without its owner record", async () => {
+      const guard = join(agentDir, ".piship-agent-files-lock");
+      const json = JSON.stringify(lock({ autoApprove: true }));
+      // A child launches in a loop; this process looks at the lock path as
+      // fast as it can. A directory seen empty at the path is a lock being
+      // filled (or emptied) in place, which a rename-based claim and release
+      // never produce; one emptied after it was renamed away is not seen
+      // there (see emptyAtPath).
+      const script = `
+        const { applyAgentFiles } = await import(${JSON.stringify(dist)});
+        for (let i = 0; i < 300; i += 1)
+          applyAgentFiles(JSON.parse(process.argv[1]), ${JSON.stringify(agentDir)}, { session: true }).restore();`;
+      const proc = spawn(process.execPath, [
+        "--input-type=module",
+        "-e",
+        script,
+        json,
+      ]);
+      const done = new Promise<void>((finish) =>
+        proc.on("close", () => finish()),
+      );
+      let empty = 0;
+      let seen = 0;
+      let finished = false;
+      void done.then(() => {
+        finished = true;
+      });
+      while (!finished) {
+        try {
+          if (emptyAtPath(guard)) empty += 1;
+          seen += 1;
+        } catch {
+          // not there at this moment
+        }
+        await new Promise((resume) => setImmediate(resume));
+      }
+      expect(seen).toBeGreaterThan(0);
+      expect(empty).toBe(0);
+    }, 60_000);
+  });
+
+  it("does not wait for a launch that is not a session", async () => {
+    const { released } = await holder(600);
+    const started = Date.now();
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir),
+    ).toThrow("being changed by another launch");
+    expect(Date.now() - started).toBeLessThan(300);
+    await released;
   });
 });

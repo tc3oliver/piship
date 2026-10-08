@@ -10,6 +10,8 @@ export {
   type ClosureAnalysis,
   type FallbackFinding,
   type FallbackReason,
+  pretranspileClosures,
+  type TranspileResult,
 } from "./closure.js";
 export {
   type DedupeReport,

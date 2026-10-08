@@ -13,17 +13,25 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, processHostToken } from "@piship/contracts";
 import { writeFileAtomic } from "@piship/credentials";
 import type {
   AgentFileMode,
   PackageAgentFile,
   PackageEnvironmentValue,
 } from "@piship/schema";
+import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock, LockedAgentFile } from "./lock-schema.js";
+import {
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
+} from "./process-identity.js";
 
 /** The bytes written for a declared file: its JSON in declared key order. */
 export function agentFileContent(json: unknown): string {
@@ -471,51 +479,386 @@ function liveProcess(pid: number): boolean {
 
 // Serialize the registration and configuration change, so two launches cannot
 // both decide the shared provider file is free. Sessions keep separate leases.
-function agentFilesTransaction<T>(agentDir: string, operation: () => T): T {
+const BUSY_MESSAGE =
+  "Package configuration is being changed by another launch; retry when it finishes";
+/**
+ * Another launch holds the transaction. A class of its own, so the wait
+ * below recognizes the condition by what it is and not by its message; it
+ * reports as `CONFIG_INVALID` with the same message as it always did.
+ */
+class AgentFilesBusyError extends PiShipError {
+  constructor() {
+    super("CONFIG_INVALID", BUSY_MESSAGE);
+  }
+}
+/** How long a session launch waits for another launch's transaction. */
+export const AGENT_FILES_LOCK_WAIT_MS = 3000;
+/**
+ * A lock directory with no readable owner this old was left by a launch that
+ * died between creating it and recording itself (a write takes milliseconds).
+ */
+export const AGENT_FILES_OWNERLESS_STALE_MS = 10_000;
+
+// ponytail: a synchronous wait, since the launch path is synchronous; the
+// holder only keeps the lock for one small file edit.
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Parallel session launches (a subagent's children) meet here at once: they
+// wait out a busy lock for `waitMs`, then report the same error as before.
+// The wait backs off with jitter so that they do not retry in step, and it
+// never runs past the budget; with none (a launch that is not a session) the
+// first busy answer is the error.
+function agentFilesTransaction<T>(
+  agentDir: string,
+  operation: () => T,
+  waitMs: number,
+): T {
+  const deadline = Date.now() + waitMs;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return agentFilesTransactionOnce(agentDir, operation);
+    } catch (error) {
+      const left = deadline - Date.now();
+      if (!(error instanceof AgentFilesBusyError) || left <= 0) throw error;
+      const ceiling = Math.min(20 * 2 ** attempt, 400);
+      pause(Math.min(left, ceiling / 2 + Math.random() * (ceiling / 2)));
+    }
+  }
+}
+
+/** Whether `path` was last changed more than `ms` ago; false if it is gone. */
+function olderThan(path: string, ms: number): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs > ms;
+  } catch {
+    return false;
+  }
+}
+
+/** What a lock's `owner.json` says about the launch that holds it. */
+interface LockOwner {
+  readonly pid: number;
+  /** Random per claim: tells this holder's lock from a later holder's at the same path. */
+  readonly token: string | null;
+  /** The holder's start identity and time, and host (absent in an older release's record). */
+  readonly identity: string | null;
+  readonly started: number | null;
+  readonly host: string | null;
+}
+
+const rename = (from: string, to: string) =>
+  (agentFilesLockHooks.rename ?? renameSync)(from, to);
+const removeTree = (path: string) =>
+  (
+    agentFilesLockHooks.rm ??
+    ((target) => rmSync(target, { recursive: true, force: true }))
+  )(path);
+
+/**
+ * Takes the lock with its owner record already inside: the record is written
+ * in a directory of its own, which one rename puts at the lock's path, so no
+ * other launch can see a lock that its holder is still filling. Returns the
+ * record, or false when the lock is held (the rename cannot replace a
+ * directory that has an owner record in it).
+ */
+function claim(guard: string): LockOwner | false {
+  for (let attempt = 0; ; attempt += 1) {
+    // POSIX renames over an empty directory; one without an owner record (an
+    // older release's, still being filled) is not ours to replace.
+    if (existsSync(guard)) return false;
+    const held: LockOwner = {
+      pid: process.pid,
+      token: randomUUID(),
+      identity: recordedIdentity(),
+      started: recordedStart(),
+      host: processHostToken(),
+    };
+    const staging = `${guard}.${randomUUID()}.new`;
+    mkdirSync(staging, { mode: 0o700 });
+    try {
+      writeFileSync(join(staging, "owner.json"), JSON.stringify(held), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      rename(staging, guard);
+      return held;
+    } catch (error) {
+      rmSync(staging, { recursive: true, force: true });
+      // Held by another launch (a holder that let go in the meantime is found
+      // on the next attempt).
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        existsSync(guard) ||
+        code === "ENOTEMPTY" ||
+        code === "EEXIST" ||
+        // Windows: a directory cannot be renamed onto an existing one, or
+        // while another process (or a scanner) has a handle inside it.
+        code === "EPERM" ||
+        code === "EACCES" ||
+        code === "EBUSY"
+      )
+        return false;
+      // The staging directory was swept (it looked abandoned): once more,
+      // then the lock is simply busy.
+      if (code === "ENOENT") {
+        if (attempt === 0) continue;
+        throw new AgentFilesBusyError();
+      }
+      throw error;
+    }
+  }
+}
+
+/**
+ * The owner record of a lock; "missing" when there is none (or it is not
+ * readable as one); "unknown" when reading it failed for any reason but
+ * absence, so the holder cannot be told dead.
+ */
+function readOwner(path: string): LockOwner | "missing" | "unknown" {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "missing"
+      : "unknown";
+  }
+  try {
+    const value = JSON.parse(text) as Record<string, unknown> | null;
+    if (typeof value?.pid !== "number") return "missing";
+    const text_ = (field: string) =>
+      typeof value[field] === "string" ? (value[field] as string) : null;
+    return {
+      pid: value.pid,
+      token: text_("token"),
+      identity: text_("identity"),
+      started: typeof value.started === "number" ? value.started : null,
+      host: text_("host"),
+    };
+  } catch {
+    return "missing";
+  }
+}
+
+/**
+ * Whether the process a record names still runs and is the one that wrote
+ * it: a process ID that exists may belong to an unrelated process that was
+ * given it after the holder died, which the start identity (or time) tells.
+ * An older record without them is as live as its process ID.
+ */
+function holderRuns(owner: LockOwner): boolean {
+  return (
+    liveProcess(owner.pid) &&
+    recordedProcessGone({
+      pid: owner.pid,
+      identity: owner.identity,
+      host: owner.host,
+      started: owner.started,
+    }) !== true
+  );
+}
+
+const sameOwner = (
+  found: LockOwner | "missing" | "unknown",
+  expected: LockOwner | "missing",
+) =>
+  expected === "missing"
+    ? found === "missing"
+    : typeof found === "object" &&
+      found.pid === expected.pid &&
+      found.token === expected.token;
+
+/**
+ * Takes a lock down: the owner is read in place first and the lock is only
+ * moved if it is the one expected, then it is renamed away (so that only one
+ * process does it) and the owner is read once more from the renamed
+ * directory; a lock that is not the expected owner's is never removed, and is
+ * put back if it was moved. "gone" when nothing was there; "changed" when it
+ * was another owner's; "unknown" when the owner could not be read (a scanner
+ * holding the file on Windows), which says nothing about whose it is. A
+ * rename that fails for another reason throws.
+ */
+function takeDown(
+  path: string,
+  expected: LockOwner | "missing",
+): "removed" | "changed" | "gone" | "unknown" {
+  if (!existsSync(path)) return "gone";
+  const before = readOwner(join(path, "owner.json"));
+  if (before === "unknown") return "unknown";
+  if (!sameOwner(before, expected)) return "changed";
+  const away = `${path}.${randomUUID()}.stale`;
+  try {
+    rename(path, away);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
+    throw error;
+  }
+  const found = readOwner(join(away, "owner.json"));
+  if (!sameOwner(found, expected)) {
+    try {
+      // Only where nothing took the path since (a rename over an empty
+      // directory would replace it).
+      if (!existsSync(path)) rename(away, path);
+    } catch {
+      // The displaced holder lost its lock to a newer one; its release finds
+      // the lock is no longer its own and leaves it alone.
+    }
+    return found === "unknown" ? "unknown" : "changed";
+  }
+  try {
+    removeTree(away);
+  } catch {
+    // Moved out of the way; a later takeover sweeps what is left.
+  }
+  return "removed";
+}
+
+/**
+ * Removes a recovery directory a launch that died left: renamed away so that
+ * one process does it, and put back when it turns out not to be old (unless
+ * a fresh one has been made since, which is then the other launch's).
+ */
+function discardRecovery(path: string): void {
+  const away = `${path}.${randomUUID()}.stale`;
+  try {
+    rename(path, away);
+  } catch {
+    return;
+  }
+  if (!olderThan(away, AGENT_FILES_OWNERLESS_STALE_MS))
+    try {
+      if (!existsSync(path)) {
+        rename(away, path);
+        return;
+      }
+    } catch {
+      // Something else is there now: this one is removed below.
+    }
+  try {
+    removeTree(away);
+  } catch {
+    // swept later
+  }
+}
+
+/** Marks the recovery directory as in use, so that a slow recoverer does not look dead. */
+function touch(path: string): void {
+  try {
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {
+    // gone: the next check finds out
+  }
+}
+
+/**
+ * Lets go of the lock this launch holds. The rename is retried (on Windows
+ * a scanner holding the directory fails it for a moment, or hides the owner
+ * record), then the lock is removed in place; only if both fail is the error
+ * surfaced, since a lock left behind with a live holder blocks every later
+ * launch.
+ */
+function release(guard: string, held: LockOwner): void {
+  agentFilesLockHooks.beforeRelease?.();
+  const ownerFile = join(guard, "owner.json");
+  let failure: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      // Gone or another owner's: nothing of ours to remove.
+      if (takeDown(guard, held) !== "unknown") return;
+    } catch (error) {
+      failure = error;
+    }
+    pause(20 * 2 ** attempt);
+  }
+  try {
+    const found = readOwner(ownerFile);
+    if (found === "unknown") throw new Error("the owner record is unreadable");
+    if (sameOwner(found, held)) removeTree(guard);
+    return;
+  } catch (error) {
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "The package configuration lock could not be released",
+      {
+        userAction: `Close any program that holds ${guard} open, then delete that directory`,
+        cause: failure ?? error,
+      },
+    );
+  }
+}
+
+/** Staging and discarded directories a process that died left beside the lock. */
+function sweepStaging(agentDir: string): void {
+  for (const entry of readdirSync(agentDir)) {
+    if (
+      !/^\.piship-agent-files-(?:lock|recovery)\..*\.(?:new|stale)$/.test(entry)
+    )
+      continue;
+    const path = join(agentDir, entry);
+    if (olderThan(path, AGENT_FILES_OWNERLESS_STALE_MS))
+      rmSync(path, { recursive: true, force: true });
+  }
+}
+
+function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const guard = filePath(agentDir, ".piship-agent-files-lock");
   const recovery = filePath(agentDir, ".piship-agent-files-recovery");
-  const busy = () =>
-    new PiShipError(
-      "CONFIG_INVALID",
-      "Package configuration is being changed by another launch; retry when it finishes",
-    );
-  if (existsSync(recovery)) throw busy();
-  try {
-    mkdirSync(guard, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  const busy = () => new AgentFilesBusyError();
+  if (existsSync(recovery)) {
+    // A recovery that never finished (its process died) must not block for good.
+    if (!olderThan(recovery, AGENT_FILES_OWNERLESS_STALE_MS)) throw busy();
+    // Only one process wins the rename; the age is looked at again after it.
+    discardRecovery(recovery);
+  }
+  let held = claim(guard);
+  if (!held) {
     try {
       mkdirSync(recovery, { mode: 0o700 });
     } catch {
       throw busy();
     }
     try {
-      const holder = readJsonObject(
-        filePath(agentDir, ".piship-agent-files-lock/owner.json"),
-      );
-      if (!holder || typeof holder.pid !== "number" || liveProcess(holder.pid))
+      const holder = readOwner(join(guard, "owner.json"));
+      agentFilesLockHooks.afterOwnerRead?.();
+      if (holder === "unknown") {
+        // Unreadable for a reason other than absence (a scanner holding it
+        // open on Windows): its holder may be alive. Not ours to take.
         throw busy();
+      }
+      if (typeof holder === "object") {
+        if (holderRuns(holder)) throw busy();
+      } else if (!olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)) {
+        // No owner record: one an older release was still writing, or gone.
+        throw busy();
+      }
+      // The check above can be slow (a process lookup that starts a process);
+      // the recovery directory is marked as in use again before the lock is
+      // touched, so that it does not look abandoned to a launch that waited.
+      touch(recovery);
+      agentFilesLockHooks.afterHolderCheck?.();
       // Every acquirer checks recovery after recording its live owner, so no
       // newcomer can mutate the config while this dead directory is removed.
-      const abandoned = `${guard}.${randomUUID()}.stale`;
-      renameSync(guard, abandoned);
-      rmSync(abandoned, { recursive: true });
+      // The lock that is taken down is the one that was read: if a stalled
+      // recovery lets another holder in meanwhile, that one is put back.
+      let outcome: ReturnType<typeof takeDown>;
+      try {
+        outcome = takeDown(guard, holder);
+      } catch {
+        throw busy();
+      }
+      if (outcome === "changed" || outcome === "unknown") throw busy();
+      sweepStaging(agentDir);
     } finally {
-      rmSync(recovery, { recursive: true });
+      rmSync(recovery, { recursive: true, force: true });
     }
-    try {
-      mkdirSync(guard, { mode: 0o700 });
-    } catch {
-      throw busy();
-    }
+    held = claim(guard);
+    if (!held) throw busy();
   }
   try {
-    writeFileSync(
-      join(guard, "owner.json"),
-      JSON.stringify({ pid: process.pid }),
-      { mode: 0o600, flag: "wx" },
-    );
     if (existsSync(recovery)) throw busy();
     try {
       return operation();
@@ -531,7 +874,9 @@ function agentFilesTransaction<T>(agentDir: string, operation: () => T): T {
       );
     }
   } finally {
-    rmSync(guard, { recursive: true });
+    // Renamed away whole, never emptied in place: a directory with its owner
+    // record taken out would be one a rename can replace.
+    release(guard, held);
   }
 }
 
@@ -541,6 +886,8 @@ export function applyAgentFiles(
   options: {
     readonly sessionAutoApprove?: boolean;
     readonly session?: boolean;
+    /** Test hook: how long a session launch waits for a busy lock. */
+    readonly lockWaitMs?: number;
   } = {},
 ): AgentFilesResult {
   if (
@@ -551,57 +898,64 @@ export function applyAgentFiles(
   const owner = randomUUID();
   const leases = filePath(agentDir, ".piship-provider-sessions");
   let registered = false;
-  const result = agentFilesTransaction(agentDir, () => {
-    const target = sessionAutoApproveTarget(lock);
-    let share = false;
-    if (target && (options.session || options.sessionAutoApprove)) {
-      mkdirSync(leases, { recursive: true, mode: 0o700 });
-      for (const entry of readdirSync(leases)) {
-        const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
-        const lease = readJsonObject(path);
-        if (!lease || typeof lease.pid !== "number")
+  const waitMs = options.session
+    ? (options.lockWaitMs ?? AGENT_FILES_LOCK_WAIT_MS)
+    : 0;
+  const result = agentFilesTransaction(
+    agentDir,
+    () => {
+      const target = sessionAutoApproveTarget(lock);
+      let share = false;
+      if (target && (options.session || options.sessionAutoApprove)) {
+        mkdirSync(leases, { recursive: true, mode: 0o700 });
+        for (const entry of readdirSync(leases)) {
+          const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
+          const lease = readJsonObject(path);
+          if (!lease || typeof lease.pid !== "number")
+            throw new PiShipError(
+              "CONFIG_INVALID",
+              "Invalid permission provider session ownership record",
+              { userAction: SHARED_PROVIDER_ACTION },
+            );
+          if (!liveProcess(lease.pid)) {
+            rmSync(path);
+            continue;
+          }
+          // The provider reads one file, so a `--yolo` session and an ordinary
+          // one cannot both have what they asked for. Two `--yolo` sessions
+          // want the same thing and share the key.
+          const wants = options.sessionAutoApprove === true;
+          if (wants && lease.yolo === true) share = true;
+          if (wants === (lease.yolo === true)) continue;
           throw new PiShipError(
             "CONFIG_INVALID",
-            "Invalid permission provider session ownership record",
+            options.sessionAutoApprove
+              ? "Another session is using the permission provider, whose own approvals --yolo switches on for every session"
+              : "A --yolo session is using the permission provider, whose own approvals it switched on for every session",
             { userAction: SHARED_PROVIDER_ACTION },
           );
-        if (!liveProcess(lease.pid)) {
-          rmSync(path);
-          continue;
         }
-        // The provider reads one file, so a `--yolo` session and an ordinary
-        // one cannot both have what they asked for. Two `--yolo` sessions
-        // want the same thing and share the key.
-        const wants = options.sessionAutoApprove === true;
-        if (wants && lease.yolo === true) share = true;
-        if (wants === (lease.yolo === true)) continue;
-        throw new PiShipError(
-          "CONFIG_INVALID",
-          options.sessionAutoApprove
-            ? "Another session is using the permission provider, whose own approvals --yolo switches on for every session"
-            : "A --yolo session is using the permission provider, whose own approvals it switched on for every session",
-          { userAction: SHARED_PROVIDER_ACTION },
-        );
       }
-    }
-    const applied = applyAgentFilesLocked(lock, agentDir, {
-      ...options,
-      owner,
-      share,
-    });
-    if (target && (options.session || options.sessionAutoApprove)) {
-      writeFileSync(
-        join(leases, owner),
-        JSON.stringify({
-          pid: process.pid,
-          yolo: options.sessionAutoApprove === true,
-        }),
-        { mode: 0o600, flag: "wx" },
-      );
-      registered = true;
-    }
-    return applied;
-  });
+      const applied = applyAgentFilesLocked(lock, agentDir, {
+        ...options,
+        owner,
+        share,
+      });
+      if (target && (options.session || options.sessionAutoApprove)) {
+        writeFileSync(
+          join(leases, owner),
+          JSON.stringify({
+            pid: process.pid,
+            yolo: options.sessionAutoApprove === true,
+          }),
+          { mode: 0o600, flag: "wx" },
+        );
+        registered = true;
+      }
+      return applied;
+    },
+    waitMs,
+  );
   let ended = false;
   const leasePath = () =>
     filePath(agentDir, `.piship-provider-sessions/${owner}`);
@@ -634,34 +988,42 @@ export function applyAgentFiles(
     reports: result.reports,
     endAutoApprove: () => {
       if (ended) return undefined;
-      return agentFilesTransaction(agentDir, () => {
-        const handedOver = handOverOrTakeBack();
-        // The lease stays, so a provider's stale save is still restored at
-        // exit; it stops counting as a session that wants the key.
-        if (registered)
-          writeFileSync(
-            leasePath(),
-            JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
-            { mode: 0o600 },
-          );
-        // A session that shares the key, or hands it on, cannot switch the
-        // provider's approvals off for itself without ending the other's.
-        return handedOver || liveYoloSessions(agentDir, owner).length > 0
-          ? "The permission provider's own approvals stay on until the other --yolo session ends."
-          : undefined;
-      });
+      return agentFilesTransaction(
+        agentDir,
+        () => {
+          const handedOver = handOverOrTakeBack();
+          // The lease stays, so a provider's stale save is still restored at
+          // exit; it stops counting as a session that wants the key.
+          if (registered)
+            writeFileSync(
+              leasePath(),
+              JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
+              { mode: 0o600 },
+            );
+          // A session that shares the key, or hands it on, cannot switch the
+          // provider's approvals off for itself without ending the other's.
+          return handedOver || liveYoloSessions(agentDir, owner).length > 0
+            ? "The permission provider's own approvals stay on until the other --yolo session ends."
+            : undefined;
+        },
+        waitMs,
+      );
     },
     restore: () => {
       if (ended) return;
-      agentFilesTransaction(agentDir, () => {
-        handOverOrTakeBack();
-        result.restore();
-        if (registered)
-          rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {
-            force: true,
-          });
-        ended = true;
-      });
+      agentFilesTransaction(
+        agentDir,
+        () => {
+          handOverOrTakeBack();
+          result.restore();
+          if (registered)
+            rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {
+              force: true,
+            });
+          ended = true;
+        },
+        waitMs,
+      );
     },
   };
 }

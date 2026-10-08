@@ -25,10 +25,25 @@ import {
 import { runDoctor } from "./commands/doctor.js";
 import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
-import { runInteractive, runSmoke } from "./commands/session.js";
+import {
+  runInteractive,
+  runSmoke,
+  runSubagentChild,
+} from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import {
+  isSubagentChild,
+  launchOutput,
+  parseSubagentChild,
+  unknownOptionMessage,
+} from "./launch/subagent-child.js";
+import {
+  assertChildWorkspace,
+  authenticateSubagentChild,
+  type SubagentParent,
+} from "./launch/subagent-owner.js";
 import {
   deferredDownloadNotice,
   deferredToolDownloads,
@@ -51,6 +66,8 @@ export {
   inspectGovernance,
 } from "./governance-session.js";
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
+// What a session publishes for its subagent children; a test stands in for one.
+export { publishSubagentOwner } from "./launch/subagent-owner.js";
 
 export const PINNED_PI_VERSION = "1.0.3" as const;
 /**
@@ -106,6 +123,23 @@ export async function launchPiDistribution(
       },
     );
   let args = [...options.args];
+  // pi-code's subagent tool runs this command as `--mode json -p ... <task>`
+  // under PI_CODE_SUBAGENT=1. The options are parsed by allowlist before
+  // anything starts; the child then takes the launch below as a session with
+  // no arguments, and ends in Pi's print mode (see launch/subagent-child.ts).
+  // It also proves a running session of this distribution started the child
+  // and puts the child in that session's workspace (launch/subagent-owner.ts),
+  // before the arguments are looked at.
+  let parent: SubagentParent | undefined;
+  if (isSubagentChild(args, process.env)) {
+    parent = authenticateSubagentChild(
+      runtimeStateDirectory({ value: metadata.app.id }),
+    );
+    assertChildWorkspace(parent.workspace);
+  }
+  const child = parent ? parseSubagentChild(args, process.env) : undefined;
+  if (child) args = [];
+  // A child's model is passed to the access check from `child` itself.
   let requestedModel: string | undefined;
   let newSession = false;
   let yolo = false;
@@ -149,7 +183,11 @@ export async function launchPiDistribution(
   // Pi's interactive TUI waits for keyboard input forever without a terminal,
   // and there is no non-interactive prompt mode. Refuse before any state,
   // identity session, credential or sandbox exists.
-  if (args.length === 0 && !(process.stdin.isTTY && process.stdout.isTTY)) {
+  if (
+    !child &&
+    args.length === 0 &&
+    !(process.stdin.isTTY && process.stdout.isTTY)
+  ) {
     const command = metadata.app.command;
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -212,13 +250,15 @@ export async function launchPiDistribution(
     stateDir,
     agentDir,
     mode: metadata.deployment.mode,
-    out: (message) => console.log(message),
+    // A child's stdout is the JSON event stream only.
+    out: launchOutput(!!child),
     err: (message) => console.error(message),
     // Only the interactive launch (no subcommand) may sign in on the spot.
-    ...(args.length === 0 && atTerminal
+    ...(!child && args.length === 0 && atTerminal
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
+    ...(parent ? { subagent: { parentSession: parent.session } } : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),
@@ -335,12 +375,11 @@ export async function launchPiDistribution(
     if (command === "auto") return runAuto(ctx, rest);
     if (command === "capabilities") return runCapabilities(ctx, rest);
   }
+  if (child) return runSubagentChild(ctx, child);
   const smoke =
     args.length === 1 && (command === "--smoke" || command === "--smoke-model");
   if (args.length > 0 && !smoke)
-    throw new Error(
-      `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
-    );
+    throw new Error(unknownOptionMessage(args, metadata.app.command));
   // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(

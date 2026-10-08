@@ -455,3 +455,28 @@ describe("a capability provider that is a package", () => {
     );
   });
 });
+
+describe("package pretranspile", () => {
+  it("is off and absent unless declared true", () => {
+    const manifest = parsed(
+      withPackages(
+        pkg({ pretranspile: true }),
+        pkg({ id: "off", package: "pi-off", pretranspile: false }),
+        pkg({ id: "plain", package: "pi-plain" }),
+      ),
+    );
+    const [on, off, plain] = manifest.governance?.resources.packages ?? [];
+    expect(on?.pretranspile).toBe(true);
+    // `false` and leaving it out parse the same, so an existing digest holds.
+    expect(off).not.toHaveProperty("pretranspile");
+    expect(plain).not.toHaveProperty("pretranspile");
+  });
+
+  it("takes only a boolean", () => {
+    rejects(
+      withPackages(pkg({ pretranspile: "yes" })),
+      "resources.packages[0].pretranspile",
+      "true or false",
+    );
+  });
+});

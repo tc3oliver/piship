@@ -174,6 +174,8 @@ interface DeclaredPackageBase {
   readonly environment?: Readonly<Record<string, PackageEnvironmentValue>>;
   /** Configuration files written into the agent directory; absent when none. */
   readonly agentFiles?: readonly PackageAgentFile[];
+  /** Build: write the TypeScript closure as JavaScript beside it; absent when off. */
+  readonly pretranspile?: true;
 }
 export interface NpmPackage extends DeclaredPackageBase {
   readonly source: "npm";

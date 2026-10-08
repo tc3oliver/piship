@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,7 +18,9 @@ import {
   analyzeClosure,
   bundleClosure,
   CLOSURE_DIRECTORY,
+  closureKey,
   type FallbackReason,
+  pretranspileClosures,
 } from "./closure.js";
 import {
   describeFootprint,
@@ -470,5 +473,412 @@ describe("the footprint report", () => {
       bundle: false,
     });
     expect(off.closures).toEqual([]);
+  });
+});
+
+/** A TypeScript package: imports written `./x.js` where only `x.ts` exists. */
+const TYPESCRIPT_PACKAGE: Record<string, string> = {
+  "node_modules/ext/package.json": JSON.stringify({
+    name: "ext",
+    version: "1.0.0",
+    type: "module",
+  }),
+  "node_modules/ext/extensions/main.ts": `import type { Shape } from "../lib/types.js";
+import { Mode, value, where } from "../lib/values.js";
+import { other } from "./other.js";
+import data from "../lib/data.json" with { type: "json" };
+import { kept } from "../lib/kept.ts";
+const ready: Shape = { size: await Promise.resolve(value) };
+export default () => ({ ready, other: other(), mode: Mode.On, where, data, kept });
+`,
+  "node_modules/ext/extensions/other.ts":
+    "export const other = (): string => 'other';\n",
+  "node_modules/ext/lib/types.ts": "export interface Shape { size: number }\n",
+  "node_modules/ext/lib/values.ts": `export enum Mode { Off, On }
+export const value: number = 2;
+export const where: string | undefined = import.meta.dirname;
+`,
+  "node_modules/ext/lib/data.json": JSON.stringify({ ok: true }),
+  "node_modules/ext/lib/kept.ts": "export const kept = 'ts';\n",
+  "node_modules/ext/lib/kept.js": "export const kept = 'js';\n",
+  "node_modules/ext/lib/unused.ts": "export const unused = 1;\n",
+  "package.json": JSON.stringify({ name: "piship-package-x" }),
+};
+
+function typescriptPackage(overrides: Record<string, string> = {}) {
+  // The real path: macOS reports its temporary directory through a symlink
+  // (/var is /private/var), and the test compares it with `import.meta` paths
+  // that Node reports resolved.
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "piship-pretranspile-")),
+  );
+  roots.push(root);
+  for (const [path, content] of Object.entries({
+    ...TYPESCRIPT_PACKAGE,
+    ...overrides,
+  })) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), content);
+  }
+  const resources = ["extensions/main.ts", "extensions/other.ts"].map(
+    (path) => ({
+      kind: "extensions" as const,
+      path,
+      sha256: createHash("sha256")
+        .update(readFileSync(join(root, "node_modules/ext", path)))
+        .digest("hex"),
+    }),
+  );
+  return { root, resources };
+}
+
+const pretranspile = (fixture: ReturnType<typeof typescriptPackage>) =>
+  pretranspileClosures(
+    [
+      {
+        id: "ext",
+        root: fixture.root,
+        packagePath: "node_modules/ext",
+        resources: fixture.resources,
+        esbuild,
+      },
+    ],
+    esbuild,
+  )[0];
+
+describe("pretranspiling a TypeScript closure", () => {
+  it("writes each imported module as JavaScript beside it, and nothing else", () => {
+    const fixture = typescriptPackage();
+    const before = tree(fixture.root);
+    const result = pretranspile(fixture);
+    expect(result).toEqual({
+      // `other.ts` is an extension another one imports; `main.ts` is imported by none.
+      written: [
+        "node_modules/ext/extensions/other.js",
+        "node_modules/ext/lib/values.js",
+      ],
+      kept: ["node_modules/ext/lib/kept.ts"],
+      warnings: [],
+    });
+    expect(tree(fixture.root)).toEqual(
+      [...before, ...(result?.written ?? [])].sort(),
+    );
+    // The extension files are the locked bytes, the existing sibling is untouched.
+    for (const resource of fixture.resources)
+      expect(
+        createHash("sha256")
+          .update(
+            readFileSync(join(fixture.root, "node_modules/ext", resource.path)),
+          )
+          .digest("hex"),
+      ).toBe(resource.sha256);
+    expect(
+      readFileSync(join(fixture.root, "node_modules/ext/lib/kept.js"), "utf8"),
+    ).toBe("export const kept = 'js';\n");
+    // ES modules, loadable by Node as they are, import.meta kept.
+    const values = pathToFileURL(
+      join(fixture.root, "node_modules/ext/lib/values.js"),
+    ).href;
+    const run = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const m = await import(${JSON.stringify(values)}); console.log(JSON.stringify([m.Mode.On, m.value, m.where]));`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(run.stderr).toBe("");
+    expect(JSON.parse(run.stdout)).toEqual([
+      1,
+      2,
+      join(fixture.root, "node_modules/ext/lib"),
+    ]);
+    expect(
+      readFileSync(
+        join(fixture.root, "node_modules/ext/lib/values.js"),
+        "utf8",
+      ),
+    ).not.toMatch(/sourceMappingURL|: number/);
+  });
+
+  it("writes the same bytes from the same input", () => {
+    const first = typescriptPackage();
+    const second = typescriptPackage();
+    const written = pretranspile(first)?.written ?? [];
+    expect(pretranspile(second)?.written).toEqual(written);
+    for (const file of written)
+      expect(readFileSync(join(second.root, file))).toEqual(
+        readFileSync(join(first.root, file)),
+      );
+  });
+
+  it.each([
+    ["export =", "export = 1;\n", /CommonJS/],
+    [
+      "require",
+      "export const other = (): string => require('../lib/values.js').where;\n",
+      /requires/,
+    ],
+    ["a syntax error", "export const = ;\n", /cannot/],
+  ])("fails on %s and writes nothing", (_, source, message) => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts": source,
+    });
+    const before = tree(fixture.root);
+    let error: unknown;
+    try {
+      pretranspile(fixture);
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect(String((error as Error).message)).toMatch(message);
+    expect(tree(fixture.root)).toEqual(before);
+  });
+});
+
+describe("pretranspile scope and failures", () => {
+  const WRITTEN = [
+    "node_modules/ext/extensions/other.js",
+    "node_modules/ext/lib/values.js",
+  ];
+
+  it("follows only the package's own imports: a dependency with a native file does not matter", () => {
+    const plain = pretranspile(typescriptPackage());
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts":
+        "import dep from 'dep';\nexport const other = (): string => dep;\n",
+      "node_modules/ext/node_modules/dep/package.json": JSON.stringify({
+        name: "dep",
+        version: "1.0.0",
+        type: "module",
+        main: "index.js",
+      }),
+      "node_modules/ext/node_modules/dep/index.js":
+        "import addon from './addon.node';\nexport default addon;\n",
+      "node_modules/ext/node_modules/dep/addon.node": "not a real addon",
+      // A tsconfig above the package must not be read.
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { jsx: "preserve", target: "es5", baseUrl: "nowhere" },
+      }),
+    });
+    const result = pretranspile(fixture);
+    expect(result?.written).toEqual(plain?.written);
+    expect(result?.written).toEqual(WRITTEN);
+  });
+
+  it("fails on a decorator, which Node cannot read, and writes nothing", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/other.ts":
+        "function dec(target: unknown) { return target; }\n@dec\nclass Thing {}\nexport const other = (): string => String(Thing);\n",
+    });
+    const before = tree(fixture.root);
+    let error: unknown;
+    try {
+      pretranspile(fixture);
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as { code?: string }).code).toBe("CONFIG_INVALID");
+    expect(String((error as Error).message)).toMatch(
+      /extensions\/other\.js.*cannot read/,
+    );
+    expect(tree(fixture.root)).toEqual(before);
+  });
+
+  it("fails, writing nothing, when a package has nothing to write", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/main.ts": "export default () => 1;\n",
+      "node_modules/ext/extensions/other.ts": "export const other = 1;\n",
+    });
+    const before = tree(fixture.root);
+    expect(() => pretranspile(fixture)).toThrow(/no TypeScript module/);
+    expect(tree(fixture.root)).toEqual(before);
+  });
+
+  it("writes .mts as .mjs, follows dynamic import, and drops an un-annotated type import", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/extensions/main.ts": `import { other } from "./other.js";
+export default async () => ({ other, late: (await import("../lib/late.js")).late });
+`,
+      "node_modules/ext/extensions/other.ts": `import { Shape } from "../lib/types.js";
+import { helper } from "../lib/helper.mjs";
+const shape: Shape = { size: 1 };
+export const other = helper(shape.size);
+`,
+      "node_modules/ext/lib/types.ts":
+        "export interface Shape { size: number }\n",
+      "node_modules/ext/lib/helper.mts":
+        "export const helper = (n: number): number => n + 1;\n",
+      "node_modules/ext/lib/late.ts": "export const late: string = 'late';\n",
+    });
+    const result = pretranspile(fixture);
+    expect(result?.written).toEqual([
+      "node_modules/ext/extensions/other.js",
+      "node_modules/ext/lib/helper.mjs",
+      "node_modules/ext/lib/late.js",
+    ]);
+    // esbuild erases the un-annotated type import, so types.ts is never reached.
+    expect(
+      existsSync(join(fixture.root, "node_modules/ext/lib/types.js")),
+    ).toBe(false);
+    const other = readFileSync(
+      join(fixture.root, "node_modules/ext/extensions/other.js"),
+      "utf8",
+    );
+    expect(other).not.toMatch(/types\.js|Shape/);
+    expect(other).toMatch(/helper\.mjs/);
+  });
+});
+
+describe("pretranspile warns where Node, not Pi's loader, would fail", () => {
+  const OTHER = "node_modules/ext/extensions/other.ts";
+  const warnings = (overrides: Record<string, string>) =>
+    pretranspile(typescriptPackage(overrides))?.warnings ?? [];
+
+  it("says nothing for a package Node can import as it is", () => {
+    expect(warnings({})).toEqual([]);
+    // Declared by the module itself, and import.meta, are fine in an ES module.
+    expect(
+      warnings({
+        [OTHER]: `import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+const require = createRequire(import.meta.url);
+export const other = (): string => __dirname + require.resolve("node:fs");
+`,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names a type re-exported as a value, which Node fails to link", () => {
+    expect(
+      warnings({
+        [OTHER]: `export { Shape } from "../lib/types.js";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /extensions\/other\.js imports Shape from node_modules\/ext\/lib\/types\.js.*does not export it/,
+      ),
+    ]);
+    // Written without the extension, it is the same module and the same finding.
+    expect(
+      warnings({
+        [OTHER]: `export { Shape } from "../lib/types";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([expect.stringMatching(/imports Shape from .*lib\/types\.js/)]);
+    // A real export of the same module is not one.
+    expect(
+      warnings({
+        [OTHER]: `export { value } from "../lib/values.js";
+export const other = (): string => "other";
+`,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names __dirname, __filename, and require left in the output", () => {
+    const found = warnings({
+      [OTHER]:
+        "export const other = (): string => __dirname + __filename + require.resolve('x');\n",
+    });
+    expect(found).toHaveLength(3);
+    for (const name of ["__dirname", "__filename", "require"])
+      expect(found.join("\n")).toContain(`extensions/other.js uses ${name}`);
+  });
+
+  it.each([
+    ["called through a comma expression", "(0, require)('node:fs')"],
+    ["passed as an argument", "[1].map(require)"],
+    ["held as a value", "(() => { const load = require; return load; })()"],
+    ["with its property read", "require.main"],
+  ])("names a require %s", (_, expression) => {
+    const found = warnings({
+      [OTHER]: `export const other = (): unknown => ${expression};\n`,
+    });
+    expect(found.join("\n")).toContain("extensions/other.js uses require");
+  });
+
+  it("refuses a require call outright (esbuild sees it), and lets a typeof guard pass", () => {
+    // A call is a build error, not a warning: it is never written.
+    expect(() =>
+      warnings({
+        [OTHER]:
+          "export const other = (): string => String(require('node:fs'));\n",
+      }),
+    ).toThrow(/calls require/);
+    expect(
+      warnings({
+        [OTHER]:
+          "export const other = (): boolean => typeof require === 'function';\n",
+      }),
+    ).toEqual([]);
+  });
+
+  it("names a package.json without type: module", () => {
+    expect(
+      warnings({
+        "node_modules/ext/package.json": JSON.stringify({
+          name: "ext",
+          version: "1.0.0",
+        }),
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /node_modules\/ext\/package\.json has no "type": "module"/,
+      ),
+    ]);
+  });
+
+  it("names a module imported both as ./x and as ./x.js", () => {
+    expect(
+      warnings({
+        [OTHER]: `import { value } from "../lib/values";
+export const other = (): number => value;
+`,
+      }),
+    ).toEqual([
+      expect.stringMatching(
+        /node_modules\/ext\/lib\/values\.ts is imported both/,
+      ),
+    ]);
+  });
+});
+
+describe("closureKey", () => {
+  it.each([
+    ["/r/pkg", "node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "node_modules\\ext\\a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "./node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    ["/r/pkg", "/r/pkg/node_modules/ext/a.ts", "node_modules/ext/a.ts"],
+    [
+      "C:\\Users\\me\\pkg",
+      "c:\\users\\me\\pkg\\node_modules\\ext\\a.ts",
+      "node_modules/ext/a.ts",
+    ],
+    ["c:/Users/me/pkg/", "C:\\Users\\me\\pkg\\lib\\a.ts", "lib/a.ts"],
+    [
+      "C:\\Users\\me\\pkg",
+      "C:\\Users\\me\\pkg2\\a.ts",
+      "C:/Users/me/pkg2/a.ts",
+    ],
+    // POSIX roots stay case sensitive.
+    ["/r/Pkg", "/r/pkg/a.ts", "/r/pkg/a.ts"],
+  ])("%s + %s", (root, path, expected) => {
+    expect(closureKey(root, path)).toBe(expected);
+  });
+
+  it("trims a root that ends in many slashes without backtracking", () => {
+    const started = Date.now();
+    expect(closureKey(`/r/pkg${"/".repeat(200_000)}x`, "a.ts")).toBe("a.ts");
+    expect(closureKey(`/r/pkg${"/".repeat(200_000)}`, "/r/pkg/a.ts")).toBe(
+      "a.ts",
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });

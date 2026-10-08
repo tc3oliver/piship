@@ -15,10 +15,13 @@
 // at run time, no CommonJS or non-JavaScript module an extension imports
 // directly, and no other file left behind that imports a bundled module. Any
 // closure that fails a test keeps its vendored files and says which test.
+import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmdirSync,
   rmSync,
   writeFileSync,
@@ -31,6 +34,7 @@ import {
   type ScanResult,
   scanModulesMany,
 } from "./module-scan.js";
+import { packageError } from "./refs.js";
 import type { LockedPackageResource } from "./types.js";
 
 /** Where the shared chunks of a package's bundled closure are written. */
@@ -86,6 +90,9 @@ const JAVASCRIPT = /\.(?:js|mjs|cjs)$/;
 const TYPESCRIPT = /\.(?:ts|mts|cts)$/;
 const SELF_LOCATION =
   /\b__dirname\b|\b__filename\b|\bimport\s*\.\s*meta\s*\.\s*(?:url|dirname|filename)\b/;
+// The part of SELF_LOCATION an ES module does not have: `import.meta` works in
+// a module read natively, `__dirname` does not.
+const CJS_LOCATION = /\b__dirname\b|\b__filename\b/;
 
 function listTree(root: string): string[] {
   const files: string[] = [];
@@ -109,6 +116,8 @@ interface Graph {
         readonly path: string;
         readonly kind: string;
         readonly external?: boolean;
+        /** The specifier as written, when esbuild resolved it to another path. */
+        readonly original?: string;
       }[];
     }
   >;
@@ -207,16 +216,49 @@ function prepare(options: ClosureOptions): State {
   return state;
 }
 
-const graphBuild = (state: State): Record<string, unknown> => ({
-  ...bundleOptions(state.root),
+const graphBuild = (
+  root: string,
+  entryPaths: readonly string[],
+): Record<string, unknown> => ({
+  ...bundleOptions(root),
   entryPoints: Object.fromEntries(
-    state.entryPaths.map((entry) => [
-      entry,
-      join(state.root, ...entry.split("/")),
-    ]),
+    entryPaths.map((entry) => [entry, join(root, ...entry.split("/"))]),
   ),
-  outdir: join(state.root, CLOSURE_DIRECTORY, ".scan"),
+  outdir: join(root, CLOSURE_DIRECTORY, ".scan"),
 });
+
+/**
+ * The graph the pretranspile reads: the package's own relative imports only.
+ * Dependencies stay external (a `.node` file or an odd loader below
+ * `node_modules` must not fail the scan), and no tsconfig above the package
+ * is read, as Pi's loader reads none.
+ */
+const transpileGraphBuild = (
+  root: string,
+  entryPaths: readonly string[],
+): Record<string, unknown> => ({
+  ...graphBuild(root, entryPaths),
+  packages: "external",
+  tsconfigRaw: {},
+});
+
+/**
+ * A metafile path as a `/`-separated path relative to `root`, whatever the
+ * platform wrote: backslashes become `/`, and an absolute path under `root`
+ * (drive letters compared without case) loses the root.
+ */
+export function closureKey(root: string, path: string): string {
+  const slashed = (value: string) => value.replace(/\\/g, "/");
+  let base = slashed(root);
+  while (base.endsWith("/")) base = base.slice(0, -1);
+  let key = slashed(path);
+  const windows = /^[A-Za-z]:(?:\/|$)/.test(base) || base.startsWith("//");
+  const head = key.slice(0, base.length + 1);
+  const prefix = `${base}/`;
+  if (windows ? head.toLowerCase() === prefix.toLowerCase() : head === prefix)
+    key = key.slice(prefix.length);
+  return key.replace(/^(?:\.\/)+/, "");
+}
 
 /** What the import graph says: what is replaced, what is bundled away, what is refused. */
 function readGraph(state: State, outcome: BuildOutcome): void {
@@ -379,7 +421,9 @@ export function analyzeClosures(
   const states = list.map(prepare);
   const live = () => states.filter((state) => !state.result);
   const graphing = live();
-  const graphs = esbuild.buildAll(graphing.map(graphBuild));
+  const graphs = esbuild.buildAll(
+    graphing.map((state) => graphBuild(state.root, state.entryPaths)),
+  );
   graphing.forEach((state, index) => {
     readGraph(state, graphs[index] as BuildOutcome);
   });
@@ -519,3 +563,364 @@ export function bundleClosure(
     chunks,
   };
 }
+
+/** What `pretranspileClosures` did for one package, `/`-separated from its root. */
+export interface TranspileResult {
+  /** The `.js` (or `.mjs`) files written beside their TypeScript sources. */
+  readonly written: readonly string[];
+  /** Closure modules left as they are because a JavaScript sibling exists. */
+  readonly kept: readonly string[];
+  /**
+   * What works under Pi's loader but not when Node imports the written files
+   * itself (docs/manifest.md, "pretranspile"). The build goes on: the files
+   * are written for the loader.
+   */
+  readonly warnings: readonly string[];
+}
+
+const TRANSPILED: Readonly<Record<string, string>> = {
+  ".ts": ".js",
+  ".mts": ".mjs",
+};
+
+/** The output a TypeScript module gets, or undefined when it gets none. */
+function transpiledName(file: string): string | undefined {
+  if (/\.d\.m?ts$/.test(file)) return undefined;
+  const extension = /\.m?ts$/.exec(file)?.[0];
+  return extension
+    ? file.slice(0, -extension.length) + TRANSPILED[extension]
+    : undefined;
+}
+
+/**
+ * Writes each TypeScript module of a package's own files that its extensions
+ * import (directly or not) as JavaScript beside it: `lib/x.ts` gets `lib/x.js`,
+ * so an import written `./x.js` names a file that exists. One file per module,
+ * in place, so `import.meta` and relative paths mean what they meant; type-only
+ * imports are erased, JSON stays JSON, and nothing else is rewritten. The
+ * extension files themselves are never touched, a module whose JavaScript
+ * sibling already exists is kept, and a module that needs CommonJS (`export =`,
+ * a `require` of a closure module) or does not parse, or whose output Node
+ * cannot read as an ES module (decorators), fails the build: its ESM
+ * output would not be the module it was.
+ *
+ * Deterministic for a given esbuild: no source maps, a fixed target, no
+ * tsconfig read from the package (Pi's loader reads none either).
+ */
+export function pretranspileClosures(
+  list: readonly (ClosureOptions & { readonly id: string })[],
+  esbuild: EsbuildApi,
+): TranspileResult[] {
+  // Real paths, so a symlinked or 8.3-style root compares like the metafile.
+  const roots = list.map((options) => realpathSync(resolve(options.root)));
+  const entries = list.map((options) =>
+    options.resources
+      .filter((resource) => resource.kind === "extensions")
+      .map((resource) => `${options.packagePath}/${resource.path}`),
+  );
+  const graphs = esbuild.buildAll(
+    list.map((_, index) =>
+      transpileGraphBuild(roots[index] as string, entries[index] as string[]),
+    ),
+  );
+  const plans = list.map((options, index) => {
+    const outcome = graphs[index] as BuildOutcome;
+    if ("failure" in outcome)
+      throw packageError(
+        "CONFIG_INVALID",
+        options.id,
+        `its TypeScript closure cannot be read for pretranspile: ${outcome.failure.errors[0]?.text ?? outcome.failure.message.split("\n")[0]}`,
+        "Fix the import, or remove pretranspile from the package",
+      );
+    const graph = outcome.build.metafile as Graph;
+    const root = roots[index] as string;
+    const key = (path: string) => closureKey(root, path);
+    const inputs = new Map(
+      Object.entries(graph.inputs).map(([file, input]) => [key(file), input]),
+    );
+    const own = `${options.packagePath}/`;
+    const imported = new Set<string>();
+    // How each module is named by the imports that reach it.
+    const spellings = new Map<string, Set<string>>();
+    for (const [file, input] of inputs)
+      for (const item of input.imports) {
+        if (item.external) continue;
+        const target = key(item.path);
+        if (item.kind === "require-call" && transpiledName(target))
+          throw unsupported(options.id, `${file} requires ${target}`);
+        imported.add(target);
+        if (item.original && /^\.\.?\//.test(item.original)) {
+          const kind = /\.m?js$/.test(item.original)
+            ? "x.js"
+            : /\.m?ts$/.test(item.original)
+              ? "x.ts"
+              : "x";
+          spellings.set(target, (spellings.get(target) ?? new Set()).add(kind));
+        }
+      }
+    const files = [...imported]
+      .filter(
+        (file) =>
+          file.startsWith(own) &&
+          !file.slice(own.length).split("/").includes("node_modules") &&
+          transpiledName(file),
+      )
+      .sort();
+    for (const file of files) {
+      if (inputs.get(file)?.format === "cjs")
+        throw unsupported(options.id, `${file} is a CommonJS module`);
+      const usesRequire = inputs
+        .get(file)
+        ?.imports.some((item) => item.kind === "require-call");
+      if (usesRequire) throw unsupported(options.id, `${file} calls require`);
+    }
+    const exists = (file: string) => existsSync(join(root, ...file.split("/")));
+    return {
+      transpile: files.filter(
+        (file) => !exists(transpiledName(file) as string),
+      ),
+      kept: files.filter((file) => exists(transpiledName(file) as string)),
+      split: files.filter((file) => (spellings.get(file)?.size ?? 0) > 1),
+    };
+  });
+  const builds = plans.flatMap((plan, index) =>
+    Object.keys(TRANSPILED).flatMap((extension) => {
+      const files = plan.transpile.filter((file) => file.endsWith(extension));
+      if (!files.length) return [];
+      const root = roots[index] as string;
+      return [
+        {
+          index,
+          options: {
+            absWorkingDir: root,
+            entryPoints: files.map((file) => join(root, ...file.split("/"))),
+            outbase: root,
+            outdir: root,
+            outExtension: { ".js": TRANSPILED[extension] },
+            write: false,
+            bundle: false,
+            format: "esm",
+            platform: "node",
+            target: "esnext",
+            sourcemap: false,
+            metafile: true,
+            logLevel: "silent",
+            tsconfigRaw: {},
+          } as Record<string, unknown>,
+        },
+      ];
+    }),
+  );
+  const outcomes = builds.length
+    ? esbuild.buildAll(builds.map((build) => build.options))
+    : [];
+  const written: string[][] = list.map(() => []);
+  const outputs: { path: string; text: string; index: number }[] = [];
+  // What each written module exports, by absolute path.
+  const exported = new Map<string, ReadonlySet<string>>();
+  builds.forEach((build, position) => {
+    const outcome = outcomes[position] as BuildOutcome;
+    const id = (list[build.index] as { id: string }).id;
+    if ("failure" in outcome)
+      throw unsupported(
+        id,
+        outcome.failure.errors[0]?.text ??
+          outcome.failure.message.split("\n")[0] ??
+          "esbuild failed",
+      );
+    for (const [path, output] of Object.entries(
+      outcome.build.metafile?.outputs ?? {},
+    ))
+      exported.set(
+        resolve(roots[build.index] as string, path),
+        new Set(output.exports),
+      );
+    for (const file of outcome.build.outputFiles ?? []) {
+      outputs.push({ path: file.path, text: file.text, index: build.index });
+      (written[build.index] as string[]).push(
+        posixPath(relative(roots[build.index] as string, file.path)),
+      );
+    }
+  });
+  list.forEach((options, index) => {
+    if (!(written[index] as string[]).length && !plans[index]?.kept.length)
+      throw packageError(
+        "CONFIG_INVALID",
+        options.id,
+        "pretranspile found no TypeScript module to write as JavaScript",
+        "Remove pretranspile from the package, or check that its extensions import TypeScript modules of the package",
+      );
+  });
+  readableAsModules(outputs, list, roots);
+  // Every module is transpiled and read before any file is written.
+  for (const output of outputs) writeFileSync(output.path, output.text);
+  return plans.map((plan, index) => ({
+    written: (written[index] as string[]).sort(),
+    kept: plan.kept,
+    warnings: nativeImportProblems(
+      outputs.filter((output) => output.index === index),
+      exported,
+      roots[index] as string,
+      plan.split,
+    ),
+  }));
+}
+
+// A named import or re-export from a relative module, as esbuild writes it
+// (one statement at the start of a line).
+const NAMED_IMPORT =
+  /^(?:import|export)\s+(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*["'](\.\.?\/[^"']+)["']/gm;
+
+/** Whether a free name is declared in the module (`const require = createRequire(...)`). */
+const declares = (text: string, name: string) =>
+  new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}\\b`).test(text);
+
+/**
+ * What Pi's loader (jiti) accepts in the written files and Node's own module
+ * loader does not. The files are written for the loader, so these are
+ * reported, not refused:
+ *
+ * - a named import or re-export of a name the transpiled module does not
+ *   export: `export { T } from "./a.js"` survives esbuild when `T` is a type,
+ *   and the loader reads it as `undefined` where Node fails to link;
+ * - `__dirname`, `__filename`, or `require` used without being declared, which
+ *   an ES module does not have;
+ * - a package.json without `"type": "module"`, which makes Node read a
+ *   written `.js` file as CommonJS;
+ * - a module imported both as `./x` and as `./x.js`, which the loader may
+ *   resolve to `x.ts` and to the written `x.js`: two instances of one module.
+ */
+function nativeImportProblems(
+  outputs: readonly { path: string; text: string }[],
+  exported: ReadonlyMap<string, ReadonlySet<string>>,
+  root: string,
+  split: readonly string[],
+): string[] {
+  const problems: string[] = [];
+  const name = (path: string) => closureKey(root, path);
+  // `export *` hides what a module exports from its own metafile entry.
+  const reexportsAll = new Set(
+    outputs
+      .filter(({ text }) => /^export\s*\*/m.test(text))
+      .map(({ path }) => resolve(path)),
+  );
+  for (const { path, text } of outputs) {
+    for (const match of text.matchAll(NAMED_IMPORT)) {
+      const written = resolve(dirname(path), match[2] as string);
+      // `./x` as well as `./x.js`: the loader finds the written file either way.
+      const target = [written, `${written}.js`, `${written}.mjs`].find((file) =>
+        exported.has(file),
+      );
+      const names = target && exported.get(target);
+      if (!target || !names || reexportsAll.has(target)) continue;
+      const missing = (match[1] as string)
+        .split(",")
+        .map((item) => item.trim().split(/\s+as\s+/)[0] as string)
+        .filter((item) => item && !names.has(item));
+      if (missing.length)
+        problems.push(
+          `${name(path)} imports ${missing.join(", ")} from ${name(target)}, which does not export ${missing.length > 1 ? "them" : "it"} once transpiled (a type imported or re-exported as a value); Node fails to link it`,
+        );
+    }
+    for (const global of ["__dirname", "__filename", "require"] as const) {
+      const used =
+        global === "require"
+          ? // The free name used as a call, a property, an argument, or a value
+            // (`(0, require)(x)`, `map(require)`, `const r = require;`);
+            // `typeof require` is a guard and passes.
+            /(?<![.\w$])(?<!\btypeof\s+)require\s*(?:[(.),;]|$)/m.test(text)
+          : CJS_LOCATION.test(text) && new RegExp(`\\b${global}\\b`).test(text);
+      if (used && !declares(text, global))
+        problems.push(
+          `${name(path)} uses ${global}, which an ES module does not have; Node fails on it`,
+        );
+    }
+  }
+  const typed = new Set<string>();
+  for (const { path } of outputs) {
+    if (!path.endsWith(".js")) continue;
+    let directory = dirname(path);
+    for (;;) {
+      const manifest = join(directory, "package.json");
+      if (existsSync(manifest)) {
+        let type: unknown;
+        try {
+          type = (
+            JSON.parse(readFileSync(manifest, "utf8")) as { type?: unknown }
+          ).type;
+        } catch {
+          // read as CommonJS, like a manifest without a type
+        }
+        if (type !== "module" && !typed.has(manifest)) {
+          typed.add(manifest);
+          problems.push(
+            `${name(manifest)} has no "type": "module", so Node reads the written .js files below it as CommonJS`,
+          );
+        }
+        break;
+      }
+      if (directory === root || dirname(directory) === directory) break;
+      directory = dirname(directory);
+    }
+  }
+  for (const file of split)
+    problems.push(
+      `${file} is imported both as ./x and as ./x.js (or ./x.ts): the loader can resolve them to two files, so two instances of the module`,
+    );
+  return problems.sort();
+}
+
+/**
+ * Every output is parsed as an ES module by the Node that builds, in one
+ * process: a module it cannot read (a decorator esbuild passed through at the
+ * esnext target) would ship as a file Pi's loader fails on.
+ */
+function readableAsModules(
+  outputs: readonly { path: string; text: string; index: number }[],
+  list: readonly { readonly id: string; readonly root: string }[],
+  roots: readonly string[],
+): void {
+  if (!outputs.length) return;
+  const script = `const vm = require("node:vm");
+const bad = [];
+for (const [path, text] of JSON.parse(require("node:fs").readFileSync(0, "utf8"))) {
+  try { new vm.SourceTextModule(text, { identifier: path }); }
+  catch (error) { bad.push([path, String(error && error.message).split("\\n")[0]]); }
+}
+process.stdout.write(JSON.stringify(bad));`;
+  const run = spawnSync(
+    process.execPath,
+    ["--experimental-vm-modules", "--no-warnings", "-e", script],
+    {
+      input: JSON.stringify(outputs.map((item) => [item.path, item.text])),
+      encoding: "utf8",
+      maxBuffer: 1 << 30,
+    },
+  );
+  let bad: [string, string][];
+  try {
+    bad = JSON.parse(run.stdout) as [string, string][];
+  } catch {
+    throw packageError(
+      "CONFIG_INVALID",
+      list[0]?.id ?? "",
+      `pretranspile could not check its output: ${run.stderr.split("\n")[0] || "no result"}`,
+      "Remove pretranspile from the package",
+    );
+  }
+  const [path, message] = bad[0] ?? [];
+  if (path === undefined) return;
+  const index = outputs.find((item) => item.path === path)?.index ?? 0;
+  throw unsupported(
+    list[index]?.id ?? "",
+    `${closureKey(roots[index] as string, path)}, which Node cannot read once transpiled (${message})`,
+  );
+}
+
+const unsupported = (id: string, detail: string) =>
+  packageError(
+    "CONFIG_INVALID",
+    id,
+    `pretranspile cannot write an ES module for ${detail}`,
+    "Remove pretranspile from the package, which then loads as TypeScript",
+  );

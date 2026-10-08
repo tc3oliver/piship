@@ -378,6 +378,17 @@ function packageConfiguration(
             : ["medium", `Environment variable changed to ${value}.`],
     );
   }
+  if (before && after)
+    out.scalar(
+      "packages",
+      `${item} pretranspile`,
+      before.pretranspile ? "on" : "off",
+      after.pretranspile ? "on" : "off",
+      [
+        "medium",
+        "Changes the files the package's extensions load: JavaScript written from its TypeScript, or the TypeScript itself.",
+      ],
+    );
   const files = (lock: LockedPackage | undefined) =>
     byKey(lock?.agentFiles, (file) => file.path);
   const fx = files(before);

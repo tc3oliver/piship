@@ -23,7 +23,11 @@ import {
   vi,
 } from "vitest";
 import { buildDistribution, type RuntimeCacheReport } from "./build.js";
-import { buildCachePath, buildInputDigest } from "./build-cache.js";
+import {
+  buildCacheKeys,
+  buildCachePath,
+  buildInputDigest,
+} from "./build-cache.js";
 import { lockManifest, requireCurrentLock } from "./lock.js";
 import { verifyPayload } from "./payload.js";
 import { lookupInstallTree, runtimeCacheFor } from "./runtime-cache.js";
@@ -144,6 +148,31 @@ function project() {
   };
 }
 const options = { supplyChainGates: false };
+
+describe("cache keys", () => {
+  it("change with a package's pretranspile switch, so a cached tree is not reused across it", () => {
+    const p = project();
+    const lock = requireCurrentLock(p.manifest);
+    const entry = {
+      id: "team",
+      source: "local",
+      class: "user",
+      resources: [],
+    } as unknown as NonNullable<typeof lock.packages>[number];
+    const keys = (packages: NonNullable<typeof lock.packages>) =>
+      buildCacheKeys(
+        fixture.input,
+        p.manifest,
+        { ...lock, packages },
+        { bundle: false, strip: false, supplyChainGates: false },
+      );
+    const off = keys([entry]);
+    const on = keys([{ ...entry, pretranspile: true }]);
+    expect(on.runtimeKey).not.toBe(off.runtimeKey);
+    expect(on.key).not.toBe(off.key);
+    expect(keys([entry])).toEqual(off);
+  });
+});
 
 describe("local payload reuse", () => {
   it("returns an unchanged payload without npm, rewriting files, or inventory hashing", () => {

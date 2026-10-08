@@ -227,6 +227,30 @@ describe("Pi packages in the lock", () => {
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
   }, 120_000);
 
+  it("switching pretranspile on or off makes the lock stale until it is locked again", (context) => {
+    requireNpm11(context);
+    const manifest = distribution();
+    lockManifest(manifest);
+    expect(readLock(manifest).packages?.[0]).not.toHaveProperty("pretranspile");
+    const off = readFileSync(manifest, "utf8");
+    const declaration = "      path: ./packages/team\n      class: user\n";
+    expect(off).toContain(declaration);
+    writeFileSync(
+      manifest,
+      off.replace(declaration, `${declaration}      pretranspile: true\n`),
+    );
+    expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+    lockManifest(manifest);
+    expect(readLock(manifest).packages?.[0]).toMatchObject({
+      pretranspile: true,
+    });
+    expect(() => requireCurrentLock(manifest)).not.toThrow();
+    writeFileSync(manifest, off);
+    expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+    lockManifest(manifest);
+    expect(readLock(manifest).packages?.[0]).not.toHaveProperty("pretranspile");
+  }, 120_000);
+
   it("an undeclared package's npm root is removed when the lock is written", (context) => {
     requireNpm11(context);
     const manifest = distribution();

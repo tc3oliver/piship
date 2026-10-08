@@ -811,6 +811,7 @@ function materialize(
     ...(declaration.agentFiles
       ? { agentFiles: lockedAgentFiles(declaration.agentFiles) }
       : {}),
+    ...(declaration.pretranspile ? { pretranspile: true as const } : {}),
   };
   return {
     locked,

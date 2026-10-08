@@ -77,6 +77,7 @@ const COMMON = [
   "certified",
   "environment",
   "agentFiles",
+  "pretranspile",
   ...PACKAGE_RESOURCE_KINDS,
 ];
 const SOURCE_FIELDS = {
@@ -236,6 +237,7 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
     source === "npm" ? item.package : undefined,
   );
   const agentFiles = parseAgentFiles(item.agentFiles, `${path}.agentFiles`);
+  const pretranspile = bool(item.pretranspile, `${path}.pretranspile`, false);
   const common = {
     id,
     class: cls,
@@ -243,6 +245,7 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
     filters: filters(item, path),
     ...(environment ? { environment } : {}),
     ...(agentFiles ? { agentFiles } : {}),
+    ...(pretranspile ? { pretranspile: true as const } : {}),
   };
   switch (source) {
     case "npm": {

@@ -145,6 +145,8 @@ export interface LockedPiPackage {
   readonly environment?: Readonly<Record<string, PackageEnvironmentValue>>;
   /** Configuration files written into the agent directory; absent when none. */
   readonly agentFiles?: readonly LockedAgentFile[];
+  /** The build writes the package's TypeScript closure as JavaScript; absent when off. */
+  readonly pretranspile?: true;
 }
 /**
  * v1alpha6: where a locked tool came from. Only tools known without running

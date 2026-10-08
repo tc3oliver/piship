@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
   createAgentSession,
   createAgentSessionRuntime,
   DefaultResourceLoader,
-  type SessionManager,
+  SessionManager,
   SettingsManager,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
@@ -26,6 +26,7 @@ import {
 } from "../governance.js";
 import {
   activateExposure,
+  boundedByAllowlist,
   buildExposureTable,
   exposureConfigOf,
   exposureFactories,
@@ -48,6 +49,12 @@ import {
   type Model,
 } from "./model-runtime.js";
 import { entitlementNotice } from "./entitlement-notice.js";
+import {
+  assertPrivateDirectory,
+  childToolOptions,
+  type SubagentChild,
+} from "./subagent-child.js";
+import { publishSubagentOwner } from "./subagent-owner.js";
 import { providerErrorRedaction } from "./redaction.js";
 import { governVirtualModels } from "./virtual-models.js";
 import {
@@ -60,7 +67,7 @@ import {
 import {
   openSession,
   resumeRefusal,
-  type SessionOwnership,
+  SessionOwnership,
 } from "./session-file.js";
 
 /**
@@ -153,6 +160,24 @@ export interface SessionOptions {
   readonly newSession: boolean;
   /** A session that holds no user work: a damaged one is replaced, not refused. */
   readonly disposable?: boolean;
+  /** A subagent child: no resume, and its options only narrow the session. */
+  readonly child?: SubagentChild;
+}
+
+/** The child's session: in memory, or the background run's own directory. */
+function openChildSession(cwd: string, child: SubagentChild) {
+  const ownership = new SessionOwnership();
+  if (!child.session)
+    return { sessionManager: SessionManager.inMemory(cwd), ownership };
+  const { id, dir } = child.session;
+  // Checked where it is used: a link, another user's, or an open directory
+  // swapped in since the arguments were read is not pi-code's session.
+  assertPrivateDirectory(dir, "session directory");
+  const existing = SessionManager.findById(cwd, id, dir);
+  const sessionManager = existing
+    ? SessionManager.open(existing, dir, cwd)
+    : SessionManager.create(cwd, dir, { id });
+  return { sessionManager, ownership };
 }
 
 /**
@@ -185,6 +210,7 @@ async function startRuntime(
   sessionManager: SessionManager,
   gov: GovernanceSession | null,
   ownership: SessionOwnership,
+  child?: SubagentChild,
 ) {
   verifyBuiltResources(ctx);
   startupMark("resources_verified");
@@ -337,6 +363,11 @@ async function startRuntime(
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      // A subagent's own prompt replaces Pi's base prompt only: the
+      // distribution's instructions below still apply.
+      ...(child?.systemPrompt !== undefined
+        ? { systemPromptOverride: () => child.systemPrompt }
+        : {}),
       agentsFilesOverride: () => ({ agentsFiles: instructions }),
     });
     await resourceLoader.reload();
@@ -369,7 +400,7 @@ async function startRuntime(
     // Hidden and denied tools, and Pi's ungoverned base tools, are excluded
     // from the session; an extension tool wider than the manifest allows
     // fails the launch.
-    const table =
+    const built =
       gov && exposureConfig
         ? buildExposureTable(
             gov,
@@ -377,6 +408,9 @@ async function startRuntime(
             extensionToolsOf(resourceLoader),
           )
         : null;
+    // A child's `--tools` is a bound: Codemode and tool search would reach
+    // tools it leaves out, so they stay inactive in such a child.
+    const table = built && child?.tools ? boundedByAllowlist(built) : built;
     if (gov) {
       gov.exposure = table;
       gov.piExtensions = () => resourceLoader.getExtensions().extensions;
@@ -431,10 +465,19 @@ async function startRuntime(
         ? {
             noTools: "builtin" as const,
             customTools: governedCustomTools(gov, cwd, table),
-            excludeTools: table?.excluded() ?? [],
           }
         : {}),
+      // Pi bounds the session's tools by `tools`, after exposure: it can only
+      // remove tools, never add one the exclusions remove. The integrity
+      // extension re-activates the tools the distribution requires, so they
+      // stay in the list (and a child may not exclude them).
+      ...childToolOptions(
+        child,
+        gov ? (table?.excluded() ?? []) : undefined,
+        child && gov ? enforcedRuntime(gov, undefined).mandatoryTools : [],
+      ),
     });
+    if (child?.thinking) result.session.setThinkingLevel(child.thinking);
     if (table) activateExposure(result.session, table);
     const current = result.session.model;
     if (
@@ -474,6 +517,23 @@ async function startRuntime(
 }
 
 /**
+ * Lets this session's subagent tool start children (launch/subagent-owner.ts).
+ * A session that cannot publish still runs; its children are refused.
+ */
+function publishChildren(ctx: LaunchContext, gov: GovernanceSession | null) {
+  try {
+    publishSubagentOwner(ctx.stateDir, {
+      session: gov?.sessionId ?? "",
+      workspace: realpathSync.native(process.cwd()),
+    });
+  } catch (error) {
+    ctx.err(
+      `Notice: subagents are unavailable in this session: ${formatError(error)}`,
+    );
+  }
+}
+
+/**
  * Starts the Pi runtime on the session `openSession` chose. The returned
  * ownership is released when the session ends (or, at the latest, when the
  * process exits).
@@ -486,11 +546,14 @@ export async function startGoverned(
 ) {
   let ownership: SessionOwnership | undefined;
   try {
-    const opened = openSession(process.cwd(), session.sessionDir, {
-      newSession: session.newSession,
-      command: ctx.metadata.app.command,
-      ...(session.disposable ? { disposable: true } : {}),
-    });
+    if (!session.child) publishChildren(ctx, gov);
+    const opened = session.child
+      ? { ...openChildSession(process.cwd(), session.child), notice: undefined }
+      : openSession(process.cwd(), session.sessionDir, {
+          newSession: session.newSession,
+          command: ctx.metadata.app.command,
+          ...(session.disposable ? { disposable: true } : {}),
+        });
     ownership = opened.ownership;
     if (opened.notice) ctx.err(`Notice: ${opened.notice}`);
     const started = await startRuntime(
@@ -499,6 +562,7 @@ export async function startGoverned(
       opened.sessionManager,
       gov,
       opened.ownership,
+      session.child,
     );
     return { ...started, ownership: opened.ownership };
   } catch (error) {
