@@ -57,7 +57,7 @@ app:
   command: acmepi
   version: 1.0.0
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
 deployment:
   mode: personal
 resources:
@@ -84,7 +84,7 @@ updates:
 const REFORMATTED = `# Reformatted by hand.
 deployment: { mode: personal }
 schema: piship/v1alpha5
-runtime: { pi: "1.0.3" }
+runtime: { pi: "1.1.0" }
 app: { version: 1.0.0, command: acmepi, name: AcmePi, id: acmepi } # app
 updates:
   trust:

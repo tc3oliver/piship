@@ -58,7 +58,7 @@ async function open(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.0.3" }',
+      'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
       "audit:",
       "  enabled: true",
@@ -81,7 +81,7 @@ async function open(
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: root,
-    piVersion: "1.0.3",
+    piVersion: "1.1.0",
     interactive: false,
     fetch: (() => {
       throw new Error("no network in unit tests");

@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-a8ea618826205a88cc867e25393bb54643b5b912378e6204d1ffec7d6204088e"
+    "sha256": "sha256-67c05dd6bac3867a2dcb63c5302d529ebeb6d5445b59cc093604498e6644354a"
   },
   "app": {
     "id": "devcode",
@@ -16,9 +16,9 @@
   },
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "1.0.3",
+    "version": "1.1.0",
     "pishipVersion": "0.12.0",
-    "npmLockSha256": "8ab976c8bc5585125fb7f9c0c2fea6aecb21dae15874e74a4471e99218d2df15",
+    "npmLockSha256": "38734725b982a602ec343c8ee9e2177c14a50ad2babebdaf590ad85906e7eed8",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -154,33 +154,33 @@
       },
       {
         "path": "node_modules/@earendil-works/chord",
-        "version": "1.0.3",
-        "integrity": "sha512-H5pKMs3S1z2q4V7NkDGKDFzOMW+OkzdsnGxxj5wNJUANG03VKj29UVmc1xnnnf0FAc03COHYNxwgNApO0nt0fg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-gsHzKfyQ3t0ZIQ3cLBjJ5Vqy1TYnFyruHIV3g3BwmulCDYe5BW4yT9vaJk9QzN6YANILIO75uzuq+Gdxtzz1og==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-agent-core",
-        "version": "1.0.3",
-        "integrity": "sha512-lnvi2PJYaq8mDLzwWBttNqfxrLS63SSMONUJnTCypdvt/flmNJchXwWXsXUOJ5Yhe/mN+iHkrXu696lWZZ8o+w==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-aX1KZomNCPmwYnXa3OivF3VYLJ+WPUkIJlEIZTgwdOZdY/+oToWTQ334WYpQeOz9POpiYFNMJLPwIhXQ4e48kg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-ai",
-        "version": "1.0.3",
-        "integrity": "sha512-p+/EUrbmfT0xWOtL/NJRtWOsyzcKKFSyiivHLDBMG0DUVpHdaIykd5jFibq0YZDFGBN/nv61zdOelMb+ylPfSg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-1T7LAkc/5Bvc0v6w4vAGVdCrli0o/E0pEmYKTnixu95vSFArBjvbhS/G4ZwI0RUePgf0Imcu0VyqlM4EcXxqfw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-codemode",
-        "version": "1.0.3",
-        "integrity": "sha512-/rgWAXA9PhuFm0+j6N5FVvvWrAwt1LnhmbjA3Hy5+Q033XUHgh0YCMGAmU76S90ocr0Vfxm50ddYT/O76T5OGQ==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-8Asc2AzhoNaXS1snmRFa96OhcWIlFM5k1Kuiz6p2DvIYgi5QHQccRAmDVY9oO92TzWrizpvQpconZGQ7JhlI7Q==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",
-        "version": "1.0.3",
-        "integrity": "sha512-t2lb0dw4y/jr5a2PRo6eTHGTZOPB3/YAMVyhhYFC1W3Hl5xE+462I/gMWjF4gCLuhGipNEfuNqONFmdqLFz4SQ==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-SeEi/4hdcHNgA9UWlefZl7ZZpm3dzi2OoxNjDHsBJ9o298LNOtbL4DGKgitlEj6uCTccvtw6f2hlCkTPVJ2RXg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node",
@@ -274,21 +274,21 @@
       },
       {
         "path": "node_modules/@earendil-works/pi-mcp",
-        "version": "1.0.3",
-        "integrity": "sha512-ZAhL/g0rpjyKtcKzD0jSDk7sFIrMCQocmKtpAE1F9eRnI5fGGVWUyiZwALG/Tn1sagzxFbSqtc29zGx5OvDDGA==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-xGKwvu3SvVTeoIx8Z7UGoJprB4VK20wKORMhufcWGx61fIauhu3J+UqfB5eeoF1oE/geYBA598K6nh1SdABQkg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-telemetry",
-        "version": "1.0.3",
-        "integrity": "sha512-Li4YamN09x9zzCquPbtEL2AQmwqv3Vn3sNOYqG0DRg24fjiMfntCsb7QKbejCXZssTAyaN+hutLl6O0UnJDrfg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-8gAK05/2pPozZZz6hCLOi8x2vsqzvsmO9gG92kbvuvTPm0qMHaFlaXX98ndXsrOi5pmzha7vNLguuG4+0Rgxjw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.1.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-tui",
-        "version": "1.0.3",
-        "integrity": "sha512-C7b8Y+7iz+/oPEZUJubv6NPm3M/4ziq0hjQ2jhqMNpBwcXeqDMYKL2FYP90t2b5S1IoGc2io47dj5ZlIC1IZWg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.0.3.tgz"
+        "version": "1.1.0",
+        "integrity": "sha512-v7wkS0y2ErZvZkSfemqd9RrBZJ5x6p8Ujsv7NdJj01IXJyFM0kNL6rMdcKcvTe7EVTd6ugvDB9VPZSoaBF9QxQ==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.1.0.tgz"
       },
       {
         "path": "node_modules/@esbuild/aix-ppc64",
@@ -1113,7 +1113,7 @@
               "integrity": "sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84",
               "license": "MIT",
               "pi": [
-                "1.0.3"
+                "1.1.0"
               ],
               "platforms": []
             },
@@ -1946,7 +1946,7 @@
           "integrity": "sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84",
           "license": "MIT",
           "pi": [
-            "1.0.3"
+            "1.1.0"
           ],
           "platforms": []
         }
@@ -1956,12 +1956,12 @@
   "digests": {
     "resources": "sha256-fd2c9e06817649fdb031617be23a391507149c8b29c6c6a24ca1e9c2ba735899",
     "policy": "sha256-4fbf3ac5006a21cf6bb7c0291e4338f687d3e76a79c7f508e39a37eae66b9844",
-    "capabilities": "sha256-91bc16ca42a0b910ab28a70aec9beabe0b3d904371e400e094a327f7326fae8c",
+    "capabilities": "sha256-e4358c701859c6d1e4eae6689d1647763f5b4c4f679e253e236728da202d37f5",
     "mcp": "sha256-7ea81aebd3bb355bc7ab3fda104b7101d09474b7a3f5813e54c9ae4de5a0afe4",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-ff7162de39b5038d4445c85272ce2f540ec1623a89110560502883a620960a56",
+    "packages": "sha256-45e738a2f1834a64bf585ae5efed9cf538514315e7b02f4c039bea3d8029e2e7",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2005,7 +2005,7 @@
       "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
       "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
       "files": 105,
-      "lockfileSha256": "2c019a808a57b12a52b52c5078b6d795c914f23c42c313454bfebf9e4ce606c4",
+      "lockfileSha256": "b825929cb6de447a54235c2b089905334bb5b775ac6d043e2b8fe714c9ada4d8",
       "resources": [
         {
           "kind": "extensions",
@@ -2242,7 +2242,7 @@
       "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
       "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
       "files": 68,
-      "lockfileSha256": "9fc0595ae9d9f3faa8267c788c5f25e8f1c4aca59bd0b2467315a75b287b5ae4",
+      "lockfileSha256": "d7780eb8b582efa93f01bec5c82311d5a9dae50bac79cadc7fba48d07aa49a5d",
       "resources": [
         {
           "kind": "extensions",
@@ -2422,7 +2422,7 @@
     "userOverride": false
   },
   "enforcement": {
-    "pi": "1.0.3",
+    "pi": "1.1.0",
     "seams": {
       "agent.invoke": "none",
       "browser.execute": "none",
@@ -2445,7 +2445,7 @@
       "tool.execute": "hook",
       "web.request": "none"
     },
-    "digest": "sha256-cd6fe03f32cb2cee5bab9d0f05da0d569ea92851cebefbc76e2c2ccfd8b7cc33"
+    "digest": "sha256-e1979e28d40bd60de60d73b521e14559e9e48009968b258f7fc2a930fc3a8429"
   },
   "data": {
     "contract": "piship-data/v1"

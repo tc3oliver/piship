@@ -79,7 +79,7 @@ describe("piship/v1", () => {
       schema: PISHIP_SCHEMA_V1,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
       runtime: {
-        pi: "1.0.3",
+        pi: "1.1.0",
         tools: { codemode: "off" },
         cacheWarming: { mode: "streaming" },
         verifyAtLaunch: true,
@@ -106,7 +106,7 @@ describe("piship/v1", () => {
     const manifest = parseManifest({
       schema: PISHIP_SCHEMA_V1,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.0.3" },
+      runtime: { pi: "1.1.0" },
       deployment: { mode: "personal" },
       updates: { channel: "stable", channels: ["stable"] },
     });
@@ -129,7 +129,7 @@ describe("piship/v1", () => {
       parseManifest({
         schema: PISHIP_SCHEMA_V1,
         app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-        runtime: { pi: "1.0.3" },
+        runtime: { pi: "1.1.0" },
         deployment: { mode: "managed" },
         updates: { channel: "stable", channels: ["stable"] },
       }),

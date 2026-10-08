@@ -49,7 +49,7 @@ async function open(evidence: {
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.0.3" }',
+      'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
       "policy:",
       "  id: unit",
@@ -98,7 +98,7 @@ async function open(evidence: {
                 source: "https://example.org/cite",
                 integrity: evidence.integrity ?? TREE,
                 license: "MIT",
-                pi: evidence.pi ?? ["1.0.3"],
+                pi: evidence.pi ?? ["1.1.0"],
                 platforms: evidence.platforms ?? [],
               },
             },
@@ -114,7 +114,7 @@ async function open(evidence: {
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "1.0.3",
+    piVersion: "1.1.0",
     interactive: false,
     fetch: (() => {
       throw new Error("no network in unit tests");
@@ -137,7 +137,7 @@ describe("certified Pi packages at launch", () => {
     const record = await open({ pi: ["9.9.9"] });
     expect(record).toMatchObject({ loaded: false });
     expect(record?.reason).toMatch(
-      /certified for Pi 9\.9\.9; running Pi 1\.0\.3/,
+      /certified for Pi 9\.9\.9; running Pi 1\.1\.0/,
     );
   });
 

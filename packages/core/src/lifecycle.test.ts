@@ -174,7 +174,7 @@ app:
   command: ${ID}
   version: ${version}
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
 deployment:
   mode: personal
 variables:
@@ -563,7 +563,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
           release: {
             target: currentTarget(),
             channel: "stable",
-            pi: "1.0.3",
+            pi: "1.1.0",
             piship: PISHIP_VERSION,
             lockSha256: a.metadata.lockSha256,
             archiveSha256: a.sha256,
@@ -931,7 +931,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
           schema: "piship-state/v1",
           distribution,
           version: "1.0.0",
-          pi: "1.0.3",
+          pi: "1.1.0",
           piship: PISHIP_VERSION,
         }),
       );
@@ -1585,7 +1585,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       schema: "piship-state/v1",
       distribution: ID,
       version: "1.1.0",
-      pi: "1.0.3",
+      pi: "1.1.0",
       piship: PISHIP_VERSION,
     });
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);

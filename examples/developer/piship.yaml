@@ -8,7 +8,7 @@ app:
   banner: DevCode developer distribution
 
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
   # fd and rg ship in the payload (pinned and digest-checked). Without them Pi
   # downloads them from GitHub on the first prompt and waits for it.
   searchTools:
@@ -120,7 +120,7 @@ resources:
         source: https://www.npmjs.com/package/@gotgenes/pi-permission-system
         integrity: sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84
         license: MIT
-        pi: ["1.0.3"]
+        pi: ["1.1.0"]
       agentFiles:
         - path: extensions/pi-permission-system/config.json
           # `seed` writes the file once and keeps a copy the user edited. A later

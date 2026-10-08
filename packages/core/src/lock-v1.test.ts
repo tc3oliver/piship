@@ -27,7 +27,7 @@ afterEach(() => {
 
 const V1ALPHA6 = `schema: piship/v1alpha6
 app: { id: acmepi, name: AcmePi, command: acmepi, version: 1.0.0 }
-runtime: { pi: "1.0.3" }
+runtime: { pi: "1.1.0" }
 deployment: { mode: personal }
 variables: [ACME_GATEWAY_URL]
 identity: { mode: none }
@@ -62,7 +62,7 @@ describe("piship-lock/v1", () => {
     // lock written before piship/v1 must still verify, so it must not move.
     const bare = `schema: piship/v1alpha6
 app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }
-runtime: { pi: "1.0.3" }
+runtime: { pi: "1.1.0" }
 deployment: { mode: personal }
 updates: { channel: stable, channels: [stable] }
 `;
@@ -71,7 +71,7 @@ updates: { channel: stable, channels: [stable] }
     expect(lock.manifest).toEqual({
       schema: "piship/v1alpha6",
       sha256:
-        "sha256-2942d6247c6ae064ac2856a3ef73b06768a64474b505a5de3b3a0ff600438ed8",
+        "sha256-171f69297f0e884ad753b25a805f0e991d97872a54e44be679f6903d788d45ae",
     });
   });
 

@@ -30,7 +30,7 @@ describe("RUNTIME_SEAMS", () => {
       expect(RUNTIME_SEAMS[action]).toMatch(/^(hook|observe|none)$/);
   });
 
-  it("matches the v0.9 table against Pi 1.0.3", () => {
+  it("matches the v0.9 table against Pi 1.1.0", () => {
     const enforced: PolicyAction[] = [
       "tool.execute",
       "mcp.tool.call",

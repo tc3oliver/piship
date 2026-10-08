@@ -267,7 +267,7 @@ describe("piship/v1alpha6 -> piship/v1", () => {
     const bare = [
       "schema: piship/v1alpha6",
       "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
-      'runtime: { pi: "1.0.3" }',
+      'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
       "updates: { channel: stable, channels: [stable] }",
       "",

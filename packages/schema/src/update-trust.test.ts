@@ -51,7 +51,7 @@ function manifest(
   const base: Json = {
     schema: PISHIP_SCHEMA_V1ALPHA5,
     app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-    runtime: { pi: "1.0.3" },
+    runtime: { pi: "1.1.0" },
     deployment: { mode: "personal" },
     updates,
   };
@@ -397,7 +397,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
       "schema: piship/v1alpha4",
       "# keep comments",
       "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
-      'runtime: { pi: "1.0.3" }',
+      'runtime: { pi: "1.1.0" }',
       `deployment: { mode: ${mode} }`,
       extra,
       "updates:",
@@ -519,7 +519,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
       [
         "schema: piship/v1alpha3",
         "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
-        'runtime: { pi: "1.0.3" }',
+        'runtime: { pi: "1.1.0" }',
         "deployment: { mode: personal }",
         "",
       ].join("\n"),

@@ -202,7 +202,7 @@ function cacheArchives(
 const MANIFEST = `schema: piship/v1alpha6
 app: { id: acmepi, name: AcmePi, command: acmepi, version: 1.0.0 }
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
   searchTools: { mode: bundled }
 deployment: { mode: personal }
 updates: { channel: stable, channels: [stable] }
