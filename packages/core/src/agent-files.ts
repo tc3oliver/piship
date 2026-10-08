@@ -13,6 +13,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -473,8 +474,23 @@ function liveProcess(pid: number): boolean {
 // both decide the shared provider file is free. Sessions keep separate leases.
 const BUSY_MESSAGE =
   "Package configuration is being changed by another launch; retry when it finishes";
+/**
+ * Another launch holds the transaction. A class of its own, so the wait
+ * below recognizes the condition by what it is and not by its message; it
+ * reports as `CONFIG_INVALID` with the same message as it always did.
+ */
+class AgentFilesBusyError extends PiShipError {
+  constructor() {
+    super("CONFIG_INVALID", BUSY_MESSAGE);
+  }
+}
 /** How long a session launch waits for another launch's transaction. */
 export const AGENT_FILES_LOCK_WAIT_MS = 3000;
+/**
+ * A lock directory with no readable owner this old was left by a launch that
+ * died between creating it and recording itself (a write takes milliseconds).
+ */
+export const AGENT_FILES_OWNERLESS_STALE_MS = 10_000;
 
 // ponytail: a synchronous wait, since the launch path is synchronous; the
 // holder only keeps the lock for one small file edit.
@@ -484,24 +500,33 @@ function pause(ms: number): void {
 
 // Parallel session launches (a subagent's children) meet here at once: they
 // wait out a busy lock for `waitMs`, then report the same error as before.
+// The wait backs off with jitter so that they do not retry in step, and it
+// never runs past the budget; with none (a launch that is not a session) the
+// first busy answer is the error.
 function agentFilesTransaction<T>(
   agentDir: string,
   operation: () => T,
   waitMs: number,
 ): T {
   const deadline = Date.now() + waitMs;
-  for (;;) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
       return agentFilesTransactionOnce(agentDir, operation);
     } catch (error) {
-      if (
-        !(error instanceof PiShipError) ||
-        error.message !== BUSY_MESSAGE ||
-        Date.now() >= deadline
-      )
-        throw error;
-      pause(20 + Math.floor(Math.random() * 80));
+      const left = deadline - Date.now();
+      if (!(error instanceof AgentFilesBusyError) || left <= 0) throw error;
+      const ceiling = Math.min(20 * 2 ** attempt, 400);
+      pause(Math.min(left, ceiling / 2 + Math.random() * (ceiling / 2)));
     }
+  }
+}
+
+/** Whether `path` was last changed more than `ms` ago; false if it is gone. */
+function olderThan(path: string, ms: number): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs > ms;
+  } catch {
+    return false;
   }
 }
 
@@ -509,7 +534,7 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const guard = filePath(agentDir, ".piship-agent-files-lock");
   const recovery = filePath(agentDir, ".piship-agent-files-recovery");
-  const busy = () => new PiShipError("CONFIG_INVALID", BUSY_MESSAGE);
+  const busy = () => new AgentFilesBusyError();
   if (existsSync(recovery)) throw busy();
   try {
     mkdirSync(guard, { mode: 0o700 });
@@ -524,8 +549,12 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
       const holder = readJsonObject(
         filePath(agentDir, ".piship-agent-files-lock/owner.json"),
       );
-      if (!holder || typeof holder.pid !== "number" || liveProcess(holder.pid))
+      if (holder && typeof holder.pid === "number") {
+        if (liveProcess(holder.pid)) throw busy();
+      } else if (!olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)) {
+        // Being written by its holder, or gone: not ours to take yet.
         throw busy();
+      }
       // Every acquirer checks recovery after recording its live owner, so no
       // newcomer can mutate the config while this dead directory is removed.
       const abandoned = `${guard}.${randomUUID()}.stale`;

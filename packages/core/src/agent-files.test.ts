@@ -10,6 +10,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { execFile, spawn } from "node:child_process";
@@ -587,6 +588,85 @@ describe("parallel session launches", () => {
       }),
     ).toThrow("being changed by another launch");
     await released;
+  });
+
+  it("keeps its wait inside the budget, even for a budget shorter than one pause", async () => {
+    const { released } = await holder(1500);
+    for (const lockWaitMs of [0, 15, 60]) {
+      const started = Date.now();
+      expect(() =>
+        applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+          session: true,
+          lockWaitMs,
+        }),
+      ).toThrow("being changed by another launch");
+      // One attempt after the last pause, and not a pause past the budget.
+      expect(Date.now() - started).toBeLessThan(lockWaitMs + 60);
+    }
+    await released;
+  });
+
+  it("reports the busy lock as the same coded error as before", async () => {
+    const { released } = await holder(600);
+    let error: unknown;
+    try {
+      applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      name: "PiShipError",
+      code: "CONFIG_INVALID",
+      message:
+        "Package configuration is being changed by another launch; retry when it finishes",
+    });
+    await released;
+  });
+
+  describe("a lock directory that no launch owns", () => {
+    const guard = () => join(agentDir, ".piship-agent-files-lock");
+    const aged = (path: string, secondsAgo: number) => {
+      const when = new Date(Date.now() - secondsAgo * 1000);
+      utimesSync(path, when, when);
+    };
+    const session = () =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        session: true,
+        lockWaitMs: 100,
+      });
+
+    it("is taken over once it is older than the bound, with no owner record", () => {
+      mkdirSync(guard());
+      aged(guard(), 30);
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("is taken over once it is older than the bound, with an owner record nobody can read", () => {
+      mkdirSync(guard());
+      writeFileSync(join(guard(), "owner.json"), "{ not json");
+      aged(guard(), 30);
+      session().restore();
+      expect(existsSync(guard())).toBe(false);
+    });
+
+    it("is left alone while it may still be being written", () => {
+      mkdirSync(guard());
+      aged(guard(), 2);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
+
+    it("is never taken from a launch that is alive, however old", () => {
+      mkdirSync(guard());
+      writeFileSync(
+        join(guard(), "owner.json"),
+        JSON.stringify({ pid: process.pid }),
+      );
+      aged(guard(), 3600);
+      expect(session).toThrow("being changed by another launch");
+      expect(existsSync(guard())).toBe(true);
+    });
   });
 
   it("does not wait for a launch that is not a session", async () => {
