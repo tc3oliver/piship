@@ -7,7 +7,7 @@ function manifest(settings: Record<string, string>) {
   const governance = parseManifest({
     schema: "piship/v1alpha6",
     app: { id: "unit", name: "Unit", command: "unit", version: "1.0.0" },
-    runtime: { pi: "1.0.3" },
+    runtime: { pi: "1.1.0" },
     deployment: { mode: "personal" },
     updates: { channel: "stable", channels: ["stable"] },
     capabilities: { permissions: { enabled: false } },

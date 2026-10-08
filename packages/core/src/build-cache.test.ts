@@ -134,7 +134,7 @@ function project() {
   const writeManifest = (command = "cachepi", name = "Cache Pi") =>
     writeFileSync(
       manifest,
-      `schema: piship/v1alpha1\napp:\n  id: cachepi\n  name: ${name}\n  version: "1.0.0"\n  command: ${command}\ndeployment:\n  mode: personal\nruntime:\n  pi: "1.0.3"\nresources:\n  instructions: [./AGENTS.md]\n`,
+      `schema: piship/v1alpha1\napp:\n  id: cachepi\n  name: ${name}\n  version: "1.0.0"\n  command: ${command}\ndeployment:\n  mode: personal\nruntime:\n  pi: "1.1.0"\nresources:\n  instructions: [./AGENTS.md]\n`,
     );
   writeManifest();
   writeFileSync(resource, "# first\n");

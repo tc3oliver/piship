@@ -9,7 +9,7 @@ app:
   theme: mypi
 
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
   # fd and rg ship in the payload (pinned and digest-checked). Without them Pi
   # downloads them from GitHub on the first prompt and waits for it.
   searchTools:

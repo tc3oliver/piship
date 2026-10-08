@@ -7,7 +7,7 @@ DevCode (`devcode`) is a batteries-included personal distribution on `piship/v1`
 - **A denial only for clear secrets.** Private keys, credential stores, `~/.ssh`, keychains, `~/.netrc`, `~/.config/gh/hosts.yml`, and the like. The rules name paths, never broad globs, so `.env.example`, a test fixture, and project configuration stay usable. A real `.env` and a non-fixture `.pem` ask.
 - **Every default is a default.** A managed distribution built from [`managed.piship.yaml`](managed.piship.yaml) tightens it ([below](#hardening-for-a-company)), and a project's own configuration never loosens it.
 
-It is `deployment.mode: personal` with `identity.mode: none` and Pi's own providers and sign-in, in isolated state at `~/.piship/devcode` (or `$PISHIP_STATE_HOME/devcode`), separate from `~/.pi`. Pi is pinned to 1.0.3.
+It is `deployment.mode: personal` with `identity.mode: none` and Pi's own providers and sign-in, in isolated state at `~/.piship/devcode` (or `$PISHIP_STATE_HOME/devcode`), separate from `~/.pi`. Pi is pinned to 1.1.0.
 
 ## What is in it
 

@@ -229,7 +229,7 @@ describe("a launch check killed in the middle", () => {
   const script = `
     const { checkPayload } = await import(process.env.STATE);
     const { writeSync } = await import("node:fs");
-    const lock = { app: { command: "acmepi", version: "1.0.0" }, runtime: { version: "1.0.3" } };
+    const lock = { app: { command: "acmepi", version: "1.0.0" }, runtime: { version: "1.1.0" } };
     checkPayload(
       "/unused",
       lock,
@@ -264,9 +264,9 @@ describe("a launch check killed in the middle", () => {
 
   const lock = {
     app: { command: "acmepi", version: "1.0.0" },
-    runtime: { version: "1.0.3" },
+    runtime: { version: "1.1.0" },
   } as Parameters<typeof checkPayload>[1];
-  const passing = () => ({ status: 0, stdout: "Pi 1.0.3", stderr: "" });
+  const passing = () => ({ status: 0, stdout: "Pi 1.1.0", stderr: "" });
 
   it("leaves its throwaway state until the next launch check removes it", async () => {
     await killMidCheck();

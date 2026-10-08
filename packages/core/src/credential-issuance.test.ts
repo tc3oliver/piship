@@ -189,14 +189,14 @@ describe("pending credential issuance across update and rollback", () => {
       }),
     );
   }
-  const current = { version: "1.1.0", pi: "1.0.3" };
+  const current = { version: "1.1.0", pi: "1.1.0" };
 
   it("a release without the schema key has it cleared, and no snapshot holds it", async () => {
     plant();
     const { credentialIssuance: _absent, ...older } = STATE_SCHEMAS;
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "1.0.3", schemas: older },
+      { version: "1.0.0", pi: "1.1.0", schemas: older },
       current,
     );
     expect(
@@ -222,7 +222,7 @@ describe("pending credential issuance across update and rollback", () => {
     plant();
     const keep = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "1.0.3", schemas: STATE_SCHEMAS },
+      { version: "1.0.0", pi: "1.1.0", schemas: STATE_SCHEMAS },
       current,
     );
     expect(
@@ -237,7 +237,7 @@ describe("pending credential issuance across update and rollback", () => {
     );
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "1.0.3", schemas: STATE_SCHEMAS },
+      { version: "1.0.0", pi: "1.1.0", schemas: STATE_SCHEMAS },
       current,
     );
     await clearCredentials(stateDir(), ID, report, {
@@ -273,7 +273,7 @@ describe("pending credential issuance across update and rollback", () => {
     const { credentialIssuance: _absent, ...older } = STATE_SCHEMAS;
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "1.0.3", schemas: older },
+      { version: "1.0.0", pi: "1.1.0", schemas: older },
       current,
     );
     expect(
@@ -294,7 +294,7 @@ describe("pending credential issuance across update and rollback", () => {
 });
 
 describe("a switch that clears one secret class keeps the file store of the others", () => {
-  const current = { version: "1.1.0", pi: "1.0.3" };
+  const current = { version: "1.1.0", pi: "1.1.0" };
 
   it("clearing only the sandbox credential keeps the runtime credential's and identity's secrets", async () => {
     await login();
@@ -326,7 +326,7 @@ describe("a switch that clears one secret class keeps the file store of the othe
     const { sandboxCredential: _absent, ...older } = STATE_SCHEMAS;
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "1.0.3", schemas: older },
+      { version: "1.0.0", pi: "1.1.0", schemas: older },
       current,
     );
     expect(

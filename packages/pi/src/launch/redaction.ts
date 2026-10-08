@@ -38,6 +38,7 @@ export const ASSISTANT_MESSAGE_FIELDS: Record<
   rawStopReason: "metadata",
   endTurn: "metadata",
   timestamp: "metadata",
+  durationMs: "metadata",
 };
 
 /**
@@ -95,6 +96,7 @@ export const TOOL_RESULT_MESSAGE_FIELDS: Record<
   nestedCalls: "redacted",
   isError: "metadata",
   timestamp: "metadata",
+  durationMs: "metadata",
 };
 
 type NestedCall = {

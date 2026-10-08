@@ -536,7 +536,7 @@ describe("entitlement freshness (F25)", () => {
     const personal = parseManifest({
       schema: PISHIP_SCHEMA_V1ALPHA2,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.0.3" },
+      runtime: { pi: "1.1.0" },
       deployment: { mode: "personal" },
     });
     const distribution = DistributionAccess.open({

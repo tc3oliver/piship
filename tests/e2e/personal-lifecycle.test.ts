@@ -83,7 +83,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     await s.installFirst();
     const version = await s.run(["version"]);
     expect(version.stdout).toContain("MyPi 1.0.0");
-    expect(version.stdout).toContain("Pi 1.0.3");
+    expect(version.stdout).toContain("Pi 1.1.0");
 
     // Pi starts on the exact pinned version with the declared personal
     // resources, Pi-native access, and the declared MCP server healthy. No
@@ -92,7 +92,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(smoke.status, smoke.stderr).toBe(0);
     const first = JSON.parse(smoke.stdout) as Smoke;
     const expected = {
-      piVersion: "1.0.3",
+      piVersion: "1.1.0",
       safeTool: "read",
       skills: ["demo-skill"],
       extensions: 1,
@@ -144,7 +144,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(inspect).toMatchObject({
       app: { id: "mypi", version: "1.0.0" },
       deployment: { mode: "personal" },
-      runtime: { version: "1.0.3" },
+      runtime: { version: "1.1.0" },
       access: {
         identity: { mode: "none" },
         credential: { provider: "pi-native" },

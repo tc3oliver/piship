@@ -89,7 +89,7 @@ resources:
         source: https://example.org/acme/release-notes
         integrity: sha256-<64 hex characters>
         license: MIT
-        pi: ["1.0.3"]
+        pi: ["1.1.0"]
         platforms: [linux, darwin]   # optional; empty means any
   extensions:
     builtin: [piship-ask-user, piship-workflow]
@@ -390,7 +390,7 @@ resources:
 - **Written for Pi's loader, not for Node.** The build checks that Node can parse each written file as an ES module, not that Node can import the package. Under Pi's loader (jiti) these work and under a plain native `import` of the written `.js` files they still fail, although the parse check passes: a value re-export of a type (`export { T } from "./a.js"` survives esbuild, because it cannot know `T` is a type, and Node then fails to link it); `__dirname`, `__filename`, or `require` left in the output in any use but a plain `require(...)` call (`require.main`, `(0, require)(x)`, `map(require)`, `const r = require;`; an ES module has none of them; a plain `require(...)` call is already a build error, and a `typeof require` guard is not reported); and a `package.json` without `"type": "module"` (Node reads the written `.js` files as CommonJS). A module that one file imports as `./x` and another as `./x.js` can also be loaded twice, as `x.ts` and as the written `x.js`, with state of its own in each. The build reports each case it can see as a `Warning: pi package pretranspile: ...` line and goes on: the three failures above, and a module spelled both ways. It does not stop the build, because the files are written for the loader. Do not import the written files with Node directly, and do not count on a loader that does.
 - **Older runtimes.** A runtime built before the field (checked against v0.12.0) does not read such a manifest or lock, at any step: `piship validate` and `piship lock` stop with `invalid field at resources.packages[0].pretranspile ...: Unknown field pretranspile`, `verify-release` of the new release fails with `INTEGRITY_FAILED: Release verification: invalid field at ... Unknown field pretranspile` and an action that reads "Do not install this artifact; obtain it again from the trusted source", and `<command> update` on an installed v0.12.0 distribution, from a signed channel offering the new release, fails the same way with exit status 1 before it installs anything. The installation is left as it was: the old release stays current, `doctor` is healthy, and no staged release remains. The error text does not say that the runtime is too old, so the action it gives is misleading here. An installation on an older runtime needs a fresh install to take a release that enables `pretranspile`, as with any addition the installed runtime does not know ([support policy](support-policy.md)).
 - **Integrity.** The written files are payload files: they are in the payload inventory, so `doctor` and the install check them like any other file, and a release built twice from the same inputs has the same bytes. They are not in the package's locked tree digest, which pins the vendored package as npm installed it.
-- **What changes at run time.** The extension files still load through Pi's loader, which now finds `./x.js` at once and loads that file instead of transpiling `x.ts`. Under Pi 1.0.3 the loader still evaluates each module once per extension (it does not use Node's own module loader unless `JITI_TRY_NATIVE` is set), so module state is shared no more than before. A loader that imports the JavaScript natively would load each module once per process and share its state across extensions and across `/reload`; a package that keeps state at module level should be tested with that in mind. A distribution that sets `JITI_EXTENSIONS` for the package can keep it: the two combine ([performance](performance.md#typescript-pi-packages)).
+- **What changes at run time.** The extension files still load through Pi's loader, which now finds `./x.js` at once and loads that file instead of transpiling `x.ts`. Under Pi 1.1.0 the loader still evaluates each module once per extension (it does not use Node's own module loader unless `JITI_TRY_NATIVE` is set), so module state is shared no more than before. A loader that imports the JavaScript natively would load each module once per process and share its state across extensions and across `/reload`; a package that keeps state at module level should be tested with that in mind. A distribution that sets `JITI_EXTENSIONS` for the package can keep it: the two combine ([performance](performance.md#typescript-pi-packages)).
 
 ### Bundled search tools (v1alpha6)
 
@@ -398,7 +398,7 @@ Pi's find and grep tools and its `@` file completion run `fd` and `rg` (ripgrep)
 
 ```yaml
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
   searchTools:
     mode: bundled     # the only mode
     fd: "10.5.0"      # optional; PiShip's default when omitted
@@ -802,7 +802,7 @@ After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted
 
 ### Migrating from v1alpha5 to v1alpha6
 
-v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0, v0.12.0, and on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
+v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0 and v0.12.0, `1.1.0` on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
 
 1. Run `piship migrate piship.yaml --check`. It prints every change and exits non-zero when one changes an effective decision.
 2. Review the plan, then run `piship migrate piship.yaml --write`.

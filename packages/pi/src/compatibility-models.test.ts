@@ -603,7 +603,7 @@ async function launchPolicy(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.0.3" }',
+      'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
       "policy:",
       "  id: unit",
@@ -623,7 +623,7 @@ async function launchPolicy(
     distributionDir: distribution,
     stateDir: join(temp, "state"),
     cwd: temp,
-    piVersion: "1.0.3",
+    piVersion: "1.1.0",
     interactive: false,
     fetch: (() => {
       throw new Error("no network in compatibility tests");

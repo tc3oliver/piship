@@ -85,7 +85,7 @@ app:
   command: ${ID}
   version: ${version}
 runtime:
-  pi: "1.0.3"
+  pi: "1.1.0"
 deployment:
   mode: personal
 variables:
