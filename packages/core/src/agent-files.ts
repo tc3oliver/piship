@@ -649,16 +649,32 @@ function readOwner(path: string): LockOwner | "missing" | "unknown" {
  * An older record without them is as live as its process ID.
  */
 function holderRuns(owner: LockOwner): boolean {
-  return (
-    liveProcess(owner.pid) &&
+  if (!liveProcess(owner.pid)) return false;
+  // A waiter asks again at every retry. Where the answer costs a process
+  // (Windows starts PowerShell for a start time), asking again and again for
+  // the same holder would starve the holder it waits for; a holder found
+  // running is taken to run for HOLDER_CHECK_REUSE_MS.
+  const now = Date.now();
+  const key = owner.token === null ? null : `${owner.pid}:${owner.token}`;
+  const seen = key === null ? undefined : holdersSeenRunning.get(key);
+  if (seen !== undefined && now - seen < HOLDER_CHECK_REUSE_MS) return true;
+  const runs =
     recordedProcessGone({
       pid: owner.pid,
       identity: owner.identity,
       host: owner.host,
       started: owner.started,
-    }) !== true
-  );
+    }) !== true;
+  if (runs && key !== null) {
+    if (holdersSeenRunning.size > 64) holdersSeenRunning.clear();
+    holdersSeenRunning.set(key, now);
+  }
+  return runs;
 }
+
+/** How long a holder found running is not looked up again (ms). */
+const HOLDER_CHECK_REUSE_MS = 1000;
+const holdersSeenRunning = new Map<string, number>();
 
 const sameOwner = (
   found: LockOwner | "missing" | "unknown",

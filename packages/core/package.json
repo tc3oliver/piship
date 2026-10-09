@@ -1,6 +1,6 @@
 {
   "name": "@piship/core",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -23,13 +23,13 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/audit": "0.12.0",
-    "@piship/contracts": "0.12.0",
-    "@piship/credentials": "0.12.0",
-    "@piship/identity": "0.12.0",
-    "@piship/inference": "0.12.0",
-    "@piship/policy": "0.12.0",
-    "@piship/schema": "0.12.0",
+    "@piship/audit": "0.13.0",
+    "@piship/contracts": "0.13.0",
+    "@piship/credentials": "0.13.0",
+    "@piship/identity": "0.13.0",
+    "@piship/inference": "0.13.0",
+    "@piship/policy": "0.13.0",
+    "@piship/schema": "0.13.0",
     "esbuild": "0.28.2"
   },
   "description": "Distribution domain types and state paths for PiShip.",
