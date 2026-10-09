@@ -15,7 +15,7 @@ The PiShip package version, the manifest schema, and the lock schema are three s
 
 | Contract | Identifier | Changes when |
 | --- | --- | --- |
-| PiShip package | `0.12.0` (a [SemVer](https://semver.org) version) | Every release. Decides which Pi versions and schemas a build accepts |
+| PiShip package | `0.13.0` (a [SemVer](https://semver.org) version) | Every release. Decides which Pi versions and schemas a build accepts |
 | Manifest | `piship/v1` | A breaking change to a manifest field, default, or rule: then `piship/v2`. Never for an additive change |
 | Lock | `piship-lock/v1` | A breaking change to a lock key: then `piship-lock/v2`. Never for an additive key |
 | Update root, channel, signature | `piship-update-root/v1`, `piship-channel/v1`, `piship-signature/v1` | A breaking change to that document |
