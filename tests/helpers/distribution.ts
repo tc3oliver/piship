@@ -29,10 +29,13 @@ function kill(child: ChildProcess): void {
 /**
  * The stdin error codes that mean the child closed its read end first — a
  * race every command that never reads stdin can lose, not a failure of the
- * run, which its own exit status still judges.
+ * run, which its own exit status still judges. Which code arrives is
+ * platform-dependent: POSIX reports a write to a closed pipe as `EPIPE`,
+ * Windows as `EOF` (libuv maps `ERROR_BROKEN_PIPE` to `UV_EOF`).
  */
 const STDIN_CLOSED_CODES: ReadonlySet<string> = new Set([
   "EPIPE",
+  "EOF",
   "ECONNRESET",
   "ERR_STREAM_DESTROYED",
 ]);

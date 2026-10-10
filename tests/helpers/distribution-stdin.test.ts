@@ -75,9 +75,10 @@ describe("branded() stdin handling", () => {
 
   it("treats every pipe-closure code the same way", async () => {
     // Which code a closed read end produces depends on the platform and on
-    // how far the write got, so all three shapes of "the child is gone" have
-    // to be expected, not just the one macOS happened to report.
-    for (const code of ["EPIPE", "ECONNRESET", "ERR_STREAM_DESTROYED"]) {
+    // how far the write got — POSIX reports `EPIPE`, Windows `EOF` — so every
+    // shape of "the child is gone" has to be expected, not just the one
+    // macOS happened to report.
+    for (const code of ["EPIPE", "EOF", "ECONNRESET", "ERR_STREAM_DESTROYED"]) {
       const child = new FakeChild();
       const settled = settle(child);
       child.stdin.emit("error", errno(code));
