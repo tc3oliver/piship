@@ -197,6 +197,98 @@ describe("redactToolResult", () => {
   });
 });
 
+describe("redactToolResult fallback for fields no table classifies", () => {
+  // `details` and `nestedCalls` are arbitrary JSON: a future or different Pi
+  // can put any key in them, and the classification tables cannot enumerate
+  // those keys. The runtime fallback is `redactValue`, which recurses and runs
+  // `redact()` over every string leaf and replaces a secret-named key whatever
+  // it holds. These pin that the fallback SCRUBS an unknown key rather than
+  // carrying it through. A token-shaped value that is NOT a registered
+  // SecretValue proves the recursive `redact()` reaches unknown keys, not just
+  // the registered-secret substitution. Flipping the fallback to pass-through
+  // would leave CREDENTIAL/SHAPED in the output and fail every assertion here.
+  const SHAPED = "sk-future-pi-field-abcdef0123456789";
+
+  const result = (details: unknown) => ({
+    role: "toolResult",
+    toolCallId: "call_u",
+    toolName: "company_batch",
+    content: [],
+    isError: false,
+    timestamp: 1,
+    details,
+  });
+
+  it("scrubs an unknown top-level key instead of carrying it through", () => {
+    const message = result({
+      futureField: `Bearer ${CREDENTIAL}`,
+      anotherUnknown: SHAPED,
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    const details = redacted.details as Record<string, string>;
+    expect(JSON.stringify(details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(details)).not.toContain(SHAPED);
+    // The keys survive (structure preserved); only the secret values are gone.
+    expect(details.futureField).toContain("[REDACTED");
+    expect(details.anotherUnknown).toBe("[REDACTED]");
+    // Non-vacuous: the input really held them.
+    expect(JSON.stringify(message.details)).toContain(CREDENTIAL);
+    expect(JSON.stringify(message.details)).toContain(SHAPED);
+  });
+
+  it("scrubs an unknown key nested arbitrarily deep", () => {
+    const message = result({
+      level1: {
+        level2: { level3: { deepSecret: CREDENTIAL, shaped: SHAPED } },
+      },
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted.details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(redacted.details)).not.toContain(SHAPED);
+    const deep = (
+      redacted.details as {
+        level1: { level2: { level3: Record<string, string> } };
+      }
+    ).level1.level2.level3;
+    expect(deep.deepSecret).toBe("[REDACTED]");
+    expect(deep.shaped).toBe("[REDACTED]");
+  });
+
+  it("scrubs an unknown key inside an array of objects", () => {
+    const message = result({
+      rows: [{ ok: true }, { futureCell: CREDENTIAL }, [`Bearer ${SHAPED}`]],
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted.details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(redacted.details)).not.toContain(SHAPED);
+    const rows = (redacted.details as { rows: unknown[] }).rows;
+    // Inert array elements are untouched; the secret-bearing ones are scrubbed.
+    expect(rows[0]).toEqual({ ok: true });
+    expect(rows[1]).toEqual({ futureCell: "[REDACTED]" });
+    expect(rows[2]).toEqual(["[REDACTED]"]);
+  });
+
+  it("scrubs a credential riding inside an exception field's value", () => {
+    // `fullOutputPath` is preserved when inert (see the nested-details test
+    // above), but its VALUE still runs through `redact()`, so a registered
+    // secret or a token shape embedded in the path is scrubbed, not carried. A
+    // key whose NAME is a credential word is replaced whatever it holds, even
+    // an otherwise-inert value.
+    const message = result({
+      fullOutputPath: `/tmp/${CREDENTIAL}/out.txt`,
+      sizedPath: `/var/log/${SHAPED}.log`,
+      apiKey: "inert-but-the-name-matches",
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    const details = redacted.details as Record<string, string>;
+    expect(JSON.stringify(details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(details)).not.toContain(SHAPED);
+    expect(details.fullOutputPath).toContain("/tmp/");
+    expect(details.fullOutputPath).toContain("[REDACTED");
+    expect(details.apiKey).toBe("[REDACTED]");
+  });
+});
+
 describe("redactProviderError", () => {
   it("redacts a registered credential and bearer shapes in an assistant's error text", () => {
     const message = {

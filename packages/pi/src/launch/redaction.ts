@@ -115,6 +115,30 @@ export const TOOL_RESULT_MESSAGE_FIELDS: Record<
   durationMs: "metadata",
 };
 
+/** Pi's per-call record inside a tool result's `nestedCalls`. */
+type NestedCallRecord = NonNullable<
+  ToolResultMessage["nestedCalls"]
+>["calls"][number];
+
+/**
+ * Every field of Pi's nested call record, by what it holds: `arguments` and
+ * `error` are the carrier JSON and text, the rest is inert metadata. A Pi
+ * upgrade that adds or removes a field fails to compile here until it is
+ * classified, so a new carrier cannot ride through a fail-closed spread.
+ */
+export const NESTED_CALL_RECORD_FIELDS: Record<
+  keyof NestedCallRecord,
+  "carrier" | "metadata"
+> = {
+  id: "metadata",
+  name: "metadata",
+  arguments: "carrier",
+  argumentsBytes: "metadata",
+  status: "metadata",
+  durationMs: "metadata",
+  error: "carrier",
+};
+
 type NestedCall = {
   id?: unknown;
   arguments?: unknown;
@@ -122,6 +146,42 @@ type NestedCall = {
   error?: unknown;
 };
 type CodemodeCall = { id?: unknown; args?: unknown; error?: unknown };
+
+/**
+ * Every field of a Codemode call record in Pi's `details.calls` (built by Pi's
+ * codemode extension), by what it holds: `args` and `error` are the carrier
+ * text, the rest is inert metadata. Codemode's `details` is `JsonValue`, so
+ * this table is maintained against Pi's shape by hand; a field it does not
+ * list is dropped on the fail-closed path below, not carried.
+ */
+export const CODEMODE_CALL_FIELDS: Record<string, "carrier" | "metadata"> = {
+  id: "metadata",
+  name: "metadata",
+  args: "carrier",
+  status: "metadata",
+  durationMs: "metadata",
+  error: "carrier",
+  // Set by the extension at runtime, not in Pi's `CodemodeCall` type: the
+  // call's share of the run's token cost. A number, so the normal path keeps
+  // it and this path must too.
+  cost: "metadata",
+};
+
+/**
+ * The fields of `value` the classification table knows, minus `omit`. A field
+ * a future Pi adds is unknown to the table, so it is dropped: a path that
+ * cannot scrub what it does not know must not carry it.
+ */
+function classified(
+  value: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  ...omit: string[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(fields))
+    if (key in value && !omit.includes(key)) out[key] = value[key];
+  return out;
+}
 
 const changed = (before: unknown, after: unknown) =>
   JSON.stringify(before) !== JSON.stringify(after);
@@ -169,12 +229,13 @@ export function redactToolResult(message: unknown): unknown {
   if (value?.role !== "toolResult") return undefined;
   const changes: Record<string, unknown> = {};
   const nested = value.nestedCalls;
-  if (Array.isArray(nested?.calls)) {
-    // Whole records, so a field a future Pi adds is redacted, not carried:
-    // arguments and error text are the opaque JSON this record holds.
-    const calls = nested.calls.map((call) => redactValue(call) as NestedCall);
-    if (changed(nested.calls, calls))
-      changes.nestedCalls = { ...nested, calls };
+  if (nested !== undefined) {
+    // The whole record, so a field a future Pi adds — on the wrapper or on a
+    // call — is redacted, not carried, and a `calls` shape this does not
+    // recognize is still scrubbed: arguments and error text are the opaque
+    // JSON this record holds.
+    const scrubbed = redactValue(nested);
+    if (changed(nested, scrubbed)) changes.nestedCalls = scrubbed;
   }
   const details = value.details;
   if (details !== undefined) {
@@ -230,13 +291,20 @@ export function redactToolResultOrDrop(message: unknown): unknown {
       details?: { calls?: CodemodeCall[] };
     };
     if (value?.role !== "toolResult") return undefined;
-    const scrub = <T extends { error?: unknown }>(call: T) =>
-      call.error === undefined
-        ? call
-        : { ...call, error: REDACTION_FAILED_TEXT };
+    const failed = (call: { error?: unknown }) =>
+      call.error === undefined ? {} : { error: REDACTION_FAILED_TEXT };
     const nested = value.nestedCalls;
     const details = value.details;
-    const { details: _untrusted, ...rest } = value;
+    // This path cannot scrub what it does not know, so nothing untrusted is
+    // spread: the message keeps only its classified fields, a record only its
+    // classified fields, and a field the classification does not know is
+    // dropped — an unknown field is a carrier until classified, not metadata.
+    const rest = classified(
+      value as Record<string, unknown>,
+      TOOL_RESULT_MESSAGE_FIELDS,
+      "details",
+      "nestedCalls",
+    );
     // Pi records `argumentsBytes` when it dropped a call's arguments for size
     // (nested-tool-calls.ts), and the HTML export prints it. Dropping the
     // arguments here without a size would leave that export claiming 0 bytes,
@@ -257,15 +325,19 @@ export function redactToolResultOrDrop(message: unknown): unknown {
       ...(Array.isArray(nested?.calls)
         ? {
             nestedCalls: {
-              ...nested,
               complete: false,
               calls: nested.calls.map((call) => {
-                const { arguments: _dropped, ...without } = call;
                 const bytes = droppedBytes(call);
-                return scrub({
-                  ...without,
+                return {
+                  ...classified(
+                    call as Record<string, unknown>,
+                    NESTED_CALL_RECORD_FIELDS,
+                    "arguments",
+                    "error",
+                  ),
                   ...(bytes === undefined ? {} : { argumentsBytes: bytes }),
-                });
+                  ...failed(call),
+                };
               }),
             },
           }
@@ -273,7 +345,16 @@ export function redactToolResultOrDrop(message: unknown): unknown {
       ...(value.toolName === "codemode" && Array.isArray(details?.calls)
         ? {
             details: {
-              calls: details.calls.map((call) => scrub({ ...call, args: "" })),
+              calls: details.calls.map((call) => ({
+                ...classified(
+                  call as Record<string, unknown>,
+                  CODEMODE_CALL_FIELDS,
+                  "args",
+                  "error",
+                ),
+                args: "",
+                ...failed(call),
+              })),
             },
           }
         : {}),
@@ -322,12 +403,18 @@ export function redactProviderErrorOrDrop(message: unknown): unknown {
       deferred?: unknown;
     };
     if (value?.role !== "assistant") return undefined;
-    // `deferred.data` is arbitrary provider JSON this path cannot scrub field
-    // by field, so the spread must not carry it: drop it whole, keeping the
-    // handle's other fields only when they are not the untrusted JSON.
-    const { deferred: _untrusted, ...rest } = value;
+    // This path cannot scrub what it does not know, so nothing untrusted is
+    // spread: `deferred.data` is arbitrary provider JSON and is dropped whole,
+    // and a field the classification table does not know is dropped too — an
+    // unknown field is a carrier until classified, not metadata.
     return {
-      ...rest,
+      ...classified(
+        value as Record<string, unknown>,
+        ASSISTANT_MESSAGE_FIELDS,
+        "deferred",
+        "errorMessage",
+        "diagnostics",
+      ),
       ...(value.errorMessage === undefined
         ? {}
         : { errorMessage: REDACTION_FAILED_TEXT }),
