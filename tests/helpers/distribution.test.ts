@@ -228,6 +228,33 @@ describe("branded", () => {
     expect(JSON.parse(result.stdout)).toEqual(["50%PATH%", ...HOSTILE]);
   });
 
+  it("does not let a child that closes its stdin turn the run into an error", async () => {
+    // The macOS CI flake: the child never reads stdin and exits at once, so a
+    // write still queued on the parent's side flushes against a closed pipe
+    // and fails asynchronously. Without a handler on `child.stdin` that EPIPE
+    // escapes as an unhandled error and reddens a run in which every test
+    // passed. The payload is larger than a pipe buffer so the write is
+    // genuinely queued rather than completing inside `end()`, which makes the
+    // failure deterministic instead of timing-dependent.
+    const result = await branded(
+      process.execPath,
+      [
+        "-e",
+        "process.stdin.destroy(); process.stdout.write('done'); process.exit(0);",
+      ],
+      {
+        cwd: scratch(),
+        env: { ...process.env },
+        input: "x".repeat(256 * 1024),
+        timeoutMs: 30_000,
+      },
+    );
+    // The child's own exit status still decides the outcome: a closed pipe is
+    // not a failure, so this resolves rather than rejecting.
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("done");
+  });
+
   // The double caret level for a .cmd target only exists on Windows, but
   // this is where the real `cmd.exe` proves it, in the unit tier CI runs on
   // windows-latest. The fixture is the shim `piship build` writes.
