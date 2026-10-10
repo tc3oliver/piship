@@ -26,6 +26,20 @@ function kill(child: ChildProcess): void {
   else child.kill("SIGKILL");
 }
 
+/**
+ * The stdin error codes that mean the child closed its read end first — a
+ * race every command that never reads stdin can lose, not a failure of the
+ * run, which its own exit status still judges. Which code arrives is
+ * platform-dependent: POSIX reports a write to a closed pipe as `EPIPE`,
+ * Windows as `EOF` (libuv maps `ERROR_BROKEN_PIPE` to `UV_EOF`).
+ */
+const STDIN_CLOSED_CODES: ReadonlySet<string> = new Set([
+  "EPIPE",
+  "EOF",
+  "ECONNRESET",
+  "ERR_STREAM_DESTROYED",
+]);
+
 /** The characters `cmd.exe` gives a meaning of their own outside quotes. */
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
 
@@ -133,7 +147,6 @@ export function branded(
         approving.catch(() => {});
       }
     });
-    child.stdin.end(options.input ?? "");
     const timer =
       options.timeoutMs === undefined
         ? undefined
@@ -145,6 +158,24 @@ export function branded(
               ),
             );
           }, options.timeoutMs);
+    // A child that never reads stdin can close its read end while a write is
+    // still queued, and the flush then fails asynchronously — the EPIPE that
+    // turned a fully green macOS unit run red as one unhandled error. The
+    // handler must exist before the write, or the event can fire first. Only
+    // the expected pipe-closure codes are ignored; anything else kills the
+    // child and rejects, so a real stdin failure never resolves as success.
+    child.stdin.on("error", (error) => {
+      if (STDIN_CLOSED_CODES.has((error as NodeJS.ErrnoException).code ?? ""))
+        return;
+      clearTimeout(timer);
+      kill(child);
+      reject(
+        new Error(
+          `${basename(command)} ${args.join(" ")} stdin failed: ${error.message}\nstdout: ${stdout}\nstderr: ${stderr}`,
+        ),
+      );
+    });
+    child.stdin.end(options.input ?? "");
     child.on("close", (status) => {
       clearTimeout(timer);
       void approving
