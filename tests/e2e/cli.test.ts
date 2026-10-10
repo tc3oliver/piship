@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { PISHIP_VERSION } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
+import { windowsArgv } from "../helpers/distribution.js";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
 const temporary: string[] = [];
@@ -401,16 +402,12 @@ describe("CLI", () => {
     );
     const launch = () =>
       process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${installedCommand}" --smoke`],
-            {
-              cwd: temp,
-              env,
-              encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
+        ? spawnSync("cmd.exe", windowsArgv(installedCommand, ["--smoke"]), {
+            cwd: temp,
+            env,
+            encoding: "utf8",
+            windowsVerbatimArguments: true,
+          })
         : spawnSync(installedCommand, ["--smoke"], {
             cwd: temp,
             env,
@@ -422,16 +419,12 @@ describe("CLI", () => {
     console.info(first.stderr.trim());
     const brandedVersion =
       process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${installedCommand}" --version`],
-            {
-              cwd: temp,
-              env,
-              encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
+        ? spawnSync("cmd.exe", windowsArgv(installedCommand, ["--version"]), {
+            cwd: temp,
+            env,
+            encoding: "utf8",
+            windowsVerbatimArguments: true,
+          })
         : spawnSync(installedCommand, ["--version"], {
             cwd: temp,
             env,
@@ -443,16 +436,12 @@ describe("CLI", () => {
     expect(brandedVersion.stdout).toContain("Pi 1.1.0 by Earendil Works");
     const brandedHelp =
       process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${installedCommand}" --help`],
-            {
-              cwd: temp,
-              env,
-              encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
+        ? spawnSync("cmd.exe", windowsArgv(installedCommand, ["--help"]), {
+            cwd: temp,
+            env,
+            encoding: "utf8",
+            windowsVerbatimArguments: true,
+          })
         : spawnSync(installedCommand, ["--help"], {
             cwd: temp,
             env,
@@ -551,16 +540,12 @@ describe("CLI", () => {
     );
     const launchOther = () =>
       process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${otherLauncher}" --smoke`],
-            {
-              cwd: temp,
-              env,
-              encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
+        ? spawnSync("cmd.exe", windowsArgv(otherLauncher, ["--smoke"]), {
+            cwd: temp,
+            env,
+            encoding: "utf8",
+            windowsVerbatimArguments: true,
+          })
         : spawnSync(otherLauncher, ["--smoke"], {
             cwd: temp,
             env,
@@ -708,16 +693,12 @@ describe("CLI", () => {
       );
       const resumed =
         process.platform === "win32"
-          ? spawnSync(
-              "cmd.exe",
-              ["/d", "/s", "/c", `call "${movedLauncher}" --smoke`],
-              {
-                cwd: temp,
-                env: movedEnv,
-                encoding: "utf8",
-                windowsVerbatimArguments: true,
-              },
-            )
+          ? spawnSync("cmd.exe", windowsArgv(movedLauncher, ["--smoke"]), {
+              cwd: temp,
+              env: movedEnv,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            })
           : spawnSync(movedLauncher, ["--smoke"], {
               cwd: temp,
               env: movedEnv,

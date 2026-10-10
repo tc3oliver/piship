@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -139,6 +140,44 @@ describe("incremental relocatable build input", () => {
     expect(first.files).toBe(28);
     expect(first.removed).toBe(1);
     expect(prepare(workspace).copied).toBe(0);
+  });
+  it("keeps the payload package list in step with the workspace", () => {
+    const repository = fileURLToPath(new URL("../", import.meta.url));
+    const runtimeSource = join(
+      repository,
+      "packages",
+      "core",
+      "src",
+      "runtime-dependencies.ts",
+    );
+    const declared = (file: string, name: string): string[] => {
+      const list = new RegExp(
+        `(?:export )?const ${name} = \\[([\\s\\S]*?)\\]`,
+      ).exec(readFileSync(file, "utf8"));
+      expect(list, `${name} in ${file}`).not.toBeNull();
+      return [...(list?.[1] ?? "").matchAll(/"([^"]+)"/g)]
+        .map((entry) => entry[1])
+        .filter((entry): entry is string => entry !== undefined);
+    };
+    const payload = declared(prepareScript, "packages");
+    expect(declared(runtimeSource, "workspacePackages").sort()).toEqual(
+      [...payload].sort(),
+    );
+    const development = declared(runtimeSource, "developmentPackages");
+    const workspace = readdirSync(join(repository, "packages"), {
+      withFileTypes: true,
+    })
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          existsSync(join(repository, "packages", entry.name, "package.json")),
+      )
+      .map((entry) => entry.name)
+      .sort();
+    // Every workspace package either ships in the payload or is declared
+    // development-only, so a new payload package that is missing from the
+    // script's list (or a stale entry for a removed one) fails here.
+    expect(workspace).toEqual([...payload, ...development].sort());
   });
   it("runs as a script from a checkout reached through a symlink or junction", () => {
     const { workspace, input } = fixture();

@@ -374,12 +374,8 @@ describe("headless workload distribution (local fixtures)", () => {
       { session: "parent-session", workspace: realpathSync(temp) },
       parentEnv,
     );
-    // The Windows helper joins arguments with spaces and no quoting, so the
-    // task, the one argument with a space, is quoted here.
-    const arg = (value: string) =>
-      process.platform === "win32" && /\s/.test(value) ? `"${value}"` : value;
     const child = (rest: string[], marker = "1", nonce = true) =>
-      branded(command, ["--mode", "json", "-p", ...rest.map(arg)], {
+      branded(command, ["--mode", "json", "-p", ...rest], {
         cwd: temp,
         env: {
           ...env,

@@ -121,6 +121,65 @@ export function unknownOptionMessage(
 export const launchOutput = (child: boolean) => (message: string) =>
   child ? console.error(message) : console.log(message);
 
+// A `--tools` entry is an explicit tool name only when Pi's own parser reads it
+// as one. Pi treats an entry containing `*` as a pattern matching every tool
+// (`createToolNameMatcher`) and a leading `+`/`-` as a modifier
+// (`isToolModifier`/`getToolListError`); a modifier flips the list to
+// default-modifier semantics and, because PiShip passes `noTools: "builtin"`
+// (not `"all"`), drops `allowedToolNames` entirely, so the bound disappears and
+// Pi activates every extension tool activated-on-registration. A `*` allowlist
+// makes Pi activate every registered declarable tool, Codemode and tool search
+// included, which `boundedByAllowlist` only keeps PiShip from activating and
+// `activateExposure` never deactivates. Empty and whitespace-only entries are
+// malformed. Refusing these shapes here, before anything reaches Pi, keeps the
+// `--tools` list a strict allowlist of exact names so the child's active tools
+// cannot exceed what the distribution permits. This bounds tool exposure;
+// per-call distribution policy still gates every tool_call.
+//
+// `--exclude-tools` is the opposite side and is deliberately NOT held to that
+// rule. Pi feeds it only to `createToolNameMatcher` as a filter on the active
+// set (sdk.js), never to the allowlist that decides registration, so an
+// exclusion can only narrow the child's tools — it cannot drop the bound
+// `--tools` establishes. Pi documents `*` patterns here ("--exclude-tools
+// 'mcp__*'" drops every MCP tool), and a `+`/`-` entry is inert on this side
+// (the matcher reads it as a literal name no tool has). A child's exclusions are
+// therefore parsed exactly as Pi's own CLI parses them — each entry trimmed and
+// empties dropped — so a distribution that excludes MCP tools the way Pi
+// documents keeps working. The only exclusion refusal left is the exact-name
+// clash with a mandatory tool below. A `*` pattern that would also remove a
+// mandatory tool cannot be caught at parse time (the mandatory set is computed
+// later, in runtime.ts), but it is caught fail-closed: Pi's `_isAllowedTool`
+// applies exclusions to registration as well as to the active set, so the tool
+// is never registered, the integrity extension cannot re-activate it, and it
+// blocks the session rather than run a launch missing a tool the distribution
+// requires.
+const isToolName = (entry: string): boolean =>
+  entry !== "" &&
+  !/\s/.test(entry) &&
+  !entry.includes("*") &&
+  !entry.startsWith("+") &&
+  !entry.startsWith("-");
+
+function refuseToolPatterns(flag: string, entries: readonly string[]): void {
+  if (entries.some((entry) => !isToolName(entry)))
+    throw refuse(
+      `${flag} must be a comma-separated list of explicit tool names`,
+      `Remove any "*", "+name"/"-name", or empty entry from ${flag}`,
+    );
+}
+
+/**
+ * A child's `--exclude-tools` value parsed exactly as Pi's own CLI parses it
+ * (`args.js`): comma-split, each entry trimmed, empties dropped. Patterns and
+ * modifiers are kept, because on this side they can only narrow (see
+ * `isToolName`).
+ */
+const parseExcludeTools = (value: string): string[] =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
 /**
  * `--tools` bounds a child's tools, and Codemode and tool search reach tools
  * the list leaves out, so a list naming either is refused. They are not made
@@ -128,6 +187,7 @@ export const launchOutput = (child: boolean) => (message: string) =>
  * stop the whole child.
  */
 function refuseUnboundingTools(tools: readonly string[]): void {
+  refuseToolPatterns("--tools", tools);
   const named = tools.filter(
     (tool) => tool === CODEMODE_TOOL || tool === TOOL_SEARCH_TOOL,
   );
@@ -285,11 +345,12 @@ export function parseSubagentChild(
         throw refuse("--thinking is not a known level");
       thinking = value as ChildThinking;
     } else if (flag === "--tools") {
-      tools = value.split(",").filter(Boolean);
+      // No filter: an empty entry is malformed and refused, not dropped.
+      tools = value.split(",");
       refuseUnboundingTools(tools);
-    } else if (flag === "--exclude-tools")
-      excludeTools = value.split(",").filter(Boolean);
-    else if (flag === "--system-prompt") systemPrompt = promptFile(value);
+    } else if (flag === "--exclude-tools") {
+      excludeTools = parseExcludeTools(value);
+    } else if (flag === "--system-prompt") systemPrompt = promptFile(value);
     else if (flag === "--session-id") sessionId = value;
     else sessionDir = value;
   }

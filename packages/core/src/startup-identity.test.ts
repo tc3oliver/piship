@@ -161,9 +161,12 @@ describe.runIf(process.platform !== "linux")(
     });
 
     it("tolerates the gap between a process's creation and Node's time origin", () => {
-      // A cold first launch on Windows can spend seconds before Node starts.
+      // A cold first launch on Windows can spend seconds loading and scanning
+      // node.exe before Node takes its time origin, so a live owner's recorded
+      // start (its timeOrigin) lies AFTER the creation time the system reports
+      // for the same process. The record is therefore dated later than ~now.
       const root = home();
-      leaseFile(root, { pid: livePid(), started: Date.now() - 10_000 });
+      leaseFile(root, { pid: livePid(), started: Date.now() + 10_000 });
       expect(runtimeLeases("acme", true)[0]?.live).toBe(true);
       expect(START_TOLERANCE_MS).toBeGreaterThan(10_000);
     });

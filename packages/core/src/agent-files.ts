@@ -28,6 +28,7 @@ import type {
 import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock, LockedAgentFile } from "./lock-schema.js";
 import {
+  type ProcessRecord,
   recordedIdentity,
   recordedProcessGone,
   recordedStart,
@@ -138,6 +139,10 @@ interface SeedState {
 interface SessionOverride {
   readonly owner?: string;
   readonly pid?: number;
+  /** The owner's host, start identity and time, against a reused process ID. */
+  readonly host?: string | null;
+  readonly started?: number | null;
+  readonly identity?: string | null;
   readonly path: string;
   readonly key: string;
   readonly hadKey: boolean;
@@ -318,12 +323,14 @@ function applyAgentFilesLocked(
   let state = readSeedState(agentDir);
   if (state.override) {
     // A launch that never reached its end left the override on.
-    const live = state.override.pid && liveProcess(state.override.pid);
+    const live = recordLive(state.override);
     if (live && !options.share)
       throw new PiShipError(
         "CONFIG_INVALID",
         "Another live session owns the permission provider auto-approval",
-        { userAction: SHARED_PROVIDER_ACTION },
+        {
+          userAction: `${SHARED_PROVIDER_ACTION}; if no session is running, remove the "override" entry from ${join(agentDir, SEED_STATE)}`,
+        },
       );
     if (!live) {
       if (
@@ -400,7 +407,7 @@ function applyAgentFilesLocked(
       );
     override = {
       ...(options.owner ? { owner: options.owner } : {}),
-      pid: process.pid,
+      ...ownRecord(),
       path: target.path,
       key: target.key,
       hadKey: target.key in current,
@@ -441,28 +448,30 @@ const SHARED_PROVIDER_ACTION =
 
 /**
  * The live `--yolo` sessions other than `except` that still want the
- * provider's auto-approval: not one that already ran `/auto off`.
+ * provider's auto-approval: not one that already ran `/auto off`. Each carries
+ * its record fields, so a hand-over can name the heir exactly (an heir judged
+ * by a bare pid lookup could be an unrelated process holding a reused ID).
  */
 function liveYoloSessions(
   agentDir: string,
   except: string,
-): { owner: string; pid: number }[] {
+): ({ owner: string } & ProcessRecord)[] {
   const dir = filePath(agentDir, ".piship-provider-sessions");
   if (!existsSync(dir)) return [];
-  const sessions: { owner: string; pid: number }[] = [];
+  const sessions: ({ owner: string } & ProcessRecord)[] = [];
   for (const entry of readdirSync(dir)) {
     if (entry === except) continue;
     const lease = readJsonObject(
       filePath(agentDir, `.piship-provider-sessions/${entry}`),
     );
+    const stored = lease && storedRecord(lease);
     if (
-      lease &&
-      typeof lease.pid === "number" &&
-      lease.yolo === true &&
+      stored &&
+      lease?.yolo === true &&
       lease.ended !== true &&
-      liveProcess(lease.pid)
+      recordLive(stored)
     )
-      sessions.push({ owner: entry, pid: lease.pid });
+      sessions.push({ owner: entry, ...stored });
   }
   return sessions;
 }
@@ -477,6 +486,56 @@ function liveProcess(pid: number): boolean {
   }
 }
 
+/**
+ * A stored override or lease record: the `ProcessRecord` fields, all optional
+ * (an older release wrote only `pid`, or nothing) and read back unvalidated.
+ */
+interface RecordSource {
+  readonly pid?: unknown;
+  readonly identity?: unknown;
+  readonly host?: unknown;
+  readonly started?: unknown;
+}
+
+/** The `ProcessRecord` fields a stored record carries, or undefined if unusable. */
+function storedRecord(record: RecordSource): ProcessRecord | undefined {
+  const pid = record.pid;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0)
+    return undefined;
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  return {
+    pid,
+    identity: text(record.identity),
+    host: text(record.host),
+    started: typeof record.started === "number" ? record.started : null,
+  };
+}
+
+/**
+ * Whether the process an override or lease names is still the one that wrote
+ * it. A record with no usable pid (a fieldless override an older release left)
+ * is not live, so it is reclaimable. Otherwise this defers to
+ * `recordedProcessGone`: proven gone (a dead local pid, or a reused one whose
+ * start identity or time is not the writer's) is not live; the same running
+ * process is; and one that cannot be told — a record from another host, or a
+ * legacy pid-only record whose id a process still has — counts as live, so a
+ * foreign or old record is never cleared merely for lacking the new fields.
+ */
+function recordLive(record: RecordSource): boolean {
+  const stored = storedRecord(record);
+  return stored !== undefined && recordedProcessGone(stored) !== true;
+}
+
+/** This process's own `ProcessRecord` fields, for an override or lease. */
+function ownRecord(): ProcessRecord {
+  return {
+    pid: process.pid,
+    host: processHostToken(),
+    identity: recordedIdentity(),
+    started: recordedStart(),
+  };
+}
+
 // Serialize the registration and configuration change, so two launches cannot
 // both decide the shared provider file is free. Sessions keep separate leases.
 const BUSY_MESSAGE =
@@ -487,10 +546,15 @@ const BUSY_MESSAGE =
  * reports as `CONFIG_INVALID` with the same message as it always did.
  */
 class AgentFilesBusyError extends PiShipError {
-  constructor() {
-    super("CONFIG_INVALID", BUSY_MESSAGE);
+  constructor(userAction?: string) {
+    super("CONFIG_INVALID", BUSY_MESSAGE, {
+      ...(userAction ? { userAction } : {}),
+    });
   }
 }
+/** What a launch that cannot get the lock is told to clear. */
+const lockAction = (guard: string) =>
+  `Wait for the other launch to finish; if none is running, delete the lock directory ${guard}`;
 /** How long a session launch waits for another launch's transaction. */
 export const AGENT_FILES_LOCK_WAIT_MS = 3000;
 /**
@@ -515,12 +579,14 @@ function agentFilesTransaction<T>(
   operation: () => T,
   waitMs: number,
 ): T {
-  const deadline = Date.now() + waitMs;
+  // Monotonic: a wall-clock step (NTP, a user change) must not lengthen or
+  // cut short how long a launch waits for another's transaction.
+  const deadline = performance.now() + waitMs;
   for (let attempt = 0; ; attempt += 1) {
     try {
       return agentFilesTransactionOnce(agentDir, operation);
     } catch (error) {
-      const left = deadline - Date.now();
+      const left = deadline - performance.now();
       if (!(error instanceof AgentFilesBusyError) || left <= 0) throw error;
       const ceiling = Math.min(20 * 2 ** attempt, 400);
       pause(Math.min(left, ceiling / 2 + Math.random() * (ceiling / 2)));
@@ -531,6 +597,10 @@ function agentFilesTransaction<T>(
 /** Whether `path` was last changed more than `ms` ago; false if it is gone. */
 function olderThan(path: string, ms: number): boolean {
   try {
+    // Wall clock, not monotonic: this compares against a filesystem mtime,
+    // which is itself wall-clock. shortcut: a backwards clock step can make a
+    // stale directory look fresh until the clock catches up; upgrade only if
+    // that proves to matter in practice.
     return Date.now() - statSync(path).mtimeMs > ms;
   } catch {
     return false;
@@ -643,18 +713,33 @@ function readOwner(path: string): LockOwner | "missing" | "unknown" {
 }
 
 /**
- * Whether the process a record names still runs and is the one that wrote
- * it: a process ID that exists may belong to an unrelated process that was
- * given it after the holder died, which the start identity (or time) tells.
- * An older record without them is as live as its process ID.
+ * Whether the process a lock's owner record names still runs and is the one
+ * that wrote it. This defers to `recordedProcessGone`, which answers:
+ * - true  (proven gone): a local process ID nobody holds, or one a different
+ *   process now has (its start identity or time is not the holder's) — the
+ *   lock is stale and may be taken down;
+ * - false (same running process): the holder is alive here — keep the lock;
+ * - undefined (cannot tell): a record from another host, whose process ID
+ *   means nothing here, or one with no start identity or time to compare (an
+ *   older release's record) whose ID a process still has — keep the lock.
+ * A foreign host's ID is therefore never judged dead by a local lookup: on an
+ * agent directory shared across hosts, host B taking down host A's live lock
+ * would let both mutate the same state at once. Being conservative on
+ * `undefined` means a genuinely stale *local* lock is still recovered (its ID
+ * is either free or reused, both proven gone), while an unverifiable one is
+ * left for its owner.
  */
 function holderRuns(owner: LockOwner): boolean {
-  if (!liveProcess(owner.pid)) return false;
   // A waiter asks again at every retry. Where the answer costs a process
   // (Windows starts PowerShell for a start time), asking again and again for
   // the same holder would starve the holder it waits for; a holder found
-  // running is taken to run for HOLDER_CHECK_REUSE_MS.
-  const now = Date.now();
+  // running is taken to run for HOLDER_CHECK_REUSE_MS. The key carries the
+  // per-claim random token, so two owners — even one that reused the ID — can
+  // never alias; a record without a token (an older release's) is never cached
+  // and is re-checked every time.
+  // Monotonic: a wall-clock step backwards would make `now - seen` negative
+  // and serve a stale "running" answer for the duration of the step.
+  const now = performance.now();
   const key = owner.token === null ? null : `${owner.pid}:${owner.token}`;
   const seen = key === null ? undefined : holdersSeenRunning.get(key);
   if (seen !== undefined && now - seen < HOLDER_CHECK_REUSE_MS) return true;
@@ -808,6 +893,12 @@ function release(guard: string, held: LockOwner): void {
 
 /** Staging and discarded directories a process that died left beside the lock. */
 function sweepStaging(agentDir: string): void {
+  // Called only while the recovery directory is held: `rename` keeps a
+  // directory's mtime, so a `.stale` that looks old can be one a release or a
+  // stalled recoverer is still about to rename back. Sweeping after an
+  // ordinary claim, which holds no such mutex, could delete a directory
+  // another process still holds. Leftovers are therefore swept by the next
+  // takeover, which is the only point that is provably quiet.
   for (const entry of readdirSync(agentDir)) {
     if (
       !/^\.piship-agent-files-(?:lock|recovery)\..*\.(?:new|stale)$/.test(entry)
@@ -823,7 +914,7 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   const guard = filePath(agentDir, ".piship-agent-files-lock");
   const recovery = filePath(agentDir, ".piship-agent-files-recovery");
-  const busy = () => new AgentFilesBusyError();
+  const busy = () => new AgentFilesBusyError(lockAction(guard));
   if (existsSync(recovery)) {
     // A recovery that never finished (its process died) must not block for good.
     if (!olderThan(recovery, AGENT_FILES_OWNERLESS_STALE_MS)) throw busy();
@@ -927,13 +1018,20 @@ export function applyAgentFiles(
         for (const entry of readdirSync(leases)) {
           const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
           const lease = readJsonObject(path);
-          if (!lease || typeof lease.pid !== "number")
+          const stored = lease && storedRecord(lease);
+          if (!lease || !stored)
             throw new PiShipError(
               "CONFIG_INVALID",
               "Invalid permission provider session ownership record",
               { userAction: SHARED_PROVIDER_ACTION },
             );
-          if (!liveProcess(lease.pid)) {
+          // Free check first: a record of this host (or one written before
+          // hosts were recorded) whose ID no process holds is dead. Anything
+          // else is kept — a foreign host's ID says nothing here — so a normal
+          // launch never pays for a process lookup.
+          const local =
+            stored.host === null || stored.host === processHostToken();
+          if (local && !liveProcess(stored.pid)) {
             rmSync(path);
             continue;
           }
@@ -941,8 +1039,17 @@ export function applyAgentFiles(
           // one cannot both have what they asked for. Two `--yolo` sessions
           // want the same thing and share the key.
           const wants = options.sessionAutoApprove === true;
+          const conflicts = wants !== (lease.yolo === true);
+          if (conflicts && !recordLive(stored)) {
+            // About to refuse this launch, so the reliable answer is worth its
+            // lookup: an ID that merely exists may belong to an unrelated
+            // process given it after the session died, which would otherwise
+            // refuse every later launch.
+            rmSync(path);
+            continue;
+          }
           if (wants && lease.yolo === true) share = true;
-          if (wants === (lease.yolo === true)) continue;
+          if (!conflicts) continue;
           throw new PiShipError(
             "CONFIG_INVALID",
             options.sessionAutoApprove
@@ -961,7 +1068,7 @@ export function applyAgentFiles(
         writeFileSync(
           join(leases, owner),
           JSON.stringify({
-            pid: process.pid,
+            ...ownRecord(),
             yolo: options.sessionAutoApprove === true,
           }),
           { mode: 0o600, flag: "wx" },
@@ -991,9 +1098,13 @@ export function applyAgentFiles(
       return false;
     const heir = liveYoloSessions(agentDir, owner)[0];
     if (heir) {
+      const { owner: heirOwner, ...heirRecord } = heir;
       writeSeedState(agentDir, {
         ...state,
-        override: { ...state.override, owner: heir.owner, pid: heir.pid },
+        // Carry the heir's whole record (host, identity, started), so a later
+        // reclaim judges the heir by the same rule and a reused ID never wedges
+        // the provider for it.
+        override: { ...state.override, owner: heirOwner, ...heirRecord },
       });
       return true;
     }
@@ -1013,7 +1124,7 @@ export function applyAgentFiles(
           if (registered)
             writeFileSync(
               leasePath(),
-              JSON.stringify({ pid: process.pid, yolo: true, ended: true }),
+              JSON.stringify({ ...ownRecord(), yolo: true, ended: true }),
               { mode: 0o600 },
             );
           // A session that shares the key, or hands it on, cannot switch the

@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
+import { branded, launcher, type Result } from "../helpers/distribution.js";
 
 // Deterministic CI evidence only: the local identity, broker, and gateway are
 // fixtures. They prove PiShip's contracts, not a live identity provider or
@@ -30,64 +31,6 @@ afterEach(async () => {
 }, 180000);
 
 type Services = Awaited<ReturnType<typeof startLocalServices>>;
-interface Result {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function launcher(artifact: string, command: string) {
-  return join(
-    artifact,
-    "bin",
-    process.platform === "win32" ? `${command}.cmd` : command,
-  );
-}
-
-/** Run a branded command; acts as the browser for any printed sign-in URL. */
-function branded(
-  command: string,
-  args: string[],
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    services?: Services;
-    input?: string;
-  },
-): Promise<Result> {
-  return new Promise((resolve) => {
-    const child =
-      process.platform === "win32"
-        ? spawn(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${command}" ${args.join(" ")}`],
-            {
-              cwd: options.cwd,
-              env: options.env,
-              windowsVerbatimArguments: true,
-            },
-          )
-        : spawn(command, args, { cwd: options.cwd, env: options.env });
-    let stdout = "";
-    let stderr = "";
-    let approved = false;
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-      const match = /(http:\/\/127\.0\.0\.1:\d+\/idp\/authorize\S+)/.exec(
-        stderr,
-      );
-      if (match?.[1] && options.services && !approved) {
-        approved = true;
-        void options.services.approve(match[1]);
-      }
-    });
-    child.stdin.end(options.input ?? "");
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
-  });
-}
 
 function scan(directory: string, secrets: readonly string[]): string[] {
   const hits: string[] = [];
@@ -192,7 +135,7 @@ describe("managed distribution (local fixtures)", () => {
       branded(command, args, {
         cwd: temp,
         env,
-        services,
+        approve: services.approve,
         ...(input ? { input } : {}),
       });
 

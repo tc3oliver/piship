@@ -4,9 +4,14 @@ import { providerErrorRedaction, REDACTION_FAILED_TEXT } from "./redaction.js";
 
 // Redaction itself fails: Pi would report the throwing handler and persist
 // the original message, so the handler must replace the provider text whole.
+// Both entry points throw — a string goes through `redact`, opaque JSON (a
+// nested call record, a non-codemode tool's `details`) through `redactValue`.
 vi.mock("@piship/contracts", async (original) => ({
   ...(await original<typeof import("@piship/contracts")>()),
   redact: () => {
+    throw new Error("redaction failed");
+  },
+  redactValue: () => {
     throw new Error("redaction failed");
   },
 }));
@@ -90,7 +95,9 @@ describe("the provider error redaction when redaction fails", () => {
         {
           id: "call_1/1",
           name: "bash",
-          argumentsBytes: 0,
+          // Pi's dropped-arguments form: the real byte length of the
+          // arguments JSON, not a fabricated 0.
+          argumentsBytes: `{"command":"echo ${secret}"}`.length,
           status: "error",
           error: REDACTION_FAILED_TEXT,
         },
@@ -108,6 +115,54 @@ describe("the provider error redaction when redaction fails", () => {
       ],
     });
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("drops another tool's details whole instead of letting the spread carry a secret", () => {
+    // A non-codemode tool whose `details` are arbitrary JSON carrying a secret.
+    // The success path redacts them; on failure the spread must not carry the
+    // original `details` back, so they are dropped entirely.
+    const secret = "piship-fake-unredacted-credential-0123";
+    const result = messageEnd()({
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolName: "company_batch",
+        content: [],
+        isError: false,
+        details: {
+          request: { headers: { Authorization: `Bearer ${secret}` } },
+          fullOutputPath: "/tmp/out.txt",
+        },
+      },
+    }) as { message: Record<string, unknown> };
+    expect(result.message.details).toBeUndefined();
+    expect("details" in result.message).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    // Non-secret metadata that is not in `details` survives.
+    expect(result.message.toolName).toBe("company_batch");
+  });
+
+  it("drops a deferred handle's data whole instead of letting the spread carry a secret", () => {
+    // `DeferredHandle.data` is arbitrary provider JSON. The success path
+    // redacts it; on failure the spread must not carry the original back.
+    const secret = "piship-fake-unredacted-credential-0123";
+    const result = messageEnd()({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "deferred",
+        content: [],
+        deferred: {
+          provider: "acmecode",
+          id: "batch_42/row_7",
+          data: { headers: { authorization: secret } },
+        },
+      },
+    }) as { message: Record<string, unknown> };
+    expect("deferred" in result.message).toBe(false);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    // Fields outside the untrusted handle survive.
+    expect(result.message.stopReason).toBe("deferred");
   });
 
   it("leaves messages of other roles alone", () => {

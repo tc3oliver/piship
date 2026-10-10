@@ -33,6 +33,12 @@ import {
 } from "./agent-files.js";
 import { agentFilesLockHooks } from "./agent-files-hooks.js";
 import type { DistributionLock } from "./lock-schema.js";
+import { recordedIdentity, recordedStart } from "./process-identity.js";
+import {
+  deadPid,
+  livePid,
+  stopLiveProcesses,
+} from "../../../tests/helpers/processes.js";
 
 const PATH = "extensions/provider/config.json";
 let temp: string;
@@ -516,6 +522,254 @@ describe("a session auto-approval", () => {
   });
 });
 
+// The override and lease records name their process by the full record (pid,
+// host, identity, started), so a killed session's ID being reused does not
+// wedge the provider for every later launch, and a foreign host's lease is
+// never deleted for lacking a local process.
+describe("provider session ownership", () => {
+  const key = () => JSON.parse(read()).yoloMode;
+  const sidecar = () => join(agentDir, ".piship-agent-files.json");
+  const leases = () => join(agentDir, ".piship-provider-sessions");
+  const leaseNames = () => (existsSync(leases()) ? readdirSync(leases()) : []);
+  const writeOverride = (override: Record<string, unknown>) =>
+    writeFileSync(
+      sidecar(),
+      JSON.stringify({
+        schema: "piship-agent-files/v1",
+        files: {},
+        override,
+      }),
+    );
+  const writeLease = (name: string, lease: Record<string, unknown>) => {
+    mkdirSync(leases(), { recursive: true, mode: 0o700 });
+    writeFileSync(join(leases(), name), JSON.stringify(lease));
+  };
+  afterEach(stopLiveProcesses);
+
+  it("records the launch's process in the override and in the lease", () => {
+    const session = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    const override = JSON.parse(readFileSync(sidecar(), "utf8")).override;
+    expect(override).toMatchObject({
+      pid: process.pid,
+      host: processHostToken(),
+      identity: recordedIdentity(),
+      started: recordedStart(),
+    });
+    expect(
+      JSON.parse(readFileSync(join(leases(), override.owner), "utf8")),
+    ).toMatchObject({ pid: process.pid, yolo: true });
+    session.restore();
+  });
+
+  it("reclaims an override whose process ID another process now has", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    // A killed session's ID, reused: the start time the system reports for the
+    // process holding it lies clearly after the record, so it is a different
+    // process. Without this, every later launch would fail with "another live
+    // session owns the permission provider auto-approval".
+    const state = JSON.parse(readFileSync(sidecar(), "utf8"));
+    const pid = livePid();
+    writeOverride({
+      ...state.override,
+      owner: undefined,
+      pid,
+      started: Date.now() - 60_000,
+    });
+    const next = applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    expect(key()).toBe(false);
+    next.restore();
+  });
+
+  it("refuses while the override's process is the same live one", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir),
+    ).toThrow(/Another live session owns/);
+  });
+
+  it("keeps a foreign host's override instead of clearing it", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    const state = JSON.parse(readFileSync(sidecar(), "utf8"));
+    writeOverride({
+      ...state.override,
+      owner: undefined,
+      pid: deadPid(),
+      host: "000000000000",
+    });
+    // Cannot be told: the record stays and blocks, rather than being taken
+    // back from a session another host may still be running.
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir),
+    ).toThrow(/Another live session owns/);
+    expect(key()).toBe(true);
+  });
+
+  it("names the sidecar a stuck override must be cleared from", () => {
+    // An override naming this process is live, so any launch refuses; what a
+    // person is told to clear is the sidecar that holds it.
+    writeOverride({
+      pid: process.pid,
+      host: processHostToken(),
+      started: recordedStart(),
+      identity: recordedIdentity(),
+      path: PATH,
+      key: "yoloMode",
+      hadKey: true,
+      original: false,
+    });
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir),
+    ).toThrow(
+      expect.objectContaining({
+        userAction: expect.stringContaining(".piship-agent-files.json"),
+      }),
+    );
+  });
+
+  it("reclaims a legacy pid-only override whose process is dead", () => {
+    // A v0.13.0 record: no host, identity or started. A dead ID is proven
+    // gone without them; it is not judged dead merely for lacking them.
+    applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    writeOverride({
+      pid: deadPid(),
+      path: PATH,
+      key: "yoloMode",
+      hadKey: true,
+      original: false,
+    });
+    const config = JSON.parse(read());
+    writeFileSync(target(), JSON.stringify({ ...config, yoloMode: true }));
+    const next = applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    expect(key()).toBe(false);
+    next.restore();
+  });
+
+  it("keeps a legacy pid-only lease whose ID a process still has", () => {
+    writeLease("legacy", { pid: livePid(), yolo: false });
+    // Unknown, not dead: the lease stays and still conflicts with --yolo.
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+        sessionAutoApprove: true,
+      }),
+    ).toThrow(/permission provider/);
+    expect(leaseNames()).toContain("legacy");
+  });
+
+  it("deletes a legacy pid-only lease whose process is gone", () => {
+    writeLease("legacy", { pid: deadPid(), yolo: false });
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    }).restore();
+    expect(leaseNames()).not.toContain("legacy");
+  });
+
+  it("never deletes a foreign host's lease, and refuses an ordinary session under it", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    writeLease("foreign", {
+      pid: deadPid(),
+      yolo: true,
+      host: "000000000000",
+      started: Date.now(),
+      identity: null,
+    });
+    // The lease may be a session another host is running: it stays, and an
+    // ordinary launch cannot have the provider its way while a --yolo one may.
+    expect(() =>
+      applyAgentFiles(lock({ autoApprove: true }), agentDir, { session: true }),
+    ).toThrow(/permission provider/);
+    expect(leaseNames()).toContain("foreign");
+    expect(key()).toBe(false);
+  });
+
+  it("shares the key with a foreign host's --yolo lease, as with a local one", () => {
+    writeLease("foreign", {
+      pid: deadPid(),
+      yolo: true,
+      host: "000000000000",
+      started: Date.now(),
+      identity: null,
+    });
+    // Two --yolo sessions want the same thing; one that cannot be judged dead
+    // is one that may be running on the other host.
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    expect(key()).toBe(true);
+    expect(leaseNames()).toContain("foreign");
+  });
+
+  it("deletes a lease whose process ID another live process now has when it would block", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    writeLease("recycled", {
+      pid: livePid(),
+      yolo: true,
+      host: processHostToken(),
+      started: Date.now() - 60_000,
+      identity: null,
+    });
+    // A killed --yolo session whose ID was reused must not refuse every later
+    // ordinary launch: the reliable check runs where the refusal is about to
+    // happen, proves the lease is another process's, and clears it.
+    const session = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      session: true,
+    });
+    expect(leaseNames()).not.toContain("recycled");
+    session.restore();
+  });
+
+  it("keeps a live same-mode lease and does not refuse under it", () => {
+    writeLease("other", {
+      pid: livePid(),
+      yolo: false,
+      host: processHostToken(),
+      started: Date.now(),
+      identity: null,
+    });
+    // Ordinary sessions coexist: another ordinary lease neither conflicts nor
+    // is cleared.
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      session: true,
+    }).restore();
+    expect(leaseNames()).toContain("other");
+  });
+
+  it("hands the key to a heir named by its whole record", () => {
+    const first = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    const second = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    first.restore();
+    expect(key()).toBe(true);
+    const override = JSON.parse(readFileSync(sidecar(), "utf8")).override;
+    // The heir's lease is this process's own record, so the fields match it.
+    expect(override).toMatchObject({
+      pid: process.pid,
+      host: processHostToken(),
+      started: recordedStart(),
+    });
+    second.restore();
+    expect(key()).toBe(false);
+  });
+});
+
 // Parallel session launches (a subagent's children) share one transaction lock.
 describe("parallel session launches", () => {
   // A file: URL, which `import()` takes on every platform (a Windows path
@@ -829,6 +1083,55 @@ describe("parallel session launches", () => {
     it("still treats a holder it cannot tell from its record as alive", () => {
       holdAs({ pid: process.pid, token: "holder" });
       expect(() => session()).toThrow("being changed by another launch");
+    });
+
+    it("never takes a foreign host's lock down because no local process has its ID", () => {
+      // An agent directory shared across hosts (an NFS home): host A's lock is
+      // mid-transaction, and no process on host B has A's ID. A local lookup
+      // must not judge A's live lock dead.
+      holdAs({
+        pid: 2 ** 22,
+        token: "foreign-holder",
+        identity: null,
+        started: Date.now(),
+        host: "000000000000",
+      });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("foreign-holder");
+    });
+
+    it("never takes a foreign host's lock down when its ID collides with a live local process", () => {
+      const pid = livePid();
+      holdAs({
+        pid,
+        token: "foreign-holder",
+        identity: null,
+        started: Date.now() - 24 * 60 * 60 * 1000,
+        host: "000000000000",
+      });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("foreign-holder");
+    });
+
+    it("never takes a foreign host's lock down when its ID collides with a dead local one", () => {
+      holdAs({
+        pid: deadPid(),
+        token: "foreign-holder",
+        identity: null,
+        started: Date.now(),
+        host: "000000000000",
+      });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("foreign-holder");
+    });
+
+    it("tells a launch that cannot get the lock what to delete", () => {
+      holdAs({ pid: process.pid, token: "holder" });
+      expect(() => session()).toThrow(
+        expect.objectContaining({
+          userAction: expect.stringContaining(".piship-agent-files-lock"),
+        }),
+      );
     });
 
     it("tries a claim again once when its staging directory was swept, then reports busy", () => {
