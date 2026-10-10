@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -29,6 +29,11 @@ const HOSTILE: readonly string[] = [
   "tab\tinside",
   'a\\"b',
 ];
+
+// A second-command detector: if the cmd.exe escaping ever loses its grip on
+// this argument, it runs as `echo PWNED > pwned.txt` in the spawn directory
+// and leaves the file behind, which the real-spawn test asserts against.
+const CANARY = "canary & echo PWNED > pwned.txt";
 
 /**
  * cmd.exe phase 1: `%VAR%` expansion, which happens before any caret is
@@ -129,8 +134,9 @@ describe("windowsArgv", () => {
     const node = "C:\\nodejs\\node.exe";
     const launcher = "C:\\apps\\acmecode\\bin\\acmecode";
     // `50%PATH%` with a defined PATH proves the caret inside the escaped
-    // name survives both stages and cmd never expands the variable.
-    const args = [...HOSTILE, "50%PATH%"];
+    // name survives both stages and cmd never expands the variable. The
+    // canary proves no separator in it goes live at either stage.
+    const args = [...HOSTILE, "50%PATH%", CANARY];
     const phase1 = modelCmd(windowsArgv(command, args), {
       PATH: "C:\\expanded\\path",
     });
@@ -239,7 +245,8 @@ describe("branded", () => {
         shim,
         `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`,
       );
-      const result = await branded(shim, ["50%PATH%", ...HOSTILE], {
+      const args = ["50%PATH%", ...HOSTILE, CANARY];
+      const result = await branded(shim, args, {
         cwd: dir,
         env: { ...process.env },
         timeoutMs: 30_000,
@@ -248,7 +255,11 @@ describe("branded", () => {
       // `%PATH%` is defined on every Windows runner: this is the real
       // proof that the caret inside the escaped name keeps cmd's
       // percent-expansion from touching it.
-      expect(JSON.parse(result.stdout)).toEqual(["50%PATH%", ...HOSTILE]);
+      expect(JSON.parse(result.stdout)).toEqual(args);
+      // The canary argument must reach the child as data: had any `&` or
+      // `>` gone live, cmd would have run the second command and left this
+      // file in the working directory.
+      expect(existsSync(join(dir, "pwned.txt"))).toBe(false);
     },
   );
 });

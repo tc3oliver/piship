@@ -772,6 +772,93 @@ describe("provider session ownership", () => {
     second.restore();
     expect(key()).toBe(false);
   });
+
+  // A `--yolo` session that died without a clean exit leaves a lease naming a
+  // process ID another live process may since have taken. The same-mode scan
+  // keeps such a lease on the free `liveProcess` check alone and sets `share`,
+  // so these pin that a recycled ID is never mistaken for a session to share
+  // the provider with: the new launch must end up owning the key itself.
+  it("takes its own override, not a shared one, over a recycled same-mode lease", () => {
+    writeLease("recycled", {
+      pid: livePid(),
+      yolo: true,
+      host: processHostToken(),
+      started: Date.now() - 60_000,
+      identity: recordedIdentity(),
+    });
+    // No override on disk: the dead session's key was never left switched on.
+    const session = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    expect(key()).toBe(true);
+    // The override is this launch's own process, not a share of the gone one.
+    expect(JSON.parse(readFileSync(sidecar(), "utf8")).override).toMatchObject({
+      pid: process.pid,
+      host: processHostToken(),
+    });
+    session.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("reclaims a recycled override and lease left by a dead --yolo session", () => {
+    applyAgentFiles(lock({ autoApprove: true }), agentDir);
+    const recycled = {
+      pid: livePid(),
+      host: processHostToken(),
+      started: Date.now() - 60_000,
+      identity: recordedIdentity(),
+    };
+    // Both records name the reused ID: the lease (same-mode, so the scan keeps
+    // it and sets `share`) and the override the dead session left switched on.
+    writeLease("recycled", { ...recycled, yolo: true });
+    writeOverride({
+      ...recycled,
+      path: PATH,
+      key: "yoloMode",
+      hadKey: true,
+      original: false,
+    });
+    writeFileSync(
+      target(),
+      JSON.stringify({ ...JSON.parse(read()), yoloMode: true }),
+    );
+    const session = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    // The dead override was taken back and this launch owns a fresh one, so the
+    // key is on for the right process and off again when it ends.
+    expect(key()).toBe(true);
+    expect(JSON.parse(readFileSync(sidecar(), "utf8")).override).toMatchObject({
+      pid: process.pid,
+    });
+    session.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("enables its own auto-approval over a recycled ended --yolo lease", () => {
+    // `/auto off` then an abnormal exit: the lease stays (`ended`) naming a
+    // reused ID. A new --yolo launch must still switch the key on for itself.
+    writeLease("ended", {
+      pid: livePid(),
+      yolo: true,
+      ended: true,
+      host: processHostToken(),
+      started: Date.now() - 60_000,
+      identity: recordedIdentity(),
+    });
+    const session = applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      sessionAutoApprove: true,
+      session: true,
+    });
+    expect(key()).toBe(true);
+    expect(JSON.parse(readFileSync(sidecar(), "utf8")).override).toMatchObject({
+      pid: process.pid,
+    });
+    session.restore();
+    expect(key()).toBe(false);
+  });
 });
 
 // Parallel session launches (a subagent's children) share one transaction lock.

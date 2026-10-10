@@ -1037,7 +1037,11 @@ export function applyAgentFiles(
           }
           // The provider reads one file, so a `--yolo` session and an ordinary
           // one cannot both have what they asked for. Two `--yolo` sessions
-          // want the same thing and share the key.
+          // want the same thing and share the key. A same-mode lease is never
+          // identity-checked here, and does not need to be: `share` is only
+          // consumed under a live override, whose own record is judged
+          // separately (`recordLive(state.override)`), so a stale lease whose
+          // ID was recycled still ends in this launch taking its own override.
           const wants = options.sessionAutoApprove === true;
           const conflicts = wants !== (lease.yolo === true);
           if (conflicts && !recordLive(stored)) {
