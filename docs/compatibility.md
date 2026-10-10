@@ -123,7 +123,7 @@ The pin moved from 1.0.3 to 1.1.0, reviewed on 2026-10-09; the review spans 1.0.
 - **Offline mode and state.** The diff shows no change to `PI_OFFLINE`, `PI_CODING_AGENT_DIR`, the model catalog refresh, extension loading, the `fd` and `rg` download, update checks, auth storage, or process spawning, so the seams PiShip pins for them are as for 1.0.3.
 - **Terminal status reports (new environment variable).** The only new environment variable is `PI_PROGRAM_STATUS`. Pi 1.1.0's interactive mode sends status reports to the terminal (OSC 7501) with the session name and the first line of an error message, never prompts or model output, and a support query at startup. PiShip leaves Pi's default (`PI_PROGRAM_STATUS` unset, so on) and does not set the variable. For a personal distribution a person or an enterprise can set `PI_PROGRAM_STATUS=0` in the shell.
 - **Network.** The only new URLs are documentation links and an OpenAI Decisions classifier endpoint, which Pi reaches only through codemode's `models.classify()` with `OPENAI_API_KEY`.
-- **Tool filters.** `excludeTools` and `tools` accept `*` patterns; a name without `*` still matches exactly, and PiShip passes no `tools`.
+- **Tool filters.** `excludeTools` and `tools` accept `*` patterns; a name without `*` still matches exactly, and PiShip passes no `tools` of its own — the one `tools` list it passes is a subagent child's bounded `--tools` allowlist ([security](security.md#subagent-child-launch)).
 - **Events.** `agent_settled` gains an `aborted` argument. PiShip's listener ignores its arguments.
 
 ## Upgrade to Pi 1.0.3

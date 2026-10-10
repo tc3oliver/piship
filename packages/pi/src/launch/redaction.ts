@@ -33,7 +33,12 @@ export const ASSISTANT_MESSAGE_FIELDS: Record<
   diagnostics: "redacted",
   usage: "metadata",
   stopReason: "metadata",
-  deferred: "metadata",
+  // A deferred handle's `data` is arbitrary provider JSON (`DeferredHandle`
+  // in pi-ai), so it is a carrier like the diagnostics, not inert metadata.
+  // Classified "redacted" so a Pi that starts using it cannot add an
+  // unscrubbed carrier unnoticed; `redactValue` keeps the handle's structural
+  // fields and a normal `id`, and scrubs only secrets and token shapes.
+  deferred: "redacted",
   errorMessage: "redacted",
   rawStopReason: "metadata",
   endTurn: "metadata",
@@ -53,7 +58,12 @@ export const ASSISTANT_MESSAGE_FIELDS: Record<
  */
 export function redactProviderError(message: unknown): unknown {
   const value = message as
-    | { role?: string; errorMessage?: unknown; diagnostics?: unknown }
+    | {
+        role?: string;
+        errorMessage?: unknown;
+        diagnostics?: unknown;
+        deferred?: unknown;
+      }
     | null
     | undefined;
   if (value?.role !== "assistant") return undefined;
@@ -68,6 +78,11 @@ export function redactProviderError(message: unknown): unknown {
     if (JSON.stringify(diagnostics) !== JSON.stringify(value.diagnostics))
       changes.diagnostics = diagnostics;
   }
+  if (value.deferred !== undefined) {
+    const deferred = redactValue(value.deferred);
+    if (JSON.stringify(deferred) !== JSON.stringify(value.deferred))
+      changes.deferred = deferred;
+  }
   return Object.keys(changes).length ? { ...value, ...changes } : undefined;
 }
 
@@ -78,10 +93,11 @@ type ToolResultMessage = Extract<
 
 /**
  * Every field of Pi's tool result message, by what it holds. The calls a
- * tool made to other tools (`nestedCalls`, attached by Pi; a Codemode
- * result's `details.calls`) hold their arguments and error text, which
- * PiShip redacts; the result content itself is tool output. A Pi upgrade
- * that adds or removes a field fails to compile here until it is classified.
+ * tool made to other tools (`nestedCalls`, attached by Pi) hold their
+ * arguments and error text; `details` is arbitrary per-tool JSON that can
+ * echo argument material or error text anywhere in it. PiShip redacts both
+ * recursively; the result content itself is tool output. A Pi upgrade that
+ * adds or removes a field fails to compile here until it is classified.
  */
 export const TOOL_RESULT_MESSAGE_FIELDS: Record<
   keyof ToolResultMessage,
@@ -99,6 +115,30 @@ export const TOOL_RESULT_MESSAGE_FIELDS: Record<
   durationMs: "metadata",
 };
 
+/** Pi's per-call record inside a tool result's `nestedCalls`. */
+type NestedCallRecord = NonNullable<
+  ToolResultMessage["nestedCalls"]
+>["calls"][number];
+
+/**
+ * Every field of Pi's nested call record, by what it holds: `arguments` and
+ * `error` are the carrier JSON and text, the rest is inert metadata. A Pi
+ * upgrade that adds or removes a field fails to compile here until it is
+ * classified, so a new carrier cannot ride through a fail-closed spread.
+ */
+export const NESTED_CALL_RECORD_FIELDS: Record<
+  keyof NestedCallRecord,
+  "carrier" | "metadata"
+> = {
+  id: "metadata",
+  name: "metadata",
+  arguments: "carrier",
+  argumentsBytes: "metadata",
+  status: "metadata",
+  durationMs: "metadata",
+  error: "carrier",
+};
+
 type NestedCall = {
   id?: unknown;
   arguments?: unknown;
@@ -106,6 +146,42 @@ type NestedCall = {
   error?: unknown;
 };
 type CodemodeCall = { id?: unknown; args?: unknown; error?: unknown };
+
+/**
+ * Every field of a Codemode call record in Pi's `details.calls` (built by Pi's
+ * codemode extension), by what it holds: `args` and `error` are the carrier
+ * text, the rest is inert metadata. Codemode's `details` is `JsonValue`, so
+ * this table is maintained against Pi's shape by hand; a field it does not
+ * list is dropped on the fail-closed path below, not carried.
+ */
+export const CODEMODE_CALL_FIELDS: Record<string, "carrier" | "metadata"> = {
+  id: "metadata",
+  name: "metadata",
+  args: "carrier",
+  status: "metadata",
+  durationMs: "metadata",
+  error: "carrier",
+  // Set by the extension at runtime, not in Pi's `CodemodeCall` type: the
+  // call's share of the run's token cost. A number, so the normal path keeps
+  // it and this path must too.
+  cost: "metadata",
+};
+
+/**
+ * The fields of `value` the classification table knows, minus `omit`. A field
+ * a future Pi adds is unknown to the table, so it is dropped: a path that
+ * cannot scrub what it does not know must not carry it.
+ */
+function classified(
+  value: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  ...omit: string[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(fields))
+    if (key in value && !omit.includes(key)) out[key] = value[key];
+  return out;
+}
 
 const changed = (before: unknown, after: unknown) =>
   JSON.stringify(before) !== JSON.stringify(after);
@@ -131,11 +207,14 @@ function redactPreview(text: string, max: number): string {
 }
 
 /**
- * The tool result with the nested calls' arguments and error text redacted,
- * or undefined when there is nothing to redact: Pi's `nestedCalls` record,
- * and the `details.calls` a Codemode result keeps (a 200-character argument
- * preview and the error). Both are persisted with the message and shown in
- * the HTML export.
+ * The tool result with everything PiShip redacts redacted, or undefined when
+ * there is nothing to redact: the nested calls' arguments and error text in
+ * Pi's `nestedCalls` record, and the per-tool `details` JSON recursively —
+ * `details` is arbitrary tool-supplied data, so any tool can echo argument
+ * material or error text into it. A Codemode result's `details.calls`
+ * previews are rebuilt from the full arguments Pi recorded, redacted before
+ * the cut. All of it is persisted with the message and shown in the HTML
+ * export.
  */
 export function redactToolResult(message: unknown): unknown {
   const value = message as
@@ -143,48 +222,53 @@ export function redactToolResult(message: unknown): unknown {
         role?: string;
         toolName?: string;
         nestedCalls?: { calls?: NestedCall[] };
-        details?: { calls?: CodemodeCall[] };
+        details?: unknown;
       }
     | null
     | undefined;
   if (value?.role !== "toolResult") return undefined;
   const changes: Record<string, unknown> = {};
   const nested = value.nestedCalls;
-  if (Array.isArray(nested?.calls)) {
-    const calls = nested.calls.map((call) => ({
-      ...call,
-      ...(call.arguments === undefined
-        ? {}
-        : { arguments: redactValue(call.arguments) }),
-      ...(typeof call.error === "string" ? { error: redact(call.error) } : {}),
-    }));
-    if (changed(nested.calls, calls))
-      changes.nestedCalls = { ...nested, calls };
+  if (nested !== undefined) {
+    // The whole record, so a field a future Pi adds — on the wrapper or on a
+    // call — is redacted, not carried, and a `calls` shape this does not
+    // recognize is still scrubbed: arguments and error text are the opaque
+    // JSON this record holds.
+    const scrubbed = redactValue(nested);
+    if (changed(nested, scrubbed)) changes.nestedCalls = scrubbed;
   }
   const details = value.details;
-  if (value.toolName === "codemode" && Array.isArray(details?.calls)) {
-    // The preview is rebuilt from the full arguments Pi recorded for the
-    // same call, redacted before the cut.
-    const full = new Map<unknown, unknown>();
-    for (const call of Array.isArray(nested?.calls) ? nested.calls : [])
-      if (call.arguments !== undefined) full.set(call.id, call.arguments);
-    const args = (call: CodemodeCall): string => {
-      const source = full.get(call.id);
-      if (source !== undefined)
-        return preview(
-          JSON.stringify(redactValue(source)) ?? "",
-          ARGS_PREVIEW_CHARS,
-        );
-      return redactPreview(call.args as string, ARGS_PREVIEW_CHARS);
-    };
-    const calls = details.calls.map((call) => ({
-      ...call,
-      ...(typeof call.args === "string" ? { args: args(call) } : {}),
-      ...(typeof call.error === "string"
-        ? { error: redactPreview(call.error, ERROR_PREVIEW_CHARS) }
-        : {}),
-    }));
-    if (changed(details.calls, calls)) changes.details = { ...details, calls };
+  if (details !== undefined) {
+    let next = redactValue(details);
+    const codemode = details as { calls?: CodemodeCall[] } | null;
+    if (value.toolName === "codemode" && Array.isArray(codemode?.calls)) {
+      // The preview is rebuilt from the full arguments Pi recorded for the
+      // same call, redacted before the cut.
+      const full = new Map<unknown, unknown>();
+      for (const call of Array.isArray(nested?.calls) ? nested.calls : [])
+        if (call.arguments !== undefined) full.set(call.id, call.arguments);
+      const args = (call: CodemodeCall): string => {
+        const source = full.get(call.id);
+        if (source !== undefined)
+          return preview(
+            JSON.stringify(redactValue(source)) ?? "",
+            ARGS_PREVIEW_CHARS,
+          );
+        return redactPreview(call.args as string, ARGS_PREVIEW_CHARS);
+      };
+      next = {
+        ...(next as Record<string, unknown>),
+        calls: codemode.calls.map((call) => ({
+          // A record field this map does not know is redacted, not carried.
+          ...(redactValue(call) as CodemodeCall),
+          ...(typeof call.args === "string" ? { args: args(call) } : {}),
+          ...(typeof call.error === "string"
+            ? { error: redactPreview(call.error, ERROR_PREVIEW_CHARS) }
+            : {}),
+        })),
+      };
+    }
+    if (changed(details, next)) changes.details = next;
   }
   return Object.keys(changes).length ? { ...value, ...changes } : undefined;
 }
@@ -192,7 +276,9 @@ export function redactToolResult(message: unknown): unknown {
 /**
  * `redactToolResult` that fails closed: the nested calls' arguments are
  * dropped (Pi's own `argumentsBytes` form), their error text replaced by a
- * fixed marker, and the Codemode argument previews blanked.
+ * fixed marker, and the Codemode argument previews blanked. Any other tool's
+ * `details` is arbitrary JSON this path cannot scrub field by field, so the
+ * spread must not carry it and it is dropped whole.
  */
 export function redactToolResultOrDrop(message: unknown): unknown {
   try {
@@ -200,34 +286,75 @@ export function redactToolResultOrDrop(message: unknown): unknown {
   } catch {
     const value = message as {
       role?: string;
+      toolName?: string;
       nestedCalls?: { calls?: NestedCall[] };
       details?: { calls?: CodemodeCall[] };
     };
     if (value?.role !== "toolResult") return undefined;
-    const scrub = <T extends { error?: unknown }>(call: T) =>
-      call.error === undefined
-        ? call
-        : { ...call, error: REDACTION_FAILED_TEXT };
+    const failed = (call: { error?: unknown }) =>
+      call.error === undefined ? {} : { error: REDACTION_FAILED_TEXT };
     const nested = value.nestedCalls;
     const details = value.details;
+    // This path cannot scrub what it does not know, so nothing untrusted is
+    // spread: the message keeps only its classified fields, a record only its
+    // classified fields, and a field the classification does not know is
+    // dropped — an unknown field is a carrier until classified, not metadata.
+    const rest = classified(
+      value as Record<string, unknown>,
+      TOOL_RESULT_MESSAGE_FIELDS,
+      "details",
+      "nestedCalls",
+    );
+    // Pi records `argumentsBytes` when it dropped a call's arguments for size
+    // (nested-tool-calls.ts), and the HTML export prints it. Dropping the
+    // arguments here without a size would leave that export claiming 0 bytes,
+    // so keep the size Pi recorded and otherwise measure it the same way. A
+    // measurement that throws is left out: this path must not throw, or Pi
+    // persists the original message.
+    const droppedBytes = (call: NestedCall): number | undefined => {
+      if (call.argumentsBytes !== undefined) return call.argumentsBytes;
+      try {
+        return new TextEncoder().encode(JSON.stringify(call.arguments ?? {}))
+          .length;
+      } catch {
+        return undefined;
+      }
+    };
     return {
-      ...value,
+      ...rest,
       ...(Array.isArray(nested?.calls)
         ? {
             nestedCalls: {
-              ...nested,
               complete: false,
-              calls: nested.calls.map(({ arguments: _dropped, ...call }) =>
-                scrub({ ...call, argumentsBytes: call.argumentsBytes ?? 0 }),
-              ),
+              calls: nested.calls.map((call) => {
+                const bytes = droppedBytes(call);
+                return {
+                  ...classified(
+                    call as Record<string, unknown>,
+                    NESTED_CALL_RECORD_FIELDS,
+                    "arguments",
+                    "error",
+                  ),
+                  ...(bytes === undefined ? {} : { argumentsBytes: bytes }),
+                  ...failed(call),
+                };
+              }),
             },
           }
         : {}),
-      ...(Array.isArray(details?.calls)
+      ...(value.toolName === "codemode" && Array.isArray(details?.calls)
         ? {
             details: {
-              ...details,
-              calls: details.calls.map((call) => scrub({ ...call, args: "" })),
+              calls: details.calls.map((call) => ({
+                ...classified(
+                  call as Record<string, unknown>,
+                  CODEMODE_CALL_FIELDS,
+                  "args",
+                  "error",
+                ),
+                args: "",
+                ...failed(call),
+              })),
             },
           }
         : {}),
@@ -273,10 +400,21 @@ export function redactProviderErrorOrDrop(message: unknown): unknown {
       role?: string;
       errorMessage?: unknown;
       diagnostics?: unknown;
+      deferred?: unknown;
     };
     if (value?.role !== "assistant") return undefined;
+    // This path cannot scrub what it does not know, so nothing untrusted is
+    // spread: `deferred.data` is arbitrary provider JSON and is dropped whole,
+    // and a field the classification table does not know is dropped too — an
+    // unknown field is a carrier until classified, not metadata.
     return {
-      ...value,
+      ...classified(
+        value as Record<string, unknown>,
+        ASSISTANT_MESSAGE_FIELDS,
+        "deferred",
+        "errorMessage",
+        "diagnostics",
+      ),
       ...(value.errorMessage === undefined
         ? {}
         : { errorMessage: REDACTION_FAILED_TEXT }),

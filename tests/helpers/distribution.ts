@@ -26,6 +26,59 @@ function kill(child: ChildProcess): void {
   else child.kill("SIGKILL");
 }
 
+/** The characters `cmd.exe` gives a meaning of their own outside quotes. */
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/**
+ * One argument quoted for the MSVCRT argv rules (what the program finally
+ * parses), then with every `cmd.exe` metacharacter caret-escaped so no
+ * argument can end the command line (`&`, `|`, `>` …) or move a caret into
+ * the child's argv. With `doubleEscape` each metacharacter takes two caret
+ * levels, because a `.cmd`/`.bat` target parses the arguments twice: once
+ * for the `/c` line and once when the batch re-expands `%*` into its own
+ * command line (npm's promise-spawn applies the same rule).
+ *
+ * `%VAR%` expansion runs before carets are read, but the caret on `%`
+ * reaches the variable name too (`^%PATH^%` scans as `P^A^T^H^`, which no
+ * variable is called), so an argument's `%VAR%` reaches the child as the
+ * literal text it was written as. `!` stays literal as well: `cmd.exe /c`
+ * runs without delayed expansion.
+ */
+function cmdArgument(arg: string, doubleEscape: boolean): string {
+  const quoted = `"${arg
+    // Backslashes directly before a quote: double them, escape the quote.
+    .replace(/(?=(\\+?)?)\1"/g, '$1$1\\"')
+    // Trailing backslashes: double them so they cannot eat the closing quote.
+    .replace(/(?=(\\+?)?)\1$/, "$1$1")}"`;
+  const escaped = quoted.replace(CMD_META, "^$1");
+  return doubleEscape ? escaped.replace(CMD_META, "^$1") : escaped;
+}
+
+/**
+ * The argument vector `branded()` hands `cmd.exe` on Windows: the command
+ * and every argument escaped so the child receives exactly `args`, with no
+ * boundary an argument can cross to become a second command. There is no
+ * `call` in front: it re-parses the line, adding a caret stage whose count
+ * nothing pins down, and `cmd.exe /c` runs a batch file (and propagates its
+ * exit code) without it.
+ *
+ * Pure, so the Windows quoting is testable on any platform.
+ */
+export function windowsArgv(
+  command: string,
+  args: readonly string[],
+): string[] {
+  const batch = /\.(?:cmd|bat)$/i.test(command);
+  const line = [
+    command.replace(CMD_META, "^$1"),
+    ...args.map((arg) => cmdArgument(arg, batch)),
+  ].join(" ");
+  // With `/s`, `cmd.exe` strips the first and the last quote of the `/c`
+  // string and runs the rest, which keeps the quotes that carry the
+  // argument boundaries intact.
+  return ["/d", "/s", "/c", `"${line}"`];
+}
+
 /**
  * Run a branded command; acts as the browser for any printed sign-in URL.
  * With `timeoutMs`, a command still running then is killed and the promise
@@ -51,15 +104,11 @@ export function branded(
   return new Promise((resolve, reject) => {
     const child =
       process.platform === "win32"
-        ? spawn(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${command}" ${args.join(" ")}`],
-            {
-              cwd: options.cwd,
-              env: options.env,
-              windowsVerbatimArguments: true,
-            },
-          )
+        ? spawn("cmd.exe", windowsArgv(command, args), {
+            cwd: options.cwd,
+            env: options.env,
+            windowsVerbatimArguments: true,
+          })
         : spawn(command, [...args], { cwd: options.cwd, env: options.env });
     let stdout = "";
     let stderr = "";

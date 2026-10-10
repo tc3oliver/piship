@@ -418,6 +418,74 @@ describe("the tools a child adds to the session", () => {
     },
   );
 
+  // Pi reads a `*` entry as a pattern matching every tool and a `+`/`-` entry
+  // as a default modifier; either drops the allowlist bound the child's
+  // `--tools` is supposed to be (subagent-child-tools.test.ts asserts what Pi
+  // then activates). An empty or whitespace-only entry is malformed.
+  it.each([
+    "*",
+    "read,*",
+    "re*d",
+    "+codemode",
+    "+tool_search",
+    "+",
+    "-read",
+    "-",
+    "read,+codemode",
+    "read,",
+    ",read",
+    " read",
+    "read, grep",
+  ])("refuses --tools %j, which is not an explicit tool name", (list) => {
+    const error = refused(["--tools", list, "Task: canary-task"]);
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toContain("--tools must be a comma-separated list");
+    expect(error.message).not.toContain("canary-task");
+    expect(() =>
+      childToolOptions({ prompt: "t", tools: list.split(",") }, [], []),
+    ).toThrow(/--tools must be a comma-separated list/);
+  });
+
+  it("refuses an empty --tools value", () => {
+    expect(refused(["--tools", "", "t"]).message).toContain("needs a value");
+  });
+
+  // `--exclude-tools` is the narrowing side: Pi documents `*` patterns here and
+  // reads a `+`/`-` entry as an inert literal name, so an exclusion cannot drop
+  // the allowlist bound `--tools` establishes. A child excludes MCP tools the
+  // way Pi's own CLI does, so these forms are parsed, not refused.
+  it.each(["mcp__*", "*", "read,*", "+codemode", "-read", "mcp__server__*"])(
+    "takes --exclude-tools %j the way Pi's CLI parses it",
+    (list) => {
+      expect(parse(["--exclude-tools", list, "t"]).excludeTools).toEqual(
+        list.split(","),
+      );
+      // childToolOptions carries the exclusion through to Pi untouched.
+      expect(
+        childToolOptions({ prompt: "t", excludeTools: list.split(",") }, [], [])
+          .excludeTools,
+      ).toEqual(list.split(","));
+    },
+  );
+
+  it("trims each exclusion and drops an empty entry, as Pi's CLI does", () => {
+    expect(
+      parse(["--exclude-tools", " bash , , grep ", "t"]).excludeTools,
+    ).toEqual(["bash", "grep"]);
+  });
+
+  it("refuses an empty --exclude-tools value", () => {
+    expect(refused(["--exclude-tools", "", "t"]).message).toContain(
+      "needs a value",
+    );
+  });
+
+  it("takes an allowlist of explicit names, including MCP and dashed ones", () => {
+    expect(
+      parse(["--tools", "read,mcp__server__tool,tool-x", "t"]).tools,
+    ).toEqual(["read", "mcp__server__tool", "tool-x"]);
+  });
+
   it("still takes an allowlist that names neither", () => {
     expect(parse(["--tools", "read,grep", "t"]).tools).toEqual([
       "read",

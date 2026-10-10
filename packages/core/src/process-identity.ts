@@ -97,7 +97,7 @@ export function processIdentityMatches(
 
 /**
  * How far a recorded start time (the writer's `performance.timeOrigin`) may
- * lie from the start time the system reports for the same process: `ps`
+ * lie AFTER the start time the system reports for the same process: `ps`
  * reports whole seconds, and Node takes its time origin after the process
  * (or the shell a command shim replaces with `exec`) began. On Windows the
  * system stamps a process when it is created, and a first launch can spend
@@ -107,6 +107,16 @@ export function processIdentityMatches(
  * minute of it.
  */
 export const START_TOLERANCE_MS = 30_000;
+
+/**
+ * How far the start time the system reports may lie AFTER a recorded one and
+ * still be the same process: a process is created before Node takes its time
+ * origin, so only timestamp rounding and a clock stepped backwards between
+ * the two readings make the system's time the later one. A process the
+ * system dates clearly after the record was written is a different one
+ * holding the reused ID, however close the two times look.
+ */
+export const START_SKEW_MS = 5_000;
 
 /** A record that names the process holding something. */
 export interface ProcessRecord {
@@ -149,7 +159,21 @@ export function recordedProcessGone(
   const current = processIdentity(record.pid);
   const start = current === undefined ? undefined : startMs(current);
   if (start === undefined) return undefined;
-  return Math.abs(start - record.started) > START_TOLERANCE_MS;
+  // A creation stamp in the future means the wall clock moved backwards
+  // between the process's creation and this check (NTP, a hypervisor, a user
+  // change). Every start-time comparison below is then untrustworthy: without
+  // this guard a live holder whose record was written before the step looks
+  // like a reused ID and its lock is taken down mid-transaction.
+  if (start > Date.now()) return undefined;
+  // Directional: the same process is created before Node takes the time
+  // origin its record carries, so the system's time is the earlier one (a
+  // clock stepped backwards between the two readings is the exception, and
+  // small). A process the system dates clearly after the record can only be
+  // a different one holding the reused ID, however close the times look.
+  return (
+    start - record.started > START_SKEW_MS ||
+    record.started - start > START_TOLERANCE_MS
+  );
 }
 
 /**

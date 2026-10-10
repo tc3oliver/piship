@@ -118,17 +118,70 @@ describe("redactToolResult", () => {
       expect(call.args).not.toContain(partial);
   });
 
-  it("leaves another tool's details, and a result with nothing to redact, alone", () => {
+  it("redacts another tool's details, which are arbitrary JSON, and keeps its structure", () => {
+    // A non-codemode tool that echoes a secret into `details`: the same defect
+    // would persist it unredacted if only codemode's `details.calls` were
+    // touched. `details` is opaque per-tool JSON, so it is redacted whole.
     const other = redactToolResult(nestedMessage("company_batch")) as {
-      details: unknown;
+      details: { calls: { id: string; name: string; args: string }[] };
+      nestedCalls: { calls: { arguments: unknown; error: string }[] };
     };
-    expect(JSON.stringify(other.details)).toContain(CREDENTIAL);
+    expect(JSON.stringify(other.details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(other.nestedCalls)).not.toContain(CREDENTIAL);
+    // Ordinary metadata survives: the shape and the non-secret fields stay.
+    expect(other.details.calls[0]?.id).toBe("call_1/1");
+    expect(other.details.calls[0]?.name).toBe("bash");
+    expect(other.details.calls[0]?.args).toContain("[REDACTED");
+    // A non-codemode `details.calls.args` is not rebuilt from full arguments
+    // (that is codemode's preview); it is redacted in place, still a preview.
+    expect(other.details.calls[0]?.args).not.toContain("...");
+  });
+
+  it("redacts secrets nested in objects and arrays inside any tool's details", () => {
+    const message = {
+      role: "toolResult",
+      toolCallId: "call_9",
+      toolName: "company_batch",
+      content: [],
+      isError: false,
+      timestamp: 1,
+      details: {
+        request: { headers: { Authorization: `Bearer ${CREDENTIAL}` } },
+        rows: [
+          { ok: true },
+          { note: `token=${CREDENTIAL}`, apiKey: CREDENTIAL },
+        ],
+        fullOutputPath: "/tmp/out.txt",
+      },
+    };
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted.details)).not.toContain(CREDENTIAL);
+    // Structure and non-secret metadata are preserved.
+    expect(redacted.details.rows[0]).toEqual({ ok: true });
+    expect(redacted.details.fullOutputPath).toBe("/tmp/out.txt");
+    expect(redacted.details.request.headers.Authorization).toContain(
+      "[REDACTED",
+    );
+    // The original is untouched.
+    expect(JSON.stringify(message.details)).toContain(CREDENTIAL);
+  });
+
+  it("leaves a result with nothing to redact, and a message of another role, alone", () => {
     expect(
       redactToolResult({
         role: "toolResult",
         toolName: "read",
         content: [],
         isError: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      redactToolResult({
+        role: "toolResult",
+        toolName: "read",
+        content: [],
+        isError: false,
+        details: { lines: 3, path: "a.txt" },
       }),
     ).toBeUndefined();
     expect(redactToolResult({ role: "assistant" })).toBeUndefined();
@@ -141,6 +194,98 @@ describe("redactToolResult", () => {
         .map(([field]) => field)
         .sort(),
     ).toEqual(["details", "nestedCalls"]);
+  });
+});
+
+describe("redactToolResult fallback for fields no table classifies", () => {
+  // `details` and `nestedCalls` are arbitrary JSON: a future or different Pi
+  // can put any key in them, and the classification tables cannot enumerate
+  // those keys. The runtime fallback is `redactValue`, which recurses and runs
+  // `redact()` over every string leaf and replaces a secret-named key whatever
+  // it holds. These pin that the fallback SCRUBS an unknown key rather than
+  // carrying it through. A token-shaped value that is NOT a registered
+  // SecretValue proves the recursive `redact()` reaches unknown keys, not just
+  // the registered-secret substitution. Flipping the fallback to pass-through
+  // would leave CREDENTIAL/SHAPED in the output and fail every assertion here.
+  const SHAPED = "sk-future-pi-field-abcdef0123456789";
+
+  const result = (details: unknown) => ({
+    role: "toolResult",
+    toolCallId: "call_u",
+    toolName: "company_batch",
+    content: [],
+    isError: false,
+    timestamp: 1,
+    details,
+  });
+
+  it("scrubs an unknown top-level key instead of carrying it through", () => {
+    const message = result({
+      futureField: `Bearer ${CREDENTIAL}`,
+      anotherUnknown: SHAPED,
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    const details = redacted.details as Record<string, string>;
+    expect(JSON.stringify(details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(details)).not.toContain(SHAPED);
+    // The keys survive (structure preserved); only the secret values are gone.
+    expect(details.futureField).toContain("[REDACTED");
+    expect(details.anotherUnknown).toBe("[REDACTED]");
+    // Non-vacuous: the input really held them.
+    expect(JSON.stringify(message.details)).toContain(CREDENTIAL);
+    expect(JSON.stringify(message.details)).toContain(SHAPED);
+  });
+
+  it("scrubs an unknown key nested arbitrarily deep", () => {
+    const message = result({
+      level1: {
+        level2: { level3: { deepSecret: CREDENTIAL, shaped: SHAPED } },
+      },
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted.details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(redacted.details)).not.toContain(SHAPED);
+    const deep = (
+      redacted.details as {
+        level1: { level2: { level3: Record<string, string> } };
+      }
+    ).level1.level2.level3;
+    expect(deep.deepSecret).toBe("[REDACTED]");
+    expect(deep.shaped).toBe("[REDACTED]");
+  });
+
+  it("scrubs an unknown key inside an array of objects", () => {
+    const message = result({
+      rows: [{ ok: true }, { futureCell: CREDENTIAL }, [`Bearer ${SHAPED}`]],
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted.details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(redacted.details)).not.toContain(SHAPED);
+    const rows = (redacted.details as { rows: unknown[] }).rows;
+    // Inert array elements are untouched; the secret-bearing ones are scrubbed.
+    expect(rows[0]).toEqual({ ok: true });
+    expect(rows[1]).toEqual({ futureCell: "[REDACTED]" });
+    expect(rows[2]).toEqual(["[REDACTED]"]);
+  });
+
+  it("scrubs a credential riding inside an exception field's value", () => {
+    // `fullOutputPath` is preserved when inert (see the nested-details test
+    // above), but its VALUE still runs through `redact()`, so a registered
+    // secret or a token shape embedded in the path is scrubbed, not carried. A
+    // key whose NAME is a credential word is replaced whatever it holds, even
+    // an otherwise-inert value.
+    const message = result({
+      fullOutputPath: `/tmp/${CREDENTIAL}/out.txt`,
+      sizedPath: `/var/log/${SHAPED}.log`,
+      apiKey: "inert-but-the-name-matches",
+    });
+    const redacted = redactToolResult(message) as typeof message;
+    const details = redacted.details as Record<string, string>;
+    expect(JSON.stringify(details)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(details)).not.toContain(SHAPED);
+    expect(details.fullOutputPath).toContain("/tmp/");
+    expect(details.fullOutputPath).toContain("[REDACTED");
+    expect(details.apiKey).toBe("[REDACTED]");
   });
 });
 
@@ -182,6 +327,40 @@ describe("redactProviderError", () => {
     expect(redactProviderError({ role: "assistant", diagnostics: [] })).toBe(
       undefined,
     );
+  });
+
+  it("redacts a secret a provider puts in a deferred handle's data", () => {
+    // `DeferredHandle.data` is arbitrary provider JSON, so it is a carrier
+    // like the diagnostics. The handle's structural fields and a normal `id`
+    // stay: a deferred conversion Pi resumes must still work.
+    const message = {
+      role: "assistant",
+      stopReason: "deferred",
+      deferred: {
+        provider: "acmecode",
+        modelId: "acme/coder",
+        api: "openai-completions",
+        id: "batch_42/row_7",
+        data: { request: { headers: { authorization: CREDENTIAL } } },
+      },
+    };
+    const redacted = redactProviderError(message) as typeof message;
+    expect(JSON.stringify(redacted.deferred)).not.toContain(CREDENTIAL);
+    expect(redacted.deferred.id).toBe("batch_42/row_7");
+    expect(redacted.deferred.provider).toBe("acmecode");
+    expect(redacted.deferred.modelId).toBe("acme/coder");
+    expect(redacted.deferred.api).toBe("openai-completions");
+    expect(JSON.stringify(message.deferred)).toContain(CREDENTIAL);
+  });
+
+  it("leaves a deferred handle with nothing secret in it alone", () => {
+    expect(
+      redactProviderError({
+        role: "assistant",
+        stopReason: "deferred",
+        deferred: { provider: "acmecode", id: "batch_42/row_7", data: {} },
+      }),
+    ).toBeUndefined();
   });
 
   it("leaves a message without secret text, without error text, or of another role alone", () => {

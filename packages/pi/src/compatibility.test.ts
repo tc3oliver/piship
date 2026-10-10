@@ -13,11 +13,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { parseManifest } from "@piship/schema";
 import { tmpdir } from "node:os";
-import { inspect } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import * as upstreamPi from "@earendil-works/pi-coding-agent";
 import {
   type BashOperations,
@@ -48,6 +47,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type AuditEvent, SecretValue } from "@piship/contracts";
 import { type DistributionLock, lockManifest, PI_VERSION } from "@piship/core";
+import { parseManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
@@ -57,11 +57,11 @@ import {
   UNRESOLVED_EXPOSURE_RULE,
 } from "./builtins.js";
 import {
+  activateExposure,
   boundedByAllowlist,
   buildExposureTable,
   DEFAULT_EXPOSURE_CONFIG,
   type ExposureConfig,
-  activateExposure,
   exposureConfigOf,
   exposureFactories,
   extensionToolsOf,
@@ -1264,7 +1264,7 @@ describe("Pi session seams used by governance", () => {
         .filter(([, kind]) => kind === "redacted")
         .map(([field]) => field)
         .sort(),
-    ).toEqual(["diagnostics", "errorMessage"]);
+    ).toEqual(["deferred", "diagnostics", "errorMessage"]);
     const { session: agent } = await session();
     await agent.prompt("hello");
     services.knobs.gatewayStatus = 500;
