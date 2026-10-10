@@ -123,12 +123,13 @@ describe.runIf(process.platform !== "linux")(
 
     it("cannot judge a record when the system's clock has moved backwards", () => {
       const pid = sleeper();
-      const identity = processIdentity(pid) as string;
       // A creation stamp in the future (the clock stepped back since the
       // process was created) makes every start-time comparison untrustworthy:
       // a live holder must not be judged gone, or its lock is taken down
-      // mid-transaction.
-      vi.spyOn(Date, "now").mockReturnValue(Number(identity) * 1000 - 60_000);
+      // mid-transaction. The sleeper was created milliseconds ago, so a clock
+      // now reading a minute earlier puts every creation stamp in its future —
+      // platform-independent, whatever form the system's stamp takes.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 60_000);
       try {
         expect(
           recordedProcessGone({
