@@ -719,7 +719,11 @@ describe("provider session ownership", () => {
       yolo: true,
       host: processHostToken(),
       started: Date.now() - 60_000,
-      identity: null,
+      // A writer on this platform records its own identity (`ownRecord`): on
+      // Linux that is the `boot:ticks` the reused-ID proof compares against,
+      // elsewhere `null` and the start time carries the proof. Without it a
+      // Linux record with a live ID is a legacy one that cannot be judged gone.
+      identity: recordedIdentity(),
     });
     // A killed --yolo session whose ID was reused must not refuse every later
     // ordinary launch: the reliable check runs where the refusal is about to
