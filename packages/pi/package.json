@@ -33,7 +33,7 @@
     "@piship/schema": "0.13.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-codemode": "1.1.0",
-    "@earendil-works/chord": "1.1.0"
+    "@earendil-works/chord": "1.2.0"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",
   "keywords": [
