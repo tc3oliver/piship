@@ -363,7 +363,7 @@ export function commandShimSource(
   home: string = homedir(),
 ): string {
   return platform === "win32"
-    ? `@echo off\r\nnode "${windowsShimPath(launcher, home)}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`
+    ? `@echo off\r\nsetlocal\r\nnode "${windowsShimPath(launcher, home)}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`
     : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo '${NODE_REQUIRED}' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
 }
 
