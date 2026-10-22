@@ -1134,9 +1134,17 @@ describe("lock-time script execution and shipped modules", () => {
         "lib/node_moduleſ/evil/index.js": "module.exports = 1;\n",
       });
       const { context: ctx, calls } = recorded(context());
+      // Windows bsdtar may reject the Unicode filename while extracting
+      // git archive, before the source-tree policy can examine it. Both
+      // outcomes reject the package; the local variant and the pure folding
+      // test below still verify our policy independently of the extractor.
+      const gitFailure =
+        process.platform === "win32"
+          ? /(?:lib\/node_moduleſ ships its own node_modules|tar hdrcharset=UTF-8 failed: tar: Archive entry has empty or unreadable filename)/
+          : /lib\/node_moduleſ ships its own node_modules/;
       expect(() =>
         resolvePiPackage(gitPackage("ships-long-s-modules", fixture), ctx),
-      ).toThrow(/lib\/node_moduleſ ships its own node_modules/);
+      ).toThrow(gitFailure);
       write(join(ctx.distributionDir, "packages", "long-s-modules"), {
         "package.json": JSON.stringify({ name: "long-s-modules" }),
         "node_moduleſ/evil/index.js": "module.exports = 1;\n",
