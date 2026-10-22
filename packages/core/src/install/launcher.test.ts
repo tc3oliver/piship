@@ -311,7 +311,13 @@ describe("the command shim", () => {
         const result = spawnSync(
           "cmd.exe",
           ["/d", "/s", "/c", `""${shim}" ${status}"`],
-          { encoding: "utf8", windowsHide: true },
+          {
+            encoding: "utf8",
+            windowsHide: true,
+            // /s /c must receive one command string with its outer quotes
+            // intact. Otherwise spawnSync escapes them a second time.
+            windowsVerbatimArguments: true,
+          },
         );
         expect(result.status, result.stderr).toBe(status);
       }
