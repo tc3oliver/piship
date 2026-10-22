@@ -304,7 +304,7 @@ describe("the command shim", () => {
       roots.push(root);
       const script = join(root, "exit.mjs");
       const shim = join(root, "exit.cmd");
-      writeFileSync(script, "process.exitCode = Number(process.argv[2]);\\n");
+      writeFileSync(script, "process.exitCode = Number(process.argv[2]);\n");
       writeFileSync(shim, commandShimSource(script, "win32"));
 
       for (const status of [0, 1, 7]) {
