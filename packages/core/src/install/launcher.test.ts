@@ -289,13 +289,34 @@ describe("the command shim", () => {
   it("runs node on the Windows PATH without spawning `where` first", () => {
     const text = commandShimSource(launcher, "win32");
     expect(text).toBe(
-      `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\n`,
+      `@echo off\r\nsetlocal\r\nnode "${launcher}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`,
     );
     // No process is started to find node, and none is pinned: a path written
     // at install time outlives the node the user switches to.
     expect(text).not.toMatch(/where|\.exe|if exist/);
-    expect(text.split("\r\n").filter(Boolean)).toHaveLength(3);
+    expect(text.split("\r\n").filter(Boolean)).toHaveLength(6);
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "returns the launched Node process status on Windows",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "piship-shim-status-"));
+      roots.push(root);
+      const script = join(root, "exit.mjs");
+      const shim = join(root, "exit.cmd");
+      writeFileSync(script, "process.exitCode = Number(process.argv[2]);\\n");
+      writeFileSync(shim, commandShimSource(script, "win32"));
+
+      for (const status of [0, 1, 7]) {
+        const result = spawnSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", `""${shim}" ${status}"`],
+          { encoding: "utf8", windowsHide: true },
+        );
+        expect(result.status, result.stderr).toBe(status);
+      }
+    },
+  );
 
   it("writes %USERPROFILE% for a non-ASCII path under the profile, because cmd reads the shim in the OEM code page", () => {
     const home = "C:\\Users\\Zoë";
