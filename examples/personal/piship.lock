@@ -19,7 +19,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.1.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "e7aea67d876c424b3252992bbb35654e85e995aca2dd6db25c3c1b7058d5c9f0",
+    "npmLockSha256": "124876f6ef342f9325d30045511353b8493b73db0711e68967e56d2cdae2105e",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -552,9 +552,9 @@
       },
       {
         "path": "node_modules/@types/node",
-        "version": "22.20.4",
-        "integrity": "sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==",
-        "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.4.tgz"
+        "version": "22.20.5",
+        "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==",
+        "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.5.tgz"
       },
       {
         "path": "node_modules/@types/retry",
