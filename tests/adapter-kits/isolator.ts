@@ -6,7 +6,13 @@
 // with a printed reason, or fail under PISHIP_REQUIRE_ISOLATOR=1
 // (./isolator-gate.ts).
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { findBwrap } from "./isolator-gate.js";
 
@@ -171,7 +177,26 @@ export function runIsolated(
       if (child.pid) kill(-child.pid);
     },
     killProcess: () => {
-      if (child.pid) kill(child.pid);
+      if (!child.pid) return;
+      // Bubblewrap forks the command, and the fork ends with bubblewrap only
+      // once it has armed its parent-death signal: killing bubblewrap alone
+      // right after the start (a loaded host stretches that window to tens
+      // of ms) leaves the command itself running. The started process is
+      // the command, so stop bubblewrap, then kill it and its direct child.
+      let kids: string[] = [];
+      if (isolator === "bubblewrap") {
+        try {
+          process.kill(child.pid, "SIGSTOP");
+          kids = readFileSync(
+            `/proc/${child.pid}/task/${child.pid}/children`,
+            "utf8",
+          ).split(" ");
+        } catch {
+          // gone, or /proc lists no children: kill what is left below
+        }
+      }
+      for (const pid of kids) if (pid) kill(Number(pid));
+      kill(child.pid);
     },
   };
 }
