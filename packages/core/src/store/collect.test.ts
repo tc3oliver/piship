@@ -81,6 +81,10 @@ function world(): World {
         liveness: (release) =>
           state.get(`${release.id}@${release.version}`) ?? "dead",
         graceMs: 0,
+        // Date.now() is whole milliseconds and a file's mtime is not, so a
+        // clock read in the same millisecond as the write sees it as younger
+        // than a grace period of zero.
+        now: () => Date.now() + 1_000,
         ...options,
       }),
     has: (text) =>
