@@ -5,7 +5,7 @@ import type { Readable, Writable } from "node:stream";
 import { redact } from "@piship/contracts";
 import type { WrappedCommand } from "./adapter.js";
 import { stripCredentials } from "./environment.js";
-import { windowsJobCommand } from "./windows-job.js";
+import { windowsJobSupervisor } from "./windows-job.js";
 
 /** Anything that can place a command inside a sandbox (an ActiveSandbox). */
 export interface SandboxWrapper {
@@ -189,7 +189,7 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     env: NodeJS.ProcessEnv;
   };
   try {
-    launched = platform === "win32" ? windowsJobCommand(target) : target;
+    launched = platform === "win32" ? windowsJobSupervisor(target) : target;
   } catch (error) {
     // Fail closed: never fall back to an unresolved supervisor.
     return notStarted(redact((error as Error).message));

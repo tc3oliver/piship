@@ -376,6 +376,21 @@ The Windows command is `<command>.cmd`, which starts `cmd.exe`, which starts `no
 
 **Verdict: rejected; the `.cmd` shim stays.** Two Windows runs with Defender on and 15 repetitions each (artifacts `cmd-launch-report.json` and `cmd-launch-summary.md` of runs 37507963017 and 37513059620) measured a median overhead of 6.1 ms and 23.5 ms, 1.01x and 1.02x of a 1.1 to 1.6 s start, with the minimum difference of 20 and 7 ms: far below the 50 ms stability bar and the 100 ms or 1.25x implementation bar. A bare `cmd.exe /c exit` took 16 ms and a bare `node -e 0` 42 ms on the first runner, so the shim's own cost is the cost of `cmd.exe`, which does not justify a native launcher, its signing, and its attack surface. Revisit only if a later measurement on a real user machine shows a stable cost of 100 ms or more.
 
+## Windows child start
+
+On Windows every child PiShip starts itself, such as an MCP stdio server, runs inside a kill-on-close Job Object that a supervisor creates. The first supervisor was a PowerShell script that compiled the Job Object code with `Add-Type` at each start. On one Windows 11 machine (Defender on, no corporate endpoint software, Node 24.22.1) that cost about 930 ms for a child that does nothing (`node -e 0` is 32 ms): a bare PowerShell start is about 530 ms, a trivial `Add-Type` adds about 240 ms, and the compile writes a directory of `.cs`, `.dll`, and temporary files under `%TEMP%` that is deleted again each time, so every start gave Defender a new `.dll` and a `csc.exe` run to scan. A profile of a start with an MCP server showed the main thread 97% idle during `governance_mcp_started`: the phase was waiting for this supervisor, not computing.
+
+The supervisor is now a helper executable compiled once, with the `csc.exe` that ships with Windows, from the same source (`packages/sandbox/src/windows-job-helper.ts`). The compile takes about 115 to 220 ms; the helper is proved by running a child through it, kept in `<state home>/.job-helper/<source digest>/`, and checked against its recorded sha256 at each start. The PowerShell supervisor remains the fallback when there is no compiler, the check fails, or the recorded bytes do not match; `PISHIP_WINDOWS_JOB_HELPER=off` refuses the helper. The compile is not reproducible byte for byte (two compiles of one source differ, and the Framework compiler has no `/deterministic`), which is why the helper is compiled on the machine and not shipped in a release, whose payload must reproduce.
+
+Measured on that machine, the personal example built and installed in isolated directories, `PISHIP_DEBUG_TIMING=1` and `PI_OFFLINE=1`, four warm `--smoke` starts each of the same build:
+
+| | `governance_mcp_started` | total |
+|---|---|---|
+| PowerShell supervisor (`PISHIP_WINDOWS_JOB_HELPER=off`) | 1057 to 1092 ms | 1616 to 1796 ms |
+| Compiled helper | 131 to 162 ms | 687 to 862 ms |
+
+The first start with the helper also pays the compile and the check (`governance_mcp_started` 455 ms, against 1076 ms with PowerShell). The remaining 130 to 160 ms is the helper's own .NET start and the MCP server's. A distribution that declares no MCP server never starts a supervised child at launch and is unchanged. Not measured: a managed endpoint with application control or endpoint detection (a refused executable falls back to the PowerShell path), a machine without the .NET Framework compiler, and a reboot-cold first start.
+
 ## Regression budgets
 
 `scripts/store-budgets.json` holds the rules and `scripts/store-budgets.mjs` applies them, to the reports the benchmarks already write; it is separate from any other budget file so that concerns do not collide.
