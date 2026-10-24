@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,16 +47,24 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
 });
 
 /** A compiler that writes a file, and a helper that exits with `exit`. */
 function fakeRun(options: { compile?: number; exit?: number } = {}): {
   run: RunSync;
   calls: string[];
+  cwds: string[];
 } {
   const calls: string[] = [];
-  const run: RunSync = (file, args) => {
+  const cwds: string[] = [];
+  const run: RunSync = (file, args, _env, _timeout, cwd) => {
+    cwds.push(cwd);
     if (file.endsWith("csc.exe")) {
       calls.push("compile");
       const out = args.find((arg) => arg.startsWith("/out:"));
@@ -65,7 +74,7 @@ function fakeRun(options: { compile?: number; exit?: number } = {}): {
     calls.push("run");
     return { status: options.exit ?? 3 };
   };
-  return { run, calls };
+  return { run, calls, cwds };
 }
 
 const target = {
@@ -90,6 +99,16 @@ describe("windowsJobHelper", () => {
       windowsJobHelper({ host, systemRoot: windows, run: second.run }),
     ).toBe(path);
     expect(second.calls).toEqual([]);
+  });
+
+  it("runs the compiler and the check in the build directory, not the workspace", () => {
+    const { run, cwds } = fakeRun();
+    windowsJobHelper({ host, systemRoot: windows, run });
+    expect(cwds).toHaveLength(2);
+    for (const cwd of cwds) {
+      expect(cwd).not.toBe(process.cwd());
+      expect(cwd.startsWith(helperDirectory(host))).toBe(true);
+    }
   });
 
   it("builds in its own directory under the state home", () => {
@@ -119,13 +138,73 @@ describe("windowsJobHelper", () => {
     expect(readFileSync(rebuilt as string, "utf8")).toBe("fake-exe-bytes");
   });
 
-  it("removes a helper left by a lost race once one is recorded", () => {
+  it("removes an old unrecorded helper but keeps one a racing process just made", () => {
     const dir = helperDirectory(host);
     mkdirSync(dir, { recursive: true });
     const stale = join(dir, "jobhelper-0123456789abcdef.exe");
+    const recent = join(dir, "jobhelper-fedcba9876543210.exe");
     writeFileSync(stale, "stale");
+    writeFileSync(recent, "recent");
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    utimesSync(stale, old, old);
     windowsJobHelper({ host, systemRoot: windows, run: fakeRun().run });
     expect(existsSync(stale)).toBe(false);
+    expect(existsSync(recent)).toBe(true);
+  });
+
+  it("rebuilds from a corrupt record, and from one whose exe is gone", () => {
+    const first = windowsJobHelper({
+      host,
+      systemRoot: windows,
+      run: fakeRun().run,
+    }) as string;
+    const record = join(helperDirectory(host), "helper.json");
+    writeFileSync(record, "{not json");
+    const corrupt = fakeRun();
+    expect(
+      windowsJobHelper({ host, systemRoot: windows, run: corrupt.run }),
+    ).toMatch(/jobhelper-[0-9a-f]{16}\.exe$/);
+    expect(corrupt.calls).toEqual(["compile", "run"]);
+    rmSync(first, { force: true });
+    rmSync(
+      join(
+        helperDirectory(host),
+        String(JSON.parse(readFileSync(record, "utf8")).exe),
+      ),
+      { force: true },
+    );
+    const missing = fakeRun();
+    expect(
+      windowsJobHelper({ host, systemRoot: windows, run: missing.run }),
+    ).toMatch(/jobhelper-[0-9a-f]{16}\.exe$/);
+    expect(missing.calls).toEqual(["compile", "run"]);
+  });
+
+  it("tries again once the 24 hour marker has expired", () => {
+    expect(
+      windowsJobHelper({
+        host,
+        systemRoot: windows,
+        run: fakeRun({ exit: 1 }).run,
+      }),
+    ).toBeUndefined();
+    const marker = join(helperDirectory(host), "unavailable.json");
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(marker, old, old);
+    const retry = fakeRun();
+    expect(
+      windowsJobHelper({ host, systemRoot: windows, run: retry.run }),
+    ).toMatch(/jobhelper-[0-9a-f]{16}\.exe$/);
+    expect(retry.calls).toEqual(["compile", "run"]);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("falls back when the state home cannot be written", () => {
+    writeFileSync(state, "a file where the state home should be");
+    const { run } = fakeRun();
+    expect(
+      windowsJobHelper({ host, systemRoot: windows, run }),
+    ).toBeUndefined();
   });
 
   it("gives up without a compiler and writes nothing", () => {
@@ -230,6 +309,8 @@ describe.runIf(process.platform === "win32")(
   () => {
     beforeEach(() => {
       vi.stubEnv("PISHIP_STATE_HOME", state);
+      // The suite turns the helper off for every other file (vitest.config.ts).
+      vi.stubEnv("PISHIP_WINDOWS_JOB_HELPER", "on");
     });
 
     function run(
@@ -277,24 +358,38 @@ describe.runIf(process.platform === "win32")(
       });
       expect(file).not.toMatch(/powershell/i);
       const supervisor = spawn(file, args, { env, windowsHide: true });
-      const childPid = await new Promise<number>((done) =>
-        supervisor.stdout.once("data", (chunk) => done(Number(String(chunk)))),
-      );
-      expect(() => process.kill(childPid, 0)).not.toThrow();
-      spawn("taskkill", ["/pid", String(supervisor.pid), "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      const deadline = Date.now() + 10_000;
-      let alive = true;
-      while (alive && Date.now() < deadline) {
-        try {
-          process.kill(childPid, 0);
-          await new Promise((wait) => setTimeout(wait, 100));
-        } catch {
-          alive = false;
+      let childPid: number | undefined;
+      try {
+        childPid = await new Promise<number>((done) =>
+          supervisor.stdout.once("data", (chunk) =>
+            done(Number(String(chunk))),
+          ),
+        );
+        expect(() => process.kill(childPid as number, 0)).not.toThrow();
+        spawn("taskkill", ["/pid", String(supervisor.pid), "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        }).on("error", () => {});
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          try {
+            process.kill(childPid, 0);
+            await new Promise((wait) => setTimeout(wait, 100));
+          } catch {
+            childPid = undefined;
+            break;
+          }
         }
+      } finally {
+        supervisor.kill();
+        if (childPid !== undefined)
+          try {
+            process.kill(childPid);
+          } catch {
+            // already gone
+          }
       }
+      const alive = childPid !== undefined;
       expect(alive).toBe(false);
     }, 60_000);
   },
