@@ -22,6 +22,11 @@ export default defineConfig({
       // against local servers, and the test of the bundled template asks for
       // them explicitly).
       PISHIP_INIT_PROBE: "unreachable",
+      // On Windows a governed child is started through a compiled helper kept
+      // under the state home. A test must not compile it into the user's real
+      // home or race other files to do it; the helper's own live test turns it
+      // back on, with a state home of its own.
+      PISHIP_WINDOWS_JOB_HELPER: "off",
     },
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     testTimeout: 15_000,

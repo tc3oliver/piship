@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnManaged, spawnProcess } from "./process.js";
 import { windowsJobCommand } from "./windows-job.js";
 
@@ -118,6 +118,12 @@ describe.runIf(process.platform === "win32")(
   () => {
     afterEach(() => {
       vi.unstubAllEnvs();
+    });
+
+    // The compiled helper has its own live tests; this one is the PowerShell
+    // supervisor, the fallback.
+    beforeEach(() => {
+      vi.stubEnv("PISHIP_WINDOWS_JOB_HELPER", "off");
     });
 
     it("runs a governed child to its marker and exit 0 with only the approved environment", async () => {
