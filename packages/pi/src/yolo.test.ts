@@ -20,6 +20,8 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  type ApprovalChannel,
+  type ApprovalDetail,
   type AuditEvent,
   type ManagedFetch,
   PiShipError,
@@ -608,5 +610,187 @@ describe("the --yolo indicator", () => {
         .filter((event) => event.event.startsWith("policy.auto_"))
         .map((event) => `${event.event} ${event.detail?.source ?? ""}`),
     ).toEqual(["policy.auto_enabled yolo", "policy.auto_disabled session"]);
+  });
+});
+
+// Allow for this session, by rule: the same fixture's layers decide which
+// asks it may cover.
+describe("allow for this session", () => {
+  /** A prompt that records what it showed and answers for the session. */
+  function sessionPrompt() {
+    const shown: ApprovalDetail[] = [];
+    const channel: ApprovalChannel = async (_decision, detail) => {
+      shown.push(detail);
+      return "approved-session";
+    };
+    return { shown, channel };
+  }
+
+  async function openWith(mode: "managed" | "personal", rules: unknown[]) {
+    const built = distribution({ mode });
+    writeFileSync(
+      join(built.stateDir, "config", "policy.json"),
+      JSON.stringify(rules),
+    );
+    const session = await GovernanceSession.open(built.options);
+    sessions.push(session);
+    return { ...built, session };
+  }
+
+  const covers = (rule: string, action: string) =>
+    `Allow for this session covers any target of rule ${rule} for ${action} in this session`;
+
+  it("covers any later target of the same rule and action, and the prompt says so", async () => {
+    const { session, workspace } = await open({ mode: "personal" });
+    const { shown, channel } = sessionPrompt();
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        channel,
+      ),
+    ).toMatchObject({ outcome: "allow", remember: "session", ruleId: "write" });
+    expect(shown[0]?.scopes).toEqual(["once", "session"]);
+    expect(shown[0]?.message).toContain(covers("write", "filesystem.write"));
+    for (const path of ["b.txt", join("deep", "c.txt")])
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, path),
+          channel,
+        ),
+      ).toMatchObject({ outcome: "allow", approval: "session" });
+    expect(shown).toHaveLength(1);
+    // Another rule (the user's own) still asks.
+    await session.decide(
+      "filesystem.read",
+      join(workspace, "private", "a.txt"),
+      channel,
+    );
+    expect(shown).toHaveLength(2);
+  });
+
+  it("grants only the exact target for policy.default and for a rule that keeps its prompt", async () => {
+    const { session, workspace } = await open({ mode: "personal" });
+    const { shown, channel } = sessionPrompt();
+    // policy.default (a builtin rule) is not a rule grant.
+    await session.decide("web.request", "example.org", channel);
+    expect(shown[0]?.message).not.toContain("covers any target");
+    await session.decide("web.request", "example.org", channel);
+    expect(shown).toHaveLength(1);
+    await session.decide("web.request", "example.com", channel);
+    expect(shown).toHaveLength(2);
+    // An enforced ask: personal offers the session answer, for this file only.
+    const kept = join(workspace, "kept", "a.txt");
+    await session.decide("filesystem.write", kept, channel);
+    expect(shown[2]?.scopes).toEqual(["once", "session"]);
+    expect(shown[2]?.message).not.toContain("covers any target");
+    await session.decide("filesystem.write", kept, channel);
+    expect(shown).toHaveLength(3);
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "kept", "b.txt"),
+      channel,
+    );
+    expect(shown).toHaveLength(4);
+  });
+
+  it("is never offered for a managed user's own ask, and a default ask's grant does not cover it", async () => {
+    const { session, workspace } = await open({ mode: "managed" });
+    const { shown, channel } = sessionPrompt();
+    await session.decide("filesystem.write", join(workspace, "a.txt"), channel);
+    expect(shown[0]?.message).toContain(covers("write", "filesystem.write"));
+    const mine = join(workspace, "private", "a.txt");
+    const decided = await session.decide("filesystem.read", mine, channel);
+    expect(shown).toHaveLength(2);
+    expect(shown[1]?.scopes).toBeUndefined();
+    // Not offered, so not remembered: it asks again.
+    expect(decided).not.toHaveProperty("remember");
+    await session.decide("filesystem.read", mine, channel);
+    expect(shown).toHaveLength(3);
+  });
+
+  it("does not cover another action under the same rule id", async () => {
+    const { session } = await openWith("personal", [
+      { id: "net", action: "*", resource: "example.org", effect: "ask" },
+    ]);
+    const { shown, channel } = sessionPrompt();
+    expect(
+      await session.decide("web.request", "example.org", channel),
+    ).toMatchObject({ ruleId: "net", remember: "session" });
+    expect(
+      await session.decide("network.connect", "example.org", channel),
+    ).toMatchObject({ ruleId: "net", approval: "approved" });
+    expect(shown).toHaveLength(2);
+    expect(shown[1]?.message).toContain(covers("net", "network.connect"));
+  });
+
+  it("never covers a deny: a resource deny and a tool deny still win", async () => {
+    const { session } = await openWith("personal", [
+      {
+        id: "my-no-rm",
+        action: "shell.execute",
+        resource: "rm **",
+        effect: "deny",
+      },
+      { id: "sh", action: "shell.execute", effect: "ask" },
+      {
+        id: "no-edit",
+        action: "tool.execute",
+        resource: "edit",
+        effect: "deny",
+      },
+      { id: "t", action: "tool.execute", resource: "*", effect: "ask" },
+    ]);
+    const { shown, channel } = sessionPrompt();
+    expect(await session.decide("shell.execute", "ls", channel)).toMatchObject({
+      ruleId: "sh",
+      remember: "session",
+    });
+    expect(
+      await session.decide("shell.execute", "rm -rf x", channel),
+    ).toMatchObject({ outcome: "deny", ruleId: "my-no-rm" });
+    expect(
+      await session.decide("tool.execute", "write", channel),
+    ).toMatchObject({ ruleId: "t", remember: "session" });
+    expect(await session.decide("tool.execute", "read", channel)).toMatchObject(
+      { approval: "session" },
+    );
+    expect(await session.decide("tool.execute", "edit", channel)).toMatchObject(
+      { outcome: "deny", ruleId: "no-edit" },
+    );
+    expect(shown).toHaveLength(2);
+  });
+
+  it("stores nothing, and a later session or a subagent child does not inherit it", async () => {
+    const { session, workspace, stateDir, options } = await open({
+      mode: "personal",
+    });
+    const files = () =>
+      readdirSync(stateDir, { recursive: true })
+        .map(String)
+        .filter((path) => !path.startsWith("logs"))
+        .sort();
+    const before = files();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      sessionPrompt().channel,
+    );
+    expect(files()).toEqual(before);
+    for (const next of [
+      options,
+      { ...options, subagent: { parentSession: session.sessionId } },
+    ]) {
+      const child = await GovernanceSession.open(next);
+      sessions.push(child);
+      expect(
+        await child.decide(
+          "filesystem.write",
+          join(workspace, "b.txt"),
+          undefined,
+        ),
+      ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+    }
   });
 });

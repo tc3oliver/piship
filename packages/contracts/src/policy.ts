@@ -130,8 +130,8 @@ export interface ResolvedDecision extends PolicyDecision {
     | "session";
   /**
    * What the person asked to keep: `allow` or `deny` (stored for the project,
-   * personal mode only), or `session` (in memory, the same action and target,
-   * until the session ends).
+   * personal mode only), or `session` (in memory until the session ends: the
+   * same action and target, or the same rule and action; see GovernanceSession).
    */
   readonly remember?: ApprovalScope | "allow" | "deny";
 }
@@ -149,8 +149,8 @@ export type PolicyEvaluator = (request: PolicyRequest) => PolicyDecision;
 
 /**
  * How long an approval is remembered. `once` is this action only; `session`
- * is every later ask for the same action and target until the session ends,
- * kept in memory. A persistent scope joins this list, with its own answer,
+ * is every later ask for the same action and target (or the same rule and
+ * action) until the session ends, kept in memory. A persistent scope joins this list, with its own answer,
  * when something stores it.
  */
 export type ApprovalScope = "once" | "session";
