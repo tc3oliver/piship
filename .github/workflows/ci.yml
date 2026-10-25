@@ -13,18 +13,21 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  check:
-    # The names of the required checks: keep them exact.
-    name: check (${{ matrix.os }})
+  # Each target's check runs on several runners at once: the unit files in
+  # shards balanced by their measured durations (tests/helpers/unit-shards.ts)
+  # and everything else on one more runner. Each runner repeats the setup and
+  # build (about 40 seconds on Ubuntu and macOS, 75 on Windows), so a target
+  # has only as many unit shards as keep it below Windows' compatibility
+  # runner, the slowest of all.
+  ubuntu:
+    name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        # The whole check on one runner; Windows splits it (job windows).
-        # actionlint types the shared steps' matrix from these keys.
-        part: [all]
-        shard: [""]
+        include:
+          - { os: ubuntu-latest, part: unit, shard: 1/1 }
+          - { os: ubuntu-latest, part: compatibility }
     steps: &check-steps
       # Windows runners are ephemeral VMs whose C: drive is slow for the many
       # small files npm writes. Skip Defender scanning and keep temp output and
@@ -65,21 +68,25 @@ jobs:
       # namespaces, which Ubuntu restricts through AppArmor by default. The live
       # secret-store test needs GNOME Keyring, a D-Bus session, and secret-tool;
       # without recommended packages this stays clear of the desktop stack.
+      # GNOME Keyring alone pulls in about 40 packages, so a unit shard
+      # installs bubblewrap only. Its platform-store.test.ts then meets a
+      # missing secret-tool; the compatibility runner runs that whole file
+      # with the real one.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends bubblewrap gnome-keyring dbus dbus-x11 libsecret-tools
+          sudo apt-get install -y -qq --no-install-recommends bubblewrap ${{ matrix.part != 'unit' && 'gnome-keyring dbus dbus-x11 libsecret-tools' || '' }}
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
       - run: npm ci
       # Formatting, lint, types, and boundaries do not depend on the OS.
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os == 'ubuntu-latest' && matrix.part != 'unit'
         run: npm run format:check
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os == 'ubuntu-latest' && matrix.part != 'unit'
         run: npm run lint
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os == 'ubuntu-latest' && matrix.part != 'unit'
         run: npm run typecheck
-      - if: matrix.os == 'ubuntu-latest'
+      - if: matrix.os == 'ubuntu-latest' && matrix.part != 'unit'
         run: npm run check:boundaries
       - run: npm run build
       # The deterministic footprint of the managed example (file counts and
@@ -90,15 +97,15 @@ jobs:
         run: npm run check:budgets
       # Linux and macOS must enforce the sandbox: a missing adapter fails
       # the sandbox tests instead of skipping them.
-      - if: matrix.part == 'all'
-        run: npm test
+      - if: matrix.part == 'unit' && runner.os != 'Windows'
+        run: npm test -- --shard=${{ matrix.shard }}
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
           PISHIP_REQUIRE_ISOLATOR: ${{ runner.os != 'Windows' && '1' || '0' }}
       # A Windows unit shard keeps the default PowerShell but hands the
       # command to cmd: the npm 11.21 PowerShell shim drops `--`, and the
       # shard would then run every file.
-      - if: matrix.part == 'unit'
+      - if: matrix.part == 'unit' && runner.os == 'Windows'
         run: cmd /d /c "npm test -- --shard=${{ matrix.shard }}"
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
@@ -117,7 +124,7 @@ jobs:
         run: npx vitest run packages/credentials/src/platform-store.test.ts
         env:
           PISHIP_LIVE_SECRET_STORE: "1"
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && matrix.part != 'unit'
         timeout-minutes: 5
         run: |
           dbus-run-session -- bash -euo pipefail -c '
@@ -134,11 +141,19 @@ jobs:
           '
         env:
           PISHIP_LIVE_SECRET_STORE: "1"
-  # Windows takes longest, so its check runs on three runners at once: the
-  # unit files in two shards and everything else on the third. Each runner
-  # repeats the setup and build (about 75 seconds).
+  macos:
+    name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, part: unit, shard: 1/2 }
+          - { os: macos-latest, part: unit, shard: 2/2 }
+          - { os: macos-latest, part: compatibility }
+    steps: *check-steps
   windows:
-    name: check (windows-latest, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
+    name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -148,8 +163,27 @@ jobs:
           - { os: windows-latest, part: unit, shard: 2/2 }
           - { os: windows-latest, part: compatibility }
     steps: *check-steps
-  # The required check for Windows. It passes only when every Windows runner
-  # succeeded: a skipped or cancelled one fails it.
+  # The required checks, one per target by these exact names. Each passes
+  # only when every runner of its target succeeded: a skipped or cancelled
+  # one fails it.
+  check-ubuntu:
+    name: check (ubuntu-latest)
+    needs: [ubuntu]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.ubuntu.result }}
+  check-macos:
+    name: check (macos-latest)
+    needs: [macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.macos.result }}
   check-windows:
     name: check (windows-latest)
     needs: [windows]
