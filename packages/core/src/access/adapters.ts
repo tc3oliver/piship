@@ -21,6 +21,9 @@ export async function loadAdapter<T>(
   kind: string,
   context: AdapterContext,
   timeoutMs: number = ADAPTER_CALL_TIMEOUT_MS,
+  // Apart from timeoutMs, which tests shorten: a loaded host can take longer
+  // than a short deadline to import a module that settles.
+  importTimeoutMs: number = ADAPTER_CALL_TIMEOUT_MS,
 ): Promise<T> {
   const base = resolve(distributionDir, "resources");
   const absolute = resolve(base, ...path.slice(2).split("/"));
@@ -34,27 +37,13 @@ export async function loadAdapter<T>(
     );
   // Importing the module and running its factory are the adapter's code: a
   // top-level await or a factory that never settles must not hang PiShip.
-  const instance = await callWithDeadline(
-    async () => {
-      const module = (await import(pathToFileURL(absolute).href)) as {
-        default?: unknown;
-      };
-      if (typeof module.default !== "function")
-        throw new PiShipError(
-          "CONFIG_INVALID",
-          `The ${kind} adapter must default-export a factory function`,
-          {
-            component: kind,
-          },
-        );
-      return (module.default as (context: AdapterContext) => unknown)(context);
-    },
-    {
-      timeoutMs,
+  const bounded = <R>(call: () => Promise<R>, ms: number): Promise<R> =>
+    callWithDeadline(call, {
+      timeoutMs: ms,
       timedOut: () =>
         new PiShipError(
           "CONFIG_UNAVAILABLE",
-          `The ${kind} adapter ${path} did not load within ${Math.ceil(timeoutMs / 1000)} s`,
+          `The ${kind} adapter ${path} did not load within ${Math.ceil(ms / 1000)} s`,
           {
             component: kind,
             retryable: true,
@@ -62,14 +51,27 @@ export async function loadAdapter<T>(
               adapter: path,
               phase: "load",
               reason: "timeout",
-              timeoutMs,
+              timeoutMs: ms,
             },
           },
         ),
       // No caller signal: never called.
       cancelled: () => undefined,
-    },
-  );
+    });
+  const module = (await bounded(
+    () => import(pathToFileURL(absolute).href),
+    importTimeoutMs,
+  )) as { default?: unknown };
+  if (typeof module.default !== "function")
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `The ${kind} adapter must default-export a factory function`,
+      {
+        component: kind,
+      },
+    );
+  const factory = module.default as (context: AdapterContext) => unknown;
+  const instance = await bounded(async () => factory(context), timeoutMs);
   if (!instance || typeof instance !== "object")
     throw new PiShipError(
       "CONFIG_INVALID",

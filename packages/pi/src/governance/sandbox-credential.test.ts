@@ -10,16 +10,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  IdentitySession,
-  PrincipalKey,
-  SecretStore,
-  SecretValue,
+import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  type IdentitySession,
+  type PrincipalKey,
+  type SecretStore,
+  type SecretValue,
 } from "@piship/contracts";
 import { type AccessEvent, openSandboxCredential } from "@piship/core";
 import type { SandboxBackend } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -540,6 +541,30 @@ ${body}`,
     });
   });
 
+  it("fails the launch when the module never settles", {
+    timeout: 5_000,
+  }, async () => {
+    write("await new Promise(() => {});\nexport default () => ({});");
+    // The import is bounded by the production deadline, not the seam.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const launch = sandboxBackend(
+        options(custom, { adapterTimeoutMs: 50 } as Partial<GovernanceOptions>),
+      );
+      launch.catch(() => undefined);
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+      await vi.advanceTimersByTimeAsync(ADAPTER_CALL_TIMEOUT_MS);
+      await expect(launch).rejects.toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining(
+          "the custom sandbox adapter could not be loaded: the module did not settle within 60 s",
+        ),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails the launch when sandboxCredential never answers, and revokes a credential issued late", {
     timeout: 5_000,
   }, async () => {
@@ -569,7 +594,6 @@ export default () => ({});`);
     expect(log.signals).toHaveLength(1);
     expect(log.signals[0]?.aborted).toBe(true);
     log.issue?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(log.revoked).toEqual(["fake-late-token"]);
+    await vi.waitFor(() => expect(log.revoked).toEqual(["fake-late-token"]));
   });
 });
