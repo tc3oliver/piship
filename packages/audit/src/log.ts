@@ -568,8 +568,13 @@ const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
  * process can win, replayed, and deleted. Every write is synchronous, so the
  * file is never behind the in-memory queue:
  *
- * - `append` (each emitted event) is one O_APPEND write and an fsync. A crash
- *   can leave only the last line torn, and a reader drops a torn last line.
+ * - `append` (each emitted event) is one O_APPEND write, which is in the
+ *   file as soon as it returns: a crash of the process loses nothing, and can
+ *   leave only the last line torn, which a reader drops.
+ * - `sync` (once per flush, before the batch is sent) fsyncs those appends,
+ *   so an event is on disk before the collector can have it. An fsync per
+ *   event costs about 8 ms on macOS (F_FULLFSYNC); an operating system crash
+ *   or power loss can lose what was emitted since the last flush.
  * - `replace` (after each acknowledged batch, and at launch) writes the queue
  *   to a temporary, fsyncs it, and renames it over the file, so a crash leaves
  *   the old or the new content, never a mix.
@@ -673,7 +678,6 @@ class HttpSpool {
     );
     try {
       writeFileSync(fd, line, "utf8");
-      fsyncSync(fd);
       this.#size += bytes;
     } catch (error) {
       // A short write (a full disk) must not leave a fragment that the next
@@ -684,6 +688,16 @@ class HttpSpool {
         this.#torn = true;
       }
       throw error;
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  sync(): void {
+    // Windows flushes only through a handle that can write.
+    const fd = openSync(this.path, constants.O_RDWR | NOFOLLOW);
+    try {
+      fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
@@ -1134,6 +1148,12 @@ export class AuditLog implements AuditEmitter {
     // Deliver only what was queued when the flush started, in bounded
     // batches, removing each batch as soon as it is acknowledged.
     let remaining = sink.queue.length;
+    if (sink.spool && remaining > 0)
+      try {
+        sink.spool.sync();
+      } catch (error) {
+        this.#spoolFailure(sink, error);
+      }
     while (remaining > 0) {
       const batch = sink.queue.slice(0, Math.min(remaining, BATCH_LIMIT));
       try {
