@@ -169,10 +169,11 @@ export interface Holder {
 /**
  * The running processes, other than this one, whose command line names
  * `path`: what a test started there and may still have files open in it.
- * Chrome's helper processes name their profile directory this way, and
- * outlive the browser process the package waits for on Windows.
+ * Chrome's helper processes name their profile directory this way and are
+ * a likely holder on Windows: they may outlive the browser process the
+ * package waits for.
  */
-export function processesNaming(path: string): Holder[] {
+export function processesNaming(path: string, timeoutMs = 10_000): Holder[] {
   const windows = process.platform === "win32";
   const fold = (text: string) => {
     const slashes = text.replaceAll("\\", "/");
@@ -181,6 +182,8 @@ export function processesNaming(path: string): Holder[] {
   const names = new Set([path]);
   try {
     names.add(realpathSync(path));
+    // The native spelling expands Windows 8.3 short names such as RUNNER~1.
+    names.add(realpathSync.native(path));
   } catch {
     // Gone already: only the given spelling can be named.
   }
@@ -194,11 +197,11 @@ export function processesNaming(path: string): Holder[] {
           "-Command",
           "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
         ],
-        { encoding: "utf8", timeout: 30_000, windowsHide: true },
+        { encoding: "utf8", timeout: timeoutMs, windowsHide: true },
       )
-    : spawnSync("ps", ["-Ao", "pid=,args="], {
+    : spawnSync("ps", ["-ww", "-Ao", "pid=,args="], {
         encoding: "utf8",
-        timeout: 30_000,
+        timeout: timeoutMs,
       });
   if (listed.status !== 0)
     throw new Error(
@@ -231,6 +234,7 @@ function killTree(pid: number): void {
   if (process.platform === "win32")
     spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
       stdio: "ignore",
+      timeout: 10_000,
     });
   else
     try {
@@ -244,7 +248,7 @@ export interface RemoveTreeOptions {
   /** How long the processes that name the tree get to exit, in milliseconds. */
   readonly deadlineMs?: number;
   readonly pollMs?: number;
-  readonly holders?: (path: string) => readonly Holder[];
+  readonly holders?: (path: string, timeoutMs: number) => readonly Holder[];
   readonly kill?: (pid: number) => void;
   readonly remove?: (path: string) => void;
 }
@@ -258,6 +262,8 @@ const describeHolders = (holders: readonly Holder[]) =>
  * that name the tree are waited for first; any still running at the deadline
  * leaked from the test: they are stopped so the tree can go, and the removal
  * then fails naming them. A removal that fails anyway names what still runs.
+ * When the processes cannot be listed the tree is still removed, and the
+ * listing error is reported with any failure.
  */
 export async function removeTree(
   path: string,
@@ -276,34 +282,52 @@ export async function removeTree(
       }));
   const pollMs = options.pollMs ?? 500;
   const deadline = Date.now() + (options.deadlineMs ?? 15_000);
-  let running = holders(path);
+  let listingError: unknown;
+  // A listing that fails counts as nothing running: the removal still runs.
+  const look = (by: number) => {
+    try {
+      return holders(path, Math.max(1_000, by - Date.now()));
+    } catch (error) {
+      listingError = error;
+      return [];
+    }
+  };
+  const listing = () =>
+    listingError === undefined
+      ? ""
+      : `\nThe processes could not be listed: ${(listingError as Error).message}`;
+  let running = look(deadline);
   while (running.length > 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, pollMs));
-    running = holders(path);
+    running = look(deadline);
   }
   const leaked = running;
   for (const item of leaked) kill(item.pid);
   if (leaked.length > 0) {
     // Give what was killed a moment to release its handles.
     const killedBy = Date.now() + 5_000;
-    while (holders(path).length > 0 && Date.now() < killedBy)
+    while (look(killedBy).length > 0 && Date.now() < killedBy)
       await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
   try {
     remove(path);
   } catch (error) {
-    const still = holders(path);
+    const still = look(Date.now() + 10_000);
     throw new Error(
       `Could not remove ${path}: ${(error as Error).message}${
         still.length > 0
           ? `\nProcesses naming it still run:\n${describeHolders(still)}`
           : "\nNo running process names it."
-      }`,
+      }${listing()}`,
       { cause: error },
     );
   }
   if (leaked.length > 0)
     throw new Error(
-      `${leaked.length} process(es) started under ${path} still ran ${Math.round((options.deadlineMs ?? 15_000) / 1000)} s after the scenario and were stopped:\n${describeHolders(leaked)}`,
+      `${leaked.length} process(es) started under ${path} still ran ${Math.round((options.deadlineMs ?? 15_000) / 1000)} s after the scenario and were stopped:\n${describeHolders(leaked)}${listing()}`,
+    );
+  if (listingError !== undefined)
+    console.warn(
+      `Removed ${path} without waiting for its processes${listing()}`,
     );
 }

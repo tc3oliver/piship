@@ -202,7 +202,8 @@ beforeAll(() => {
   artifact = join(temp, "dist", "devcode");
 }, 600_000);
 
-// The browser test's Chrome helpers can still be exiting when it returns.
+// A helper process of the browser test's Chrome may still hold files here
+// when it returns (a likely cause of an EPERM seen once on Windows).
 afterAll(async () => {
   if (temp) await removeTree(temp);
 }, 60_000);

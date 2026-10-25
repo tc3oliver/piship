@@ -235,6 +235,26 @@ describe("scenario tree removal", () => {
     ).rejects.toThrow(/EPERM[\s\S]*still run:\n4242 chrome\.exe/);
   });
 
+  it("still removes the tree when the processes cannot be listed, and reports why", async () => {
+    const ran: string[] = [];
+    await expect(
+      removeTree("T", {
+        pollMs: 1,
+        holders: () => {
+          throw new Error("powershell.exe timed out");
+        },
+        kill: () => ran.push("kill"),
+        remove: () => {
+          ran.push("remove");
+          throw new Error("EPERM, Permission denied");
+        },
+      }),
+    ).rejects.toThrow(
+      /EPERM[\s\S]*could not be listed: powershell\.exe timed out/,
+    );
+    expect(ran).toEqual(["remove"]);
+  });
+
   it("finds a real process by a path in its command line", async () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-holder-"));
     const child = spawn(
