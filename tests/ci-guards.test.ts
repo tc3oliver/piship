@@ -155,10 +155,13 @@ describe("E2E vulnerability preflight", () => {
     );
     it(`${file} audits once before its shards`, () => {
       expect(text).toContain("run: node scripts/audit-preflight.mjs");
-      expect(
-        text.match(/^ {4}needs: preflight$/gm)?.length,
-      ).toBeGreaterThanOrEqual(1);
-      expect(text).toMatch(/needs: \[preflight, /);
+      const jobs =
+        file === "portable-e2e" ? ["portable"] : ["stack", "reference"];
+      for (const name of jobs)
+        expect(text).toMatch(
+          new RegExp(`\\n  ${name}:\\n    needs: preflight\\n`),
+        );
+      expect(text).toMatch(/\n  report:\n    needs: \[preflight, /);
     });
   }
 });

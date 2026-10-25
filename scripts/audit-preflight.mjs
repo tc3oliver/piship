@@ -8,7 +8,7 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const BLOCKING = ["high", "critical"];
+const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
 
 /** The `npm audit --json` advisories at or above high, one per package. */
 export function blockingAdvisories(audit) {
@@ -19,7 +19,9 @@ export function blockingAdvisories(audit) {
     for (const via of entry.via ?? []) {
       if (!via || typeof via !== "object") continue;
       const severity = via.severity ?? entry.severity;
-      if (!BLOCKING.includes(severity)) continue;
+      // As the release gate: an unrecognised severity cannot be ranked, so it blocks.
+      const rank = SEVERITY_ORDER.indexOf(severity);
+      if (rank !== -1 && rank < SEVERITY_ORDER.indexOf("high")) continue;
       const id =
         String(via.url ?? "").match(
           /GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}/i,

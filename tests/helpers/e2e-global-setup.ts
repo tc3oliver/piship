@@ -25,7 +25,10 @@ export default async function setup(project: TestProject) {
     console.error(`E2E global setup failed: ${message}`);
     if (process.env.GITHUB_ACTIONS)
       console.error(
-        `::error title=E2E global setup failed::${message.replace(/\r?\n/g, "%0A")}`,
+        `::error title=E2E global setup failed::${message
+          .replace(/%/g, "%25")
+          .replace(/\r/g, "%0D")
+          .replace(/\n/g, "%0A")}`,
       );
     // The build that failed is what has to be reported. A fixture directory a
     // process still holds (Windows cannot remove one) must not replace it.
