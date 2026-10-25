@@ -1,10 +1,17 @@
 // Governed child processes: approved environment only, process-group
 // lifetime, timeout with grace, AbortSignal cancellation, orphan cleanup.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import {
+  type ChildProcess,
+  execFile,
+  execFileSync,
+  spawn,
+  spawnSync,
+} from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { redact } from "@piship/contracts";
 import type { WrappedCommand } from "./adapter.js";
 import { stripCredentials } from "./environment.js";
+import { SANDBOX_EXEC } from "./seatbelt.js";
 import { windowsJobSupervisor } from "./windows-job.js";
 
 /** Anything that can place a command inside a sandbox (an ActiveSandbox). */
@@ -87,19 +94,236 @@ function killTree(pid: number, platform: NodeJS.Platform): void {
   signalGroup(pid, "SIGKILL");
 }
 
+// macOS has no PID namespace: a descendant that calls setsid() or setpgid()
+// leaves the process group the kill reaches. So while a command contained by
+// Seatbelt runs, its descendants that left the group are recorded with their
+// start time, and are killed with it. An uncontained command keeps the plain
+// process-group lifetime, as on Linux, so a server a user detaches survives.
+// shortcut: one whose parent exits between two snapshots (an immediate double
+// fork) is never seen; closing that needs native process tracking.
+interface Recorded {
+  readonly start: string;
+  /** The newest snapshot that confirmed it. */
+  seen: number;
+}
+interface Tracked {
+  readonly since: number;
+  /** The last snapshot taken before tracking began; only later ones show it. */
+  readonly from: number;
+  /** Each descendant outside the leader's group, by pid. */
+  readonly known: Map<number, Recorded>;
+}
+const tracked = new Map<number, Tracked>();
+let snapshots = 0;
+let pollTimer: NodeJS.Timeout | undefined;
+let pollDue = 0;
+let polling = false;
+
+interface PsRow {
+  readonly ppid: number;
+  readonly pgid: number;
+  readonly start: string;
+}
+
+/**
+ * The process table, numbered when its `ps` is started. A sync and an async
+ * snapshot may finish in another order than they were numbered; that only
+ * skips some deletions, never adds a record from the wrong process.
+ */
+export interface Snapshot {
+  readonly seq: number;
+  readonly rows: ReadonlyMap<number, PsRow>;
+}
+
+const PS_ARGS = ["-Ao", "pid=,ppid=,pgid=,lstart="];
+// A fixed locale and zone make one process's start time read the same each time.
+const PS_ENV = { PATH: "/usr/bin:/bin", TZ: "UTC0", LC_ALL: "C" };
+const PS_TIMEOUT_MS = 1000;
+
+export function parsePs(text: string): Map<number, PsRow> {
+  const rows = new Map<number, PsRow>();
+  for (const line of text.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S.*\S)\s*$/.exec(line);
+    if (match)
+      rows.set(Number(match[1]), {
+        ppid: Number(match[2]),
+        pgid: Number(match[3]),
+        start: match[4] as string,
+      });
+  }
+  return rows;
+}
+
+// A snapshot that fails or takes over a second reclaims nothing: the command
+// then has only its process-group lifetime.
+function readPs(): Snapshot | undefined {
+  const seq = ++snapshots;
+  try {
+    return {
+      seq,
+      rows: parsePs(
+        execFileSync("/bin/ps", PS_ARGS, {
+          encoding: "utf8",
+          env: PS_ENV,
+          timeout: PS_TIMEOUT_MS,
+          killSignal: "SIGKILL",
+          stdio: ["ignore", "pipe", "ignore"],
+        }),
+      ),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Add to `known` every descendant outside the leader's group of the leader
+ * (only while `alive`: an unreaped leader), of the members of its group (the
+ * group ID stays reserved while it has members, and setpgid cannot leave the
+ * session, so a member whose parent exited is still ours), and of the
+ * recorded processes this snapshot shows with their start time. A record is
+ * dropped only by a snapshot at least as new as the one that last confirmed
+ * it, when that snapshot lacks it or shows its pid with another start time
+ * (exited, and the pid may be reused); an older snapshot read late never
+ * drops or follows it. This process and its ancestors are never recorded.
+ */
+export function trackDescendants(
+  snapshot: Snapshot,
+  leader: number,
+  alive: boolean,
+  known: Map<number, Recorded>,
+  self: number = process.pid,
+): void {
+  const { rows, seq } = snapshot;
+  const queue = alive ? [leader] : [];
+  for (const [pid, record] of known) {
+    if (rows.get(pid)?.start === record.start) {
+      record.seen = Math.max(record.seen, seq);
+      queue.push(pid);
+    } else if (record.seen <= seq) known.delete(pid);
+  }
+  const ancestors = new Set<number>();
+  let ancestor = self;
+  while (ancestor > 1 && !ancestors.has(ancestor)) {
+    ancestors.add(ancestor);
+    ancestor = rows.get(ancestor)?.ppid ?? 0;
+  }
+  const children = new Map<number, number[]>();
+  for (const [pid, row] of rows) {
+    const list = children.get(row.ppid);
+    if (list) list.push(pid);
+    else children.set(row.ppid, [pid]);
+    if (row.pgid === leader && !ancestors.has(pid)) queue.push(pid);
+  }
+  const seen = new Set(queue);
+  while (queue.length > 0)
+    for (const pid of children.get(queue.shift() as number) ?? []) {
+      const row = rows.get(pid) as PsRow;
+      if (seen.has(pid) || ancestors.has(pid) || pid <= 1) continue;
+      seen.add(pid);
+      queue.push(pid);
+      if (row.pgid !== leader && !known.has(pid))
+        known.set(pid, { start: row.start, seen: seq });
+    }
+}
+
+/** Signal the recorded descendants of `leader` that still run, after one more snapshot. */
+function reclaim(
+  leader: number,
+  alive: boolean,
+  signal: NodeJS.Signals,
+  shared?: Snapshot,
+): void {
+  const entry = tracked.get(leader);
+  if (!entry) return;
+  const snapshot = shared ?? readPs();
+  if (!snapshot) return;
+  trackDescendants(snapshot, leader, alive, entry.known);
+  for (const [pid, record] of entry.known) {
+    // Only what this snapshot itself confirmed is signalled.
+    if (record.seen !== snapshot.seq) continue;
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/** Track a leader's escaping descendants until `untrackLeader`. Exported for tests. */
+export function trackLeader(pid: number): void {
+  tracked.set(pid, { since: Date.now(), from: snapshots, known: new Map() });
+  schedulePoll();
+}
+
+export function untrackLeader(pid: number): void {
+  tracked.delete(pid);
+  if (tracked.size === 0 && pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = undefined;
+  }
+}
+
+// One poller for every tracked leader: often while the youngest is new, then
+// less, since most escapes happen as a command starts. A pending tick is only
+// ever brought forward, so commands that keep starting cannot postpone it.
+function schedulePoll(): void {
+  if (tracked.size === 0) return;
+  const youngest = Math.min(
+    ...[...tracked.values()].map((entry) => Date.now() - entry.since),
+  );
+  const due =
+    Date.now() + (youngest < 5_000 ? 250 : youngest < 30_000 ? 1000 : 2000);
+  if (pollTimer && pollDue <= due) return;
+  if (pollTimer) clearTimeout(pollTimer);
+  pollDue = due;
+  pollTimer = setTimeout(poll, due - Date.now());
+  pollTimer.unref();
+}
+
+function poll(): void {
+  pollTimer = undefined;
+  // At most one snapshot is read at a time; `ps` is killed at its timeout,
+  // and one the kernel holds past that stops the polling (fail open), never
+  // piles up more.
+  if (polling) return;
+  polling = true;
+  const seq = ++snapshots;
+  execFile(
+    "/bin/ps",
+    PS_ARGS,
+    { env: PS_ENV, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" },
+    (error, stdout) => {
+      polling = false;
+      if (!error) {
+        const snapshot = { seq, rows: parsePs(stdout) };
+        // An entry is removed when its leader is reaped, so a leader still
+        // here and tracked before the snapshot was taken was alive in it.
+        for (const [leader, entry] of tracked)
+          if (entry.from < seq)
+            trackDescendants(snapshot, leader, true, entry.known);
+      }
+      schedulePoll();
+    },
+  );
+}
+
 function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   // Synchronous best effort: never leave governed children behind.
-  process.on("exit", () => {
-    for (const [pid, platform] of live) killTree(pid, platform);
-    live.clear();
-  });
+  process.on("exit", () => killAllManaged());
 }
 
 /** Kill every governed child still running (for shutdown paths that skip 'exit'). */
 export function killAllManaged(): void {
-  for (const [pid, platform] of live) killTree(pid, platform);
+  const snapshot = [...live.keys()].some((pid) => tracked.has(pid))
+    ? readPs()
+    : undefined;
+  for (const [pid, platform] of live) {
+    if (snapshot) reclaim(pid, true, "SIGKILL", snapshot);
+    killTree(pid, platform);
+  }
   live.clear();
 }
 
@@ -224,6 +448,14 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   let terminating = false;
   let graceTimer: NodeJS.Timeout | undefined;
   let timeoutTimer: NodeJS.Timeout | undefined;
+  // Only a command Seatbelt contains (what the sandbox wraps, and so the MCP
+  // servers started under it), never the uncontained local shell.
+  const track =
+    platform === "darwin" &&
+    process.platform === "darwin" &&
+    pid !== undefined &&
+    launched.file === SANDBOX_EXEC;
+  if (track) trackLeader(pid);
 
   const terminate = () => {
     if (done || pid === undefined || terminating) return;
@@ -232,11 +464,12 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
       killTree(pid, platform);
       return;
     }
+    if (track) reclaim(pid, true, "SIGTERM");
     signalGroup(pid, "SIGTERM");
-    graceTimer = setTimeout(
-      () => killTree(pid, platform),
-      options.graceMs ?? DEFAULT_GRACE_MS,
-    );
+    graceTimer = setTimeout(() => {
+      if (track) reclaim(pid, true, "SIGKILL");
+      killTree(pid, platform);
+    }, options.graceMs ?? DEFAULT_GRACE_MS);
   };
   const onAbort = () => {
     cancelled = true;
@@ -255,8 +488,11 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     if (graceTimer) clearTimeout(graceTimer);
     options.signal?.removeEventListener("abort", onAbort);
     if (pid !== undefined) {
-      // The leader is gone: nothing in its group may outlive it.
+      // The leader is gone: nothing in its group may outlive it. The snapshot
+      // comes first, while the group's members still lead to what they started.
+      if (track) reclaim(pid, false, "SIGKILL");
       if (platform !== "win32") signalGroup(pid, "SIGKILL");
+      if (track) untrackLeader(pid);
       live.delete(pid);
     }
   };
