@@ -18,7 +18,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.1.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "15b239aa1118562c3e4fc81926dc68c91fd8492b8feab33e9e6d81007b84a38a",
+    "npmLockSha256": "9c52b3f3709e64e2f04b8c6dfd05efae7bf3f039dc082cbe027712f94595aa12",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -1961,7 +1961,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-3be1e50668565c5b3aa32d715d3c2ce90232569bb3c21baac18a41a4894706ba",
+    "packages": "sha256-54abee15042bc2fdbb53bb5c4037f886c8801fc9fb7657a7a77f3d7625c85e88",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2005,7 +2005,7 @@
       "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
       "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
       "files": 105,
-      "lockfileSha256": "4b4cdf4257a3eae78f9abe9b2acc9af048be240b4d59799aefc85f5e02b7f719",
+      "lockfileSha256": "ba1bdb01f4e66e25b2148037be21dae050ca669518fd741af5334278f7799e66",
       "resources": [
         {
           "kind": "extensions",
@@ -2242,7 +2242,7 @@
       "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
       "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
       "files": 68,
-      "lockfileSha256": "a91fcb697a16b4e6cee5d0c9828dce4c3f519b6b0613fe472bf539439069b1d0",
+      "lockfileSha256": "d7b8a745c3766068f1ef493becae57776258d68457b2acabdc9638dbf5ff308f",
       "resources": [
         {
           "kind": "extensions",
