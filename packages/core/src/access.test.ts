@@ -1299,6 +1299,79 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       DistributionAccess.open(options).currentIdentity({ required: true }),
     ).resolves.toMatchObject({ subject: "demo-user-1" });
   });
+
+  describe("in-session identity renewal", () => {
+    let offset: number;
+    let session: DistributionAccess;
+    const leaks = () => [
+      ...services.state.credentials.keys(),
+      ...services.state.accessTokens.keys(),
+      ...services.state.refreshTokens.keys(),
+    ];
+    const failure = async () => {
+      const error = await session.requestSecret().catch((caught) => caught);
+      expect(error).toBeInstanceOf(PiShipError);
+      const text = `${error.message}\n${error.stack}\n${JSON.stringify(error)}\n${JSON.stringify(events)}`;
+      for (const secret of leaks()) expect(text).not.toContain(secret);
+      return error as PiShipError;
+    };
+    beforeEach(async () => {
+      // The access token is always inside its 60 s refresh window and the
+      // credential inside `refresh.beforeExpiry` (5 m), so every request renews.
+      services.knobs.accessTokenTtl = 30;
+      services.knobs.credentialTtl = 120;
+      offset = 0;
+      session = DistributionAccess.open({
+        ...options,
+        now: () => Date.now() + offset,
+      });
+      await session.login({ openUrl: (url) => void services.approve(url) });
+    });
+
+    it("renews the sign-in silently and keeps the credential through an identity provider outage", async () => {
+      const first = (await session.requestSecret())?.reveal();
+      expect(names()).toContain("identity.refresh");
+      services.knobs.tokenStatus = 503;
+      // Still valid: the outage does not end the session.
+      expect((await session.requestSecret())?.reveal()).toBe(first);
+      expect((await session.requestSecret())?.reveal()).toBe(first);
+      // Once the provider answers again, the next request renews.
+      services.knobs.tokenStatus = undefined;
+      const renewed = (await session.requestSecret())?.reveal();
+      expect(renewed).toBeTruthy();
+      expect(renewed).not.toBe(first);
+    });
+
+    it("fails closed on an outage once the credential has expired", async () => {
+      await session.requestSecret();
+      services.knobs.tokenStatus = 503;
+      offset = 130_000;
+      expect(await failure()).toMatchObject({ retryable: true });
+    });
+
+    it("never keeps a credential across a forced renewal the provider cannot answer", async () => {
+      await session.requestSecret();
+      services.knobs.tokenStatus = 503;
+      await expect(session.requestSecret({ force: true })).rejects.toThrow();
+    });
+
+    it("ends the session's credential when the sign-in was revoked", async () => {
+      await session.requestSecret();
+      services.state.refreshTokens.clear();
+      expect(await failure()).toMatchObject({ code: "IDENTITY_EXPIRED" });
+      // A later outage does not bring the old credential back.
+      services.knobs.tokenStatus = 503;
+      expect(await failure()).toMatchObject({ retryable: true });
+    });
+
+    it("ends the session's credential when the renewed sign-in names another subject", async () => {
+      await session.requestSecret();
+      services.knobs.refreshSubject = "demo-user-2";
+      expect(await failure()).toMatchObject({ code: "IDENTITY_INVALID" });
+      services.knobs.tokenStatus = 503;
+      expect(await failure()).toMatchObject({ retryable: true });
+    });
+  });
 });
 
 describe("identity requirements of credential providers", () => {
