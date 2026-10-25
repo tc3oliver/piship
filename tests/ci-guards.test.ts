@@ -144,3 +144,24 @@ describe("release candidate supply-chain evidence", () => {
     );
   });
 });
+
+// Every shard of an E2E workflow builds test releases that pass the release
+// vulnerability gate, so one early audit job stands in front of them all.
+describe("E2E vulnerability preflight", () => {
+  for (const file of ["portable-e2e", "reference-e2e"]) {
+    const text = readFileSync(
+      join(ROOT, `.github/workflows/${file}.yml`),
+      "utf8",
+    );
+    it(`${file} audits once before its shards`, () => {
+      expect(text).toContain("run: node scripts/audit-preflight.mjs");
+      const jobs =
+        file === "portable-e2e" ? ["portable"] : ["stack", "reference"];
+      for (const name of jobs)
+        expect(text).toMatch(
+          new RegExp(`\\n  ${name}:\\n    needs: preflight\\n`),
+        );
+      expect(text).toMatch(/\n  report:\n    needs: \[preflight, /);
+    });
+  }
+});
