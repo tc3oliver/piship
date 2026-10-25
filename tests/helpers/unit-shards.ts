@@ -31,13 +31,13 @@ const COLUMN: Readonly<Record<Platform, 0 | 1 | 2>> = {
 
 /**
  * Seconds every file pays before its tests, which the per-file figures leave
- * out: Vitest's import time over the file count on each runner (about 145 s
- * for 279 files on Ubuntu, 110 s on macOS, 230 s on Windows).
+ * out: Vitest's import time over the file count on each runner (about 180 s
+ * for 281 files on Ubuntu, 140 s on macOS, 250 s on Windows).
  */
 const IMPORT: Readonly<Record<Platform, number>> = {
-  linux: 0.5,
-  darwin: 0.4,
-  win32: 0.8,
+  linux: 0.65,
+  darwin: 0.5,
+  win32: 0.9,
 };
 
 function platformOf(platform: NodeJS.Platform): Platform {
