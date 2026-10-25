@@ -1107,6 +1107,35 @@ describe("parallel session launches", () => {
       expect(moved).toEqual([]);
     });
 
+    it("asks whether a holder runs without holding up the launches that could claim the lock", () => {
+      // The answer can start a process (PowerShell on Windows); while the
+      // recovery directory exists no launch may claim, so it must not exist yet.
+      holdAs({
+        pid: livePid(),
+        token: "live-holder",
+        identity: null,
+        started: Date.now(),
+        host: processHostToken(),
+      });
+      const recovery = join(agentDir, ".piship-agent-files-recovery");
+      const during: boolean[] = [];
+      agentFilesLockHooks.beforeHolderCheck = () =>
+        during.push(existsSync(recovery));
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(during).toEqual([false]);
+      expect(ownerOf().token).toBe("live-holder");
+    });
+
+    it("never takes down a lock another launch took after its holder was judged dead", () => {
+      holdAs({ pid: 2 ** 22, token: "dead-holder" });
+      // The dead holder's record was read; before the recovery directory is
+      // taken, the lock is let go and claimed by a live launch.
+      agentFilesLockHooks.beforeHolderCheck = () =>
+        holdAs({ pid: process.pid, token: "new-holder" });
+      expect(() => session()).toThrow("being changed by another launch");
+      expect(ownerOf().token).toBe("new-holder");
+    });
+
     it("marks its recovery directory as in use again before it takes a lock down", () => {
       holdAs({ pid: 2 ** 22, token: "dead-holder" });
       const recovery = join(agentDir, ".piship-agent-files-recovery");
