@@ -325,6 +325,19 @@ describe("diffLocks", () => {
     ]);
   });
 
+  it("flags a server that starts running tool calls in parallel as low", () => {
+    const parallel = clone(base);
+    parallel.governance.manifest.mcp.servers[0].parallelToolCalls = true;
+    const report = diffLocks(base, parallel);
+    expect(report.changes).toEqual([
+      expect.objectContaining({
+        area: "mcp",
+        item: "mcp server docs parallelToolCalls",
+        risk: "low",
+      }),
+    ]);
+  });
+
   it("flags plain HTTP as high and an identity header as medium", () => {
     const https = clone(base);
     https.governance.manifest.mcp.servers.push({

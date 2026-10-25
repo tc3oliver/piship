@@ -910,6 +910,28 @@ describe("governed built-in tools", () => {
   });
 });
 
+describe("MCP tool execution mode", () => {
+  it("is parallel only for a tool whose server opted in", async () => {
+    const { session, workspace } = await open();
+    const descriptor = (server: string, parallel?: true) => ({
+      name: `mcp__${server}__search`,
+      server,
+      tool: "search",
+      description: "",
+      inputSchema: { type: "object" },
+      ...(parallel ? { parallel } : {}),
+      call: async () => ({ text: "", isError: false, truncated: false }),
+    });
+    session.mcp = {
+      tools: () => [descriptor("fast", true), descriptor("plain")],
+      close: async () => {},
+    } as never;
+    const tools = governedTools(session, workspace);
+    expect(tool(tools, "mcp__fast__search").executionMode).toBe("parallel");
+    expect(tool(tools, "mcp__plain__search").executionMode).toBe("sequential");
+  });
+});
+
 describe("one prompt per governed tool call", () => {
   const AUDIT = [
     "audit:",

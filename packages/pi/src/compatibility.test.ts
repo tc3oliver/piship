@@ -2052,6 +2052,28 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
     allow("workspace-read", "filesystem.read", "workspace/**"),
     allow("workspace-write", "filesystem.write", "workspace/**"),
   ];
+  // A stdio MCP server whose `rendezvous` tool answers "met" only when a second
+  // call is in flight at the same time, and "alone" after 1.5s: a barrier, so
+  // overlap is observed rather than inferred from timing.
+  const BARRIER_SERVER = `
+import { createInterface } from "node:readline";
+let waiting = [];
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+const tools = ["rendezvous", "ping"].map((name) => ({ name, description: name, inputSchema: { type: "object", properties: {} } }));
+const text = (value) => ({ content: [{ type: "text", text: value }] });
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (id === undefined) return;
+  if (method === "initialize") return send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "barrier", version: "1" } } });
+  if (method === "tools/list") return send({ id, result: { tools } });
+  if (params.name === "ping") return send({ id, result: text("pong") });
+  const mine = { id, release: () => {} };
+  const timer = setTimeout(() => { waiting = waiting.filter((item) => item !== mine); send({ id, result: text("alone") }); }, 1500);
+  for (const other of waiting) { clearTimeout(timer); other.release(); mine.release = () => {}; send({ id, result: text("met") }); return; }
+  mine.release = () => { clearTimeout(timer); send({ id, result: text("met") }); };
+  waiting.push(mine);
+});
+`;
   const mcpFixture = (name: string) =>
     readFileSync(
       new URL(`../../mcp/src/testing/${name}`, import.meta.url),
@@ -2086,6 +2108,8 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       rules?: string[];
       config?: Partial<ExposureConfig>;
       mcpExposure?: "direct" | "deferred";
+      /** `barrier` servers: `docs` opts in to parallel calls, `plain` does not. */
+      barrier?: boolean;
       extensions?: InlineExtension[];
       /** Extensions loaded before PiShip's policy hooks. */
       before?: InlineExtension[];
@@ -2107,6 +2131,11 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
       ] as const)
         for (const dir of ["mcp", "resources/mcp"])
           write(join(distribution, dir, name), mcpFixture(source));
+    if (options.barrier)
+      // One module per server: an adapter file may be declared once.
+      for (const name of ["docs", "plain"])
+        for (const dir of ["mcp", "resources/mcp"])
+          write(join(distribution, dir, `${name}.mjs`), BARRIER_SERVER);
     const tools = { ...DEFAULT_EXPOSURE_CONFIG, ...options.config };
     // YAML is a superset of JSON: runtime.tools as the manifest declares it.
     const runtimeTools = JSON.stringify({
@@ -2130,6 +2159,15 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
         "  defaults:",
         ...BASE_RULES,
         ...(options.rules ?? []),
+        ...(options.barrier
+          ? [
+              "mcp:",
+              "  mode: allowlist",
+              "  servers:",
+              "    docs: { transport: stdio, module: ./mcp/docs.mjs, exposure: direct, parallelToolCalls: true }",
+              "    plain: { transport: stdio, module: ./mcp/plain.mjs, exposure: direct }",
+            ]
+          : []),
         ...(options.mcpExposure
           ? [
               "mcp:",
@@ -2651,6 +2689,40 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
     );
     agent.dispose();
   });
+
+  const barrierRules = [
+    allow("docs-start", "mcp.server.start", "docs"),
+    allow("plain-start", "mcp.server.start", "plain"),
+    allow("docs-tools", "tool.execute", "mcp__docs__*"),
+    allow("plain-tools", "tool.execute", "mcp__plain__*"),
+    allow("docs-calls", "mcp.tool.call", "docs:*"),
+    allow("plain-calls", "mcp.tool.call", "plain:*"),
+  ];
+  const rendezvous = { name: "mcp__docs__rendezvous", arguments: {} };
+
+  it("MCP parallelToolCalls: a batch of opted-in calls overlaps in the real agent loop", async () => {
+    services.knobs.gatewayMode = "script";
+    services.knobs.toolBatch = true;
+    services.knobs.toolScript = [rendezvous, rendezvous];
+    const { agent } = await governed({ rules: barrierRules, barrier: true });
+    await agent.prompt("overlap");
+    expect(results()).toEqual(["met", "met"]);
+    agent.dispose();
+  }, 30_000);
+
+  it("MCP parallelToolCalls: one sequential tool keeps the whole batch sequential", async () => {
+    services.knobs.gatewayMode = "script";
+    services.knobs.toolBatch = true;
+    services.knobs.toolScript = [
+      rendezvous,
+      rendezvous,
+      { name: "mcp__plain__ping", arguments: {} },
+    ];
+    const { agent } = await governed({ rules: barrierRules, barrier: true });
+    await agent.prompt("sequential");
+    expect(results()).toEqual(["alone", "alone", "pong"]);
+    agent.dispose();
+  }, 30_000);
 
   it("codemode is refused in Plan mode; a nested bash through another tool is refused too", async () => {
     const nested = nestedCaller([

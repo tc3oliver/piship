@@ -227,6 +227,8 @@ export async function startLocalServices(options = {}) {
     gatewayMode: "text",
     // With gatewayMode "script": one tool call per model turn, in order.
     toolScript: [],
+    // With toolBatch, the whole script is one model turn (a parallel batch).
+    toolBatch: false,
     gatewayStatus: undefined,
     gatewayDelayMs: 0,
     acceptedKeys: [],
@@ -619,6 +621,27 @@ export async function startLocalServices(options = {}) {
       );
       if (
         knobs.gatewayMode === "script" &&
+        knobs.toolBatch &&
+        toolMessages.length === 0
+      )
+        return sse(response, [
+          completion(model, {
+            role: "assistant",
+            tool_calls: knobs.toolScript.map((step, index) => ({
+              index,
+              id: `call_script_${index + 1}`,
+              type: "function",
+              function: {
+                name: step.name,
+                arguments: JSON.stringify(step.arguments ?? {}),
+              },
+            })),
+          }),
+          completion(model, {}, "tool_calls"),
+        ]);
+      if (
+        knobs.gatewayMode === "script" &&
+        !knobs.toolBatch &&
         toolMessages.length < knobs.toolScript.length
       ) {
         const step = knobs.toolScript[toolMessages.length];
