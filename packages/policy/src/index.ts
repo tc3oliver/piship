@@ -4,6 +4,7 @@ export * from "./extension-trust.js";
 export * from "./explain.js";
 export * from "./exposure.js";
 export * from "./glob.js";
+export * from "./grant.js";
 export * from "./model-requirements.js";
 export * from "./project.js";
 export * from "./seams.js";
