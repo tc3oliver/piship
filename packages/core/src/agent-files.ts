@@ -933,6 +933,11 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
     // on Windows): its holder may be alive. Not ours to take.
     if (seen === "unknown") throw busy();
     if (typeof seen === "object" && holderRuns(seen)) throw busy();
+    // A lock caught mid-release or mid-claim has no record yet; waiting is
+    // cheaper than taking the recovery directory from a launch that is
+    // claiming right now.
+    if (seen === "missing" && !olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS))
+      throw busy();
     try {
       mkdirSync(recovery, { mode: 0o700 });
     } catch {
@@ -944,6 +949,14 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
       // Only the owner judged dead above is taken down; one that took the
       // lock since was not looked at.
       if (holder === "unknown" || !sameOwner(holder, seen)) throw busy();
+      // An older release's record has no token, so matching it proves only
+      // the process ID, which another live launch may have reused since.
+      if (
+        typeof holder === "object" &&
+        holder.token === null &&
+        holderRuns(holder)
+      )
+        throw busy();
       if (
         holder === "missing" &&
         !olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)
