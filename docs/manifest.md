@@ -143,7 +143,7 @@ A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, 
 | `provider.load` | Capability provider ID, such as `company/flow`; its extension is then decided as `extension.load` with `<class>:<path>` |
 | `mcp.server.start` | Server ID |
 | `mcp.tool.call` | `<server>:<tool>` |
-| `tool.execute` | Tool name, such as `read`, `bash`, or `mcp__docs__search`. An `ask` for `read`, `write`, `edit`, or `bash` is asked together with the call's first `filesystem.*` or `shell.execute` decision, in one prompt; a `deny` from either blocks without a prompt |
+| `tool.execute` | Tool name, such as `read`, `bash`, or `mcp__docs__search`. An `ask` for `read`, `write`, `edit`, or `bash` is asked together with the call's first `filesystem.*` or `shell.execute` decision (for `write`, the parent folder), in one prompt that names both; a `tool.execute` `deny`, or a `deny` on that first decision, blocks without a prompt ([security](security.md#tools-shell-and-plan-mode)) |
 | `shell.execute` | The command text of the `bash` tool or a user `!` command. `allow` and `ask` rules are prefix hints: they do not match a command with a shell metacharacter (`;` `&` `\|` `$` `` ` `` `<` `>` `(` `)`, a line break, `^`, `%`) that the pattern does not spell out, except the bare `**`; `deny` rules always match. An `ask` from `policy.enforced`, a team or project rule, or a managed user's own rule still applies to such a chained command (`git push**` keeps its prompt for `git push origin main; true`); it only ever adds an `ask` to the strictest-wins result |
 | `filesystem.read`, `filesystem.write` | Absolute path, symlink-resolved, with `/` separators |
 | `session.export` | `public`, `local`, or `support` ([session export](#session-export)) |

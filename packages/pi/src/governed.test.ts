@@ -1143,7 +1143,13 @@ describe("one prompt per governed tool call", () => {
   });
 
   it("still asks for the tool when execute runs under an ID the hook never saw", async () => {
-    const { session, workspace } = await open(AUDIT, { userRules: SHELL_ASK });
+    // Only the tool ask can prompt: the command itself is allowed.
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        SHELL_ASK[0],
+        { id: "me.shell", action: "shell.execute", effect: "allow" },
+      ],
+    });
     const bash = tool(governedTools(session, workspace), "bash");
     const { ctx, prompts } = counting(false);
     await expect(
@@ -1157,6 +1163,101 @@ describe("one prompt per governed tool call", () => {
     ).rejects.toThrow(/not allowed/);
     expect(prompts).toHaveLength(1);
     expect(existsSync(join(workspace, "c"))).toBe(false);
+  });
+
+  it("shows the tool ask and both reasons in the prompt of write and edit", async () => {
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.write-tool",
+          action: "tool.execute",
+          resource: "write",
+          effect: "ask",
+          reason: "Tool-reason-canary",
+        },
+        {
+          id: "me.edit-tool",
+          action: "tool.execute",
+          resource: "edit",
+          effect: "ask",
+        },
+        {
+          id: "me.write",
+          action: "filesystem.write",
+          resource: "workspace/asked/**",
+          effect: "ask",
+          reason: "File-reason-canary",
+        },
+        { id: "me.files", action: "filesystem.write", effect: "allow" },
+      ],
+    });
+    mkdirSync(join(workspace, "asked"));
+    // write decides the folder, then the file: the tool ask goes with the
+    // first, and the file's own ask is asked again for the file.
+    const write = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "write",
+        { path: "asked/a.txt", content: "x" },
+        write.ctx,
+      ),
+    ).toHaveProperty("text");
+    expect(write.prompts).toHaveLength(2);
+    expect(write.prompts[0]).toMatch(
+      /tool\.execute write\nTool-reason-canary\nfilesystem\.write write: .*asked\nFile-reason-canary$/,
+    );
+    expect(write.prompts[1]).not.toContain("tool.execute");
+    // An allowed file: one prompt, for the tool alone.
+    const edit = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "edit",
+        { path: "notes.txt", edits: [{ oldText: "notes", newText: "edited" }] },
+        edit.ctx,
+      ),
+    ).toHaveProperty("text");
+    expect(edit.prompts).toEqual([
+      expect.stringMatching(/tool\.execute edit\nfilesystem\.write edit: /),
+    ]);
+    expect(readFileSync(join(workspace, "notes.txt"), "utf8")).toBe(
+      "workspace edited\n",
+    );
+  });
+
+  it("asks for the tool with an allowed folder, then refuses a denied file in it", async () => {
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.write-tool",
+          action: "tool.execute",
+          resource: "write",
+          effect: "ask",
+        },
+        {
+          id: "me.locked",
+          action: "filesystem.write",
+          resource: "workspace/locked.txt",
+          effect: "deny",
+        },
+        { id: "me.files", action: "filesystem.write", effect: "allow" },
+      ],
+    });
+    const { ctx, prompts } = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "write",
+        { path: "locked.txt", content: "x" },
+        ctx,
+      ),
+    ).toHaveProperty("refused", expect.stringMatching(/rule me\.locked/));
+    expect(prompts).toEqual([expect.stringContaining("tool.execute write")]);
+    expect(existsSync(join(workspace, "locked.txt"))).toBe(false);
   });
 
   it("leaves other tools' ask to the hook", async () => {

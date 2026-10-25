@@ -530,7 +530,18 @@ export class GovernanceSession {
     ];
     const prompt = {
       title: `${this.options.lock.app.name} policy approval`,
-      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
+      // A combined prompt names the tool ask, and each ask's reason, so the
+      // answer (an Allow for this session too) covers only what it shows.
+      message: [
+        ...(tool
+          ? [
+              `tool.execute ${tool.tool}`,
+              ...(tool.decision.reason ? [tool.decision.reason] : []),
+            ]
+          : []),
+        `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? own.resource)}`,
+        ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
+      ].join("\n"),
     };
     // Pi does not queue extension dialogs: a second confirm replaces the
     // first, whose promise never settles. Approvals of concurrent tool
@@ -738,6 +749,8 @@ export class GovernanceSession {
     const decision = this.resourceTools.has(tool)
       ? this.engine.evaluate({ action: "tool.execute", resource: tool })
       : undefined;
+    // Only an ask is carried: a deny was already blocked by the tool_call
+    // hook, which Pi runs before every execute, top-level and nested.
     return this.#toolCall.run(
       decision?.effect === "ask" ? { ask: { tool, decision, detail } } : {},
       run,

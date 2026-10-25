@@ -51,6 +51,7 @@ const POLICY = [
   '    - { id: secrets, action: filesystem.read, resource: "~/.ssh/**", effect: deny }',
   '    - { id: keep-asking, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
   '    - { id: push, action: shell.execute, resource: "git push**", effect: ask }',
+  "    - { id: read-tool, action: tool.execute, resource: read, effect: ask, reason: Read-tool-canary }",
   "  defaults:",
   '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
   '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
@@ -369,6 +370,51 @@ describe("user auto mode in a governed session", () => {
         context(async () => true).ctx,
       ),
     ).toEqual(expect.objectContaining({ block: true }));
+  });
+
+  it("keeps an enforced tool ask, shown with its reason, in one prompt under auto mode and --yolo", async () => {
+    for (const yolo of [false, true]) {
+      const built = distribution({ userAuto: "allowed", on: !yolo });
+      const session = await GovernanceSession.open({ ...built.options, yolo });
+      sessions.push(session);
+      const read = governedTools(session, built.workspace).find(
+        (item) => item.name === "read",
+      ) as ToolDefinition;
+      const hook = hooks(session).handlers.get("tool_call") as (
+        event: unknown,
+        ctx: unknown,
+      ) => Promise<unknown>;
+      for (const answer of [false, true]) {
+        const prompts: string[] = [];
+        // An enforced ask offers no session scope: a yes/no confirm.
+        const { ctx } = context((async (_title: string, message: string) => {
+          prompts.push(message);
+          return answer;
+        }) as () => Promise<boolean>);
+        const id = `call-${yolo}-${answer}`;
+        expect(
+          await hook({ toolName: "read", toolCallId: id, input: {} }, ctx),
+        ).toBeUndefined();
+        const ran = await read
+          .execute(
+            id,
+            { path: "notes.txt" } as never,
+            undefined,
+            undefined,
+            ctx,
+          )
+          .then(
+            () => true,
+            () => false,
+          );
+        expect(ran).toBe(answer);
+        expect(prompts).toEqual([
+          expect.stringMatching(
+            /tool\.execute read\nRead-tool-canary\nfilesystem\.read read: \S*notes\.txt$/,
+          ),
+        ]);
+      }
+    }
   });
 
   it("keeps an explicit shell ask when the command chains past its pattern", async () => {
