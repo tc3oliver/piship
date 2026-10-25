@@ -876,4 +876,65 @@ describe("approval metrics", () => {
       session.decide("web.request", "example.org", undefined),
     ).resolves.toMatchObject({ outcome: "allow", approval: "auto" });
   });
+
+  it("counts each confirmation dialog once, by answer", async () => {
+    const { session, workspace } = await open({ userAuto: "allowed" });
+    const write = tool(session, workspace, "write");
+    const secret = "distinctive-prompt-name";
+    // Headless: no dialog, nothing shown.
+    await expect(
+      write({ path: `${secret}.txt`, content: "text-canary" }, context().ctx),
+    ).rejects.toThrow();
+    expect(session.metrics.snapshot().prompts).toBeUndefined();
+    let dialogs = 0;
+    await write(
+      { path: `${secret}-a.txt`, content: "text-canary" },
+      context(async () => {
+        dialogs++;
+        return true;
+      }).ctx,
+    );
+    // Counts the dialogs the user saw, not the decision records the write
+    // makes (`approvals` counts two for it).
+    expect(dialogs).toBeGreaterThan(0);
+    expect(session.metrics.snapshot().prompts).toEqual({
+      shown: dialogs,
+      allowed: dialogs,
+    });
+    const before = dialogs;
+    await expect(
+      write(
+        { path: `${secret}-b.txt`, content: "text-canary" },
+        context(async () => false).ctx,
+      ),
+    ).rejects.toThrow();
+    const cancelled = context(async () => true);
+    cancelled.ctx.ui.select = async () => undefined;
+    await expect(
+      write({ path: `${secret}-c.txt`, content: "text-canary" }, cancelled.ctx),
+    ).rejects.toThrow();
+    const counts = session.metrics.snapshot().prompts;
+    expect(counts?.allowed).toBe(before);
+    expect(counts?.denied).toBe(1);
+    expect(counts?.cancelled).toBe(1);
+    expect(counts?.shown).toBe(
+      (counts?.allowed ?? 0) + (counts?.denied ?? 0) + (counts?.cancelled ?? 0),
+    );
+    const text = JSON.stringify(session.metrics.snapshot());
+    for (const leak of [secret, "text-canary", workspace])
+      expect(text).not.toContain(leak);
+  });
+
+  it("never lets a failing prompt counter change a decision", async () => {
+    const { session, workspace } = await open({ userAuto: "allowed" });
+    session.metrics.recordPrompt = () => {
+      throw new Error("disk full");
+    };
+    const result = await tool(
+      session,
+      workspace,
+      "write",
+    )({ path: "a.txt", content: "x" }, context(async () => true).ctx);
+    expect(result).toBeDefined();
+  });
 });

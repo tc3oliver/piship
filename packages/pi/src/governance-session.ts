@@ -592,7 +592,24 @@ export class GovernanceSession {
               if (auto) return approved;
               if (sessionAllowed()) return sessionApproved;
               prompted = true;
-              return resolveDecision(decision, channel, offered);
+              bestEffort(() => this.metrics.recordPrompt("shown"));
+              const answered = await resolveDecision(
+                decision,
+                channel,
+                offered,
+              );
+              bestEffort(() => {
+                this.metrics.recordPrompt(
+                  answered.outcome === "allow"
+                    ? "allowed"
+                    : answered.approval === "denied"
+                      ? "denied"
+                      : "cancelled",
+                );
+                if (answered.remember === "session")
+                  this.metrics.recordPrompt("sessionGrants");
+              });
+              return answered;
             })
           : await resolveDecision(decision, channel, prompt);
     if (resolved.remember === "session")

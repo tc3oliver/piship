@@ -508,4 +508,22 @@ describe("LocalMetrics", () => {
       "shell.execute:approved": 1,
     });
   });
+
+  it("counts confirmation dialogs by closed kind and restores them", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    metrics.recordPrompt("shown");
+    metrics.recordPrompt("allowed");
+    metrics.recordPrompt("rm -rf /");
+    metrics.save();
+    writeFileSync(
+      join(temp, "logs", "metrics.json"),
+      JSON.stringify({
+        ...metrics.snapshot(),
+        prompts: { shown: 2, "/etc/passwd": 1, denied: -1 },
+      }),
+    );
+    expect(LocalMetrics.load(temp, { now }).snapshot().prompts).toEqual({
+      shown: 2,
+    });
+  });
 });
