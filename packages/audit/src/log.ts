@@ -1,5 +1,21 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { constants, existsSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import {
   chmod,
   type FileHandle,
@@ -16,6 +32,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   AUDIT_BATCH_SCHEMA,
+  AUDIT_EVENT_SCHEMA,
   type AuditBatch,
   type AuditCapture,
   type AuditEmitter,
@@ -104,6 +121,8 @@ export interface AuditLogOptions {
    * smaller limits.
    */
   readonly rotation?: AuditRotation;
+  /** Cap on a required HTTP sink's spool. Default AUDIT_SPOOL_MAX_BYTES. */
+  readonly spoolMaxBytes?: number;
 }
 
 /** Size-based retention of the file sink: `audit.jsonl` plus `.1`..`.<files>`. */
@@ -524,6 +543,251 @@ class FileSinkWriter implements AuditSink {
   }
 }
 
+/** Where required HTTP sinks spool: `<dir>/<sink key>/<owner>.jsonl`. */
+export const AUDIT_SPOOL_DIRECTORY = join("logs", "audit-spool");
+/** 16 MiB per spool; an append past it fails closed. */
+export const AUDIT_SPOOL_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * Spool files this process owns. Any other file named with this process's ID
+ * belongs to an earlier process that had the same ID and is gone.
+ */
+const ownedSpools = new Set<string>();
+
+/** `<pid>-<host id>-<random>`, the owner a spool file is named after. */
+function ownerToken(): string {
+  return `${process.pid}-${HOST_ID}-${randomBytes(8).toString("hex")}`;
+}
+
+/** O_NOFOLLOW refuses a planted symlink; it is 0 where unsupported. */
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/**
+ * The durable copy of a required HTTP sink's undelivered events. Each process
+ * writes its own file, so writers never interleave; a file whose owner is gone
+ * (a crash) is claimed by the next launch with one rename, which only one
+ * process can win, replayed, and deleted. Every write is synchronous, so the
+ * file is never behind the in-memory queue:
+ *
+ * - `append` (each emitted event) is one O_APPEND write and an fsync. A crash
+ *   can leave only the last line torn, and a reader drops a torn last line.
+ * - `replace` (after each acknowledged batch, and at launch) writes the queue
+ *   to a temporary, fsyncs it, and renames it over the file, so a crash leaves
+ *   the old or the new content, never a mix.
+ *
+ * An event is in the spool before it is sent and leaves it only after the
+ * collector acknowledged it, so a crash can resend an event (each keeps its
+ * `id`, which the collector de-duplicates) but never lose one it had taken in.
+ */
+class HttpSpool {
+  readonly directory: string;
+  readonly path: string;
+  #size = 0;
+  /** A failed append whose bytes could not be removed: only `replace` repairs it. */
+  #torn = false;
+
+  constructor(
+    readonly stateDir: string,
+    sinkId: string,
+    readonly maxBytes: number,
+  ) {
+    const key = createHash("sha256").update(sinkId).digest("hex").slice(0, 16);
+    this.directory = join(stateDir, AUDIT_SPOOL_DIRECTORY, key);
+    this.path = join(this.directory, `${ownerToken()}.jsonl`);
+  }
+
+  /**
+   * Create this process's spool (proving it writable), claim every spool whose
+   * owner is gone, and return their events: de-duplicated by `id`, in time
+   * order. Throws when the spool cannot be written or a claimed file is corrupt.
+   */
+  open(): AuditEvent[] {
+    for (const directory of [
+      join(this.stateDir, "logs"),
+      join(this.stateDir, AUDIT_SPOOL_DIRECTORY),
+      this.directory,
+    ]) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      if (process.platform !== "win32") chmodSync(directory, 0o700);
+    }
+    ownedSpools.add(this.path);
+    const claimed: string[] = [];
+    try {
+      for (const name of readdirSync(this.directory).sort()) {
+        const path = join(this.directory, name);
+        if (ownedSpools.has(path) || !spoolAbandoned(name)) continue;
+        if (name.endsWith(".tmp")) {
+          rmSync(path, { force: true });
+          continue;
+        }
+        if (!name.endsWith(".jsonl")) continue;
+        // Renamed to a name this process owns: a second launcher's rename of
+        // the same file fails, so no file is replayed twice.
+        const claim = join(this.directory, `${ownerToken()}.jsonl`);
+        ownedSpools.add(claim);
+        try {
+          renameSync(path, claim);
+          claimed.push(claim);
+        } catch (error) {
+          ownedSpools.delete(claim);
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      const ids = new Set<string>();
+      const events: AuditEvent[] = [];
+      for (const path of claimed)
+        for (const event of readSpool(path))
+          if (!ids.has(event.id as string)) {
+            ids.add(event.id as string);
+            events.push(event);
+          }
+      // Files are named by owner, not age: order by event time (a stable sort
+      // keeps each file's own order for equal times).
+      events.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+      // Written here before the claimed files go: a crash in between leaves
+      // duplicates, which the next replay drops by id.
+      this.replace(events);
+      for (const path of claimed) {
+        rmSync(path, { force: true });
+        ownedSpools.delete(path);
+      }
+      syncDirectory(this.directory);
+      return events;
+    } catch (error) {
+      // Left for the next launch, which fails the same way until it is fixed.
+      ownedSpools.delete(this.path);
+      for (const path of claimed) ownedSpools.delete(path);
+      throw error;
+    }
+  }
+
+  append(event: AuditEvent): void {
+    if (this.#torn) throw new Error("audit spool has a partial write");
+    const line = `${JSON.stringify(event)}\n`;
+    const bytes = Buffer.byteLength(line, "utf8");
+    if (this.#size + bytes > this.maxBytes)
+      throw new Error(`audit spool is full (${this.maxBytes} bytes)`);
+    const fd = openSync(
+      this.path,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW,
+      0o600,
+    );
+    try {
+      writeFileSync(fd, line, "utf8");
+      fsyncSync(fd);
+      this.#size += bytes;
+    } catch (error) {
+      // A short write (a full disk) must not leave a fragment that the next
+      // line is glued onto.
+      try {
+        ftruncateSync(fd, this.#size);
+      } catch {
+        this.#torn = true;
+      }
+      throw error;
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** Atomically make the spool hold exactly `events`. Never refused for size: it only shrinks or restores. */
+  replace(events: readonly AuditEvent[]): void {
+    const data = events.map((event) => `${JSON.stringify(event)}\n`).join("");
+    const temporary = `${this.path}.tmp`;
+    const fd = openSync(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      writeFileSync(fd, data, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    // No handle stays open on the spool, so the rename also works on Windows.
+    renameSync(temporary, this.path);
+    syncDirectory(this.directory);
+    this.#size = Buffer.byteLength(data, "utf8");
+    this.#torn = false;
+  }
+
+  /** At close: delete the spool when it is empty, else leave it for the next launch. */
+  release(empty: boolean): void {
+    if (empty) rmSync(this.path, { force: true });
+    ownedSpools.delete(this.path);
+  }
+}
+
+/**
+ * Whether a spool file's owner is gone: another process on this host that no
+ * longer exists, or an earlier process with this one's ID. A spool from
+ * another host (a shared home directory) is never taken: its owner's state
+ * cannot be seen from here.
+ */
+function spoolAbandoned(name: string): boolean {
+  const owner = tokenOwner(name);
+  if (!owner?.sameHost || !/^\d+-[0-9a-f]{12}-/.test(name)) return false;
+  return owner.pid === process.pid || !processAlive(owner.pid);
+}
+
+/**
+ * Read a spool's events. A last line without its newline was torn by a crash
+ * mid-append: it is kept if it is still a whole event, and dropped otherwise.
+ * Any other line that is not an event makes the spool corrupt.
+ */
+function readSpool(path: string): AuditEvent[] {
+  const fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  let text: string;
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error(`${path} is not a file`);
+    text = readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines = text.split("\n");
+  const tail = lines.pop() as string;
+  const events = lines.map((line, index) => {
+    const event = spooledEvent(line);
+    if (!event)
+      throw new Error(`audit spool ${path} is corrupt at line ${index + 1}`);
+    return event;
+  });
+  const last = tail && spooledEvent(tail);
+  if (last) events.push(last);
+  return events;
+}
+
+function spooledEvent(line: string): AuditEvent | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const event = value as Partial<AuditEvent> | null;
+  return typeof event === "object" &&
+    event !== null &&
+    !Array.isArray(event) &&
+    event.schema === AUDIT_EVENT_SCHEMA &&
+    typeof event.id === "string" &&
+    typeof event.event === "string" &&
+    typeof event.time === "string"
+    ? (event as AuditEvent)
+    : undefined;
+}
+
+/** Make a created, renamed, or deleted entry durable. Directories cannot be opened on Windows. */
+function syncDirectory(directory: string): void {
+  if (process.platform === "win32") return;
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * The `http` sink's delivery: one POST of a `piship-audit-batch/v1` batch,
  * settled by the collector's answer. `AuditLog` owns queueing and retries;
@@ -594,6 +858,10 @@ class Sink {
   delivered = 0;
   dropped = 0;
   lastError: string | undefined;
+  /** A required HTTP sink's durable copy of `queue`. */
+  spool: HttpSpool | undefined;
+  /** The spool could not take an event or the queue: governed actions fail closed. */
+  spoolFailed = false;
 
   constructor(
     readonly config: AuditSinkConfig,
@@ -705,7 +973,10 @@ export class AuditLog implements AuditEmitter {
       ids.add(sinkConfig.id);
       sinks.push(await openSink(sinkConfig, options));
     }
-    return new AuditLog(config, options.distribution, sinks, options);
+    const log = new AuditLog(config, options.distribution, sinks, options);
+    // Deliver what a crashed process spooled before anything new.
+    if (sinks.some((sink) => sink.queue.length)) void log.flush();
+    return log;
   }
 
   get capture(): AuditCapture {
@@ -742,6 +1013,12 @@ export class AuditLog implements AuditEmitter {
           else sink.state = "degraded";
           continue;
         }
+        if (sink.spool)
+          try {
+            sink.spool.append(event);
+          } catch (error) {
+            this.#spoolFailure(sink, error);
+          }
         sink.queue.push(event);
         // Early flush at half capacity, but not while a sink is retrying.
         if (sink.queue.length * 2 >= limit && !sink.lastError) flushSoon = true;
@@ -761,7 +1038,7 @@ export class AuditLog implements AuditEmitter {
     );
     throw new PiShipError(
       "AUDIT_UNAVAILABLE",
-      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and the audit buffer is full`,
+      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and ${sink?.spoolFailed ? "its audit spool cannot keep its events" : "the audit buffer is full"}`,
       {
         component: "audit",
         userAction:
@@ -811,6 +1088,13 @@ export class AuditLog implements AuditEmitter {
       await Promise.race([final, deadline]);
       clearTimeout(timer);
       this.#abort.abort();
+      // Undelivered events stay spooled for the next launch to replay.
+      for (const sink of this.#sinks)
+        try {
+          sink.spool?.release(sink.queue.length === 0);
+        } catch {
+          // An empty spool left behind is claimed and deleted by the next launch.
+        }
     }
     this.#closed = true;
     return this.status();
@@ -876,7 +1160,20 @@ export class AuditLog implements AuditEmitter {
       remaining -= batch.length;
       sink.state = "ok";
       sink.lastError = undefined;
+      if (sink.spool)
+        try {
+          sink.spool.replace(sink.queue);
+          sink.spoolFailed = false;
+        } catch (error) {
+          this.#spoolFailure(sink, error);
+        }
     }
+  }
+
+  #spoolFailure(sink: Sink, error: unknown): void {
+    sink.spoolFailed = true;
+    sink.state = "failed";
+    sink.lastError = sink.describeError(error);
   }
 
   #computeState(): AuditLogState {
@@ -947,6 +1244,23 @@ async function openSink(
     } catch (error) {
       throw unavailable(config, sink.describeError(error));
     }
+  if (config.required) {
+    // Only a required sink spools: an optional one drops what it cannot send.
+    const spool = new HttpSpool(
+      options.stateDir,
+      config.id,
+      options.spoolMaxBytes ?? AUDIT_SPOOL_MAX_BYTES,
+    );
+    try {
+      sink.queue.push(...spool.open());
+    } catch (error) {
+      throw unavailable(
+        config,
+        `its spool under ${AUDIT_SPOOL_DIRECTORY} cannot be used: ${sink.describeError(error)}`,
+      );
+    }
+    sink.spool = spool;
+  }
   return sink;
 }
 
