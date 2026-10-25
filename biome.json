@@ -10,7 +10,10 @@
       "!**/.omc",
       "!**/.claude",
       "!**/package-lock.json",
-      "!docs/spec/product-v1.0.md"
+      "!docs/spec/product-v1.0.md",
+      "!**/*.md",
+      "!**/*.yaml",
+      "!**/*.yml"
     ]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2 },
