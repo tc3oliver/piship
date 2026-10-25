@@ -210,10 +210,14 @@ async function decideToolCall(
   tool: string,
   ctx: ExtensionContext,
   detail: CallDetail = {},
+  callId?: string,
 ): Promise<{ block: true; reason: string } | undefined> {
   attach(gov, ctx);
   const refusal = planRefusal(gov, tool);
   if (refusal) return { block: true, reason: refusal };
+  // A governed tool's ask is answered with its first file or command
+  // decision, in one prompt (GovernanceSession.decide).
+  if (callId && gov.deferToolAsk(callId, tool, detail)) return undefined;
   const decision = await gov.withChannel(uiChannel(ctx), () =>
     gov.decide("tool.execute", tool, gov.currentChannel(), {
       allowed: "tool.allowed",
@@ -288,6 +292,7 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
       pi.on("tool_execution_end", (event) => {
         const call = calls.get(event.toolCallId);
         calls.delete(event.toolCallId);
+        gov.dropToolAsk(event.toolCallId);
         if (!call || call.gated || !event.isError) return;
         // Pi refused the call before PiShip's policy hook ran.
         const tool = event.toolName;
@@ -338,6 +343,7 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
             tool,
             ctx,
             call?.detail ?? callDetail(tool, event.parentToolCallId),
+            event.toolCallId,
           );
         } catch (error) {
           // Fail closed: a tool call whose decision failed never runs.

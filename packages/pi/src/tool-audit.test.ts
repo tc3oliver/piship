@@ -59,6 +59,8 @@ function setup(
     attachNotices: () => undefined,
     withChannel: (_channel: unknown, run: () => unknown) => run(),
     currentChannel: () => undefined,
+    deferToolAsk: () => false,
+    dropToolAsk: () => undefined,
     decide: async (
       _action: string,
       tool: string,

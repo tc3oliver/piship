@@ -321,6 +321,56 @@ describe("user auto mode in a governed session", () => {
     }
   });
 
+  it("keeps a tool ask the user's own rule wrote, in the one prompt of the call, and never touches a tool deny", async () => {
+    const { session, workspace } = await open({
+      userAuto: "allowed",
+      on: true,
+      userRules: [
+        { id: "mine", action: "tool.execute", resource: "bash", effect: "ask" },
+        {
+          id: "no-edit",
+          action: "tool.execute",
+          resource: "edit",
+          effect: "deny",
+        },
+      ],
+    });
+    const bash = governedTools(session, workspace).find(
+      (item) => item.name === "bash",
+    ) as ToolDefinition;
+    const hook = hooks(session).handlers.get("tool_call") as (
+      event: unknown,
+      ctx: unknown,
+    ) => Promise<unknown>;
+    // `echo` is a policy.default ask, which auto mode approves; the tool's
+    // own ask still asks, once.
+    for (const answer of [false, true]) {
+      let prompts = 0;
+      const { ctx } = context(async () => {
+        prompts += 1;
+        return answer;
+      });
+      const id = `call-${answer}`;
+      expect(
+        await hook({ toolName: "bash", toolCallId: id, input: {} }, ctx),
+      ).toBeUndefined();
+      const ran = bash
+        .execute(id, { command: "echo hi" } as never, undefined, undefined, ctx)
+        .then(
+          () => true,
+          () => false,
+        );
+      expect(await ran).toBe(answer);
+      expect(prompts).toBe(1);
+    }
+    expect(
+      await hook(
+        { toolName: "edit", toolCallId: "e", input: {} },
+        context(async () => true).ctx,
+      ),
+    ).toEqual(expect.objectContaining({ block: true }));
+  });
+
   it("keeps an explicit shell ask when the command chains past its pattern", async () => {
     const { session } = await open({
       userAuto: "allowed",

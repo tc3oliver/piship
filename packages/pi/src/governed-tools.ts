@@ -881,7 +881,9 @@ function withChannel<T extends ToolDefinition>(
     ...tool,
     execute: (id, params, signal, onUpdate, ctx) =>
       gov.withChannel(uiChannel(ctx), () =>
-        execute(id, params, signal, onUpdate, ctx),
+        gov.withToolCall(id, tool.name, () =>
+          execute(id, params, signal, onUpdate, ctx),
+        ),
       ),
   } as T;
 }
@@ -1007,10 +1009,23 @@ export function governedTools(
     governedBashTool(gov, cwd) as ToolDefinition,
     ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
-  return tools.flatMap((tool) => {
+  const session = tools.flatMap((tool) => {
     const exposure = table?.get(tool.name) ?? "direct";
     return exposure === "hidden"
       ? []
       : [withChannel(gov, { ...tool, exposure } as ToolDefinition)];
   });
+  // MCP tools have no file or command decision to defer their ask to.
+  gov.resourceTools = new Set(
+    session.map((tool) => tool.name).filter((name) => RESOURCE_TOOLS.has(name)),
+  );
+  return session;
 }
+
+/** The governed tools that decide every file or command they touch. */
+const RESOURCE_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "write",
+  "edit",
+  "bash",
+]);
