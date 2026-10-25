@@ -923,6 +923,16 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
   }
   let held = claim(guard);
   if (!held) {
+    // Whether the holder runs is asked before the recovery directory is
+    // taken: the answer can cost a process start (PowerShell on Windows), and
+    // while that directory exists no launch may claim the lock, so asking
+    // under it held every parallel launch up behind each waiter's lookup.
+    const seen = readOwner(join(guard, "owner.json"));
+    agentFilesLockHooks.beforeHolderCheck?.();
+    // Unreadable for a reason other than absence (a scanner holding it open
+    // on Windows): its holder may be alive. Not ours to take.
+    if (seen === "unknown") throw busy();
+    if (typeof seen === "object" && holderRuns(seen)) throw busy();
     try {
       mkdirSync(recovery, { mode: 0o700 });
     } catch {
@@ -931,20 +941,19 @@ function agentFilesTransactionOnce<T>(agentDir: string, operation: () => T): T {
     try {
       const holder = readOwner(join(guard, "owner.json"));
       agentFilesLockHooks.afterOwnerRead?.();
-      if (holder === "unknown") {
-        // Unreadable for a reason other than absence (a scanner holding it
-        // open on Windows): its holder may be alive. Not ours to take.
-        throw busy();
-      }
-      if (typeof holder === "object") {
-        if (holderRuns(holder)) throw busy();
-      } else if (!olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)) {
+      // Only the owner judged dead above is taken down; one that took the
+      // lock since was not looked at.
+      if (holder === "unknown" || !sameOwner(holder, seen)) throw busy();
+      if (
+        holder === "missing" &&
+        !olderThan(guard, AGENT_FILES_OWNERLESS_STALE_MS)
+      ) {
         // No owner record: one an older release was still writing, or gone.
         throw busy();
       }
-      // The check above can be slow (a process lookup that starts a process);
-      // the recovery directory is marked as in use again before the lock is
-      // touched, so that it does not look abandoned to a launch that waited.
+      // The recovery directory is marked as in use again before the lock is
+      // touched, so that a stalled recovery does not look abandoned to a
+      // launch that waited.
       touch(recovery);
       agentFilesLockHooks.afterHolderCheck?.();
       // Every acquirer checks recovery after recording its live owner, so no
