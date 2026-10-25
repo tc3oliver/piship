@@ -20,11 +20,27 @@ concurrency:
   group: reference-e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  # One cheap audit for all shards: the release vulnerability gate runs inside
+  # every test release, so an advisory it rejects would fail each shard
+  # separately (scripts/audit-preflight.mjs).
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.19.x
+      - run: node scripts/audit-preflight.mjs
+
   # The stack as a user starts it (README, "Run it"), with the broker's happy
   # path against it, and the contract tests that need no stack. Starting the
   # stack needs Node built-ins only; the broker and sandbox contract tests
   # import PiShip's built packages, so npm ci and the build run here too.
   stack:
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -154,6 +170,7 @@ jobs:
   # The test stacks publish on ports Docker chooses, so the groups could
   # also share one host; the runners are for time, not isolation.
   reference:
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -293,7 +310,7 @@ jobs:
   # requests. Manual and Release qualification runs report in the Actions UI
   # only.
   report:
-    needs: [stack, reference]
+    needs: [preflight, stack, reference]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
