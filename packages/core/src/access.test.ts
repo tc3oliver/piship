@@ -1357,8 +1357,15 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
 
     it("ends the session's credential when the sign-in was revoked", async () => {
       await session.requestSecret();
+      // Revoke the refresh tokens, keeping them for the leak scan.
+      const revoked = [...services.state.refreshTokens.keys()];
       services.state.refreshTokens.clear();
-      expect(await failure()).toMatchObject({ code: "IDENTITY_EXPIRED" });
+      const error = await failure();
+      for (const token of revoked)
+        expect(
+          `${error.message}\n${error.stack}\n${JSON.stringify(error)}\n${JSON.stringify(events)}`,
+        ).not.toContain(token);
+      expect(error).toMatchObject({ code: "IDENTITY_EXPIRED" });
       // A later outage does not bring the old credential back.
       services.knobs.tokenStatus = 503;
       expect(await failure()).toMatchObject({ retryable: true });
