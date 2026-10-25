@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { expect, inject, onTestFinished } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
-import { branded, type Result } from "./distribution.js";
+import { branded, type Result, STDIN_CLOSED_CODES } from "./distribution.js";
 import type { LifecycleFixture } from "./e2e-shards.js";
 import {
   clearPlatformStore,
@@ -251,6 +251,12 @@ function piship(
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+    });
+    // Closing stdin of a child that has already exited fails with a platform
+    // dependent code; the exit status judges the run, not that race.
+    child.stdin.on("error", (error) => {
+      if (!STDIN_CLOSED_CODES.has((error as NodeJS.ErrnoException).code ?? ""))
+        throw error;
     });
     child.stdin.end();
     child.on("close", (status) => resolve({ status, stdout, stderr }));
