@@ -416,7 +416,12 @@ const SYSTEM_CONFIG_PATHS = [
   "/etc/gitconfig",
   "/opt/homebrew/etc/gitconfig",
   "/usr/local/etc/gitconfig",
-  "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+  // macOS mounts /home through autofs, where each lookup is an uncached
+  // automountd query of tens of milliseconds, and Homebrew there never uses
+  // the Linuxbrew prefix.
+  ...(process.platform === "darwin"
+    ? []
+    : ["/home/linuxbrew/.linuxbrew/etc/gitconfig"]),
   "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
   "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
 ];
