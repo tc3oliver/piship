@@ -78,7 +78,13 @@ describe("branded() stdin handling", () => {
     // how far the write got — POSIX reports `EPIPE`, Windows `EOF` — so every
     // shape of "the child is gone" has to be expected, not just the one
     // macOS happened to report.
-    for (const code of ["EPIPE", "EOF", "ECONNRESET", "ERR_STREAM_DESTROYED"]) {
+    for (const code of [
+      "EPIPE",
+      "EOF",
+      "ECONNRESET",
+      "ENOTCONN",
+      "ERR_STREAM_DESTROYED",
+    ]) {
       const child = new FakeChild();
       const settled = settle(child);
       child.stdin.emit("error", errno(code));
