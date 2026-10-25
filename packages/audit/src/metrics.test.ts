@@ -493,4 +493,19 @@ describe("LocalMetrics", () => {
       {},
     );
   });
+
+  it("counts approvals by known action and kind and restores them", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    metrics.recordApproval("shell.execute", "prompted");
+    metrics.recordApproval("shell.execute", "prompted");
+    metrics.recordApproval("shell.execute", "approved");
+    metrics.recordApproval("cat ~/.ssh/id_rsa", "approved");
+    metrics.recordApproval("shell.execute", "rm -rf /");
+    metrics.save();
+    const reloaded = LocalMetrics.load(temp, { now });
+    expect(reloaded.snapshot().approvals).toEqual({
+      "shell.execute:prompted": 2,
+      "shell.execute:approved": 1,
+    });
+  });
 });

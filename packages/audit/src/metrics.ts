@@ -114,6 +114,13 @@ export interface MetricsSnapshot {
   readonly schema: typeof METRICS_SCHEMA;
   readonly updatedAt: string;
   readonly policyDenials: Readonly<Record<string, number>>;
+  /**
+   * Policy decision records by `<action>:<kind>`: `prompted` (the user was
+   * asked), `approved` and `denied` (final outcome of an ask, plus deny-effect
+   * rules and headless refusals), `auto` (auto mode, `--yolo`, or a session
+   * allow). Per record, not per tool call.
+   */
+  readonly approvals?: Readonly<Record<string, number>>;
   readonly mcpHealth: Readonly<Record<string, McpHealthMetric>>;
   readonly sandbox?: SandboxMetric;
   readonly startupFailures: Readonly<Record<string, number>>;
@@ -144,6 +151,21 @@ function lifecycleKey(key: string): boolean {
     (outcome === "ok" ||
       outcome === "UNKNOWN" ||
       ERROR_CODES.has(outcome ?? ""))
+  );
+}
+
+const APPROVAL_KINDS = new Set<string>([
+  "prompted",
+  "approved",
+  "denied",
+  "auto",
+]);
+function approvalKey(key: string): boolean {
+  const [action, kind, extra] = key.split(":");
+  return (
+    extra === undefined &&
+    ACTIONS.has(action ?? "") &&
+    APPROVAL_KINDS.has(kind ?? "")
   );
 }
 
@@ -260,6 +282,7 @@ export class LocalMetrics {
   readonly path: string;
   readonly #now: () => Date;
   #policyDenials: Record<string, number> = {};
+  #approvals: Record<string, number> = {};
   #mcpHealth: Record<string, McpHealthMetric> = {};
   #sandbox: SandboxMetric | undefined;
   #startupFailures: Record<string, number> = {};
@@ -299,6 +322,12 @@ export class LocalMetrics {
   recordPolicyDenial(action: string): void {
     if (!ACTIONS.has(action)) return;
     this.#increment(this.#policyDenials, action);
+  }
+
+  /** Count an ask decision by action and kind; anything else is ignored. */
+  recordApproval(action: string, kind: string): void {
+    const key = `${action}:${kind}`;
+    if (approvalKey(key)) this.#increment(this.#approvals, key);
   }
 
   recordMcpHealth(serverId: string, state: McpHealthState): void {
@@ -465,6 +494,9 @@ export class LocalMetrics {
       schema: METRICS_SCHEMA,
       updatedAt: this.#updatedAt,
       policyDenials: { ...this.#policyDenials },
+      ...(Object.keys(this.#approvals).length
+        ? { approvals: { ...this.#approvals } }
+        : {}),
       mcpHealth: structuredClone(this.#mcpHealth),
       ...(this.#sandbox ? { sandbox: { ...this.#sandbox } } : {}),
       startupFailures: { ...this.#startupFailures },
@@ -538,6 +570,7 @@ export class LocalMetrics {
     this.#policyDenials = counters(value.policyDenials, (key) =>
       ACTIONS.has(key),
     );
+    this.#approvals = counters(value.approvals, approvalKey);
     this.#startupFailures = counters(
       value.startupFailures,
       (key) => ERROR_CODES.has(key) || key === "UNKNOWN",
