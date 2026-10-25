@@ -37,11 +37,12 @@ import type {
   McpServerConfig,
   McpServerReport,
 } from "@piship/mcp";
-import type {
-  CapabilityState,
-  PolicyEngine,
-  ProjectIdentity,
-  ProjectResourceCandidate,
+import {
+  type CapabilityState,
+  denialHint,
+  type PolicyEngine,
+  type ProjectIdentity,
+  type ProjectResourceCandidate,
 } from "@piship/policy";
 import {
   type ActiveSandbox,
@@ -343,6 +344,12 @@ export class GovernanceSession {
 
   get policyId(): string {
     return this.engine.id;
+  }
+
+  /** How to change a blocking decision, led by a space; empty when none applies. */
+  denialHint(decision: Parameters<typeof denialHint>[0]): string {
+    const hint = denialHint(decision, this.options.lock.deployment.mode);
+    return hint ? ` ${hint}` : "";
   }
 
   /**
