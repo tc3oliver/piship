@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -157,4 +159,151 @@ export async function acquireLease(
       );
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+}
+
+export interface Holder {
+  readonly pid: number;
+  readonly command: string;
+}
+
+/**
+ * The running processes, other than this one, whose command line names
+ * `path`: what a test started there and may still have files open in it.
+ * Chrome's helper processes name their profile directory this way, and
+ * outlive the browser process the package waits for on Windows.
+ */
+export function processesNaming(path: string): Holder[] {
+  const windows = process.platform === "win32";
+  const fold = (text: string) => {
+    const slashes = text.replaceAll("\\", "/");
+    return windows ? slashes.toLowerCase() : slashes;
+  };
+  const names = new Set([path]);
+  try {
+    names.add(realpathSync(path));
+  } catch {
+    // Gone already: only the given spelling can be named.
+  }
+  const needles = [...names].map(fold);
+  const listed = windows
+    ? spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        ],
+        { encoding: "utf8", timeout: 30_000, windowsHide: true },
+      )
+    : spawnSync("ps", ["-Ao", "pid=,args="], {
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+  if (listed.status !== 0)
+    throw new Error(
+      `Could not list processes: ${listed.error?.message ?? listed.stderr}`,
+    );
+  const all: Holder[] = windows
+    ? (
+        JSON.parse(listed.stdout) as {
+          ProcessId: number;
+          CommandLine: string | null;
+        }[]
+      ).map((item) => ({
+        pid: item.ProcessId,
+        command: item.CommandLine ?? "",
+      }))
+    : listed.stdout.split("\n").flatMap((line) => {
+        const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+        return match
+          ? [{ pid: Number(match[1]), command: match[2] ?? "" }]
+          : [];
+      });
+  return all.filter(
+    (item) =>
+      item.pid !== process.pid &&
+      needles.some((needle) => fold(item.command).includes(needle)),
+  );
+}
+
+function killTree(pid: number): void {
+  if (process.platform === "win32")
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+  else
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // It exited after it was listed.
+    }
+}
+
+export interface RemoveTreeOptions {
+  /** How long the processes that name the tree get to exit, in milliseconds. */
+  readonly deadlineMs?: number;
+  readonly pollMs?: number;
+  readonly holders?: (path: string) => readonly Holder[];
+  readonly kill?: (pid: number) => void;
+  readonly remove?: (path: string) => void;
+}
+
+const describeHolders = (holders: readonly Holder[]) =>
+  holders.map((item) => `${item.pid} ${item.command}`).join("\n");
+
+/**
+ * Remove a scenario's temporary tree once nothing it started runs there.
+ * Windows refuses to delete a directory a process has open, so the processes
+ * that name the tree are waited for first; any still running at the deadline
+ * leaked from the test: they are stopped so the tree can go, and the removal
+ * then fails naming them. A removal that fails anyway names what still runs.
+ */
+export async function removeTree(
+  path: string,
+  options: RemoveTreeOptions = {},
+): Promise<void> {
+  const holders = options.holders ?? processesNaming;
+  const kill = options.kill ?? killTree;
+  const remove =
+    options.remove ??
+    ((target: string) =>
+      rmSync(target, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 200,
+      }));
+  const pollMs = options.pollMs ?? 500;
+  const deadline = Date.now() + (options.deadlineMs ?? 15_000);
+  let running = holders(path);
+  while (running.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    running = holders(path);
+  }
+  const leaked = running;
+  for (const item of leaked) kill(item.pid);
+  if (leaked.length > 0) {
+    // Give what was killed a moment to release its handles.
+    const killedBy = Date.now() + 5_000;
+    while (holders(path).length > 0 && Date.now() < killedBy)
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  try {
+    remove(path);
+  } catch (error) {
+    const still = holders(path);
+    throw new Error(
+      `Could not remove ${path}: ${(error as Error).message}${
+        still.length > 0
+          ? `\nProcesses naming it still run:\n${describeHolders(still)}`
+          : "\nNo running process names it."
+      }`,
+      { cause: error },
+    );
+  }
+  if (leaked.length > 0)
+    throw new Error(
+      `${leaked.length} process(es) started under ${path} still ran ${Math.round((options.deadlineMs ?? 15_000) / 1000)} s after the scenario and were stopped:\n${describeHolders(leaked)}`,
+    );
 }
