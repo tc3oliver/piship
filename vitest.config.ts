@@ -1,7 +1,36 @@
 import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
+import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { fileURLToPath } from "node:url";
 import { testStoreHome } from "./tests/helpers/test-store.js";
+import { unitSeconds, unitShard } from "./tests/helpers/unit-shards.js";
+
+/**
+ * Starts the longest files first, so none is left to run alone at the end,
+ * and with `--shard` splits the files by measured duration
+ * (tests/helpers/unit-shards.ts) instead of by a hash of their path. Files
+ * of equal duration, such as the compatibility files, which have none, keep
+ * Vitest's order.
+ */
+class UnitSequencer extends BaseSequencer {
+  override async shard(specs: TestSpecification[]) {
+    const { index, count } = this.ctx.config.shard ?? { index: 1, count: 1 };
+    const mine = new Set(
+      unitShard(
+        specs.map((spec) => spec.moduleId),
+        index,
+        count,
+      ),
+    );
+    return specs.filter((spec) => mine.has(spec.moduleId));
+  }
+
+  override async sort(specs: TestSpecification[]) {
+    return (await super.sort(specs)).sort(
+      (a, b) => unitSeconds(b.moduleId) - unitSeconds(a.moduleId),
+    );
+  }
+}
 
 export default defineConfig({
   resolve: {
@@ -42,5 +71,6 @@ export default defineConfig({
     // and archive tests slow toward the test timeout.
     fileParallelism: true,
     maxWorkers: Math.min(availableParallelism(), 4),
+    sequence: { sequencer: UnitSequencer },
   },
 });

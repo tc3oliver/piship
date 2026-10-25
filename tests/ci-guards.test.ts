@@ -16,9 +16,9 @@ function ciJob(name: string): string {
   return ci.slice(start, next < 0 ? undefined : start + 1 + next);
 }
 
-/** The steps of the CI check job, one string each. */
+/** The steps every CI check runner runs, one string each. */
 function steps(): string[] {
-  const check = ciJob("check");
+  const check = ciJob("ubuntu");
   const body = check.slice(check.indexOf("    steps: &check-steps\n"));
   return body
     .split(/\n(?= {6}- )/)
@@ -36,14 +36,14 @@ describe("the CI check job", () => {
     );
     expect(conditions.sort()).toEqual([
       "runner.os != 'Linux' && matrix.part != 'unit'",
-      "runner.os == 'Linux'",
+      "runner.os == 'Linux' && matrix.part != 'unit'",
     ]);
     for (const step of live)
       expect(step).toMatch(/^ {10}PISHIP_LIVE_SECRET_STORE: "1"$/m);
   });
 
   it("requires the OS sandbox and isolator on Linux and macOS", () => {
-    // The whole unit tier, and a Windows unit shard.
+    // A unit shard on Linux and macOS, and one on Windows.
     const units = steps().filter((step) => step.includes("npm test"));
     expect(units).toHaveLength(2);
     for (const unit of units)
@@ -60,66 +60,101 @@ describe("the CI check job", () => {
   });
 });
 
-// Windows runs the check job's steps on three runners: two unit shards and
-// one for everything else. Branch protection requires `check (windows-latest)`
-// by name, and a skipped required check counts as passed, so the job of that
-// name must run always and fail unless every Windows runner succeeded.
-describe("the Windows CI check", () => {
-  it("keeps the required check names", () => {
-    expect(ciJob("check")).toContain("    name: check (${{ matrix.os }})\n");
-    expect(ciJob("check")).toContain("os: [ubuntu-latest, macos-latest]");
-    expect(ciJob("windows")).toMatch(
-      /^ {4}name: check \(windows-latest, \$\{\{/m,
-    );
-    expect(ci.match(/^ {4}name: check \(windows-latest\)$/gm)).toHaveLength(1);
-    expect(ciJob("check-windows")).toContain("name: check (windows-latest)\n");
-  });
-
-  it("runs every step of the check, and every unit file once, across its runners", () => {
-    const windows = ciJob("windows");
-    expect(windows).toContain("    steps: *check-steps\n");
-    for (const leg of [
+// Each target runs the check's steps on several runners: unit shards and one
+// for everything else. Branch protection requires `check (<os>)` by name, and
+// a skipped required check counts as passed, so the job of that name must run
+// always and fail unless every runner of its target succeeded.
+describe("the CI check runners", () => {
+  const TARGETS = {
+    ubuntu: ["{ os: ubuntu-latest, part: unit, shard: 1/1 }"],
+    macos: [
+      "{ os: macos-latest, part: unit, shard: 1/2 }",
+      "{ os: macos-latest, part: unit, shard: 2/2 }",
+    ],
+    windows: [
       "{ os: windows-latest, part: unit, shard: 1/2 }",
       "{ os: windows-latest, part: unit, shard: 2/2 }",
-      "{ os: windows-latest, part: compatibility }",
-    ])
-      expect(windows).toContain(leg);
-    expect(ciJob("check")).toContain("part: [all]");
+    ],
+  } as const;
+
+  it("keeps the required check names", () => {
+    for (const target of Object.keys(TARGETS)) {
+      const os = `${target}-latest`;
+      expect(ciJob(target)).toContain(
+        "    name: check (${{ matrix.os }}, ${{ matrix.part }}${{",
+      );
+      expect(
+        ci.match(new RegExp(`^ {4}name: check \\(${os}\\)$`, "gm")),
+      ).toHaveLength(1);
+      expect(ciJob(`check-${target}`)).toContain(`name: check (${os})\n`);
+    }
+  });
+
+  it("runs every step of the check, and every unit shard, on each target", () => {
+    expect(ciJob("ubuntu")).toContain("    steps: &check-steps\n");
+    for (const [target, shards] of Object.entries(TARGETS)) {
+      const job = ciJob(target);
+      if (target !== "ubuntu")
+        expect(job).toMatch(/^ {4}steps: \*check-steps$/m);
+      // The unit shards of a target, 1/n to n/n, and one runner for the rest.
+      const legs = [...job.matchAll(/^ {10}- (\{ .* \})$/gm)].map(
+        ([, leg]) => leg,
+      );
+      expect(legs).toEqual([
+        ...shards,
+        `{ os: ${target}-latest, part: compatibility }`,
+      ]);
+      for (const [index, leg] of shards.entries())
+        expect(leg).toContain(`shard: ${index + 1}/${shards.length} }`);
+    }
     const condition = (run: string) =>
       steps()
         .filter((step) => step.includes(run))
         .map((step) => /^ {6}- if: (.+)$/m.exec(step)?.[1]);
-    expect(condition("run: npm test\n")).toEqual(["matrix.part == 'all'"]);
+    expect(condition("run: npm test -- --shard=${{ matrix.shard }}\n")).toEqual(
+      ["matrix.part == 'unit' && runner.os != 'Windows'"],
+    );
     const shard = 'run: cmd /d /c "npm test -- --shard=${{ matrix.shard }}"';
-    expect(condition(shard)).toEqual(["matrix.part == 'unit'"]);
+    expect(condition(shard)).toEqual([
+      "matrix.part == 'unit' && runner.os == 'Windows'",
+    ]);
     for (const run of [
       "run: npm run check:budgets",
       "run: npm run test:compatibility",
     ])
       expect(condition(run), run).toEqual(["matrix.part != 'unit'"]);
+    for (const run of [
+      "run: npm run format:check",
+      "run: npm run lint",
+      "run: npm run typecheck",
+      "run: npm run check:boundaries",
+    ])
+      expect(condition(run), run).toEqual([
+        "matrix.os == 'ubuntu-latest' && matrix.part != 'unit'",
+      ]);
   });
 
-  it("fails unless every Windows runner succeeded", () => {
-    // The whole job: nothing may make it pass on a failed, skipped, or
-    // cancelled runner, such as continue-on-error or a weaker condition.
-    expect(ciJob("check-windows").trimEnd()).toBe(
-      [
-        "",
-        "  check-windows:",
-        "    name: check (windows-latest)",
-        "    needs: [windows]",
-        "    if: always()",
-        "    runs-on: ubuntu-latest",
-        "    steps:",
-        '      - run: test "$RESULT" = success',
-        "        env:",
-        "          RESULT: ${{ needs.windows.result }}",
-      ].join("\n"),
-    );
-    // A runner allowed to fail would report success to the aggregate.
-    expect(ciJob("windows")).not.toContain("continue-on-error");
-    expect(ciJob("check")).not.toContain("continue-on-error");
-  });
+  for (const target of Object.keys(TARGETS))
+    it(`fails check (${target}-latest) unless every ${target} runner succeeded`, () => {
+      // The whole job: nothing may make it pass on a failed, skipped, or
+      // cancelled runner, such as continue-on-error or a weaker condition.
+      expect(ciJob(`check-${target}`).trimEnd()).toBe(
+        [
+          "",
+          `  check-${target}:`,
+          `    name: check (${target}-latest)`,
+          `    needs: [${target}]`,
+          "    if: always()",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          '      - run: test "$RESULT" = success',
+          "        env:",
+          `          RESULT: \${{ needs.${target}.result }}`,
+        ].join("\n"),
+      );
+      // A runner allowed to fail would report success to the aggregate.
+      expect(ciJob(target)).not.toContain("continue-on-error");
+    });
 });
 
 describe("browser evidence tiers", () => {
