@@ -1,6 +1,11 @@
 // Human and JSON renderings of a policy explanation. All free text passes
 // through redact() so rule reasons can never leak secret values.
-import { redact, type PolicyEffect } from "@piship/contracts";
+import {
+  type PolicyDecision,
+  type PolicyEffect,
+  redact,
+  type ResolvedDecision,
+} from "@piship/contracts";
 import type { PolicyExplanation } from "./engine.js";
 import { decisionStatus } from "./seams.js";
 
@@ -129,4 +134,39 @@ export function formatDecisionJSON(
   options: DecisionFormatOptions = {},
 ): string {
   return JSON.stringify(decisionToJSON(explanation, options), null, 2);
+}
+
+/**
+ * One sentence on how to change a blocking decision, chosen by the layer of
+ * the deciding rule. It adds no resource or path beyond what the denial text
+ * already carries, and a distribution-enforced or team rule never gets a
+ * workaround.
+ */
+export function denialHint(
+  decision: Pick<PolicyDecision, "layer" | "action" | "ruleId"> & {
+    readonly approval?: ResolvedDecision["approval"];
+  },
+  deployment: "personal" | "managed",
+): string {
+  // The person's own refusal of a prompt needs no way to change a rule.
+  if (decision.approval === "denied" || decision.approval === "cancelled")
+    return "";
+  const explain = `\`piship policy explain ${decision.action} <resource>\` shows how it was decided`;
+  switch (decision.layer) {
+    case "distribution-enforced":
+      return deployment === "managed"
+        ? "This rule is distribution-owned and cannot be changed here; contact the distribution owner."
+        : "This rule is distribution-owned and cannot be changed here.";
+    case "team-project":
+      return "This rule comes from the project or team policy; ask its owner to change it.";
+    case "user-preference":
+      return `This is your own rule ${decision.ruleId}; edit it in config/policy.json (${explain}).`;
+    case "builtin":
+      // No rule decided: nothing a user rule or the distribution can change here.
+      return "";
+    default:
+      return deployment === "managed"
+        ? "This is a distribution default; contact the distribution owner."
+        : `This is a distribution default; add a rule to config/policy.json to change it (${explain}).`;
+  }
 }
