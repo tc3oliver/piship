@@ -34,7 +34,7 @@ function kill(child: ChildProcess): void {
  * Windows as `EOF` (libuv maps `ERROR_BROKEN_PIPE` to `UV_EOF`), and macOS
  * as `ENOTCONN` when the socket-backed pipe is already torn down.
  */
-const STDIN_CLOSED_CODES: ReadonlySet<string> = new Set([
+export const STDIN_CLOSED_CODES: ReadonlySet<string> = new Set([
   "EPIPE",
   "EOF",
   "ECONNRESET",
