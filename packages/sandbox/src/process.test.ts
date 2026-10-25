@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   mkdtempSync,
   readdirSync,
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { spawnManaged } from "./process.js";
+import { parsePs, spawnManaged, trackDescendants } from "./process.js";
 
 const node = process.execPath;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -145,6 +145,63 @@ describe("spawnManaged", () => {
     expect(running(token)).toBe(false);
   });
 
+  // Node's `detached` calls setsid(): the grandchild leaves the leader's group.
+  const ESCAPING = TREE.replace(
+    '{ stdio: "ignore" }',
+    '{ stdio: "ignore", detached: true }',
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "kills a descendant that left the group when the leader exits, and nothing else",
+    async () => {
+      const heartbeat = join(dir, "hb");
+      const token = `piship-setsid-${Date.now()}`;
+      const bystanderToken = `piship-bystander-${Date.now()}`;
+      const bystander = spawn(
+        node,
+        ["-e", "setInterval(() => {}, 1000)", bystanderToken],
+        { stdio: "ignore" },
+      );
+      try {
+        const leader = ESCAPING.replace(
+          "setInterval(() => {}, 1000);",
+          "setTimeout(() => process.exit(0), 800);",
+        );
+        const exit = await spawnManaged({
+          file: node,
+          args: ["-e", leader, heartbeat, token],
+          cwd: dir,
+          env: { PATH: process.env.PATH ?? "" },
+        }).exited;
+        expect(exit.code).toBe(0);
+        expect(await heartbeatStopped(heartbeat)).toBe(true);
+        expect(running(token)).toBe(false);
+        expect(running(bystanderToken)).toBe(true);
+      } finally {
+        bystander.kill("SIGKILL");
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "kills a descendant that left the group on timeout",
+    async () => {
+      const heartbeat = join(dir, "hb");
+      const token = `piship-setsid-timeout-${Date.now()}`;
+      const exit = await spawnManaged({
+        file: node,
+        args: ["-e", ESCAPING, heartbeat, token],
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "" },
+        timeoutMs: 2000,
+        graceMs: 300,
+      }).exited;
+      expect(exit.timedOut).toBe(true);
+      expect(await heartbeatStopped(heartbeat)).toBe(true);
+      expect(running(token)).toBe(false);
+    },
+  );
+
   it.skipIf(process.platform !== "win32")(
     "returns the governed child's exit code after draining its output",
     async () => {
@@ -269,5 +326,82 @@ describe("spawnManaged", () => {
     }).exited;
     expect(missing.code).toBeNull();
     expect(missing.error).toMatch(/ENOENT/);
+  });
+});
+
+describe("trackDescendants", () => {
+  // pid -> [ppid, pgid, start]; 10 is this process, 9 its parent, 100 the leader.
+  const table = (entries: Record<number, [number, number, string]>) =>
+    parsePs(
+      Object.entries(entries)
+        .map(([pid, [ppid, pgid, start]]) => `${pid} ${ppid} ${pgid} ${start}`)
+        .join("\n"),
+    );
+  const T = "Mon Oct 26 04:00:00 2026";
+
+  it("records descendants that left the group, across a reparenting", () => {
+    const known = new Map<number, string>();
+    trackDescendants(
+      table({
+        9: [1, 9, T],
+        10: [9, 9, T],
+        100: [10, 100, T],
+        101: [100, 100, T], // same group: the group kill reaches it
+        102: [101, 102, T], // setsid
+        103: [102, 102, T],
+        200: [1, 200, T], // unrelated
+      }),
+      100,
+      known,
+      10,
+    );
+    expect([...known.keys()].sort()).toEqual([102, 103]);
+    // The leader and 102 exited; 103 now belongs to launchd and is still found.
+    trackDescendants(
+      table({
+        9: [1, 9, T],
+        10: [9, 9, T],
+        103: [1, 102, T],
+        104: [103, 104, T],
+      }),
+      undefined,
+      known,
+      10,
+    );
+    expect([...known.keys()].sort()).toEqual([103, 104]);
+  });
+
+  it("drops a reused pid and never follows it", () => {
+    const known = new Map([[102, T]]);
+    trackDescendants(
+      table({
+        10: [1, 10, T],
+        102: [1, 102, "Mon Oct 26 05:00:00 2026"], // same pid, another process
+        300: [102, 300, T],
+      }),
+      undefined,
+      known,
+      10,
+    );
+    expect(known.size).toBe(0);
+  });
+
+  it("never records this process or its ancestors", () => {
+    const known = new Map<number, string>();
+    // A table claiming the launcher descends from the leader (pid confusion).
+    trackDescendants(
+      table({
+        100: [1, 100, T],
+        9: [100, 9, T],
+        10: [9, 9, T],
+        11: [10, 11, T],
+      }),
+      100,
+      known,
+      10,
+    );
+    expect(known.has(9)).toBe(false);
+    expect(known.has(10)).toBe(false);
+    expect(known.has(11)).toBe(false);
   });
 });
