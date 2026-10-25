@@ -631,6 +631,7 @@ describe("allow for this session", () => {
     setup: Setup,
     rules: unknown[],
     defaults: unknown[] = [],
+    homeDir?: string,
   ) {
     const built = distribution(setup);
     writeFileSync(
@@ -641,7 +642,9 @@ describe("allow for this session", () => {
       defaults: unknown[];
     };
     policy.defaults = [...defaults, ...policy.defaults];
-    const session = await GovernanceSession.open(built.options);
+    const session = await GovernanceSession.open(
+      homeDir ? { ...built.options, homeDir } : built.options,
+    );
     sessions.push(session);
     return { ...built, session };
   }
@@ -709,20 +712,29 @@ describe("allow for this session", () => {
   });
 
   it.each([
-    ["*", "web.request"],
-    ["**", "web.request"],
-    ["**/*", "filesystem.read"],
-    ["/**", "filesystem.read"],
+    ["*", "web.request", "example.org", "example.com"],
+    ["**", "web.request", "example.org", "example.com"],
+    ["*:*", "mcp.tool.call", "one:a", "two:b"],
+    ["*:**", "mcp.tool.call", "one:a", "two:b"],
+    ["* **", "shell.execute", "ls a", "cat b"],
+    ["**/*", "filesystem.read", "a.txt", "b.txt"],
+    ["/**", "filesystem.read", "a.txt", "b.txt"],
+    ["**/x", "filesystem.read", "a/x", "b/x"],
+    // With a home of `/`, `~/**` is `/**` once expanded.
+    ["~/**", "filesystem.read", "a.txt", "b.txt"],
   ] as const)(
-    "grants only the exact target for a rule whose pattern %s matches everything",
-    async (resource, action) => {
-      const { session, workspace } = await openWith({ mode: "personal" }, [
-        { id: "all", action, resource, effect: "ask" },
-      ]);
+    "grants only the exact target for a rule whose pattern %s reaches every target",
+    async (resource, action, first, second) => {
+      const { session, workspace } = await openWith(
+        { mode: "personal" },
+        [{ id: "all", action, resource, effect: "ask" }],
+        [],
+        resource === "~/**" ? "/" : undefined,
+      );
       const [one, two] =
-        action === "web.request"
-          ? ["example.org", "example.com"]
-          : [join(workspace, "a.txt"), join(workspace, "b.txt")];
+        action === "filesystem.read"
+          ? [join(workspace, first), join(workspace, second)]
+          : [first, second];
       const { shown, channel } = sessionPrompt();
       expect(await session.decide(action, one, channel)).toMatchObject({
         ruleId: "all",
@@ -733,6 +745,28 @@ describe("allow for this session", () => {
       expect(shown).toHaveLength(1);
       await session.decide(action, two, channel);
       expect(shown).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    ["git *", "git status", "git log"],
+    ["echo *", "echo one", "echo two"],
+    ["npm run *", "npm run build", "npm run test"],
+  ] as const)(
+    "grants the rule for a pattern with a literal prefix, %s",
+    async (resource, one, two) => {
+      const { session } = await openWith({ mode: "personal" }, [
+        { id: "cmd", action: "shell.execute", resource, effect: "ask" },
+      ]);
+      const { shown, channel } = sessionPrompt();
+      await session.decide("shell.execute", one, channel);
+      expect(shown[0]?.sessionCovers).toBe(
+        covers(resource, "cmd", "shell.execute"),
+      );
+      expect(await session.decide("shell.execute", two, channel)).toMatchObject(
+        { ruleId: "cmd", approval: "session" },
+      );
+      expect(shown).toHaveLength(1);
     },
   );
 
@@ -831,7 +865,6 @@ describe("allow for this session", () => {
         resource: "rm **",
         effect: "deny",
       },
-      { id: "sh", action: "shell.execute", resource: "*", effect: "ask" },
       { id: "sh-r", action: "shell.execute", resource: "r*", effect: "ask" },
       {
         id: "no-edit",
@@ -839,24 +872,30 @@ describe("allow for this session", () => {
         resource: "edit",
         effect: "deny",
       },
-      { id: "t", action: "tool.execute", resource: "*e*", effect: "ask" },
+      { id: "t", action: "tool.execute", resource: "e*", effect: "ask" },
     ]);
     const { shown, channel } = sessionPrompt();
-    void shown;
+    expect(
+      await session.decide("shell.execute", "rg one", channel),
+    ).toMatchObject({ ruleId: "sh-r", remember: "session" });
+    expect(
+      await session.decide("shell.execute", "rg two", channel),
+    ).toMatchObject({ approval: "session" });
+    // `r*` matches it too, but the deny is decided first.
     expect(
       await session.decide("shell.execute", "rm -rf x", channel),
     ).toMatchObject({ outcome: "deny", ruleId: "my-no-rm" });
-    expect(shown).toHaveLength(0);
+    expect(shown).toHaveLength(1);
     expect(
-      await session.decide("tool.execute", "write", channel),
+      await session.decide("tool.execute", "explore", channel),
     ).toMatchObject({ ruleId: "t", remember: "session" });
-    expect(await session.decide("tool.execute", "read", channel)).toMatchObject(
-      { approval: "session" },
-    );
+    expect(
+      await session.decide("tool.execute", "extra", channel),
+    ).toMatchObject({ approval: "session" });
     expect(await session.decide("tool.execute", "edit", channel)).toMatchObject(
       { outcome: "deny", ruleId: "no-edit" },
     );
-    expect(shown).toHaveLength(1);
+    expect(shown).toHaveLength(2);
   });
 
   it("stores nothing, and a later session or a subagent child does not inherit it", async () => {

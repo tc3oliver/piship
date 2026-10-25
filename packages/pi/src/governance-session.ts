@@ -40,6 +40,8 @@ import type {
 import {
   type CapabilityState,
   denialHint,
+  expandPathTokens,
+  isPathAction,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -891,8 +893,14 @@ export class GovernanceSession {
         match.layer === first.layer &&
         match.ruleId === first.ruleId,
     )?.resource;
-    // A pattern of only `*` and `/` (`**`, `**/*`, `/**`) matches everything.
-    if (pattern === undefined || /^[*/]*$/.test(pattern)) return exact;
+    if (pattern === undefined) return exact;
+    // Only a pattern with a literal character other than `/` or `:` before
+    // its first `*`, once `~`, `workspace`, and `tmp` are expanded: `**`,
+    // `*:*`, `* **`, `**/x`, or `~/**` with a home of `/` reach too far.
+    const expanded = isPathAction(ask.action)
+      ? expandPathTokens(pattern, this.engine.context)
+      : pattern;
+    if (!/[^/:]/.test(expanded.split("*")[0] ?? "")) return exact;
     return {
       key: JSON.stringify([ask.action, first.layer, first.ruleId]),
       rule: first.ruleId,
