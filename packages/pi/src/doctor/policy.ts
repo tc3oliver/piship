@@ -5,9 +5,23 @@ import {
   sessionExportStatus,
   withSessionExportRules,
 } from "@piship/core";
-import { manifestContainment, unenforcedRules } from "@piship/policy";
+import {
+  manifestContainment,
+  matchAction,
+  unenforcedRules,
+} from "@piship/policy";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
+
+// What a package permission provider decides for the user: tool calls, bash
+// commands, paths, and MCP calls.
+const PROVIDER_GOVERNED_ACTIONS = new Set([
+  "tool.execute",
+  "shell.execute",
+  "filesystem.read",
+  "filesystem.write",
+  "mcp.tool.call",
+]);
 
 export function policyGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
@@ -56,6 +70,32 @@ export function policyGroup(data: DoctorData, out: DoctorSection): void {
     const line = describeUserAuto(auto);
     if (auto.state === "on" || auto.state === "off") out.ok("auto", line);
     else out.warn("auto", line);
+  }
+  // PiShip cannot answer the provider's own prompts, so an `ask` on both sides
+  // can prompt twice for one action. Only the distribution's own policy is
+  // read, not user, team, or project rules.
+  const permissions = governance.manifest.capabilities.find(
+    (item) => item.name === "permissions",
+  );
+  if (permissions?.enabled && permissions.provider?.package) {
+    const asks = [...policy.enforced, ...policy.defaults]
+      .filter(
+        (rule) =>
+          rule.effect === "ask" &&
+          [...PROVIDER_GOVERNED_ACTIONS].some((action) =>
+            matchAction(rule.action, action),
+          ),
+      )
+      .map((rule) => `${rule.action} ${rule.resource} (rule ${rule.id})`);
+    if (policy.default === "ask")
+      asks.push(
+        "the provider's actions not covered by a rule (policy.default)",
+      );
+    if (asks.length > 0)
+      out.warn(
+        "double ask",
+        `PiShip asks for ${asks.join(", ")}, and the permission provider ${permissions.provider.package} also decides these actions, so you can be asked twice. This reads only the distribution's own policy, not user, team, or project rules. Set the PiShip rule or policy.default to allow for them, or let the provider own the question`,
+      );
   }
   for (const diagnostic of inspection.engine.diagnostics)
     out.warn(diagnostic.source, diagnostic.message);
