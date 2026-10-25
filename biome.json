@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "root": true,
   "files": {
     "includes": [
@@ -10,7 +10,6 @@
       "!**/.omc",
       "!**/.claude",
       "!**/package-lock.json",
-      "!docs/spec/product-v1.0.md",
       "!**/*.md",
       "!**/*.yaml",
       "!**/*.yml"
