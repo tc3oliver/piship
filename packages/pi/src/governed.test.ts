@@ -657,7 +657,7 @@ describe("governed built-in tools", () => {
       await run(write, { path: "a.txt", content: "1" }, ctx);
       expect(seen[0]).toEqual(["Allow once", "Allow for this session", "Deny"]);
       expect(titles[0]).toContain(
-        "Allow for this session covers any target of rule write for filesystem.write in this session",
+        "Allow for this session covers any target matching workspace/** (rule write) for filesystem.write in this session",
       );
       const afterFirst = seen.length;
       // The same file again, and another file the same rule asks for: no prompt.
@@ -1255,6 +1255,49 @@ describe("one prompt per governed tool call", () => {
     expect(again.prompts).toHaveLength(1);
   });
 
+  it("keeps a held grant's count of uses when a combined prompt answers it again", async () => {
+    const { session, workspace, root } = await open(AUDIT, {
+      userRules: [
+        SHELL_ASK[0],
+        {
+          id: "me.echo",
+          action: "shell.execute",
+          resource: "echo *",
+          effect: "ask",
+        },
+        {
+          id: "me.ls",
+          action: "shell.execute",
+          resource: "ls*",
+          effect: "ask",
+        },
+      ],
+    });
+    const { ctx } = counting("Allow for this session");
+    const select = ctx.ui.select;
+    ctx.ui.select = (async (title: string, options: string[]) =>
+      options.includes("Allow for this session")
+        ? "Allow for this session"
+        : select(title, options)) as typeof select;
+    // The grant, one use, a prompt for a new command rule that answers the
+    // held tool grant again, then one more use.
+    for (const command of ["echo one", "echo two", "ls", "echo three"])
+      expect(
+        await call(session, workspace, "bash", { command }, ctx),
+      ).toHaveProperty("text");
+    const uses = (await events(session, root))
+      .map(
+        (event) => event as { event: string; detail?: Record<string, string> },
+      )
+      .filter(
+        (event) =>
+          event.event === "tool.allowed" &&
+          event.detail?.action === "tool.execute",
+      )
+      .map((event) => event.detail?.sessionUses);
+    expect(uses).toEqual([undefined, "1", undefined, "2"]);
+  });
+
   it("still asks for the tool when execute runs under an ID the hook never saw", async () => {
     // Only the tool ask can prompt: the command itself is allowed.
     const { session, workspace } = await open(AUDIT, {
@@ -1319,7 +1362,7 @@ describe("one prompt per governed tool call", () => {
     ).toHaveProperty("text");
     expect(write.prompts).toHaveLength(2);
     expect(write.prompts[0]).toMatch(
-      /tool\.execute write\nTool-reason-canary\nfilesystem\.write write: .*asked\nFile-reason-canary\nAllow for this session covers any target of rule me\.write-tool for tool\.execute in this session\nAllow for this session covers any target of rule me\.write for filesystem\.write in this session$/,
+      /tool\.execute write\nTool-reason-canary\nfilesystem\.write write: .*asked\nFile-reason-canary\nAllow for this session covers any target matching write \(rule me\.write-tool\) for tool\.execute in this session\nAllow for this session covers any target matching workspace\/asked\/\*\* \(rule me\.write\) for filesystem\.write in this session$/,
     );
     expect(write.prompts[1]).not.toContain("tool.execute");
     // An allowed file: one prompt, for the tool alone.

@@ -166,6 +166,11 @@ export interface ApprovalDetail {
    */
   readonly scopes?: readonly ApprovalScope[];
   /**
+   * What the `session` answer covers when it is wider than the target the
+   * message names. Shown only by a channel that offers that answer.
+   */
+  readonly sessionCovers?: string;
+  /**
    * Lets the person keep the answer for this project (`approved-always` and
    * `denied-always`); a channel returns them only when this is set.
    */

@@ -554,17 +554,20 @@ export class GovernanceSession {
           : []),
         `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? own.resource)}`,
         ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
-        // A grant wider than the target shown says so, for each ask.
-        ...(offersSession && grants.some((grant) => grant.rule)
-          ? asks.map((ask, index) => {
-              const rule = grants[index]?.rule;
-              return rule
-                ? `Allow for this session covers any target of rule ${rule} for ${ask.action} in this session`
-                : `Allow for this session covers this ${ask.action} target only`;
-            })
-          : []),
       ].join("\n"),
     };
+    // A grant wider than the target shown says so, for each ask, where the
+    // session answer is shown.
+    const sessionCovers = grants.some((grant) => grant.rule)
+      ? asks
+          .map((ask, index) => {
+            const grant = grants[index];
+            return grant?.rule
+              ? `Allow for this session covers any target matching ${grant.pattern} (rule ${grant.rule}) for ${ask.action} in this session`
+              : `Allow for this session covers this ${ask.action} target only`;
+          })
+          .join("\n")
+      : undefined;
     // Pi does not queue extension dialogs: a second confirm replaces the
     // first, whose promise never settles. Approvals of concurrent tool
     // calls (parallel top-level calls, Codemode's nested calls) wait their
@@ -588,7 +591,11 @@ export class GovernanceSession {
       approval: "session" as const,
     };
     const offered = offersSession
-      ? { ...prompt, scopes: ["once", "session"] as const }
+      ? {
+          ...prompt,
+          scopes: ["once", "session"] as const,
+          ...(sessionCovers ? { sessionCovers } : {}),
+        }
       : prompt;
     let auto = this.#autoApproval(asks, decision);
     let prompted = false;
@@ -622,8 +629,10 @@ export class GovernanceSession {
               return answered;
             })
           : await resolveDecision(decision, channel, prompt);
+    // An answer for a grant already held keeps its count of uses.
     if (resolved.remember === "session")
-      for (const { key } of grants) this.#sessionAllowed.set(key, 0);
+      for (const { key } of grants)
+        if (!this.#sessionAllowed.has(key)) this.#sessionAllowed.set(key, 0);
     if (resolved.approval === "session")
       for (const { key } of grants)
         this.#sessionAllowed.set(key, (this.#sessionAllowed.get(key) ?? 0) + 1);
@@ -839,15 +848,28 @@ export class GovernanceSession {
   readonly #sessionAllowed = new Map<string, number>();
 
   /**
-   * What "allow for this session" grants for one ask. An ask that one rule of
-   * the user's preferences or the distribution defaults decides on every
-   * target, and that no rule keeps the prompt of, grants that rule for that
-   * action: any target it asks for next. Any other grants its exact targets.
+   * What "allow for this session" grants for one ask. Where the user owns the
+   * policy or the administrator allows auto-approval (`policy.userAuto`), an
+   * ask that one rule of the user's preferences or the distribution defaults
+   * decides on every target, that no rule keeps the prompt of, and whose
+   * pattern does not match everything, grants that rule for that action: any
+   * target it asks for next. Any other grants its exact targets.
    */
-  #sessionGrant(ask: ApprovalTarget): { key: string; rule?: string } {
-    const asked = ask.resources
-      .map((resource) => this.engine.evaluate({ action: ask.action, resource }))
-      .filter((decision) => decision.effect !== "allow");
+  #sessionGrant(ask: ApprovalTarget): {
+    key: string;
+    rule?: string;
+    pattern?: string;
+  } {
+    const exact = { key: sessionAllowKey(ask.action, ask.resources) };
+    if (
+      this.options.lock.deployment.mode !== "personal" &&
+      !this.#userAuto.allowed
+    )
+      return exact;
+    const explained = ask.resources
+      .map((resource) => this.engine.explain({ action: ask.action, resource }))
+      .filter((explanation) => explanation.decision.effect !== "allow");
+    const asked = explained.map((explanation) => explanation.decision);
     const [first] = asked;
     const byRule =
       first !== undefined &&
@@ -862,12 +884,20 @@ export class GovernanceSession {
       !ask.resources.some((resource) =>
         this.engine.keepsPrompt({ action: ask.action, resource }),
       );
-    return byRule
-      ? {
-          key: JSON.stringify([ask.action, first.layer, first.ruleId]),
-          rule: first.ruleId,
-        }
-      : { key: sessionAllowKey(ask.action, ask.resources) };
+    if (!byRule) return exact;
+    const pattern = explained[0]?.matches.find(
+      (match) =>
+        match.first &&
+        match.layer === first.layer &&
+        match.ruleId === first.ruleId,
+    )?.resource;
+    // A pattern of only `*` and `/` (`**`, `**/*`, `/**`) matches everything.
+    if (pattern === undefined || /^[*/]*$/.test(pattern)) return exact;
+    return {
+      key: JSON.stringify([ask.action, first.layer, first.ruleId]),
+      rule: first.ruleId,
+      pattern,
+    };
   }
 
   /**
