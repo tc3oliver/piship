@@ -19,6 +19,17 @@ export default async function setup(project: TestProject) {
       await shardFixtures(project),
     );
   } catch (error) {
+    // Vitest 4 reports a failed global setup as "No test files found" and
+    // drops the error, so the cause is printed (and annotated in CI) first.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`E2E global setup failed: ${message}`);
+    if (process.env.GITHUB_ACTIONS)
+      console.error(
+        `::error title=E2E global setup failed::${message
+          .replace(/%/g, "%25")
+          .replace(/\r/g, "%0D")
+          .replace(/\n/g, "%0A")}`,
+      );
     // The build that failed is what has to be reported. A fixture directory a
     // process still holds (Windows cannot remove one) must not replace it.
     try {
