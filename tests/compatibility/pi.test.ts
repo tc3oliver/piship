@@ -42,14 +42,14 @@ describe("pinned Pi compatibility", () => {
       const lock = jsonAt("package-lock.json") as {
         packages: Record<string, { version?: string }>;
       };
-      // Other overrides (e.g. security pins such as undici) are allowed.
-      expect(
-        Object.fromEntries(
-          Object.entries(root.overrides ?? {}).filter(([name]) =>
-            name.startsWith("@earendil-works/"),
-          ),
-        ),
-      ).toEqual(PI_SIBLING_PINS);
+      // undici is a security pin that must match the version PiShip itself uses.
+      const contracts = jsonAt("packages/contracts/package.json") as {
+        dependencies: Record<string, string>;
+      };
+      expect(root.overrides).toEqual({
+        ...PI_SIBLING_PINS,
+        undici: contracts.dependencies.undici,
+      });
       // Pi releases its packages in lockstep.
       for (const version of Object.values(PI_SIBLING_PINS))
         expect(version).toBe(PINNED_PI_VERSION);
