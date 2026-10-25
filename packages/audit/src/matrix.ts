@@ -44,7 +44,7 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
     condition: "delivery fails",
     sink: "required",
     behavior:
-      "events stay in the bounded buffer and are retried on the next flush; nothing is lost",
+      "events stay in the bounded buffer and in the sink's spool on disk, and are retried on the next flush; nothing is lost",
     logState: "degraded",
     governedActions: "continue",
   },
@@ -53,6 +53,22 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
     sink: "required",
     behavior:
       "new events are dropped and counted; assertAvailable() throws AUDIT_UNAVAILABLE until a flush drains the buffer",
+    logState: "failed",
+    governedActions: "fail closed",
+  },
+  {
+    condition: "its spool cannot be written or holds a corrupt line at launch",
+    sink: "required",
+    behavior:
+      "AuditLog.open throws AUDIT_UNAVAILABLE, at every launch until the spool is repaired",
+    logState: "launch fails",
+    governedActions: "fail closed",
+  },
+  {
+    condition: "its spool is full or cannot be written during the session",
+    sink: "required",
+    behavior:
+      "the event stays in the in-memory buffer; assertAvailable() throws AUDIT_UNAVAILABLE until a delivered batch lets the spool be rewritten",
     logState: "failed",
     governedActions: "fail closed",
   },
@@ -69,7 +85,7 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
       "events are still undelivered at close, or were dropped (full buffer, or emitted after close)",
     sink: "required",
     behavior:
-      "close() retries the sink until its deadline, then aborts; requiredAuditLoss(status) turns what is left into AUDIT_UNAVAILABLE, which ends the governed session or the login, logout, update, or rollback command with an error (the operation itself is not undone); the log is failed when events were dropped",
+      "close() retries the sink until its deadline, then aborts; what is left stays in the spool and is delivered first at the next launch; requiredAuditLoss(status) turns what is left into AUDIT_UNAVAILABLE, which ends the governed session or the login, logout, update, or rollback command with an error (the operation itself is not undone); the log is failed when events were dropped",
     logState: "degraded",
     governedActions: "fail closed",
   },
