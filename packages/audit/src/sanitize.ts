@@ -1,11 +1,11 @@
 import {
   AUDIT_EVENT_SCHEMA,
   AUDIT_EVENT_TYPES,
+  ENFORCEMENT_PLANES,
+  type EnforcementPlane,
   type AuditCapture,
   type AuditEvent,
   type AuditEventType,
-  ENFORCEMENT_PLANES,
-  type EnforcementPlane,
   PiShipError,
   REDACTED_TEXT,
   redact,

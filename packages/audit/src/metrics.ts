@@ -115,9 +115,10 @@ export interface MetricsSnapshot {
   readonly updatedAt: string;
   readonly policyDenials: Readonly<Record<string, number>>;
   /**
-   * Ask decisions by `<action>:<kind>`: `prompted` (the user was asked),
-   * `approved` and `denied` (final outcome; denied includes policy and
-   * headless refusals), `auto` (auto mode, `--yolo`, or a session allow).
+   * Policy decision records by `<action>:<kind>`: `prompted` (the user was
+   * asked), `approved` and `denied` (final outcome of an ask, plus deny-effect
+   * rules and headless refusals), `auto` (auto mode, `--yolo`, or a session
+   * allow). Per record, not per tool call.
    */
   readonly approvals?: Readonly<Record<string, number>>;
   readonly mcpHealth: Readonly<Record<string, McpHealthMetric>>;

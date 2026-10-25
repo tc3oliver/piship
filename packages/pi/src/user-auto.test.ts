@@ -27,8 +27,8 @@ import { resolveLock, setUserAuto, userAutoPath } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { governanceHooks } from "./builtins.js";
 import { runPolicy } from "./commands/governance.js";
-import type { DoctorData } from "./doctor/data.js";
 import { policyGroup } from "./doctor/policy.js";
+import type { DoctorData } from "./doctor/data.js";
 import { GovernanceSession, inspectGovernance } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 import type { LaunchContext } from "./launch/context.js";
@@ -843,13 +843,12 @@ describe("approval metrics", () => {
       ),
     ).rejects.toThrow();
     const counts = off.session.metrics.snapshot().approvals ?? {};
-    // A write decides more than once, so count relations, not call totals.
-    expect(counts["filesystem.write:approved"]).toBeGreaterThan(0);
-    expect(counts["filesystem.write:prompted"]).toBe(
-      (counts["filesystem.write:approved"] ?? 0) + 1,
-    );
-    expect(counts["filesystem.write:denied"]).toBe(2);
-    expect(counts["filesystem.write:auto"]).toBeUndefined();
+    // A write decides twice, so the approved write counts twice.
+    expect(counts).toEqual({
+      "filesystem.write:prompted": 3,
+      "filesystem.write:approved": 2,
+      "filesystem.write:denied": 2,
+    });
 
     const on = await open({ userAuto: "allowed", on: true });
     await tool(
@@ -857,9 +856,9 @@ describe("approval metrics", () => {
       on.workspace,
       "write",
     )({ path: `${secret}.txt`, content: "text-canary" }, context().ctx);
-    expect(
-      on.session.metrics.snapshot().approvals?.["filesystem.write:auto"],
-    ).toBeGreaterThan(0);
+    expect(on.session.metrics.snapshot().approvals).toEqual({
+      "filesystem.write:auto": 2,
+    });
     const text = JSON.stringify([
       off.session.metrics.snapshot(),
       on.session.metrics.snapshot(),

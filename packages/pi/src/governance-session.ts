@@ -13,7 +13,6 @@ import {
 import {
   type ApprovalChannel,
   type AuditEventType,
-  duringStartup,
   formatError,
   PiShipError,
   type PolicyAction,
@@ -21,6 +20,7 @@ import {
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
+  duringStartup,
   resolveDecision,
   startupMark,
 } from "@piship/contracts";
