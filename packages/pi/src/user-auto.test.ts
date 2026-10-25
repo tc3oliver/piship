@@ -51,6 +51,7 @@ const POLICY = [
   '    - { id: secrets, action: filesystem.read, resource: "~/.ssh/**", effect: deny }',
   '    - { id: keep-asking, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
   '    - { id: push, action: shell.execute, resource: "git push**", effect: ask }',
+  "    - { id: read-tool, action: tool.execute, resource: read, effect: ask, reason: Read-tool-canary }",
   "  defaults:",
   '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
   '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
@@ -318,6 +319,101 @@ describe("user auto mode in a governed session", () => {
       ).rejects.toThrow(/not allowed/);
       expect(prompts).toBeGreaterThan(0);
       expect(existsSync(join(workspace, path))).toBe(false);
+    }
+  });
+
+  it("keeps a tool ask the user's own rule wrote, in the one prompt of the call, and never touches a tool deny", async () => {
+    const { session, workspace } = await open({
+      userAuto: "allowed",
+      on: true,
+      userRules: [
+        { id: "mine", action: "tool.execute", resource: "bash", effect: "ask" },
+        {
+          id: "no-edit",
+          action: "tool.execute",
+          resource: "edit",
+          effect: "deny",
+        },
+      ],
+    });
+    const bash = governedTools(session, workspace).find(
+      (item) => item.name === "bash",
+    ) as ToolDefinition;
+    const hook = hooks(session).handlers.get("tool_call") as (
+      event: unknown,
+      ctx: unknown,
+    ) => Promise<unknown>;
+    // `echo` is a policy.default ask, which auto mode approves; the tool's
+    // own ask still asks, once.
+    for (const answer of [false, true]) {
+      let prompts = 0;
+      const { ctx } = context(async () => {
+        prompts += 1;
+        return answer;
+      });
+      const id = `call-${answer}`;
+      expect(
+        await hook({ toolName: "bash", toolCallId: id, input: {} }, ctx),
+      ).toBeUndefined();
+      const ran = bash
+        .execute(id, { command: "echo hi" } as never, undefined, undefined, ctx)
+        .then(
+          () => true,
+          () => false,
+        );
+      expect(await ran).toBe(answer);
+      expect(prompts).toBe(1);
+    }
+    expect(
+      await hook(
+        { toolName: "edit", toolCallId: "e", input: {} },
+        context(async () => true).ctx,
+      ),
+    ).toEqual(expect.objectContaining({ block: true }));
+  });
+
+  it("keeps an enforced tool ask, shown with its reason, in one prompt under auto mode and --yolo", async () => {
+    for (const yolo of [false, true]) {
+      const built = distribution({ userAuto: "allowed", on: !yolo });
+      const session = await GovernanceSession.open({ ...built.options, yolo });
+      sessions.push(session);
+      const read = governedTools(session, built.workspace).find(
+        (item) => item.name === "read",
+      ) as ToolDefinition;
+      const hook = hooks(session).handlers.get("tool_call") as (
+        event: unknown,
+        ctx: unknown,
+      ) => Promise<unknown>;
+      for (const answer of [false, true]) {
+        const prompts: string[] = [];
+        // An enforced ask offers no session scope: a yes/no confirm.
+        const { ctx } = context((async (_title: string, message: string) => {
+          prompts.push(message);
+          return answer;
+        }) as () => Promise<boolean>);
+        const id = `call-${yolo}-${answer}`;
+        expect(
+          await hook({ toolName: "read", toolCallId: id, input: {} }, ctx),
+        ).toBeUndefined();
+        const ran = await read
+          .execute(
+            id,
+            { path: "notes.txt" } as never,
+            undefined,
+            undefined,
+            ctx,
+          )
+          .then(
+            () => true,
+            () => false,
+          );
+        expect(ran).toBe(answer);
+        expect(prompts).toEqual([
+          expect.stringMatching(
+            /tool\.execute read\nRead-tool-canary\nfilesystem\.read read: \S*notes\.txt$/,
+          ),
+        ]);
+      }
     }
   });
 

@@ -910,6 +910,382 @@ describe("governed built-in tools", () => {
   });
 });
 
+describe("one prompt per governed tool call", () => {
+  const AUDIT = [
+    "audit:",
+    "  enabled: true",
+    "  sinks:",
+    "    - { id: local, type: file, required: false }",
+  ];
+  const SHELL_ASK = [
+    { id: "me.bash", action: "tool.execute", resource: "bash", effect: "ask" },
+    { id: "me.shell", action: "shell.execute", effect: "ask" },
+  ];
+
+  /** A tool call as Pi makes it: PiShip's tool_call hook, then execute. */
+  async function call(
+    session: GovernanceSession,
+    workspace: string,
+    name: string,
+    params: unknown,
+    ctx: ExtensionToolContext,
+  ) {
+    const id = `call-${Math.random()}`;
+    const governed = tool(governedTools(session, workspace), name);
+    const hook = load(governanceHooks(session)).handlers.get("tool_call");
+    const blocked = (await hook?.(
+      { toolName: name, toolCallId: id, input: params },
+      ctx,
+    )) as { block: true; reason: string } | undefined;
+    if (blocked) return { blocked: blocked.reason };
+    return governed
+      .execute(id, params as never, undefined, undefined, ctx)
+      .then(
+        (result) => ({ text: text(result) }),
+        (error: Error) => ({ refused: error.message }),
+      );
+  }
+
+  async function events(session: GovernanceSession, root: string) {
+    await session.audit.flush();
+    return readFileSync(join(root, "state", "logs", "audit.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => String(event.event).startsWith("tool."));
+  }
+
+  function counting(answer: boolean | string) {
+    const prompts: string[] = [];
+    const ctx = context(answer, async (_title, message) => {
+      prompts.push(message);
+      return answer !== false;
+    });
+    return { ctx, prompts };
+  }
+
+  it("asks once for a tool ask and a command ask, and records both decisions", async () => {
+    const { session, workspace, root } = await open(AUDIT, {
+      userRules: SHELL_ASK,
+    });
+    // Before any governed tool is registered, the hook decides the ask itself.
+    const early = counting(true);
+    expect(
+      await load(governanceHooks(session)).handlers.get("tool_call")?.(
+        { toolName: "bash", toolCallId: "early", input: {} },
+        early.ctx,
+      ),
+    ).toBeUndefined();
+    expect(early.prompts).toHaveLength(1);
+    const { ctx, prompts } = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "bash",
+        { command: "echo ran > marker.txt" },
+        ctx,
+      ),
+    ).not.toHaveProperty("refused");
+    expect(prompts).toHaveLength(1);
+    expect(existsSync(join(workspace, "marker.txt"))).toBe(true);
+    const recorded = (await events(session, root)).slice(-2);
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        event: "tool.allowed",
+        resource: "bash",
+        rule: "me.bash",
+        decision: "approved",
+        detail: expect.objectContaining({
+          action: "tool.execute",
+          approval: "approved",
+        }),
+      }),
+      expect.objectContaining({
+        event: "tool.allowed",
+        resource: "bash",
+        rule: "me.shell",
+        decision: "approved",
+        detail: expect.objectContaining({
+          action: "shell.execute",
+          approval: "approved",
+        }),
+      }),
+    ]);
+  });
+
+  it("runs nothing when that one prompt is denied, or with no one to ask", async () => {
+    const { session, workspace, root } = await open(AUDIT, {
+      userRules: SHELL_ASK,
+    });
+    const { ctx, prompts } = counting(false);
+    expect(
+      await call(session, workspace, "bash", { command: "echo x > a" }, ctx),
+    ).toHaveProperty("refused", expect.stringMatching(/rule me\.shell/));
+    expect(prompts).toHaveLength(1);
+    const denied = await events(session, root);
+    expect(denied.map((event) => [event.event, event.rule])).toEqual([
+      ["tool.denied", "me.bash"],
+      ["tool.denied", "me.shell"],
+    ]);
+    // Headless: the deferred ask still resolves to deny.
+    expect(
+      await call(
+        session,
+        workspace,
+        "bash",
+        { command: "echo x > b" },
+        context(),
+      ),
+    ).toHaveProperty(
+      "refused",
+      expect.stringMatching(/approval needs an interactive session/),
+    );
+    expect(readdirSync(workspace)).toEqual(["notes.txt"]);
+  });
+
+  it("asks for a tool ask even where the file itself is allowed", async () => {
+    const { session, workspace, root } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.read",
+          action: "tool.execute",
+          resource: "read",
+          effect: "ask",
+        },
+      ],
+    });
+    const yes = counting(true);
+    expect(
+      await call(session, workspace, "read", { path: "notes.txt" }, yes.ctx),
+    ).toEqual({ text: "workspace notes\n" });
+    expect(yes.prompts).toEqual([
+      expect.stringContaining("filesystem.read read: "),
+    ]);
+    const no = counting(false);
+    expect(
+      await call(session, workspace, "read", { path: "notes.txt" }, no.ctx),
+    ).toHaveProperty("refused", expect.stringMatching(/rule me\.read/));
+    expect(no.prompts).toHaveLength(1);
+    // The file was allowed but never read: only the tool ask is recorded.
+    expect((await events(session, root)).slice(-1)).toEqual([
+      expect.objectContaining({
+        event: "tool.denied",
+        rule: "me.read",
+        detail: expect.objectContaining({ action: "tool.execute" }),
+      }),
+    ]);
+  });
+
+  it("never asks past a deny: the tool's own, or the file's", async () => {
+    const { session, workspace, home } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.read",
+          action: "tool.execute",
+          resource: "read",
+          effect: "ask",
+        },
+      ],
+    });
+    // tool.execute deny (POLICY no-bash-tool) blocks in the hook.
+    const tool = counting(true);
+    expect(
+      await call(session, workspace, "bash", { command: "ls" }, tool.ctx),
+    ).toHaveProperty("blocked", expect.stringMatching(/rule no-bash-tool/));
+    const file = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "read",
+        { path: join(home, ".ssh", "id_rsa") },
+        file.ctx,
+      ),
+    ).toHaveProperty("refused", expect.stringMatching(/rule secrets/));
+    expect([...tool.prompts, ...file.prompts]).toEqual([]);
+  });
+
+  it("covers the whole prompt with Allow for this session, and only that", async () => {
+    const { session, workspace } = await open(AUDIT, { userRules: SHELL_ASK });
+    const first = counting("Allow for this session");
+    const select = first.ctx.ui.select;
+    first.ctx.ui.select = (async (title: string, options: string[]) => {
+      first.prompts.push(title);
+      return options.includes("Allow for this session")
+        ? "Allow for this session"
+        : select(title, options);
+    }) as typeof select;
+    await call(session, workspace, "bash", { command: "echo one" }, first.ctx);
+    expect(first.prompts).toHaveLength(1);
+    const again = counting(false);
+    expect(
+      await call(
+        session,
+        workspace,
+        "bash",
+        { command: "echo one" },
+        again.ctx,
+      ),
+    ).toHaveProperty("text");
+    expect(again.prompts).toEqual([]);
+    // Another command is a new ask for the command; it is asked again.
+    expect(
+      await call(
+        session,
+        workspace,
+        "bash",
+        { command: "echo two" },
+        again.ctx,
+      ),
+    ).toHaveProperty("refused");
+    expect(again.prompts).toHaveLength(1);
+  });
+
+  it("still asks for the tool when execute runs under an ID the hook never saw", async () => {
+    // Only the tool ask can prompt: the command itself is allowed.
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        SHELL_ASK[0],
+        { id: "me.shell", action: "shell.execute", effect: "allow" },
+      ],
+    });
+    const bash = tool(governedTools(session, workspace), "bash");
+    const { ctx, prompts } = counting(false);
+    await expect(
+      bash.execute(
+        "unseen",
+        { command: "echo x > c" } as never,
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ).rejects.toThrow(/not allowed/);
+    expect(prompts).toHaveLength(1);
+    expect(existsSync(join(workspace, "c"))).toBe(false);
+  });
+
+  it("shows the tool ask and both reasons in the prompt of write and edit", async () => {
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.write-tool",
+          action: "tool.execute",
+          resource: "write",
+          effect: "ask",
+          reason: "Tool-reason-canary",
+        },
+        {
+          id: "me.edit-tool",
+          action: "tool.execute",
+          resource: "edit",
+          effect: "ask",
+        },
+        {
+          id: "me.write",
+          action: "filesystem.write",
+          resource: "workspace/asked/**",
+          effect: "ask",
+          reason: "File-reason-canary",
+        },
+        { id: "me.files", action: "filesystem.write", effect: "allow" },
+      ],
+    });
+    mkdirSync(join(workspace, "asked"));
+    // write decides the folder, then the file: the tool ask goes with the
+    // first, and the file's own ask is asked again for the file.
+    const write = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "write",
+        { path: "asked/a.txt", content: "x" },
+        write.ctx,
+      ),
+    ).toHaveProperty("text");
+    expect(write.prompts).toHaveLength(2);
+    expect(write.prompts[0]).toMatch(
+      /tool\.execute write\nTool-reason-canary\nfilesystem\.write write: .*asked\nFile-reason-canary$/,
+    );
+    expect(write.prompts[1]).not.toContain("tool.execute");
+    // An allowed file: one prompt, for the tool alone.
+    const edit = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "edit",
+        { path: "notes.txt", edits: [{ oldText: "notes", newText: "edited" }] },
+        edit.ctx,
+      ),
+    ).toHaveProperty("text");
+    expect(edit.prompts).toEqual([
+      expect.stringMatching(/tool\.execute edit\nfilesystem\.write edit: /),
+    ]);
+    expect(readFileSync(join(workspace, "notes.txt"), "utf8")).toBe(
+      "workspace edited\n",
+    );
+  });
+
+  it("asks for the tool with an allowed folder, then refuses a denied file in it", async () => {
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.write-tool",
+          action: "tool.execute",
+          resource: "write",
+          effect: "ask",
+        },
+        {
+          id: "me.locked",
+          action: "filesystem.write",
+          resource: "workspace/locked.txt",
+          effect: "deny",
+        },
+        { id: "me.files", action: "filesystem.write", effect: "allow" },
+      ],
+    });
+    const { ctx, prompts } = counting(true);
+    expect(
+      await call(
+        session,
+        workspace,
+        "write",
+        { path: "locked.txt", content: "x" },
+        ctx,
+      ),
+    ).toHaveProperty("refused", expect.stringMatching(/rule me\.locked/));
+    expect(prompts).toEqual([expect.stringContaining("tool.execute write")]);
+    expect(existsSync(join(workspace, "locked.txt"))).toBe(false);
+  });
+
+  it("leaves other tools' ask to the hook", async () => {
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.ext",
+          action: "tool.execute",
+          resource: "deploy",
+          effect: "ask",
+        },
+      ],
+    });
+    governedTools(session, workspace);
+    const hook = load(governanceHooks(session)).handlers.get("tool_call");
+    const no = counting(false);
+    expect(
+      await hook?.({ toolName: "deploy", toolCallId: "d", input: {} }, no.ctx),
+    ).toEqual(expect.objectContaining({ block: true }));
+    expect(no.prompts).toHaveLength(1);
+    // A hidden governed tool is not registered, so its ask stays in the hook.
+    governedTools(session, workspace, {
+      get: (name: string) => (name === "read" ? "hidden" : "direct"),
+    } as never);
+    expect(session.resourceTools.has("read")).toBe(false);
+  });
+});
+
 // On APFS and ext4 a truncated-up file is sparse and allocates nothing. NTFS
 // does not make it sparse, so Windows uses a file just over the limit.
 const HUGE =
