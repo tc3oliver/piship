@@ -1899,10 +1899,12 @@ const checks: Record<SandboxBehavior, Check> = {
     // The command writes its marker once the kit releases it after
     // dispose(), not a second after it started: a loaded host can take that
     // long to dispose, and the command must still be running then. Where
-    // the kit cannot release it, it ends on its own after about 10 s.
+    // the kit cannot release it, it ends on its own after the kit's bound
+    // on dispose(), so a slow dispose() is not mistaken for none.
+    const polls = Math.ceil(h.boundMs / 50);
     const execution = h.start(
       instance,
-      `echo started; i=0; until [ -e ${quote(release)} ] || [ $i -ge 200 ]; do sleep 0.05 2>/dev/null || sleep 1; i=$((i + 1)); done; printf late > ${quote(marker)}`,
+      `echo started; i=0; until [ -e ${quote(release)} ] || [ "$i" -ge ${polls} ]; do if sleep 0.05 2>/dev/null; then i=$((i+1)); else sleep 1; i=$((i+20)); fi; done; printf late > ${quote(marker)}`,
     );
     check(
       await whileRunning(execution),
