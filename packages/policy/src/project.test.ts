@@ -758,16 +758,23 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
   it("reads the system config of a Homebrew, Xcode, or Command Line Tools git too, since its path is fixed when git is built", () => {
     const root = repo("system-prefixes");
     delete process.env.GIT_CONFIG_NOSYSTEM;
+    const linuxbrew = "/home/linuxbrew/.linuxbrew/etc/gitconfig";
     const prefixes = [
       "/opt/homebrew/etc/gitconfig",
       "/usr/local/etc/gitconfig",
-      "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+      ...(process.platform === "darwin" ? [] : [linuxbrew]),
       "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
       "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
     ];
     const listed = () => projectGitControlFiles(root, { scope: "sandbox" });
     for (const path of [...prefixes, "/etc/gitconfig"])
       expect(listed(), path).toContain(posix(realNearest(path)));
+    // On macOS /home is an autofs mount: each lookup under it costs tens of
+    // milliseconds at every start, for a prefix no macOS git uses.
+    if (process.platform === "darwin")
+      expect(listed().some((path) => path.includes("/home/linuxbrew"))).toBe(
+        false,
+      );
     // What such a git sets applies: the hooks path of a Homebrew system config.
     virtualFiles.set(resolve(prefixes[0] as string), hooks(".homebrew-hooks"));
     expect(dirs(root)).toContain(at(root, ".homebrew-hooks"));
