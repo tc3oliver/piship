@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { unitShard } from "./unit-shards.js";
+import { unitFileKey, unitShard } from "./unit-shards.js";
 
 const ROOT = process.env.PISHIP_BUILD_INPUT as string;
 
@@ -60,6 +60,22 @@ describe("unit shards", () => {
         ).toEqual(shards);
       }
     });
+
+  // Vitest names a file by its absolute path with `/`, on Windows too
+  // (C:/...): a key that missed would place the file by the median.
+  it("finds the duration of a file by the path Vitest names it with", () => {
+    const durations = JSON.parse(
+      readFileSync(
+        join(ROOT, "tests", "helpers", "unit-durations.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const key = "packages/core/src/lifecycle.test.ts";
+    expect(durations).toHaveProperty([key]);
+    const native = join(ROOT, ...key.split("/"));
+    expect(unitFileKey(native.replaceAll("\\", "/"))).toBe(key);
+    expect(unitFileKey(native)).toBe(key);
+  });
 
   it("places a file it has no duration for", () => {
     const extra = join(ROOT, "tests", "not-measured-yet.test.ts");

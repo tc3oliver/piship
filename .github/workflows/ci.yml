@@ -68,8 +68,10 @@ jobs:
       # namespaces, which Ubuntu restricts through AppArmor by default. The live
       # secret-store test needs GNOME Keyring, a D-Bus session, and secret-tool;
       # without recommended packages this stays clear of the desktop stack.
-      # GNOME Keyring alone pulls in about 40 packages, so a unit shard, which
-      # never runs that test, installs bubblewrap only.
+      # GNOME Keyring alone pulls in about 40 packages, so a unit shard
+      # installs bubblewrap only. Its platform-store.test.ts then meets a
+      # missing secret-tool; the compatibility runner runs that whole file
+      # with the real one.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
