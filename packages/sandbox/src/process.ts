@@ -117,7 +117,7 @@ const tracked = new Map<number, Tracked>();
 let snapshots = 0;
 let pollTimer: NodeJS.Timeout | undefined;
 let pollDue = 0;
-let inFlight: { readonly child: ChildProcess; readonly at: number } | undefined;
+let polling = false;
 
 interface PsRow {
   readonly ppid: number;
@@ -125,7 +125,11 @@ interface PsRow {
   readonly start: string;
 }
 
-/** The process table, numbered in the order the snapshots were taken. */
+/**
+ * The process table, numbered when its `ps` is started. A sync and an async
+ * snapshot may finish in another order than they were numbered; that only
+ * skips some deletions, never adds a record from the wrong process.
+ */
 export interface Snapshot {
   readonly seq: number;
   readonly rows: ReadonlyMap<number, PsRow>;
@@ -279,20 +283,18 @@ function schedulePoll(): void {
 
 function poll(): void {
   pollTimer = undefined;
-  // Skip a tick while a snapshot is read; one stuck well past its own
-  // timeout is killed and replaced.
-  if (inFlight && Date.now() - inFlight.at < 5 * PS_TIMEOUT_MS) {
-    schedulePoll();
-    return;
-  }
-  inFlight?.child.kill("SIGKILL");
+  // At most one snapshot is read at a time; `ps` is killed at its timeout,
+  // and one the kernel holds past that stops the polling (fail open), never
+  // piles up more.
+  if (polling) return;
+  polling = true;
   const seq = ++snapshots;
-  const child = execFile(
+  execFile(
     "/bin/ps",
     PS_ARGS,
     { env: PS_ENV, timeout: PS_TIMEOUT_MS, killSignal: "SIGKILL" },
     (error, stdout) => {
-      if (inFlight?.child === child) inFlight = undefined;
+      polling = false;
       if (!error) {
         const snapshot = { seq, rows: parsePs(stdout) };
         // An entry is removed when its leader is reaped, so a leader still
@@ -304,7 +306,6 @@ function poll(): void {
       schedulePoll();
     },
   );
-  inFlight = { child, at: Date.now() };
 }
 
 function installExitHook(): void {
