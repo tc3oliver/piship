@@ -2,7 +2,7 @@
 // closed, each sink with its delivery counts, and local metrics. A sink is
 // shown by its host only: the path or query of a sink URL may carry routing
 // secrets.
-import type { AuditStatus } from "@piship/audit";
+import { AUDIT_SPOOL_LEASE_MS, type AuditStatus } from "@piship/audit";
 import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
 import type { LaunchContext } from "../launch/context.js";
 import type { DoctorData } from "./data.js";
@@ -79,6 +79,27 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
         out.warn("rejected", `${status.rejected} malformed event(s) rejected`);
     }
     if (closeError) out.bad("session end", closeError);
+    for (const spool of governance.audit.spools ?? []) {
+      const label = `spool ${spool.sink ?? "orphaned"}`;
+      if (spool.quarantined.length)
+        out.bad(
+          label,
+          `corrupt spool set aside in ${spool.directory}: ${spool.quarantined.join(", ")}; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl`,
+        );
+      if (!spool.files) continue;
+      const held = `${spool.files} file(s), ${spool.bytes} bytes of undelivered events in ${spool.directory}`;
+      if (spool.sink === undefined)
+        out.warn(
+          label,
+          `${held}, of a sink no longer configured: never replayed; the audit retention sweep or an administrator removes them`,
+        );
+      else if (spool.stale)
+        out.warn(
+          label,
+          `${held}; ${spool.stale} not renewed for ${AUDIT_SPOOL_LEASE_MS / 60_000} minutes, replayed by the next launch that reaches the sink`,
+        );
+      else out.info(label, `${held}, held by running sessions`);
+    }
   }
   const denials = Object.values(data.metrics.policyDenials).reduce(
     (sum, count) => sum + count,

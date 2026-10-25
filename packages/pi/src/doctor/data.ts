@@ -4,7 +4,9 @@
 // credential value or identity claim, and audit sinks only by host.
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import {
+  type AuditSpoolReport,
   type AuditStatus,
+  auditSpools,
   LocalMetrics,
   type MetricsSnapshot,
 } from "@piship/audit";
@@ -321,6 +323,8 @@ export interface AuditData {
   /** Closing the session found events a required sink did not take. */
   readonly closeError?: string;
   readonly targets: readonly AuditSinkTarget[];
+  /** Spool directories left after the session closed: undelivered events. */
+  readonly spools?: readonly AuditSpoolReport[];
 }
 
 export interface DoctorData {
@@ -744,7 +748,17 @@ export async function collectDoctorData(
       workspace: workspaceData(inspection),
       ...(sandboxCredential ? { sandboxCredential } : {}),
       ...session,
-      audit: { ...session.audit, targets: auditSinkTargets(ctx, manifest) },
+      audit: {
+        ...session.audit,
+        targets: auditSinkTargets(ctx, manifest),
+        // After the session, which replayed what it could.
+        spools: auditSpools(
+          ctx.stateDir,
+          manifest.audit.sinks
+            .filter((sink) => sink.type === "http" && sink.required)
+            .map((sink) => sink.id),
+        ),
+      },
     };
   }
   return {
