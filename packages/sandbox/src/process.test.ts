@@ -496,14 +496,15 @@ describe.skipIf(process.platform !== "darwin")(
       const heartbeat = join(dir, "hb");
       const escaped = token("orphan-member");
       const member = join(dir, "member.js");
+      // Paths reach the scripts through argv, so no script text is built from them.
       writeFileSync(
         member,
-        `setTimeout(() => require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => require('node:fs').appendFileSync(process.argv[1], '.'), 50)", ${JSON.stringify(heartbeat)}, ${JSON.stringify(escaped)}], { detached: true, stdio: "ignore" }), 600); setInterval(() => {}, 1000);`,
+        `setTimeout(() => require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => require('node:fs').appendFileSync(process.argv[1], '.'), 50)", process.argv[2], process.argv[3]], { detached: true, stdio: "ignore" }), 600); setInterval(() => {}, 1000);`,
       );
-      const leader = `require("node:child_process").spawn(process.execPath, ["-e", "require('node:child_process').spawn(process.execPath, [process.argv[1]], { stdio: 'ignore' }); process.exit(0)", ${JSON.stringify(member)}], { stdio: "ignore" }); setInterval(() => {}, 1000);`;
+      const leader = `require("node:child_process").spawn(process.execPath, ["-e", "require('node:child_process').spawn(process.execPath, [process.argv[1], process.argv[2], process.argv[3]], { stdio: 'ignore' }); process.exit(0)", process.argv[1], process.argv[2], process.argv[3]], { stdio: "ignore" }); setInterval(() => {}, 1000);`;
       const exit = await spawnManaged({
         file: node,
-        args: ["-e", leader],
+        args: ["-e", leader, member, heartbeat, escaped],
         cwd: dir,
         env,
         sandbox,
