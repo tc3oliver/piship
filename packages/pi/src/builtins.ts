@@ -230,7 +230,7 @@ async function decideToolCall(
   return {
     block: true,
     reason: redact(
-      `${tool} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}`,
+      `${tool} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}${gov.denialHint(decision)}`,
     ),
   };
 }

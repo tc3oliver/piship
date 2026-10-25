@@ -347,7 +347,7 @@ export async function gatePath(
   );
   if (decision.outcome !== "allow")
     throw blocked(
-      `${action} ${path} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.`,
+      `${action} ${path} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}`,
     );
   return real;
 }
@@ -532,7 +532,7 @@ async function gateCommand(
     },
   );
   if (decision.outcome === "allow") return undefined;
-  return `This command is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.`;
+  return `This command is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}`;
 }
 
 type ExecOptions = Parameters<BashOperations["exec"]>[2];

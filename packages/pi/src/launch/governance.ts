@@ -389,7 +389,7 @@ export async function modelPolicy(
     if (decision.outcome !== "allow")
       throw new PiShipError(
         "MODEL_DENIED",
-        `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}`,
+        `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}${gov.denialHint(decision)}`,
         { component: "policy" },
       );
     approved.add(selected);
