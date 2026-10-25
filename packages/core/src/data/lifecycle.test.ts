@@ -103,6 +103,30 @@ describe("retention", () => {
 });
 
 describe("sweepData", () => {
+  it("deletes audit spool files past retention, including orphaned and set-aside ones", async () => {
+    const orphaned = file("logs/audit-spool/0123456789abcdef/1-a.jsonl", 200);
+    const corrupt = file(
+      "logs/audit-spool/fedcba9876543210/2-b.jsonl.corrupt",
+      200,
+    );
+    const live = file("logs/audit-spool/fedcba9876543210/3-c.jsonl", 0);
+    const { events, record } = recorder();
+    const result = await sweepData({
+      stateDir: state,
+      trigger: "launch",
+      retention: { audit: 180 * DAY },
+      record,
+      now: NOW,
+    });
+    expect(existsSync(orphaned)).toBe(false);
+    expect(existsSync(corrupt)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+    expect(result.classes).toEqual([
+      { class: "audit", removed: 2, held: 0, kept: 0, failed: 0 },
+    ]);
+    expect(events[0]?.detail.files).toBe(2);
+  });
+
   it("deletes only rotated audit files past retention, never the live log", async () => {
     const live = file("logs/audit.jsonl", 400);
     const oldRotated = file("logs/audit.jsonl.3", 200);

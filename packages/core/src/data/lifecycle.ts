@@ -7,8 +7,10 @@
 // - sessions: `*.jsonl` files under `<state>/sessions` (Pi's session files,
 //   including their `codemode-store` entries). A session held by a live owner
 //   record (packages/pi `SessionOwnership`) is skipped.
-// - audit: the rotated `logs/audit.jsonl.N` files only, never the live
-//   `audit.jsonl` (there is no forward spool: the HTTP queue is in memory).
+// - audit: the rotated `logs/audit.jsonl.N` files, never the live
+//   `audit.jsonl`, and the files under `logs/audit-spool` (a required HTTP
+//   sink's undelivered events, which may hold opted-in content). A live
+//   owner renews its spool every minute, so only an abandoned one ages out.
 // - cache: regular files under `<state>/cache`.
 //
 // Credential metadata, the secret fallback, the Pi agent directory,
@@ -31,7 +33,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { AUDIT_ROTATION, type AuditRotation } from "@piship/audit";
+import {
+  AUDIT_ROTATION,
+  AUDIT_SPOOL_DIRECTORY,
+  type AuditRotation,
+} from "@piship/audit";
 import type { AuditEventType } from "@piship/contracts";
 import {
   DATA_CLASSES,
@@ -246,10 +252,13 @@ function candidates(stateDir: string, dataClass: SweptDataClass): string[] {
     case "audit": {
       const logs = join(stateDir, "logs");
       if (!lstat(logs)?.isDirectory()) return [];
-      return entries(logs)
-        .filter((name) => ROTATED_AUDIT.test(name))
-        .map((name) => join(logs, name))
-        .filter((path) => lstat(path)?.isFile() === true);
+      return [
+        ...entries(logs)
+          .filter((name) => ROTATED_AUDIT.test(name))
+          .map((name) => join(logs, name))
+          .filter((path) => lstat(path)?.isFile() === true),
+        ...walk(join(stateDir, AUDIT_SPOOL_DIRECTORY), () => true),
+      ];
     }
     case "cache":
       return walk(join(stateDir, "cache"), () => true);
