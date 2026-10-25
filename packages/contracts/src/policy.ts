@@ -59,6 +59,7 @@ export const POLICY_ACTIONS = [
   "mcp.tool.call",
   "tool.execute",
   "shell.execute",
+  "git.push",
   "filesystem.read",
   "filesystem.write",
   "network.connect",

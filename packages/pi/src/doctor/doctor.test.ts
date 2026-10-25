@@ -2024,7 +2024,7 @@ describe("Governance group", () => {
       }),
     ).render();
     const lines = group(output, "Governance");
-    expect(lines).toContain(`  ✓ ${"enforced actions".padEnd(20)} 13 of 19`);
+    expect(lines).toContain(`  ✓ ${"enforced actions".padEnd(20)} 14 of 20`);
     for (const action of [
       "agent.invoke",
       "network.connect",

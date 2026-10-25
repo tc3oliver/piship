@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import {
   type ExtensionFactory,
   type ExtensionToolContext,
@@ -1444,6 +1445,162 @@ describe("one prompt per governed tool call", () => {
 
 // On APFS and ext4 a truncated-up file is sparse and allocates nothing. NTFS
 // does not make it sparse, so Windows uses a file just over the limit.
+describe("git.push in the shell gate", () => {
+  const SHELL = [
+    {
+      id: "me.bash",
+      action: "tool.execute",
+      resource: "bash",
+      effect: "allow",
+    },
+    { id: "me.shell", action: "shell.execute", effect: "allow" },
+  ];
+  const PUSH = [
+    {
+      id: "me.feature",
+      action: "git.push",
+      resource: "origin/feature-*",
+      effect: "allow",
+    },
+    {
+      id: "me.main",
+      action: "git.push",
+      resource: "origin/main",
+      effect: "deny",
+    },
+    {
+      id: "me.release",
+      action: "git.push",
+      resource: "origin/release",
+      effect: "ask",
+    },
+  ];
+  // Each command writes the marker only if it runs; `git` itself never does.
+  async function bash(
+    command: string,
+    userRules: readonly unknown[],
+    ctx = context(),
+  ) {
+    const { session, workspace } = await open([], { userRules });
+    const prompts: string[] = [];
+    const counted = {
+      ...ctx,
+      ui: {
+        ...ctx.ui,
+        select: async (title: string, options: string[]) => {
+          prompts.push(title);
+          return ctx.ui.select(title, options);
+        },
+      },
+    } as ExtensionToolContext;
+    const outcome = await run(
+      tool(governedTools(session, workspace), "bash"),
+      { command: `echo ran > marker.txt || ${command}` },
+      counted,
+    ).then(
+      () => "ran",
+      (error: Error) => error.message,
+    );
+    return {
+      outcome,
+      ran: existsSync(join(workspace, "marker.txt")),
+      prompts,
+    };
+  }
+
+  it("denies a push its rule denies, and a push whose target the command does not name", async () => {
+    for (const command of [
+      "git push origin main",
+      "git -C . push origin main",
+      "/usr/bin/git push origin HEAD:main",
+      "cd . && git push",
+      "git push origin",
+    ]) {
+      const result = await bash(command, [...SHELL, ...PUSH], context(true));
+      expect(result.outcome).toMatch(
+        /rule me\.main.*your own rule me\.main.*piship policy explain git\.push/,
+      );
+      expect(result.ran).toBe(false);
+      expect(result.prompts).toEqual([]);
+    }
+  });
+
+  it("runs a push an allow rule names, and asks for one an ask rule names", async () => {
+    expect(
+      await bash("git push origin feature-x", [...SHELL, ...PUSH]),
+    ).toMatchObject({ outcome: "ran", ran: true });
+    // A target no git.push rule names is left to shell.execute, not the deny default.
+    expect(
+      await bash("git push origin feature-x other", [...SHELL, ...PUSH]),
+    ).toMatchObject({ outcome: "ran", ran: true });
+    expect(
+      (await bash("git push origin release", [...SHELL, ...PUSH])).outcome,
+    ).toMatch(/approval needs an interactive session/);
+    const approved = await bash(
+      "git push origin release",
+      [...SHELL, ...PUSH],
+      context(true),
+    );
+    expect(approved).toMatchObject({ outcome: "ran", ran: true });
+    expect(approved.prompts).toHaveLength(1);
+  });
+
+  it("never lets a git.push allow lift a shell.execute deny", async () => {
+    const result = await bash("git push origin feature-x", [
+      {
+        id: "me.no-push",
+        action: "shell.execute",
+        resource: "**git push**",
+        effect: "deny",
+      },
+      ...SHELL,
+      ...PUSH,
+    ]);
+    expect(result.outcome).toMatch(/rule me\.no-push/);
+    expect(result.ran).toBe(false);
+  });
+
+  it("adds no prompt and no default without a git.push rule", async () => {
+    // The policy default here is deny; it does not apply to git.push.
+    const result = await bash("git push origin main", SHELL, context(true));
+    expect(result).toMatchObject({ outcome: "ran", ran: true, prompts: [] });
+  });
+
+  it("does not see a push it cannot read from the text; shell.execute still decides it", async () => {
+    for (const command of [
+      "sh -c 'git push origin main'",
+      "git -c alias.p=push p origin main",
+      "env git push origin main",
+      "./push.sh",
+    ]) {
+      const result = await bash(command, [...SHELL, ...PUSH]);
+      expect(result).toMatchObject({ outcome: "ran", ran: true });
+      const shell = await bash(command, [
+        {
+          id: "me.wrapped",
+          action: "shell.execute",
+          resource: "**push**",
+          effect: "deny",
+        },
+        ...SHELL,
+        ...PUSH,
+      ]);
+      expect(shell.outcome).toMatch(/rule me\.wrapped/);
+    }
+  });
+
+  it("finds no git.push rule in any example, so their pushes are decided as before", () => {
+    const examples = fileURLToPath(
+      new URL("../../../examples/", import.meta.url),
+    );
+    for (const example of readdirSync(examples)) {
+      const manifest = join(examples, example, "piship.yaml");
+      if (existsSync(manifest))
+        expect(readFileSync(manifest, "utf8")).not.toMatch(/git\.(push|\*)/);
+    }
+  });
+});
+
 const HUGE =
   process.platform === "win32"
     ? GOVERNED_READ_LIMIT_BYTES + 1

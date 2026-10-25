@@ -28,6 +28,9 @@ export const RUNTIME_SEAMS: Readonly<Record<PolicyAction, RuntimeSeamKind>> = {
   "mcp.tool.call": "hook",
   "tool.execute": "hook",
   "shell.execute": "hook",
+  // Read from the shell command text only, never contained: a push from a
+  // script, alias, or wrapper is not seen (gitPushResources).
+  "git.push": "hook",
   "filesystem.read": "hook",
   "filesystem.write": "hook",
   // Only an OS sandbox contains connections; PiShip has no in-process seam.

@@ -23,7 +23,9 @@ function enforcementLine(explanation: PolicyExplanation): string {
   const { decision } = explanation;
   switch (decisionStatus(decision)) {
     case "enforced":
-      return `enforced (${decision.enforcement})`;
+      return decision.action === "git.push"
+        ? `enforced (${decision.enforcement}, command text only: a push from a script, alias, or wrapper is not recognized)`
+        : `enforced (${decision.enforcement})`;
     case "audit-only":
       return "audit-only (observed and recorded, not prevented)";
     default:

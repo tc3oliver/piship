@@ -50,6 +50,7 @@ describe("decision tables for every action", () => {
     ["mcp.tool.call", "docs:search"],
     ["tool.execute", "bash"],
     ["shell.execute", "git status"],
+    ["git.push", "origin/main"],
     ["filesystem.read", "src/index.ts"],
     ["filesystem.write", "src/index.ts"],
     ["network.connect", "registry.example.com:443"],
@@ -113,6 +114,36 @@ describe("decision tables for every action", () => {
     expect(e.evaluate({ action: "model.select", resource: "mcp" }).effect).toBe(
       "allow",
     );
+  });
+  it("decides a push target the command does not name against every git deny and ask", () => {
+    const e = engine({
+      policy: makePolicy({
+        default: "allow",
+        defaults: [
+          rule("feature", "git.push", "origin/feature-*", "allow"),
+          rule("main", "git.push", "origin/main", "deny"),
+          rule("secret", "*", "secret", "deny"),
+        ],
+      }),
+    });
+    const push = (resource: string) =>
+      e.evaluate({ action: "git.push", resource }).ruleId;
+    expect(push("origin/feature-x")).toBe("feature");
+    expect(push("origin/main")).toBe("main");
+    expect(push("upstream/main")).toBe("builtin:default");
+    // `git push origin` or a bare `git push` could reach main.
+    expect(push("origin/*")).toBe("main");
+    expect(push("*")).toBe("main");
+    // A rule for every action is not widened to unnamed targets.
+    const wildcard = engine({
+      policy: makePolicy({
+        default: "allow",
+        defaults: [rule("secret", "*", "secret", "deny")],
+      }),
+    });
+    expect(
+      wildcard.evaluate({ action: "git.push", resource: "*" }).ruleId,
+    ).toBe("builtin:default");
   });
   it("uses first match within a layer", () => {
     const decision = engine({

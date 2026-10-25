@@ -383,6 +383,7 @@ export class GovernanceSession {
     new Set<PolicyAction>([
       "tool.execute",
       "shell.execute",
+      "git.push",
       "filesystem.read",
       "filesystem.write",
       "resource.load",

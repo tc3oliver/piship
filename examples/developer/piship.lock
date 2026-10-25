@@ -2429,6 +2429,7 @@
       "extension.load": "hook",
       "filesystem.read": "hook",
       "filesystem.write": "hook",
+      "git.push": "hook",
       "instruction.load": "hook",
       "mcp.server.start": "hook",
       "mcp.tool.call": "hook",
@@ -2445,7 +2446,7 @@
       "tool.execute": "hook",
       "web.request": "none"
     },
-    "digest": "sha256-e1979e28d40bd60de60d73b521e14559e9e48009968b258f7fc2a930fc3a8429"
+    "digest": "sha256-deade12b52f1dcbd48676e733fd6064ac2d4716f554d7751ae852285b5be7f2a"
   },
   "data": {
     "contract": "piship-data/v1"
