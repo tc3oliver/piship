@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { branded, launcher } from "../helpers/distribution.js";
+import { removeTree } from "../helpers/teardown.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
@@ -201,9 +202,11 @@ beforeAll(() => {
   artifact = join(temp, "dist", "devcode");
 }, 600_000);
 
-afterAll(() => {
-  if (temp) rmSync(temp, { recursive: true, force: true });
-});
+// A helper process of the browser test's Chrome may still hold files here
+// when it returns (a likely cause of an EPERM seen once on Windows).
+afterAll(async () => {
+  if (temp) await removeTree(temp);
+}, 60_000);
 
 describe("the built distribution", () => {
   it("vendors exactly the declared packages, and the attribution extension is not among the files it loads", () => {
@@ -900,15 +903,19 @@ describe("pi-browser-use", () => {
           "pi-browser-use": { executablePath, headless: true },
         }),
       );
-      const result = probed<{ tools: string[]; errors: unknown[] }>(
-        where,
-        "browser",
-        where.workspace,
-      );
+      const result = probed<{
+        tools: string[];
+        errors: unknown[];
+        shutdownError?: string;
+      }>(where, "browser", where.workspace);
       expect(
         result.errors,
         `Browser extension startup errors (Chrome: ${executablePath})`,
       ).toEqual([]);
+      expect(
+        result.shutdownError,
+        "Browser extension shutdown",
+      ).toBeUndefined();
       expect(result.tools).toEqual(
         expect.arrayContaining([
           "browser_navigate_page",

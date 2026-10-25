@@ -212,17 +212,24 @@ if (mode === "permissions") {
   for (let wait = 0; wait < 30 && registered().length === 0; wait += 1)
     await new Promise((resolve) => setTimeout(resolve, 500));
   const tools = registered();
+  let shutdownError;
   try {
     // Stops the browser it started.
     await probed.extensionRunner.emit({
       type: "session_shutdown",
       reason: "quit",
     });
-  } catch {
-    // The tools are what is reported.
+  } catch (error) {
+    // Reported: a Chrome that did not stop keeps its profile open.
+    shutdownError = String(error?.stack ?? error);
   }
   console.log(
-    JSON.stringify({ node: process.version, tools, errors: extensionErrors }),
+    JSON.stringify({
+      node: process.version,
+      tools,
+      errors: extensionErrors,
+      shutdownError,
+    }),
   );
 } else throw new Error(`unknown mode ${mode}`);
 process.exit(0);
