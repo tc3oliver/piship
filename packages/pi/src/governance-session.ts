@@ -93,6 +93,20 @@ function sessionAllowKey(
 ): string {
   return JSON.stringify([action, [...resources].sort()]);
 }
+
+/** One `ask` a prompt answers: its action and exact targets. */
+interface ApprovalTarget {
+  readonly action: PolicyAction;
+  readonly resources: readonly string[];
+}
+
+/** A governed tool call's `tool.execute` ask, left to its first resource decision. */
+interface DeferredToolAsk {
+  readonly tool: string;
+  readonly decision: PolicyDecision;
+  /** The call's audit detail (source, parent, exposure). */
+  readonly detail: Readonly<Record<string, string>>;
+}
 const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 
 /**
@@ -483,7 +497,10 @@ export class GovernanceSession {
    * as `policy.auto_approved`), record denials, and fail closed when a required
    * audit sink is down. Neither ever touches `deny`. Several
    * resources (a lexical and a symlink-resolved path) are decided together:
-   * the strictest decision wins and at most one approval is asked.
+   * the strictest decision wins and at most one approval is asked. The first
+   * decision inside a governed tool call also answers that call's deferred
+   * `tool.execute` ask (`deferToolAsk`): one prompt for both, never past a
+   * `deny`, and each recorded as its own event.
    */
   async decide(
     action: PolicyAction,
@@ -494,14 +511,37 @@ export class GovernanceSession {
     this.audit.assertAvailable();
     const resources =
       typeof resource === "string" ? [resource] : [...new Set(resource)];
-    const decision = resources
+    const own = resources
       .map((item) => this.engine.evaluate({ action, resource: item }))
       .reduce((current, next) =>
         STRICTNESS[next.effect] > STRICTNESS[current.effect] ? next : current,
       );
+    const held = this.#toolCall.getStore();
+    const deferred = held?.ask;
+    if (held) held.ask = undefined;
+    // A resource `deny` refuses the call without asking for the tool.
+    const tool = own.effect === "deny" ? undefined : deferred;
+    const decision = tool && own.effect === "allow" ? tool.decision : own;
+    const asks: ApprovalTarget[] = [
+      ...(tool
+        ? [{ action: "tool.execute" as const, resources: [tool.tool] }]
+        : []),
+      ...(own.effect === "ask" ? [{ action, resources }] : []),
+    ];
     const prompt = {
       title: `${this.options.lock.app.name} policy approval`,
-      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
+      // A combined prompt names the tool ask, and each ask's reason, so the
+      // answer (an Allow for this session too) covers only what it shows.
+      message: [
+        ...(tool
+          ? [
+              `tool.execute ${tool.tool}`,
+              ...(tool.decision.reason ? [tool.decision.reason] : []),
+            ]
+          : []),
+        `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? own.resource)}`,
+        ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
+      ].join("\n"),
     };
     // Pi does not queue extension dialogs: a second confirm replaces the
     // first, whose promise never settles. Approvals of concurrent tool
@@ -516,7 +556,12 @@ export class GovernanceSession {
     // A session allow is the user's own earlier answer to this very ask: it
     // is looked up only for an `ask` (never a `deny`), under the exact action
     // and targets, and looked up again once the prompt queue reaches this call.
-    const remembered = sessionAllowKey(action, resources);
+    // A combined prompt is covered only when every ask in it was allowed.
+    const remembered = asks.map((ask) =>
+      sessionAllowKey(ask.action, ask.resources),
+    );
+    const sessionAllowed = () =>
+      remembered.every((key) => this.#sessionAllowed.has(key));
     const sessionApproved = {
       ...decision,
       outcome: "allow" as const,
@@ -525,76 +570,114 @@ export class GovernanceSession {
     const offered =
       decision.effect === "ask" &&
       channel &&
-      this.#offersSession(action, resources)
+      asks.every((ask) => this.#offersSession(ask.action, ask.resources))
         ? { ...prompt, scopes: ["once", "session"] as const }
         : prompt;
-    let auto = this.#autoApproval(action, resources, decision);
+    let auto = this.#autoApproval(asks, decision);
     const resolved: ResolvedDecision = auto
       ? approved
-      : decision.effect === "ask" && this.#sessionAllowed.has(remembered)
+      : decision.effect === "ask" && sessionAllowed()
         ? sessionApproved
         : decision.effect === "ask" && channel
           ? await this.#serialized(async () => {
-              auto = this.#autoApproval(action, resources, decision);
+              auto = this.#autoApproval(asks, decision);
               if (auto) return approved;
-              if (this.#sessionAllowed.has(remembered)) return sessionApproved;
+              if (sessionAllowed()) return sessionApproved;
               return resolveDecision(decision, channel, offered);
             })
           : await resolveDecision(decision, channel, prompt);
-    if (resolved.remember === "session") this.#sessionAllowed.add(remembered);
-    const fields = {
-      resource: events?.resource ?? redact(decision.resource),
-      policy: decision.policyId,
-      rule: decision.ruleId,
-      enforcement: decision.enforcement,
-      detail: {
-        action,
-        ...(events?.detail ?? {}),
-        ...(resolved.approval ? { approval: resolved.approval } : {}),
-        ...(resolved.remember ? { remember: resolved.remember } : {}),
-        // `source` is taken (a tool call's origin), so the switch that
-        // approved gets its own key. The stored auto mode, the usual one,
-        // leaves none.
-        ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
-      },
-      ...(events?.content ? { content: events.content } : {}),
+    if (resolved.remember === "session")
+      for (const key of remembered) this.#sessionAllowed.add(key);
+    const answer = {
+      ...(resolved.approval ? { approval: resolved.approval } : {}),
+      ...(resolved.remember ? { remember: resolved.remember } : {}),
+      // `source` is taken (a tool call's origin), so the switch that
+      // approved gets its own key. The stored auto mode, the usual one,
+      // leaves none.
+      ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
     };
-    // Metadata only: the same fields as the action's own event, no content.
-    if (auto)
-      this.emit("policy.auto_approved", {
-        resource: fields.resource,
-        policy: fields.policy,
-        rule: fields.rule,
-        enforcement: fields.enforcement,
-        detail: fields.detail,
-        decision: "approved",
-      });
-    if (resolved.outcome === "deny") {
-      this.metrics.recordPolicyDenial(action);
-      if (events) this.emit(events.denied, { ...fields, decision: "denied" });
-    } else if (events?.allowed)
-      this.emit(events.allowed, {
-        ...fields,
-        decision:
-          resolved.approval === "approved" ||
-          resolved.approval === "auto" ||
-          resolved.approval === "session"
-            ? "approved"
-            : "allowed",
-      });
+    // Each decision of a combined prompt keeps its own event and rule; the
+    // answer is recorded on the ones that asked. A resource that was allowed
+    // in a call whose tool ask was refused records nothing: it never ran.
+    const records = [
+      ...(tool
+        ? [
+            {
+              action: "tool.execute" as const,
+              events: {
+                allowed: "tool.allowed",
+                denied: "tool.denied",
+              } as const,
+              fields: {
+                resource: tool.tool,
+                policy: tool.decision.policyId,
+                rule: tool.decision.ruleId,
+                enforcement: tool.decision.enforcement,
+                detail: { action: "tool.execute", ...tool.detail, ...answer },
+              },
+            },
+          ]
+        : []),
+      ...(own.effect !== "allow" || resolved.outcome === "allow"
+        ? [
+            {
+              action,
+              events,
+              fields: {
+                resource: events?.resource ?? redact(own.resource),
+                policy: own.policyId,
+                rule: own.ruleId,
+                enforcement: own.enforcement,
+                detail: {
+                  action,
+                  ...(events?.detail ?? {}),
+                  ...(own.effect === "ask" ? answer : {}),
+                },
+                ...(events?.content ? { content: events.content } : {}),
+              },
+            },
+          ]
+        : []),
+    ];
+    for (const record of records) {
+      const { fields } = record;
+      // Metadata only: the same fields as the action's own event, no content.
+      if (auto && "approval" in fields.detail)
+        this.emit("policy.auto_approved", {
+          resource: fields.resource,
+          policy: fields.policy,
+          rule: fields.rule,
+          enforcement: fields.enforcement,
+          detail: fields.detail,
+          decision: "approved",
+        });
+      if (resolved.outcome === "deny") {
+        this.metrics.recordPolicyDenial(record.action);
+        if (record.events)
+          this.emit(record.events.denied, { ...fields, decision: "denied" });
+      } else if (record.events?.allowed)
+        this.emit(record.events.allowed, {
+          ...fields,
+          decision:
+            fields.detail.approval === "approved" ||
+            fields.detail.approval === "auto" ||
+            fields.detail.approval === "session"
+              ? "approved"
+              : "allowed",
+        });
+    }
     return resolved;
   }
 
   /**
-   * Which switch approves this ask without a prompt, if one does: `--yolo`
+   * Which switch approves these asks without a prompt, if one does: `--yolo`
    * (this session only) or the user's stored auto mode. Both keep the prompt
    * of an explicit `ask` that an enforced, team, project, or managed user
    * rule wrote to keep it. A personal user owns every layer, so `--yolo`
    * there approves every ask.
    */
   #autoApproval(
-    action: PolicyAction,
-    resources: readonly string[],
+    asks: readonly ApprovalTarget[],
     decision: PolicyDecision,
   ): "yolo" | "state" | undefined {
     const switchedOn = this.#yolo
@@ -605,11 +688,73 @@ export class GovernanceSession {
     if (!switchedOn || decision.effect !== "ask") return undefined;
     if (this.#yolo && this.options.lock.deployment.mode === "personal")
       return switchedOn;
-    return resources.some((item) =>
-      this.engine.keepsPrompt({ action, resource: item }),
+    return asks.some((ask) =>
+      ask.resources.some((item) =>
+        this.engine.keepsPrompt({ action: ask.action, resource: item }),
+      ),
     )
       ? undefined
       : switchedOn;
+  }
+
+  /**
+   * The governed built-in tools of this session that decide each file or
+   * command they touch (`governedTools`): their `tool.execute` ask is
+   * deferred to that decision.
+   */
+  resourceTools: ReadonlySet<string> = new Set();
+  readonly #deferredDetail = new Map<
+    string,
+    Readonly<Record<string, string>>
+  >();
+  readonly #toolCall = new AsyncLocalStorage<{
+    ask?: DeferredToolAsk | undefined;
+  }>();
+
+  /**
+   * Leave a governed tool call's `tool.execute` ask to the call's first file
+   * or command decision, so the user answers one prompt for both. Only an
+   * `ask` is left; the caller decides anything else at once. Returns whether
+   * it was left, keeping the call's audit detail for that decision.
+   */
+  deferToolAsk(
+    callId: string,
+    tool: string,
+    detail: Readonly<Record<string, string>>,
+  ): boolean {
+    if (!this.resourceTools.has(tool)) return false;
+    this.audit.assertAvailable();
+    if (
+      this.engine.evaluate({ action: "tool.execute", resource: tool })
+        .effect !== "ask"
+    )
+      return false;
+    this.#deferredDetail.set(callId, detail);
+    return true;
+  }
+
+  /** Drop the detail of a deferred call that never ran (another hook refused it). */
+  dropToolAsk(callId: string): void {
+    this.#deferredDetail.delete(callId);
+  }
+
+  /**
+   * Run a governed tool's execute with its `tool.execute` ask, if it has one.
+   * The ask is evaluated here, not taken from the hook, so it holds even for
+   * a call whose ID the hook did not see; only the audit detail is looked up.
+   */
+  withToolCall<T>(callId: string, tool: string, run: () => T): T {
+    const detail = this.#deferredDetail.get(callId) ?? {};
+    this.#deferredDetail.delete(callId);
+    const decision = this.resourceTools.has(tool)
+      ? this.engine.evaluate({ action: "tool.execute", resource: tool })
+      : undefined;
+    // Only an ask is carried: a deny was already blocked by the tool_call
+    // hook, which Pi runs before every execute, top-level and nested.
+    return this.#toolCall.run(
+      decision?.effect === "ask" ? { ask: { tool, decision, detail } } : {},
+      run,
+    );
   }
 
   /**

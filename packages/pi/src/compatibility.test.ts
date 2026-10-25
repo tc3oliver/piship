@@ -509,6 +509,8 @@ describe("Pi tool definitions route through their operations overrides", () => {
             },
             outputStore: store,
             withChannel: (_channel: unknown, fn: () => unknown) => fn(),
+            withToolCall: (_id: string, _tool: string, fn: () => unknown) =>
+              fn(),
             mcp: null,
           } as unknown as GovernanceSession;
           const governed = governedTools(gov, cwd()).find(
@@ -552,6 +554,7 @@ describe("Pi tool definitions route through their operations overrides", () => {
         },
         outputStore: store,
         withChannel: (_channel: unknown, fn: () => unknown) => fn(),
+        withToolCall: (_id: string, _tool: string, fn: () => unknown) => fn(),
         mcp: null,
       } as unknown as GovernanceSession;
       const params = { command: "echo env", timeout: 5 } as never;
@@ -2415,6 +2418,38 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
     expect(approved.map((event) => event.decision)).toEqual([
       "approved",
       "approved",
+    ]);
+    agent.dispose();
+  });
+
+  // The deferred tool ask is keyed on the call ID: Pi must pass execute the
+  // ID its tool_call event carried, top-level and nested.
+  it("a governed tool's ask and its command's ask: one prompt per call, top-level and from codemode", async () => {
+    services.knobs.toolScript = [
+      { name: "bash", arguments: { command: "echo top" } },
+      script('await tools.bash({ command: "echo nested" }); return "nested";'),
+    ];
+    const ui = stubUi(true);
+    const { agent, events } = await governed({
+      rules: [
+        ask("bash-tool", "tool.execute", "bash"),
+        ask("shell", "shell.execute", "**"),
+      ],
+      config: { codemode: "on" },
+      ui: ui.ui,
+    });
+    await agent.prompt("run");
+    expect(results()[0]).toContain("top");
+    expect(results()[1]).toContain("nested");
+    expect(ui.prompts).toHaveLength(2);
+    const allowed = (await events()).filter(
+      (event) => event.event === "tool.allowed" && event.resource === "bash",
+    );
+    expect(allowed.map((event) => [event.rule, event.decision])).toEqual([
+      ["bash-tool", "approved"],
+      ["shell", "approved"],
+      ["bash-tool", "approved"],
+      ["shell", "approved"],
     ]);
     agent.dispose();
   });
