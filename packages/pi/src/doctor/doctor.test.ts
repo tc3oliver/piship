@@ -341,6 +341,99 @@ describe("renderDoctor", () => {
     ]);
   });
 
+  it("warns when a PiShip ask overlaps a package permission provider, and only then", () => {
+    const withSetup = (
+      policy: Record<string, unknown>,
+      provider?: Record<string, unknown>,
+    ) =>
+      governanceData({
+        manifest: {
+          ...governanceData().manifest,
+          policy: { enforced: [], defaults: [], adapter: null, ...policy },
+          capabilities: provider
+            ? [{ name: "permissions", enabled: true, provider }]
+            : [],
+        } as unknown as GovernanceData["manifest"],
+      });
+    const pkg = { id: "certified/pps", package: "pi-permission-system" };
+    const render = (governance: GovernanceData) => {
+      const result = renderDoctor(
+        doctorData("personal", { access: accessData(), governance }),
+      );
+      return {
+        failed: result.failed,
+        line: group(result.render(), "Policy").find((item) =>
+          item.includes("double ask"),
+        ),
+      };
+    };
+    const ask = {
+      id: "acme.bash.ask",
+      action: "shell.execute",
+      resource: "**",
+      effect: "ask",
+    };
+    const overlapping = render(
+      withSetup({ default: "allow", defaults: [ask] }, pkg),
+    );
+    expect(overlapping.line).toContain("shell.execute ** (rule acme.bash.ask)");
+    expect(overlapping.line).toContain("pi-permission-system");
+    expect(overlapping.line).toContain("asked twice");
+    expect(overlapping.failed).toBe(
+      render(withSetup({ default: "allow" }, pkg)).failed,
+    );
+    for (const action of ["filesystem.*", "*"])
+      expect(
+        render(
+          withSetup({ default: "allow", defaults: [{ ...ask, action }] }, pkg),
+        ).line,
+      ).toContain(`${action} **`);
+    expect(
+      render(
+        withSetup(
+          {
+            default: "allow",
+            defaults: [{ ...ask, action: "model.select" }],
+          },
+          pkg,
+        ),
+      ).line,
+    ).toBeUndefined();
+    expect(
+      render(
+        governanceData({
+          manifest: {
+            ...governanceData().manifest,
+            policy: {
+              default: "ask",
+              enforced: [],
+              defaults: [],
+              adapter: null,
+            },
+            capabilities: [
+              { name: "permissions", enabled: false, provider: pkg },
+            ],
+          } as unknown as GovernanceData["manifest"],
+        }),
+      ).line,
+    ).toBeUndefined();
+    expect(render(withSetup({ default: "ask" }, pkg)).line).toContain(
+      "policy.default",
+    );
+    expect(render(withSetup({ default: "allow" }, pkg)).line).toBeUndefined();
+    expect(
+      render(
+        withSetup(
+          { default: "allow", defaults: [ask] },
+          { id: "builtin/permissions" },
+        ),
+      ).line,
+    ).toBeUndefined();
+    expect(
+      render(withSetup({ default: "allow", defaults: [ask] })).line,
+    ).toBeUndefined();
+  });
+
   it("never reports a rule on an unsupported action as enforced", () => {
     const withPolicy = (acknowledgeUnenforced?: string[]) =>
       governanceData({
