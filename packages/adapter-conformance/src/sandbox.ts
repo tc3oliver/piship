@@ -1895,9 +1895,16 @@ const checks: Record<SandboxBehavior, Check> = {
     );
     const marker = `${h.scratch}/dispose-${randomBytes(4).toString("hex")}`;
     const ranAfter = `${h.scratch}/after-dispose-${randomBytes(4).toString("hex")}`;
+    const release = `${h.scratch}/release-${randomBytes(4).toString("hex")}`;
+    // The command writes its marker once the kit releases it after
+    // dispose(), not a second after it started: a loaded host can take that
+    // long to dispose, and the command must still be running then. Where
+    // the kit cannot release it, it ends on its own after the kit's bound
+    // on dispose(), so a slow dispose() is not mistaken for none.
+    const polls = Math.ceil(h.boundMs / 50);
     const execution = h.start(
       instance,
-      `echo started; sleep 1; printf late > ${quote(marker)}`,
+      `echo started; i=0; until [ -e ${quote(release)} ] || [ "$i" -ge ${polls} ]; do if sleep 0.05 2>/dev/null; then i=$((i+1)); else sleep 1; i=$((i+20)); fi; done; printf late > ${quote(marker)}`,
     );
     check(
       await whileRunning(execution),
@@ -1913,6 +1920,8 @@ const checks: Record<SandboxBehavior, Check> = {
       first.kind === "resolved",
       `dispose() threw (${first.kind === "rejected" ? h.describe(first.error) : ""}); it must never throw`,
     );
+    if (h.observable) writeFileSync(join(h.workspace, release), "");
+    const released = Date.now();
     const settled = await settle(() => execution.settled, h.settleMs);
     check(
       settled.kind === "resolved",
@@ -1935,6 +1944,8 @@ const checks: Record<SandboxBehavior, Check> = {
     );
     if (h.observable) {
       await markerWindow(execution, disposing);
+      // A released command that kept running writes its marker at once.
+      await sleep(Math.max(0, released + MARGIN_MS - Date.now()));
       check(
         !existsSync(join(h.workspace, marker)),
         "a command that was running at dispose() kept running and wrote its marker",

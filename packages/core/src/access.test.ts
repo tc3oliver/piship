@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
 import { LocalMetrics } from "@piship/audit";
-import { PiShipError, SecretValue } from "@piship/contracts";
+import {
+  type AdapterContext,
+  PiShipError,
+  SecretValue,
+} from "@piship/contracts";
 import { PISHIP_VERSION } from "./compatibility.js";
 import { MemorySecretStore } from "@piship/credentials";
 import { computeCapabilityStates } from "@piship/policy";
@@ -40,6 +44,7 @@ import {
   recordGatewayResult,
   resolveRuntimeReferences,
 } from "./access/index.js";
+import { loadAdapter } from "./access/adapters.js";
 import { setVariablesHint } from "./access/network.js";
 import {
   readPreferences,
@@ -1043,12 +1048,17 @@ describe("credential adapters", () => {
       message:
         "The credential adapter ./adapters/factory.mjs did not load within 1 s",
     });
+    // The import has its own deadline: adapterTimeoutMs bounds the factory.
     write("top-level.mjs", "await new Promise(() => {});");
     await expect(
-      DistributionAccess.open({
-        ...open("./adapters/top-level.mjs").options,
-        adapterTimeoutMs: 50,
-      }).activate(),
+      loadAdapter(
+        temp,
+        "./adapters/top-level.mjs",
+        "credential",
+        {} as AdapterContext,
+        50,
+        50,
+      ),
     ).rejects.toMatchObject({ code: "CONFIG_UNAVAILABLE", retryable: true });
   });
 });
