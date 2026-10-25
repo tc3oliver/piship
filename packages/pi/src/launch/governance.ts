@@ -8,8 +8,8 @@ import {
   DEFAULT_NETWORK_POLICY,
   type NetworkPolicy,
   PiShipError,
-  plainHttpOrigins,
   type PolicyAction,
+  plainHttpOrigins,
   principalId,
   principalKey,
   samePrincipal,
@@ -29,12 +29,12 @@ import {
   governanceHooks,
   workflowExtension,
 } from "../builtins.js";
+import type { ToolExposureTable } from "../governance/exposure.js";
 import type { ModelPolicy, VirtualModelRule } from "../governance.js";
 import {
   type GovernanceOptions,
   GovernanceSession,
 } from "../governance-session.js";
-import type { ToolExposureTable } from "../governance/exposure.js";
 import { governedTools } from "../governed-tools.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
 
@@ -389,7 +389,7 @@ export async function modelPolicy(
     if (decision.outcome !== "allow")
       throw new PiShipError(
         "MODEL_DENIED",
-        `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}`,
+        `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}${gov.denialHint(decision)}`,
         { component: "policy" },
       );
     approved.add(selected);

@@ -1,16 +1,17 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { POLICY_ACTIONS } from "@piship/contracts";
 import { afterAll, describe, expect, it } from "vitest";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
-import { POLICY_ACTIONS } from "@piship/contracts";
 import {
+  decisionToJSON,
+  denialHint,
+  formatDecision,
+  formatDecisionJSON,
   NO_CONTAINMENT,
   PolicyEngine,
   RUNTIME_SEAMS,
-  decisionToJSON,
-  formatDecision,
-  formatDecisionJSON,
 } from "./index.js";
 
 const base = realpathSync(
@@ -181,5 +182,44 @@ describe("managed user rules in explain", () => {
       "me.shell (user): user rules are narrowing only in managed mode; allow is ignored",
     );
     expect(JSON.stringify(decisionToJSON(explanation))).toContain("me.shell");
+  });
+});
+
+describe("denialHint", () => {
+  const at = (layer: Parameters<typeof denialHint>[0]["layer"]) => ({
+    layer,
+    action: "shell.execute" as const,
+    ruleId: "r1",
+  });
+  const FORBIDDEN = /--yolo|\/auto|config\/policy\.json|add a rule/;
+
+  it("names the owner and the way to change it per layer", () => {
+    expect(denialHint(at("user-preference"), "personal")).toMatch(
+      /your own rule r1.*config\/policy\.json.*policy explain shell\.execute/,
+    );
+    expect(denialHint(at("distribution-default"), "personal")).toMatch(
+      /add a rule to config\/policy\.json/,
+    );
+    expect(denialHint(at("distribution-default"), "managed")).toMatch(
+      /contact the distribution owner/,
+    );
+    expect(denialHint(at("team-project"), "personal")).toMatch(
+      /project or team policy; ask its owner/,
+    );
+    expect(denialHint(at("distribution-enforced"), "managed")).toMatch(
+      /distribution-owned.*contact the distribution owner/,
+    );
+  });
+
+  it("offers no workaround for an enforced or team rule", () => {
+    for (const layer of ["distribution-enforced", "team-project"] as const)
+      for (const mode of ["personal", "managed"] as const)
+        expect(denialHint(at(layer), mode)).not.toMatch(FORBIDDEN);
+  });
+
+  it("is empty after the person refused a prompt", () => {
+    expect(
+      denialHint({ ...at("user-preference"), approval: "denied" }, "personal"),
+    ).toBe("");
   });
 });
