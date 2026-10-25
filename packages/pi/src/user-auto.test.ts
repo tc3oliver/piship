@@ -823,3 +823,57 @@ describe("policy explain and doctor with auto mode", () => {
     expect(await lines({})).toEqual([]);
   });
 });
+
+describe("approval metrics", () => {
+  it("counts prompted, approved, denied and auto decisions by action only", async () => {
+    const off = await open({ userAuto: "allowed" });
+    const write = tool(off.session, off.workspace, "write");
+    const secret = "distinctive-secret-name";
+    await expect(
+      write({ path: `${secret}.txt`, content: "text-canary" }, context().ctx),
+    ).rejects.toThrow();
+    await write(
+      { path: `${secret}-a.txt`, content: "text-canary" },
+      context(async () => true).ctx,
+    );
+    await expect(
+      write(
+        { path: `${secret}-b.txt`, content: "text-canary" },
+        context(async () => false).ctx,
+      ),
+    ).rejects.toThrow();
+    const counts = off.session.metrics.snapshot().approvals ?? {};
+    // A write decides twice, so the approved write counts twice.
+    expect(counts).toEqual({
+      "filesystem.write:prompted": 3,
+      "filesystem.write:approved": 2,
+      "filesystem.write:denied": 2,
+    });
+
+    const on = await open({ userAuto: "allowed", on: true });
+    await tool(
+      on.session,
+      on.workspace,
+      "write",
+    )({ path: `${secret}.txt`, content: "text-canary" }, context().ctx);
+    expect(on.session.metrics.snapshot().approvals).toEqual({
+      "filesystem.write:auto": 2,
+    });
+    const text = JSON.stringify([
+      off.session.metrics.snapshot(),
+      on.session.metrics.snapshot(),
+    ]);
+    for (const leak of [secret, "text-canary", off.workspace])
+      expect(text).not.toContain(leak);
+  });
+
+  it("never lets a failing metrics writer change a decision", async () => {
+    const { session } = await open({ userAuto: "allowed", on: true });
+    session.metrics.recordApproval = () => {
+      throw new Error("disk full");
+    };
+    await expect(
+      session.decide("web.request", "example.org", undefined),
+    ).resolves.toMatchObject({ outcome: "allow", approval: "auto" });
+  });
+});
