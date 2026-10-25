@@ -1121,7 +1121,7 @@ describe("one prompt per governed tool call", () => {
         "refused",
         expect.stringMatching(/rule secrets.*distribution-owned/),
       );
-      expect(String(enforced.refused)).not.toMatch(forbidden);
+      expect(JSON.stringify(enforced)).not.toMatch(forbidden);
     }
     const { session, workspace } = await open(AUDIT, {
       userRules: [
