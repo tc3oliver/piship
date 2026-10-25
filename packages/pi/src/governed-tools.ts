@@ -904,7 +904,8 @@ function mcpTool(
       tool.description || `${tool.tool} from the ${tool.server} MCP server`,
     promptSnippet: `${tool.name}: ${(tool.description || tool.tool).split("\n")[0]}`,
     parameters: tool.inputSchema as never,
-    executionMode: "sequential",
+    // Sequential unless the server opted in; approvals still queue one at a time.
+    executionMode: tool.parallel ? "parallel" : "sequential",
     async execute(_id, params, signal) {
       // The tool_call hook refuses first; this holds for direct calls too.
       const refusal = planRefusal(gov, tool.name);

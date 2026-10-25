@@ -195,6 +195,13 @@ export function mcp(
     ]);
     const timing = (server: typeof x) =>
       `timeout ${server.timeoutMs}ms, startup ${server.startupTimeoutMs}ms, attempts ${server.retry?.attempts}`;
+    out.scalar(
+      "mcp",
+      `${item} parallelToolCalls`,
+      String(x.parallelToolCalls === true),
+      String(y.parallelToolCalls === true),
+      ["low", "Concurrent tool calls setting changed."],
+    );
     out.scalar("mcp", `${item} timing`, timing(x), timing(y), [
       "low",
       "Server timeouts or retries changed.",

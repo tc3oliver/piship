@@ -490,6 +490,8 @@ export interface McpServerConfig {
   readonly startupTimeoutMs: number;
   readonly retry: { readonly attempts: number };
   readonly required: boolean;
+  /** Let the agent run this server's tool calls concurrently; omitted means sequential. */
+  readonly parallelToolCalls?: boolean;
   /**
    * The piship/v1alpha5 tool filter: deny wins; an empty allow admits every
    * tool not denied. Empty for piship/v1alpha6, where `exposure` and

@@ -411,6 +411,7 @@ export class McpGovernor {
         tool: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        ...(config.parallelToolCalls ? { parallel: true } : {}),
         call: (args, signal) => this.#call(entry, tool.name, args, signal),
       });
     }
