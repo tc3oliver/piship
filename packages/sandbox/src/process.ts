@@ -11,6 +11,7 @@ import type { Readable, Writable } from "node:stream";
 import { redact } from "@piship/contracts";
 import type { WrappedCommand } from "./adapter.js";
 import { stripCredentials } from "./environment.js";
+import { SANDBOX_EXEC } from "./seatbelt.js";
 import { windowsJobSupervisor } from "./windows-job.js";
 
 /** Anything that can place a command inside a sandbox (an ActiveSandbox). */
@@ -93,14 +94,21 @@ function killTree(pid: number, platform: NodeJS.Platform): void {
   signalGroup(pid, "SIGKILL");
 }
 
-// macOS has no PID namespace: a descendant that calls setsid() leaves the
-// process group the kill reaches. So while a command runs its descendants
-// that left the group are recorded with their start time, and are killed with
-// it. shortcut: one whose parent exits between two snapshots (an immediate
-// double fork) is never seen; closing that needs native process tracking.
-const TRACK_MS = 250;
-// Per live leader: pid -> start time of each descendant outside its group.
-const escaped = new Map<number, Map<number, string>>();
+// macOS has no PID namespace: a descendant that calls setsid() or setpgid()
+// leaves the process group the kill reaches. So while a command contained by
+// Seatbelt runs, its descendants that left the group are recorded with their
+// start time, and are killed with it. An uncontained command keeps the plain
+// process-group lifetime, as on Linux, so a server a user detaches survives.
+// shortcut: one whose parent exits between two snapshots (an immediate double
+// fork) is never seen; closing that needs native process tracking.
+interface Tracked {
+  readonly since: number;
+  /** pid -> start time of each descendant outside the leader's group. */
+  readonly known: Map<number, string>;
+}
+const tracked = new Map<number, Tracked>();
+let pollTimer: NodeJS.Timeout | undefined;
+let polling = false;
 
 interface PsRow {
   readonly ppid: number;
@@ -111,6 +119,7 @@ interface PsRow {
 const PS_ARGS = ["-Ao", "pid=,ppid=,pgid=,lstart="];
 // A fixed locale and zone make one process's start time read the same each time.
 const PS_ENV = { PATH: "/usr/bin:/bin", TZ: "UTC0", LC_ALL: "C" };
+const PS_TIMEOUT_MS = 1000;
 
 export function parsePs(text: string): Map<number, PsRow> {
   const rows = new Map<number, PsRow>();
@@ -132,7 +141,7 @@ function readPs(): Map<number, PsRow> | undefined {
       execFileSync("/bin/ps", PS_ARGS, {
         encoding: "utf8",
         env: PS_ENV,
-        timeout: 5000,
+        timeout: PS_TIMEOUT_MS,
         stdio: ["ignore", "pipe", "ignore"],
       }),
     );
@@ -142,15 +151,18 @@ function readPs(): Map<number, PsRow> | undefined {
 }
 
 /**
- * Add to `known` every descendant of `leader` (a live, unreaped leader, or
- * undefined once it is gone) and of the processes already recorded that is
- * outside the leader's group. A recorded pid whose start time no longer
+ * Add to `known` every descendant outside the leader's group of the leader
+ * (only while `alive`: an unreaped leader), of the members of its group (the
+ * group ID stays reserved while it has members, and setpgid cannot leave the
+ * session, so a member whose parent exited is still ours), and of the
+ * processes already recorded. A recorded pid whose start time no longer
  * matches has exited and may be reused, so it is dropped, never kept as a
  * root or killed. This process and its ancestors are never recorded.
  */
 export function trackDescendants(
   rows: ReadonlyMap<number, PsRow>,
-  leader: number | undefined,
+  leader: number,
+  alive: boolean,
   known: Map<number, string>,
   self: number = process.pid,
 ): void {
@@ -163,12 +175,13 @@ export function trackDescendants(
     ancestor = rows.get(ancestor)?.ppid ?? 0;
   }
   const children = new Map<number, number[]>();
+  const queue = [...(alive ? [leader] : []), ...known.keys()];
   for (const [pid, row] of rows) {
     const list = children.get(row.ppid);
     if (list) list.push(pid);
     else children.set(row.ppid, [pid]);
+    if (row.pgid === leader && !ancestors.has(pid)) queue.push(pid);
   }
-  const queue = [...(leader === undefined ? [] : [leader]), ...known.keys()];
   const seen = new Set(queue);
   while (queue.length > 0)
     for (const pid of children.get(queue.shift() as number) ?? []) {
@@ -181,20 +194,61 @@ export function trackDescendants(
 }
 
 /** Signal the recorded descendants of `leader` that still run, after one more snapshot. */
-function reclaim(leader: number, alive: boolean, signal: NodeJS.Signals): void {
-  const known = escaped.get(leader);
-  // Nothing left the group and the leader is gone: no new descendant can appear.
-  if (!known || (!alive && known.size === 0)) return;
-  const rows = readPs();
-  if (!rows) return;
-  trackDescendants(rows, alive ? leader : undefined, known);
-  for (const pid of known.keys()) {
+function reclaim(
+  leader: number,
+  alive: boolean,
+  signal: NodeJS.Signals,
+  rows: ReadonlyMap<number, PsRow> | undefined = readPs(),
+): void {
+  const entry = tracked.get(leader);
+  if (!entry || !rows) return;
+  trackDescendants(rows, leader, alive, entry.known);
+  for (const pid of entry.known.keys()) {
     try {
       process.kill(pid, signal);
     } catch {
       // already gone
     }
   }
+}
+
+// One poller for every tracked leader: often while the youngest is new, then
+// less, since most escapes happen as a command starts. A tick is skipped while
+// a snapshot is still being read.
+function schedulePoll(): void {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = undefined;
+  if (tracked.size === 0) return;
+  const youngest = Math.min(
+    ...[...tracked.values()].map((entry) => Date.now() - entry.since),
+  );
+  pollTimer = setTimeout(
+    poll,
+    youngest < 5_000 ? 250 : youngest < 30_000 ? 1000 : 2000,
+  );
+  pollTimer.unref();
+}
+
+function poll(): void {
+  // The snapshot in flight schedules the next tick when it is read.
+  if (polling) return;
+  polling = true;
+  execFile(
+    "/bin/ps",
+    PS_ARGS,
+    { env: PS_ENV, timeout: PS_TIMEOUT_MS },
+    (error, stdout) => {
+      polling = false;
+      if (!error) {
+        const rows = parsePs(stdout);
+        // An entry is removed when its leader is reaped, so every leader
+        // still here was alive when the snapshot was read.
+        for (const [leader, entry] of tracked)
+          trackDescendants(rows, leader, true, entry.known);
+      }
+      schedulePoll();
+    },
+  );
 }
 
 function installExitHook(): void {
@@ -206,8 +260,11 @@ function installExitHook(): void {
 
 /** Kill every governed child still running (for shutdown paths that skip 'exit'). */
 export function killAllManaged(): void {
+  const rows = [...live.keys()].some((pid) => tracked.has(pid))
+    ? readPs()
+    : undefined;
   for (const [pid, platform] of live) {
-    if (escaped.has(pid)) reclaim(pid, true, "SIGKILL");
+    if (rows) reclaim(pid, true, "SIGKILL", rows);
     killTree(pid, platform);
   }
   live.clear();
@@ -334,25 +391,16 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   let terminating = false;
   let graceTimer: NodeJS.Timeout | undefined;
   let timeoutTimer: NodeJS.Timeout | undefined;
-  let trackTimer: NodeJS.Timeout | undefined;
+  // Only a command Seatbelt contains (what the sandbox wraps, and so the MCP
+  // servers started under it), never the uncontained local shell.
   const track =
-    platform === "darwin" && process.platform === "darwin" && pid !== undefined;
+    platform === "darwin" &&
+    process.platform === "darwin" &&
+    pid !== undefined &&
+    launched.file === SANDBOX_EXEC;
   if (track) {
-    escaped.set(pid, new Map());
-    trackTimer = setInterval(() => {
-      execFile(
-        "/bin/ps",
-        PS_ARGS,
-        { env: PS_ENV, timeout: 5000 },
-        (error, stdout) => {
-          const known = escaped.get(pid);
-          // A reaped leader's pid may be reused: only a live one is a root.
-          if (!error && known && !done)
-            trackDescendants(parsePs(stdout), pid, known);
-        },
-      );
-    }, TRACK_MS);
-    trackTimer.unref();
+    tracked.set(pid, { since: Date.now(), known: new Map() });
+    schedulePoll();
   }
 
   const terminate = () => {
@@ -384,13 +432,14 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     done = true;
     if (timeoutTimer) clearTimeout(timeoutTimer);
     if (graceTimer) clearTimeout(graceTimer);
-    if (trackTimer) clearInterval(trackTimer);
     options.signal?.removeEventListener("abort", onAbort);
     if (pid !== undefined) {
-      // The leader is gone: nothing in its group may outlive it.
-      if (platform !== "win32") signalGroup(pid, "SIGKILL");
+      // The leader is gone: nothing in its group may outlive it. The snapshot
+      // comes first, while the group's members still lead to what they started.
       if (track) reclaim(pid, false, "SIGKILL");
-      escaped.delete(pid);
+      if (platform !== "win32") signalGroup(pid, "SIGKILL");
+      tracked.delete(pid);
+      if (track) schedulePoll();
       live.delete(pid);
     }
   };
