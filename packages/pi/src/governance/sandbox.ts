@@ -173,8 +173,11 @@ async function loadCustom(
   );
   // The module and its factory are the distribution's code: neither may
   // hang the launch.
-  const timeoutMs = options.adapterTimeoutMs ?? ADAPTER_CALL_TIMEOUT_MS;
-  const bounded = <T>(what: string, call: () => Promise<T>): Promise<T> =>
+  const bounded = <T>(
+    what: string,
+    call: () => Promise<T>,
+    timeoutMs = options.adapterTimeoutMs ?? ADAPTER_CALL_TIMEOUT_MS,
+  ): Promise<T> =>
     callWithDeadline(call, {
       timeoutMs,
       timedOut: () =>
@@ -185,9 +188,12 @@ async function loadCustom(
     });
   let module: { default?: unknown; sandboxCredential?: unknown };
   try {
+    // Not the adapterTimeoutMs seam, which bounds calls into the adapter:
+    // a loaded runner can take longer than a test's deadline to import it.
     module = (await bounded(
       "the module",
       () => import(pathToFileURL(path).href),
+      ADAPTER_CALL_TIMEOUT_MS,
     )) as typeof module;
   } catch (error) {
     throw unavailable(

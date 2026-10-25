@@ -19,7 +19,7 @@ import type {
 import { type AccessEvent, openSandboxCredential } from "@piship/core";
 import type { SandboxBackend } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -569,7 +569,6 @@ export default () => ({});`);
     expect(log.signals).toHaveLength(1);
     expect(log.signals[0]?.aborted).toBe(true);
     log.issue?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(log.revoked).toEqual(["fake-late-token"]);
+    await vi.waitFor(() => expect(log.revoked).toEqual(["fake-late-token"]));
   });
 });
