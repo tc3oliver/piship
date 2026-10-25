@@ -10,11 +10,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  IdentitySession,
-  PrincipalKey,
-  SecretStore,
-  SecretValue,
+import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  type IdentitySession,
+  type PrincipalKey,
+  type SecretStore,
+  type SecretValue,
 } from "@piship/contracts";
 import { type AccessEvent, openSandboxCredential } from "@piship/core";
 import type { SandboxBackend } from "@piship/sandbox";
@@ -538,6 +539,30 @@ ${body}`,
         "the custom sandbox adapter could not be loaded: the factory did not settle within 1 s",
       ),
     });
+  });
+
+  it("fails the launch when the module never settles", {
+    timeout: 5_000,
+  }, async () => {
+    write("await new Promise(() => {});\nexport default () => ({});");
+    // The import is bounded by the production deadline, not the seam.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const launch = sandboxBackend(
+        options(custom, { adapterTimeoutMs: 50 } as Partial<GovernanceOptions>),
+      );
+      launch.catch(() => undefined);
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+      await vi.advanceTimersByTimeAsync(ADAPTER_CALL_TIMEOUT_MS);
+      await expect(launch).rejects.toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining(
+          "the custom sandbox adapter could not be loaded: the module did not settle within 60 s",
+        ),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails the launch when sandboxCredential never answers, and revokes a credential issued late", {
