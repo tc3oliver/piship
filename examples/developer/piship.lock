@@ -18,7 +18,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.1.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "124876f6ef342f9325d30045511353b8493b73db0711e68967e56d2cdae2105e",
+    "npmLockSha256": "15b239aa1118562c3e4fc81926dc68c91fd8492b8feab33e9e6d81007b84a38a",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -889,9 +889,9 @@
       },
       {
         "path": "node_modules/undici",
-        "version": "8.10.2",
-        "integrity": "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==",
-        "resolved": "https://registry.npmjs.org/undici/-/undici-8.10.2.tgz"
+        "version": "8.12.3",
+        "integrity": "sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==",
+        "resolved": "https://registry.npmjs.org/undici/-/undici-8.12.3.tgz"
       },
       {
         "path": "node_modules/undici-types",
@@ -1961,7 +1961,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-e5aead167f5013c23b85d6e766bc03aaf7b21c116e3bc4b7f2af7906b6a7bdc5",
+    "packages": "sha256-3be1e50668565c5b3aa32d715d3c2ce90232569bb3c21baac18a41a4894706ba",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2005,7 +2005,7 @@
       "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
       "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
       "files": 105,
-      "lockfileSha256": "d03d27dfc4e995679190e9e86686490d0e0e4417e3e41dffa77a99c9aed1e0a2",
+      "lockfileSha256": "4b4cdf4257a3eae78f9abe9b2acc9af048be240b4d59799aefc85f5e02b7f719",
       "resources": [
         {
           "kind": "extensions",
@@ -2138,7 +2138,7 @@
       "integrity": "sha512-6PTzboAc9z2WSEA6aNXCWGsd5ES5MKNJBMIxazbEk2fzcXZFerhJ1k07UDrGjE+hkkd6TnPhsHAxMQ28ZT0WGQ==",
       "tree": "sha256-c572b0417918aa4b1d372ee8c5e446a3974fda19a3e40617476d813946f34016",
       "files": 1568,
-      "lockfileSha256": "b8fb5d094f06a2b3ca82630cd7d70e74faf3a8ad4068774933858e36acfc4d77",
+      "lockfileSha256": "733fba2370b06c7177ffe8b1c3ac5a1891887b9c64d2a6e84b3dc2aa65ebd0a7",
       "resources": [
         {
           "kind": "extensions",
@@ -2242,7 +2242,7 @@
       "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
       "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
       "files": 68,
-      "lockfileSha256": "61cc3ea941f0b7140a42b0f3cbc5e42d513b6bfc59d714094cbb3eca983b80f0",
+      "lockfileSha256": "a91fcb697a16b4e6cee5d0c9828dce4c3f519b6b0613fe472bf539439069b1d0",
       "resources": [
         {
           "kind": "extensions",
