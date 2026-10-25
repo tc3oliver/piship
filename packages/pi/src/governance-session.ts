@@ -13,6 +13,7 @@ import {
 import {
   type ApprovalChannel,
   type AuditEventType,
+  duringStartup,
   formatError,
   PiShipError,
   type PolicyAction,
@@ -20,7 +21,6 @@ import {
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
-  duringStartup,
   resolveDecision,
   startupMark,
 } from "@piship/contracts";
@@ -574,6 +574,7 @@ export class GovernanceSession {
         ? { ...prompt, scopes: ["once", "session"] as const }
         : prompt;
     let auto = this.#autoApproval(asks, decision);
+    let prompted = false;
     const resolved: ResolvedDecision = auto
       ? approved
       : decision.effect === "ask" && sessionAllowed()
@@ -583,6 +584,7 @@ export class GovernanceSession {
               auto = this.#autoApproval(asks, decision);
               if (auto) return approved;
               if (sessionAllowed()) return sessionApproved;
+              prompted = true;
               return resolveDecision(decision, channel, offered);
             })
           : await resolveDecision(decision, channel, prompt);
@@ -604,6 +606,7 @@ export class GovernanceSession {
         ? [
             {
               action: "tool.execute" as const,
+              effect: tool.decision.effect,
               events: {
                 allowed: "tool.allowed",
                 denied: "tool.denied",
@@ -622,6 +625,7 @@ export class GovernanceSession {
         ? [
             {
               action,
+              effect: own.effect,
               events,
               fields: {
                 resource: events?.resource ?? redact(own.resource),
@@ -651,6 +655,18 @@ export class GovernanceSession {
           detail: fields.detail,
           decision: "approved",
         });
+      // Counts by action kind only; never the target or any user text.
+      const kinds =
+        record.effect === "allow"
+          ? []
+          : resolved.approval === "auto" || resolved.approval === "session"
+            ? ["auto"]
+            : [
+                ...(prompted ? ["prompted"] : []),
+                resolved.outcome === "allow" ? "approved" : "denied",
+              ];
+      for (const kind of kinds)
+        bestEffort(() => this.metrics.recordApproval(record.action, kind));
       if (resolved.outcome === "deny") {
         this.metrics.recordPolicyDenial(record.action);
         if (record.events)
