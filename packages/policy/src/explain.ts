@@ -4,6 +4,7 @@ import {
   type PolicyDecision,
   type PolicyEffect,
   redact,
+  type ResolvedDecision,
 } from "@piship/contracts";
 import type { PolicyExplanation } from "./engine.js";
 import { decisionStatus } from "./seams.js";
@@ -143,7 +144,7 @@ export function formatDecisionJSON(
  */
 export function denialHint(
   decision: Pick<PolicyDecision, "layer" | "action" | "ruleId"> & {
-    readonly approval?: string;
+    readonly approval?: ResolvedDecision["approval"];
   },
   deployment: "personal" | "managed",
 ): string {
@@ -160,6 +161,9 @@ export function denialHint(
       return "This rule comes from the project or team policy; ask its owner to change it.";
     case "user-preference":
       return `This is your own rule ${decision.ruleId}; edit it in config/policy.json (${explain}).`;
+    case "builtin":
+      // No rule decided: nothing a user rule or the distribution can change here.
+      return "";
     default:
       return deployment === "managed"
         ? "This is a distribution default; contact the distribution owner."

@@ -1106,6 +1106,47 @@ describe("one prompt per governed tool call", () => {
     expect([...tool.prompts, ...file.prompts]).toEqual([]);
   });
 
+  it("says who owns a denial and how to change it, with no workaround for an enforced rule", async () => {
+    const forbidden = /--yolo|\/auto|config\/policy\.json|add a rule/;
+    for (const mode of ["managed", "personal"] as const) {
+      const { session, workspace, home } = await open(AUDIT, { mode });
+      const enforced = await call(
+        session,
+        workspace,
+        "read",
+        { path: join(home, ".ssh", "id_rsa") },
+        counting(true).ctx,
+      );
+      expect(enforced).toHaveProperty(
+        "refused",
+        expect.stringMatching(/rule secrets.*distribution-owned/),
+      );
+      expect(String(enforced.refused)).not.toMatch(forbidden);
+    }
+    const { session, workspace } = await open(AUDIT, {
+      userRules: [
+        {
+          id: "me.read",
+          action: "tool.execute",
+          resource: "read",
+          effect: "deny",
+        },
+      ],
+    });
+    expect(
+      await call(
+        session,
+        workspace,
+        "read",
+        { path: "notes.txt" },
+        counting(true).ctx,
+      ),
+    ).toHaveProperty(
+      "blocked",
+      expect.stringMatching(/your own rule me\.read.*config\/policy\.json/),
+    );
+  });
+
   it("covers the whole prompt with Allow for this session, and only that", async () => {
     const { session, workspace } = await open(AUDIT, { userRules: SHELL_ASK });
     const first = counting("Allow for this session");

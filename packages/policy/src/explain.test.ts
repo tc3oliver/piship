@@ -1,17 +1,17 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { POLICY_ACTIONS } from "@piship/contracts";
 import { afterAll, describe, expect, it } from "vitest";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
+import { POLICY_ACTIONS } from "@piship/contracts";
 import {
+  NO_CONTAINMENT,
+  PolicyEngine,
+  RUNTIME_SEAMS,
   decisionToJSON,
   denialHint,
   formatDecision,
   formatDecisionJSON,
-  NO_CONTAINMENT,
-  PolicyEngine,
-  RUNTIME_SEAMS,
 } from "./index.js";
 
 const base = realpathSync(
@@ -215,6 +215,10 @@ describe("denialHint", () => {
     for (const layer of ["distribution-enforced", "team-project"] as const)
       for (const mode of ["personal", "managed"] as const)
         expect(denialHint(at(layer), mode)).not.toMatch(FORBIDDEN);
+  });
+
+  it("has nothing to say for the builtin fallback", () => {
+    expect(denialHint(at("builtin"), "personal")).toBe("");
   });
 
   it("is empty after the person refused a prompt", () => {
