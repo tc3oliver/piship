@@ -1952,6 +1952,19 @@ export class DistributionAccess {
         )
       ).secret;
     } catch (error) {
+      if (error instanceof PiShipError && !error.retryable) {
+        // A revoked, unrenewable, or switched sign-in ends what this session
+        // holds, so a later outage cannot bring the old secret back.
+        if (error.code.startsWith("IDENTITY_")) this.#forgetSecret();
+      } else if (
+        // A temporary failure (the identity provider's token endpoint is
+        // down) inside the renewal window keeps the still-valid credential,
+        // as a failed credential renewal does.
+        !options.force &&
+        error instanceof PiShipError &&
+        this.#cachedSecretValid(manager, "expiring")
+      )
+        return this.#secret;
       throw this.#midSessionSignInError(error);
     }
   }
@@ -1993,11 +2006,14 @@ export class DistributionAccess {
     );
   }
 
-  #cachedSecretValid(manager: CredentialManager): boolean {
+  #cachedSecretValid(
+    manager: CredentialManager,
+    accept: CredentialStatus["state"] = "valid",
+  ): boolean {
     if (!this.#secret || this.#principal === undefined) return false;
     const { state, metadata } = manager.status();
     return (
-      state === "valid" &&
+      state === accept &&
       !!metadata &&
       metadata.credential_ref === this.#secretRef &&
       metadata.acquired_at === this.#secretAcquiredAt &&

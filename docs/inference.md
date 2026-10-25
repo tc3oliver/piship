@@ -24,7 +24,7 @@ A `ModelDefinition` has an ID, name, provider, capabilities (input, reasoning, t
 
 These are the only two providers. A manifest can load identity, credential, sandbox, and policy adapters but has no field that loads an `InferenceProvider` adapter, so a gateway that is not OpenAI-compatible is not supported; the [status page](status.md#capability-matrix) lists it as not claimed.
 
-For `openai-compatible`, the Pi runtime gets one provider named after the app ID, so a model appears as `<app id>/<model id>`. Request authentication is resolved per request: PiShip refreshes the credential before expiry and passes the secret only to Pi's request path.
+For `openai-compatible`, the Pi runtime gets one provider named after the app ID, so a model appears as `<app id>/<model id>`. Request authentication is resolved per request: PiShip refreshes the credential before expiry and passes the secret only to Pi's request path. The sign-in is renewed in the session, without a prompt, when the credential is: with the refresh token (or the identity adapter's `refresh()`, or a workload adapter's `login()`) within 60 s of the access token's expiry, and once after the broker rejects it. A temporary identity provider failure inside `refresh.beforeExpiry` keeps the still-valid credential; a revoked sign-in, another subject, or an expired credential ends the session's credential and asks for `<command> login`.
 
 ## Model catalog
 
