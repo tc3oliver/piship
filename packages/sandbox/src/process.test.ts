@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -277,16 +278,20 @@ describe("spawnManaged", () => {
 
 describe("trackDescendants", () => {
   // pid -> [ppid, pgid, start]; 10 is this process, 9 its parent, 100 the leader.
-  const table = (entries: Record<number, [number, number, string]>) =>
-    parsePs(
+  let seq = 0;
+  const table = (entries: Record<number, [number, number, string]>) => ({
+    seq: ++seq,
+    rows: parsePs(
       Object.entries(entries)
         .map(([pid, [ppid, pgid, start]]) => `${pid} ${ppid} ${pgid} ${start}`)
         .join("\n"),
-    );
+    ),
+  });
+  type Known = Parameters<typeof trackDescendants>[3];
   const T = "Mon Oct 26 04:00:00 2026";
 
   it("records descendants that left the group, across a reparenting", () => {
-    const known = new Map<number, string>();
+    const known: Known = new Map();
     trackDescendants(
       table({
         9: [1, 9, T],
@@ -320,7 +325,7 @@ describe("trackDescendants", () => {
   });
 
   it("follows a group member whose parent exited", () => {
-    const known = new Map<number, string>();
+    const known: Known = new Map();
     trackDescendants(
       table({
         10: [1, 10, T],
@@ -336,8 +341,30 @@ describe("trackDescendants", () => {
     expect([...known.keys()]).toEqual([102]);
   });
 
+  it("never lets an older snapshot read late drop a newer record", () => {
+    const known: Known = new Map();
+    const older = table({ 10: [1, 10, T], 100: [10, 100, T] });
+    // A sync snapshot taken after it sees the escapee 105, born since.
+    trackDescendants(
+      table({ 10: [1, 10, T], 100: [10, 100, T], 105: [100, 105, T] }),
+      100,
+      true,
+      known,
+      10,
+    );
+    trackDescendants(older, 100, true, known, 10);
+    expect([...known.keys()]).toEqual([105]);
+    // The leader is gone and 105 belongs to launchd: still recorded.
+    const exit = table({ 10: [1, 10, T], 105: [1, 105, T] });
+    trackDescendants(exit, 100, false, known, 10);
+    expect(known.get(105)?.seen).toBe(exit.seq);
+    // Only a newer snapshot without it drops it.
+    trackDescendants(table({ 10: [1, 10, T] }), 100, false, known, 10);
+    expect(known.size).toBe(0);
+  });
+
   it("drops a reused pid and never follows it", () => {
-    const known = new Map([[102, T]]);
+    const known: Known = new Map([[102, { start: T, seen: 0 }]]);
     trackDescendants(
       table({
         10: [1, 10, T],
@@ -353,7 +380,7 @@ describe("trackDescendants", () => {
   });
 
   it("never records this process or its ancestors", () => {
-    const known = new Map<number, string>();
+    const known: Known = new Map();
     // A table claiming the launcher descends from, and shares a group with,
     // the leader (pid confusion).
     trackDescendants(
@@ -388,8 +415,13 @@ describe.skipIf(process.platform !== "darwin")(
     );
     const EXITING = ESCAPING.replace(
       "setInterval(() => {}, 1000);",
-      "setTimeout(() => process.exit(0), 800);",
+      "setTimeout(() => process.exit(0), 2000);",
     );
+    const appeared = async (check: () => boolean) => {
+      for (let waited = 0; !check() && waited < 10_000; waited += 100)
+        await sleep(100);
+      return check();
+    };
     const token = (name: string) => {
       const value = `piship-${name}-${Date.now()}`;
       tokens.push(value);
@@ -434,6 +466,7 @@ describe.skipIf(process.platform !== "darwin")(
         sandbox,
       }).exited;
       expect(exit.code).toBe(0);
+      expect(existsSync(heartbeat)).toBe(true);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
       expect(running(escaped)).toBe(false);
       expect(running(bystander)).toBe(true);
@@ -448,10 +481,11 @@ describe.skipIf(process.platform !== "darwin")(
         cwd: dir,
         env,
         sandbox,
-        timeoutMs: 2000,
+        timeoutMs: 5000,
         graceMs: 300,
       }).exited;
       expect(exit.timedOut).toBe(true);
+      expect(existsSync(heartbeat)).toBe(true);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
       expect(running(escaped)).toBe(false);
     });
@@ -473,10 +507,11 @@ describe.skipIf(process.platform !== "darwin")(
         cwd: dir,
         env,
         sandbox,
-        timeoutMs: 2500,
+        timeoutMs: 5000,
         graceMs: 300,
       }).exited;
       expect(exit.timedOut).toBe(true);
+      expect(existsSync(heartbeat)).toBe(true);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
       expect(running(escaped)).toBe(false);
     });
@@ -491,6 +526,7 @@ describe.skipIf(process.platform !== "darwin")(
         env,
       }).exited;
       expect(exit.code).toBe(0);
+      expect(await appeared(() => existsSync(heartbeat))).toBe(true);
       expect(await heartbeatStopped(heartbeat)).toBe(false);
       expect(running(detached)).toBe(true);
     });
