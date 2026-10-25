@@ -4,24 +4,34 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { NO_CONTENT_CAPTURE, PiShipError } from "@piship/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUDIT_SPOOL_DIRECTORY,
+  AUDIT_SPOOL_LEASE_MS,
   type AuditConfig,
   type AuditFetch,
   AuditLog,
   type AuditLogOptions,
+  auditSpools,
 } from "./index.js";
+
+// A seam on rename: a test stands in for a second launcher racing this one.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, renameSync: vi.fn(actual.renameSync) };
+});
 
 const posix = process.platform !== "win32";
 let temp: string;
@@ -29,6 +39,7 @@ beforeEach(() => {
   temp = mkdtempSync(join(tmpdir(), "piship-spool-"));
 });
 afterEach(() => {
+  vi.mocked(renameSync).mockRestore();
   if (posix) for (const path of spoolFiles()) chmodSync(dirname(path), 0o700);
   rmSync(temp, { recursive: true, force: true });
 });
@@ -155,6 +166,12 @@ describe("required HTTP sink spool", () => {
     const status = await first.close(50);
     expect(status.sinks[0]?.pending).toBe(1);
     expect(spoolFiles()).toHaveLength(1);
+    // Under another sink ID the directory is an orphan, never replayed.
+    expect(auditSpools(temp, ["renamed"])).toEqual([
+      expect.objectContaining({ files: 1, stale: 0, quarantined: [] }),
+    ]);
+    expect(auditSpools(temp, ["renamed"])[0]).not.toHaveProperty("sink");
+    expect(auditSpools(temp, ["company"])[0]?.sink).toBe("company");
     const up = collector();
     const second = await open(up);
     await second.close();
@@ -185,19 +202,206 @@ describe("required HTTP sink spool", () => {
     expect(target.received.map((event) => event.resource)).toEqual(["whole"]);
   });
 
-  it("fails launch with AUDIT_UNAVAILABLE on a corrupt spool, and again until it is fixed", async () => {
+  it("keeps a last line torn by a crash that is still a whole event", async () => {
+    const file = await crashWith(["first"]);
+    const [line] = readFileSync(file, "utf8").split("\n");
+    const torn = JSON.parse(line as string);
+    appendFileSync(
+      file,
+      JSON.stringify({ ...torn, id: "torn-but-whole", resource: "second" }),
+    );
+    const target = collector();
+    const log = await open(target);
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("sets a corrupt spool aside under a stable name, keeps its valid lines, and fails launch until it is removed", async () => {
     const file = await crashWith(["one", "two"]);
     const [first, second] = readFileSync(file, "utf8").split("\n");
     rmSync(file);
     appendFileSync(file, `${first}\nnot json\n${second}\n`);
+    const quarantined = `${basename(file)}.corrupt`;
     const target = collector();
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const error = await open(target).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PiShipError);
       expect((error as PiShipError).code).toBe("AUDIT_UNAVAILABLE");
-      expect((error as PiShipError).message).toContain("corrupt at line 2");
+      expect((error as PiShipError).message).toContain(
+        `${dirname(file)} holds a corrupt spool set aside, ${quarantined}`,
+      );
     }
     expect(target.received).toEqual([]);
+    expect(auditSpools(temp, ["company"])).toEqual([
+      expect.objectContaining({ sink: "company", quarantined: [quarantined] }),
+    ]);
+    rmSync(join(dirname(file), quarantined));
+    const log = await open(target);
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual([
+      "one",
+      "two",
+    ]);
+    expect(spoolFiles()).toEqual([]);
+  });
+
+  it.skipIf(!posix)(
+    "never opens a FIFO planted as a spool, so a launch does not hang",
+    async () => {
+      const file = await crashWith(["kept"]);
+      rmSync(file);
+      expect(spawnSync("mkfifo", [file]).status).toBe(0);
+      const target = collector();
+      const log = await open(target);
+      await log.close();
+      expect(target.received).toEqual([]);
+      rmSync(file);
+    },
+  );
+
+  it("claims a spool not touched within the lease although its process ID is alive or its host differs", async () => {
+    const stale = new Date(Date.now() - AUDIT_SPOOL_LEASE_MS - 60_000);
+    // A live process ID (now an unrelated process), and an earlier hostname.
+    const reused = reown(await crashWith(["reused"]), process.ppid);
+    const renamed = await crashWith(["renamed"]);
+    const otherHost = join(
+      dirname(renamed),
+      basename(renamed).replace(/^(\d+)-[0-9a-f]{12}-/, "$1-000000000000-"),
+    );
+    renameSync(renamed, otherHost);
+    const target = collector();
+    const fresh = await open(target);
+    await fresh.close();
+    expect(target.received).toEqual([]);
+    for (const path of [reused, otherHost]) utimesSync(path, stale, stale);
+    const log = await open(target);
+    await log.close();
+    expect(target.received.map((event) => event.resource).sort()).toEqual([
+      "renamed",
+      "reused",
+    ]);
+    expect(spoolFiles()).toEqual([]);
+  });
+
+  it("drops content the current audit.capture no longer admits from replayed events", async () => {
+    const captured = {
+      ...config(),
+      capture: {
+        ...NO_CONTENT_CAPTURE,
+        promptContent: true,
+        commandText: true,
+      },
+    };
+    const down = collector();
+    const first = await open(down, { config: captured });
+    down.status = 503;
+    first.emit({
+      event: "mcp.call",
+      user: null,
+      session: null,
+      resource: "narrowed",
+      content: { prompt: "the prompt words", command: "make test" },
+    });
+    await first.flush();
+    reown(spoolFiles()[0] as string, deadPid());
+    const target = collector();
+    const narrowed = {
+      ...config(),
+      capture: { ...NO_CONTENT_CAPTURE, commandText: true },
+    };
+    const log = await open(target, { config: narrowed });
+    // The spool this launch rewrote holds none of it either.
+    for (const path of spoolFiles())
+      expect(readFileSync(path, "utf8")).not.toContain("the prompt words");
+    await log.close();
+    expect(target.received).toEqual([
+      expect.objectContaining({
+        resource: "narrowed",
+        content: { command: "make test" },
+      }),
+    ]);
+  });
+
+  it("replays only a backlog within the cap at once and leaves the rest for the next launch", async () => {
+    const big = Array.from({ length: 6 }, (_, index) => `big-${index}`);
+    // Owned by a live process while the second crash runs, so it is not merged.
+    const older = reown(await crashWith(big), process.ppid);
+    await crashWith(big.map((name) => `${name}-again`));
+    reown(older, deadPid());
+    const [size] = spoolFiles().map((path) => statSync(path).size);
+    const target = collector();
+    const first = await open(target, {
+      spoolMaxBytes: Math.ceil((size as number) * 1.5),
+    });
+    await first.close();
+    expect(target.received).toHaveLength(6);
+    expect(spoolFiles()).toHaveLength(1);
+    const second = await open(target);
+    await second.close();
+    expect(target.received).toHaveLength(12);
+    expect(spoolFiles()).toEqual([]);
+  });
+
+  it("rewrites the spool once per flush, not once per delivered batch", async () => {
+    const target = collector();
+    const log = await open(target, { config: config(true, 5000) });
+    target.status = 503;
+    for (let index = 0; index < 1200; index += 1) emit(log, `e${index}`);
+    await log.flush();
+    target.status = 200;
+    const renames = vi.mocked(renameSync).mock.calls.length;
+    await log.flush();
+    expect(target.received).toHaveLength(1200);
+    expect(vi.mocked(renameSync).mock.calls.length - renames).toBe(1);
+    await log.close();
+  });
+
+  it("fails closed when a rewrite fails, keeps the old spool, and recovers on the next delivered batch", async () => {
+    const target = collector();
+    const log = await open(target);
+    target.status = 503;
+    emit(log, "before");
+    await log.flush();
+    const [file] = spoolFiles();
+    // A directory where the rewrite's temporary goes makes the rewrite fail.
+    mkdirSync(`${file}.tmp`);
+    target.status = 200;
+    await log.flush();
+    expect(target.received.map((event) => event.resource)).toEqual(["before"]);
+    expect(log.status().state).toBe("failed");
+    expect(() => log.assertAvailable()).toThrow(/spool cannot keep/);
+    // The old spool is still whole: a crash now would only resend "before".
+    expect(readFileSync(file as string, "utf8")).toContain('"before"');
+    rmSync(`${file}.tmp`, { recursive: true });
+    emit(log, "after");
+    await log.flush();
+    expect(log.status().state).toBe("ok");
+    expect(readFileSync(file as string, "utf8")).toBe("");
+    await log.close();
+  });
+
+  it("only one of two racing launchers claims a spool: the other's rename fails with ENOENT and it skips the file", async () => {
+    const file = await crashWith(["raced"]);
+    // The other launcher, alive, renames the spool to a name of its own first.
+    const other = join(
+      dirname(file),
+      basename(file).replace(/^\d+/, String(process.ppid)),
+    );
+    const actual = (await vi.importActual<typeof import("node:fs")>("node:fs"))
+      .renameSync;
+    vi.mocked(renameSync).mockImplementationOnce((from, to) => {
+      actual(from, other);
+      actual(from, to);
+    });
+    const target = collector();
+    const log = await open(target);
+    await log.close();
+    expect(target.received).toEqual([]);
+    expect(existsSync(other)).toBe(true);
+    expect(existsSync(file)).toBe(false);
   });
 
   it("fails closed when the spool is full, never grows past its cap, and recovers once delivered", async () => {
@@ -231,7 +435,13 @@ describe("required HTTP sink spool", () => {
       expect(log.status().state).toBe("failed");
       expect(() => log.assertAvailable()).toThrow(/spool cannot keep/);
       chmodSync(directory, 0o700);
+      target.status = 503;
       await log.close(50);
+      // The event only in memory is in the spool after close.
+      expect(readFileSync(spoolFiles()[0] as string, "utf8")).toContain(
+        '"unwritten"',
+      );
+      rmSync(spoolFiles()[0] as string);
       // A launch repairs the directory's mode, but not a file in its place.
       rmSync(directory, { recursive: true });
       appendFileSync(directory, "");
