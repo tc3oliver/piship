@@ -46,10 +46,14 @@ describe("pinned Pi compatibility", () => {
       const contracts = jsonAt("packages/contracts/package.json") as {
         dependencies: Record<string, string>;
       };
+      expect(contracts.dependencies.undici).toBeDefined();
       expect(root.overrides).toEqual({
         ...PI_SIBLING_PINS,
         undici: contracts.dependencies.undici,
       });
+      expect(lock.packages["node_modules/undici"]?.version).toBe(
+        contracts.dependencies.undici,
+      );
       // Pi releases its packages in lockstep.
       for (const version of Object.values(PI_SIBLING_PINS))
         expect(version).toBe(PINNED_PI_VERSION);
