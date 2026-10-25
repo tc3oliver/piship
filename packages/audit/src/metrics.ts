@@ -121,6 +121,13 @@ export interface MetricsSnapshot {
    * allow). Per record, not per tool call.
    */
   readonly approvals?: Readonly<Record<string, number>>;
+  /**
+   * Confirmation dialogs actually shown, by fixed key: `shown`, the answers
+   * `allowed`, `denied` and `cancelled` (also a timeout or a failed dialog),
+   * and `sessionGrants` (an allow for the rest of the session). One dialog
+   * counts once, however many decision records it settles.
+   */
+  readonly prompts?: Readonly<Record<string, number>>;
   readonly mcpHealth: Readonly<Record<string, McpHealthMetric>>;
   readonly sandbox?: SandboxMetric;
   readonly startupFailures: Readonly<Record<string, number>>;
@@ -168,6 +175,14 @@ function approvalKey(key: string): boolean {
     APPROVAL_KINDS.has(kind ?? "")
   );
 }
+
+const PROMPT_KINDS = new Set<string>([
+  "shown",
+  "allowed",
+  "denied",
+  "cancelled",
+  "sessionGrants",
+]);
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
 const ACTIONS = new Set<string>(POLICY_ACTIONS);
@@ -283,6 +298,7 @@ export class LocalMetrics {
   readonly #now: () => Date;
   #policyDenials: Record<string, number> = {};
   #approvals: Record<string, number> = {};
+  #prompts: Record<string, number> = {};
   #mcpHealth: Record<string, McpHealthMetric> = {};
   #sandbox: SandboxMetric | undefined;
   #startupFailures: Record<string, number> = {};
@@ -328,6 +344,11 @@ export class LocalMetrics {
   recordApproval(action: string, kind: string): void {
     const key = `${action}:${kind}`;
     if (approvalKey(key)) this.#increment(this.#approvals, key);
+  }
+
+  /** Count a confirmation dialog event by fixed kind; anything else is ignored. */
+  recordPrompt(kind: string): void {
+    if (PROMPT_KINDS.has(kind)) this.#increment(this.#prompts, kind);
   }
 
   recordMcpHealth(serverId: string, state: McpHealthState): void {
@@ -497,6 +518,9 @@ export class LocalMetrics {
       ...(Object.keys(this.#approvals).length
         ? { approvals: { ...this.#approvals } }
         : {}),
+      ...(Object.keys(this.#prompts).length
+        ? { prompts: { ...this.#prompts } }
+        : {}),
       mcpHealth: structuredClone(this.#mcpHealth),
       ...(this.#sandbox ? { sandbox: { ...this.#sandbox } } : {}),
       startupFailures: { ...this.#startupFailures },
@@ -571,6 +595,7 @@ export class LocalMetrics {
       ACTIONS.has(key),
     );
     this.#approvals = counters(value.approvals, approvalKey);
+    this.#prompts = counters(value.prompts, (key) => PROMPT_KINDS.has(key));
     this.#startupFailures = counters(
       value.startupFailures,
       (key) => ERROR_CODES.has(key) || key === "UNKNOWN",
