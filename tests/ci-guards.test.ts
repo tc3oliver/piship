@@ -9,9 +9,17 @@ import { describe, expect, it } from "vitest";
 const ROOT = process.env.PISHIP_BUILD_INPUT as string;
 const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
 
+/** The body of one CI job: from its key to the next job. */
+function ciJob(name: string): string {
+  const start = ci.indexOf(`\n  ${name}:\n`);
+  const next = ci.slice(start + 1).search(/\n {2}[a-z][\w-]*:\n/);
+  return ci.slice(start, next < 0 ? undefined : start + 1 + next);
+}
+
 /** The steps of the CI check job, one string each. */
 function steps(): string[] {
-  const body = ci.slice(ci.indexOf("    steps:\n"));
+  const check = ciJob("check");
+  const body = check.slice(check.indexOf("    steps: &check-steps\n"));
   return body
     .split(/\n(?= {6}- )/)
     .filter((step) => step.startsWith("      - "));
@@ -27,7 +35,7 @@ describe("the CI check job", () => {
       (step) => /^ {6}- if: (.+)$/m.exec(step)?.[1] ?? "always",
     );
     expect(conditions.sort()).toEqual([
-      "runner.os != 'Linux'",
+      "runner.os != 'Linux' && matrix.part != 'unit'",
       "runner.os == 'Linux'",
     ]);
     for (const step of live)
@@ -35,18 +43,82 @@ describe("the CI check job", () => {
   });
 
   it("requires the OS sandbox and isolator on Linux and macOS", () => {
-    const unit = steps().find((step) => step.includes("run: npm test"));
-    expect(unit).toBeDefined();
-    for (const variable of [
-      "PISHIP_REQUIRE_SANDBOX",
-      "PISHIP_REQUIRE_ISOLATOR",
+    // The whole unit tier, and a Windows unit shard.
+    const units = steps().filter((step) => step.includes("npm test"));
+    expect(units).toHaveLength(2);
+    for (const unit of units)
+      for (const variable of [
+        "PISHIP_REQUIRE_SANDBOX",
+        "PISHIP_REQUIRE_ISOLATOR",
+      ])
+        expect(unit).toMatch(
+          new RegExp(
+            `^ {10}${variable}: \\$\\{\\{ runner\\.os != 'Windows' && '1' \\|\\| '0' \\}\\}$`,
+            "m",
+          ),
+        );
+  });
+});
+
+// Windows runs the check job's steps on three runners: two unit shards and
+// one for everything else. Branch protection requires `check (windows-latest)`
+// by name, and a skipped required check counts as passed, so the job of that
+// name must run always and fail unless every Windows runner succeeded.
+describe("the Windows CI check", () => {
+  it("keeps the required check names", () => {
+    expect(ciJob("check")).toContain("    name: check (${{ matrix.os }})\n");
+    expect(ciJob("check")).toContain("os: [ubuntu-latest, macos-latest]");
+    expect(ciJob("windows")).toMatch(
+      /^ {4}name: check \(windows-latest, \$\{\{/m,
+    );
+    expect(ci.match(/^ {4}name: check \(windows-latest\)$/gm)).toHaveLength(1);
+    expect(ciJob("check-windows")).toContain("name: check (windows-latest)\n");
+  });
+
+  it("runs every step of the check, and every unit file once, across its runners", () => {
+    const windows = ciJob("windows");
+    expect(windows).toContain("    steps: *check-steps\n");
+    for (const leg of [
+      "{ os: windows-latest, part: unit, shard: 1/2 }",
+      "{ os: windows-latest, part: unit, shard: 2/2 }",
+      "{ os: windows-latest, part: compatibility }",
     ])
-      expect(unit).toMatch(
-        new RegExp(
-          `^ {10}${variable}: \\$\\{\\{ runner\\.os != 'Windows' && '1' \\|\\| '0' \\}\\}$`,
-          "m",
-        ),
-      );
+      expect(windows).toContain(leg);
+    expect(ciJob("check")).toContain("part: [all]");
+    const condition = (run: string) =>
+      steps()
+        .filter((step) => step.includes(run))
+        .map((step) => /^ {6}- if: (.+)$/m.exec(step)?.[1]);
+    expect(condition("run: npm test\n")).toEqual(["matrix.part == 'all'"]);
+    const shard = 'run: cmd /d /c "npm test -- --shard=${{ matrix.shard }}"';
+    expect(condition(shard)).toEqual(["matrix.part == 'unit'"]);
+    for (const run of [
+      "run: npm run check:budgets",
+      "run: npm run test:compatibility",
+    ])
+      expect(condition(run), run).toEqual(["matrix.part != 'unit'"]);
+  });
+
+  it("fails unless every Windows runner succeeded", () => {
+    // The whole job: nothing may make it pass on a failed, skipped, or
+    // cancelled runner, such as continue-on-error or a weaker condition.
+    expect(ciJob("check-windows").trimEnd()).toBe(
+      [
+        "",
+        "  check-windows:",
+        "    name: check (windows-latest)",
+        "    needs: [windows]",
+        "    if: always()",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        '      - run: test "$RESULT" = success',
+        "        env:",
+        "          RESULT: ${{ needs.windows.result }}",
+      ].join("\n"),
+    );
+    // A runner allowed to fail would report success to the aggregate.
+    expect(ciJob("windows")).not.toContain("continue-on-error");
+    expect(ciJob("check")).not.toContain("continue-on-error");
   });
 });
 
@@ -143,4 +215,25 @@ describe("release candidate supply-chain evidence", () => {
       "needs: [ci, codeql, portable-e2e, reference-e2e]",
     );
   });
+});
+
+// Every shard of an E2E workflow builds test releases that pass the release
+// vulnerability gate, so one early audit job stands in front of them all.
+describe("E2E vulnerability preflight", () => {
+  for (const file of ["portable-e2e", "reference-e2e"]) {
+    const text = readFileSync(
+      join(ROOT, `.github/workflows/${file}.yml`),
+      "utf8",
+    );
+    it(`${file} audits once before its shards`, () => {
+      expect(text).toContain("run: node scripts/audit-preflight.mjs");
+      const jobs =
+        file === "portable-e2e" ? ["portable"] : ["stack", "reference"];
+      for (const name of jobs)
+        expect(text).toMatch(
+          new RegExp(`\\n  ${name}:\\n    needs: preflight\\n`),
+        );
+      expect(text).toMatch(/\n  report:\n    needs: \[preflight, /);
+    });
+  }
 });

@@ -19,7 +19,23 @@ concurrency:
   group: portable-e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  # One cheap audit for all shards: the release vulnerability gate runs inside
+  # every test release, so an advisory it rejects would fail each shard
+  # separately (scripts/audit-preflight.mjs).
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.19.x
+      - run: node scripts/audit-preflight.mjs
+
   portable:
+    needs: preflight
     name: portable (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -241,7 +257,7 @@ jobs:
   # requests. Manual and Release qualification runs report in the Actions UI
   # only.
   report:
-    needs: portable
+    needs: [preflight, portable]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     permissions:

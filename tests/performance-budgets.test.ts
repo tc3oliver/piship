@@ -95,7 +95,10 @@ describe("footprint budgets", () => {
       join(ROOT, ".github", "workflows", "ci.yml"),
       "utf8",
     );
-    expect(ci).toMatch(/^ {6}- run: npm run check:budgets$/m);
+    // Every runner but a Windows unit shard (tests/ci-guards.test.ts).
+    expect(ci).toMatch(
+      /^ {6}- if: matrix\.part != 'unit'\n {8}run: npm run check:budgets$/m,
+    );
     const scripts = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"))
       .scripts as Record<string, string>;
     expect(scripts["check:budgets"]).toBe("node scripts/check-budgets.mjs");
