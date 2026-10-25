@@ -30,6 +30,7 @@ export interface McpServerConfig {
   readonly startupTimeoutMs: number;
   readonly retry: { readonly attempts: number };
   readonly required: boolean;
+  readonly parallelToolCalls?: boolean;
   readonly tools: {
     readonly allow: readonly string[];
     readonly deny: readonly string[];
@@ -232,5 +233,7 @@ export interface GovernedMcpTool {
   readonly tool: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  /** The server opted in to concurrent calls (`parallelToolCalls`). */
+  readonly parallel?: boolean;
   call(args: unknown, signal?: AbortSignal): Promise<McpToolResult>;
 }

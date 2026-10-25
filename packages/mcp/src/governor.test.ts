@@ -501,6 +501,45 @@ describe("McpGovernor over stdio", () => {
     expect(governor.health()[0]?.state).toBe("healthy");
   });
 
+  it("keeps concurrent calls apart: per-call deny, abort, and audit", async () => {
+    const { governor, audit } = harness({
+      servers: [stdioServer("docs", { parallelToolCalls: true })],
+      authorize: async (request) =>
+        request.resource === "docs:search"
+          ? { allowed: false, reason: "no search" }
+          : { allowed: true, reason: "ok" },
+    });
+    await governor.start();
+    const tools = governor.tools();
+    expect(tools.every((t) => t.parallel === true)).toBe(true);
+    const slow = tools.find((t) => t.tool === "slow");
+    const search = tools.find((t) => t.tool === "search");
+    const controller = new AbortController();
+    const aborted = slow?.call({ ms: 5000 }, controller.signal);
+    const kept = slow?.call({ ms: 200 });
+    const denied = search?.call({ query: "x" });
+    setTimeout(() => controller.abort(), 50);
+    await expect(denied).rejects.toMatchObject({ code: "MCP_DENIED" });
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    await expect(kept).resolves.toMatchObject({ text: "slept 200" });
+    expect(
+      audit
+        .filter((e) => e.event === "mcp.call")
+        .map((e) => [e.resource, (e.detail as { outcome: string }).outcome])
+        .sort(),
+    ).toEqual([
+      ["docs:slow", "cancelled"],
+      ["docs:slow", "ok"],
+    ]);
+    expect(governor.health()[0]?.state).toBe("healthy");
+  });
+
+  it("leaves a server without parallelToolCalls sequential", async () => {
+    const { governor } = harness({ servers: [stdioServer("docs")] });
+    await governor.start();
+    expect(governor.tools().some((t) => t.parallel)).toBe(false);
+  });
+
   it("redacts and bounds stderr in failure reports", async () => {
     const token = "sk-live-abcdefghijklmnop";
     const { governor } = harness({

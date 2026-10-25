@@ -1633,6 +1633,22 @@ describe("v1alpha3 MCP", () => {
       "Secrets",
     );
   });
+  it("reads parallelToolCalls, leaving it out unless true", () => {
+    expect(governance(stdio({})).mcp.servers[0]).not.toHaveProperty(
+      "parallelToolCalls",
+    );
+    expect(
+      governance(stdio({ parallelToolCalls: false })).mcp.servers[0],
+    ).not.toHaveProperty("parallelToolCalls");
+    expect(
+      governance(stdio({ parallelToolCalls: true })).mcp.servers[0]
+        ?.parallelToolCalls,
+    ).toBe(true);
+    rejects(
+      stdio({ parallelToolCalls: "yes" }),
+      "mcp.servers.docs.parallelToolCalls",
+    );
+  });
   it("accepts integer-second durations", () => {
     expect(governance(stdio({ timeout: 45 })).mcp.servers[0]?.timeoutMs).toBe(
       45000,

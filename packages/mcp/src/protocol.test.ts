@@ -108,6 +108,57 @@ describe("JSON-RPC validation", () => {
     ]);
   });
 
+  describe("concurrent requests", () => {
+    const quiet = () => memoryTransport(() => undefined);
+    const reply = (id: number, text: string) => ({
+      jsonrpc: "2.0",
+      id,
+      result: { text },
+    });
+
+    it("pairs replies by id even when the peer answers out of order", async () => {
+      const transport = quiet();
+      const client = new JsonRpcClient(transport, "srv");
+      const first = client.request("tools/call", {}, { timeoutMs: 1000 });
+      const second = client.request("tools/call", {}, { timeoutMs: 1000 });
+      transport.onMessage?.(reply(2, "second"));
+      transport.onMessage?.(reply(1, "first"));
+      await expect(first).resolves.toEqual({ text: "first" });
+      await expect(second).resolves.toEqual({ text: "second" });
+    });
+
+    it("ignores a duplicate or unknown id instead of settling another call", async () => {
+      const transport = quiet();
+      const client = new JsonRpcClient(transport, "srv");
+      const first = client.request("tools/call", {}, { timeoutMs: 1000 });
+      const second = client.request("tools/call", {}, { timeoutMs: 1000 });
+      transport.onMessage?.(reply(1, "first"));
+      transport.onMessage?.(reply(1, "forged second"));
+      transport.onMessage?.(reply(99, "unknown"));
+      await expect(first).resolves.toEqual({ text: "first" });
+      transport.onMessage?.(reply(2, "second"));
+      await expect(second).resolves.toEqual({ text: "second" });
+    });
+
+    it("drops a late reply to a cancelled call and leaves the others running", async () => {
+      const transport = quiet();
+      const client = new JsonRpcClient(transport, "srv");
+      const controller = new AbortController();
+      const cancelled = client.request(
+        "tools/call",
+        {},
+        { timeoutMs: 1000, signal: controller.signal },
+      );
+      const other = client.request("tools/call", {}, { timeoutMs: 1000 });
+      controller.abort();
+      await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+      transport.onMessage?.(reply(1, "late"));
+      expect(client.closed).toBeUndefined();
+      transport.onMessage?.(reply(2, "other"));
+      await expect(other).resolves.toEqual({ text: "other" });
+    });
+  });
+
   it("times out and sends notifications/cancelled", async () => {
     const transport = memoryTransport(() => undefined);
     const client = new JsonRpcClient(transport, "slow");

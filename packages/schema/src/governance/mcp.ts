@@ -74,6 +74,7 @@ function parseServer(
     "startupTimeout",
     "retry",
     "required",
+    "parallelToolCalls",
     "tools",
     ...(v6 ? ["exposure", "class", "httpTransport", "headers"] : []),
   ]);
@@ -248,6 +249,9 @@ function parseServer(
       ),
     },
     required: bool(server.required, `${path}.required`, false),
+    ...(bool(server.parallelToolCalls, `${path}.parallelToolCalls`, false)
+      ? { parallelToolCalls: true }
+      : {}),
     tools,
     ...v6Fields,
     ...http,
