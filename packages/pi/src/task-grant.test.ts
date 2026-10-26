@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -510,6 +511,111 @@ describe("a task grant", () => {
       undefined,
     );
     expect(realpaths).toHaveBeenCalled();
+  });
+
+  it("never covers a project configuration file, by its own path or a symlink's target", async () => {
+    const { session, workspace } = await open();
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "app.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    const surfaces = [
+      [".piship", "policy.json"],
+      [".pi", "extensions", "x.ts"],
+      [".pi", "settings.json"],
+      [".mcp.json"],
+      [".claude", "settings.json"],
+      ["sub", ".claude", "hooks", "h.sh"],
+      ["AGENTS.md"],
+    ];
+    for (const parts of surfaces)
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, ...parts),
+          channel,
+        ),
+      ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(surfaces.length);
+    mkdirSync(join(workspace, ".piship"));
+    writeFileSync(join(workspace, ".piship", "policy.json"), "[]");
+    symlinkSync(
+      join(workspace, ".piship", "policy.json"),
+      join(workspace, "notes.txt"),
+    );
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "notes.txt"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(surfaces.length + 1);
+  });
+
+  it("records one creation event for concurrent adds of one ID or past the cap", async () => {
+    const { session, workspace, events } = await open();
+    const created = async () =>
+      (await events()).filter((event) => event.event === "policy.grant_created")
+        .length;
+    const same = await Promise.allSettled([
+      session.addGrant(grant({ paths: [workspace] }, { id: "twice" })),
+      session.addGrant(grant({ paths: [workspace] }, { id: "twice" })),
+    ]);
+    expect(same.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(await created()).toBe(1);
+    for (let index = 2; index < 32; index += 1)
+      await session.addGrant(grant({ tools: [`tool-${index}`] }));
+    const last = await Promise.allSettled([
+      session.addGrant(grant({ tools: ["last"] })),
+      session.addGrant(grant({ tools: ["over"] })),
+    ]);
+    expect(last.map((result) => result.status)).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(await created()).toBe(32);
+  });
+
+  it("is not added when the session closes while its event is delivered", async () => {
+    const { session, workspace } = await open();
+    let closing: Promise<unknown> | undefined;
+    vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
+      closing = session.close();
+    });
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    await closing;
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("takes its monotonic deadline when it takes its wall-clock time, not after the audit flush", async () => {
+    const { session, workspace } = await open();
+    const start = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(start);
+    const flush = session.audit.flush.bind(session.audit);
+    vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
+      clock.mockReturnValue(start + 50_000);
+      await flush();
+    });
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    expect(session.listGrants()).toHaveLength(1);
+    clock.mockReturnValue(start + 61_000);
+    expect(session.listGrants()).toEqual([]);
   });
 
   it("records each grant still held as revoked when the session closes", async () => {

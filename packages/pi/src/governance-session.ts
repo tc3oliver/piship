@@ -44,6 +44,7 @@ import {
   type GrantAsk,
   grantCovers,
   isPathAction,
+  isProjectConfigPath,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -649,19 +650,29 @@ export class GovernanceSession {
     // A task grant approves only when one grant covers every ask of this
     // prompt; looked up after the session allow, and again once the queue
     // reaches this call, so a grant revoked or expired meanwhile does not.
+    // A project configuration file (policy, extensions, hooks, MCP) takes
+    // effect at the next start, outside this session: a grant never writes
+    // it, by its own path or the one it resolves to.
     const grantAsks = (): GrantAsk[] =>
       asks.flatMap((ask) =>
-        ask.resources.map((item) => ({
-          action: ask.action,
-          resource: item,
-          ...(isPathAction(ask.action)
-            ? { resolvedResource: realpathNearest(item) }
-            : {}),
-          keepsPrompt:
-            this.engine.keepsPrompt({ action: ask.action, resource: item }) ===
-            true,
-          effect: decision.effect,
-        })),
+        ask.resources.map((item) => {
+          const resolved = isPathAction(ask.action)
+            ? realpathNearest(item)
+            : undefined;
+          return {
+            action: ask.action,
+            resource: item,
+            ...(resolved !== undefined ? { resolvedResource: resolved } : {}),
+            keepsPrompt:
+              this.engine.keepsPrompt({
+                action: ask.action,
+                resource: item,
+              }) === true ||
+              (resolved !== undefined &&
+                (isProjectConfigPath(item) || isProjectConfigPath(resolved))),
+            effect: decision.effect,
+          };
+        }),
       );
     // No grant: no realpath or keepsPrompt work for this decision.
     const covering = () =>
@@ -1059,6 +1070,8 @@ export class GovernanceSession {
         { component: "policy" },
       );
     this.#checkGrantSlot(grant.id);
+    // Both clocks at one instant: the monotonic deadline is the same lifetime.
+    const started = performance.now();
     const limits = {
       now: Date.now(),
       maxTtlMs: GRANT_MAX_TTL_MS,
@@ -1102,39 +1115,58 @@ export class GovernanceSession {
         { component: "policy" },
       );
     this.audit.assertAvailable();
-    this.emit("policy.grant_created", {
-      policy: this.policyId,
-      detail: {
-        grant: stored.id,
-        createdBy: stored.createdBy,
-        expiresAt: stored.expiresAt,
-        ...grantScopeCounts(stored),
-      },
-    });
-    await this.audit.flush();
-    const loss = requiredAuditLoss(
-      this.audit.status(),
-      "The task grant was not added, because its audit was not recorded",
-    );
-    if (loss) throw loss;
-    // Another grant may have taken the ID or the last slot meanwhile.
+    // Reserved before its event, so a concurrent add of the same ID or past
+    // the cap is refused before it records anything.
     this.#checkGrantSlot(stored.id);
-    this.#grants.set(stored.id, {
-      grant: stored,
-      deadline: performance.now() + (Date.parse(stored.expiresAt) - limits.now),
-      uses: 0,
-    });
-    return stored;
+    this.#pendingGrants.add(stored.id);
+    try {
+      this.emit("policy.grant_created", {
+        policy: this.policyId,
+        detail: {
+          grant: stored.id,
+          createdBy: stored.createdBy,
+          expiresAt: stored.expiresAt,
+          ...grantScopeCounts(stored),
+        },
+      });
+      await this.audit.flush();
+      const loss = requiredAuditLoss(
+        this.audit.status(),
+        "The task grant was not added, because its audit was not recorded",
+      );
+      if (loss) throw loss;
+      if (this.#closed)
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "The task grant was not added, because the session ended",
+          { component: "policy" },
+        );
+      this.#grants.set(stored.id, {
+        grant: stored,
+        deadline: started + (Date.parse(stored.expiresAt) - limits.now),
+        uses: 0,
+      });
+      return stored;
+    } finally {
+      this.#pendingGrants.delete(stored.id);
+    }
   }
 
+  /** IDs of grants whose creation event is being delivered; they count toward the cap. */
+  readonly #pendingGrants = new Set<string>();
+
   #checkGrantSlot(id: string): void {
-    if (!GRANT_ID.test(id) || this.#grants.has(id))
+    if (
+      !GRANT_ID.test(id) ||
+      this.#grants.has(id) ||
+      this.#pendingGrants.has(id)
+    )
       throw new PiShipError(
         "CONFIG_INVALID",
         "A task grant needs a new ID of letters, digits, - and _",
         { component: "policy" },
       );
-    if (this.#grants.size >= MAX_GRANTS)
+    if (this.#grants.size + this.#pendingGrants.size >= MAX_GRANTS)
       throw new PiShipError(
         "CONFIG_INVALID",
         `A session holds at most ${MAX_GRANTS} task grants; revoke one first`,

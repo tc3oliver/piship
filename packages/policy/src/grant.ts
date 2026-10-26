@@ -44,6 +44,15 @@ export type GrantPlatform = "posix" | "win32";
 const GLOB_CHARS = /[*?[{]/;
 const DEFAULT_BRANCHES = ["main", "master"];
 
+/** A scope list as the matcher reads it: anything but an array grants nothing. */
+const list = <T>(value: readonly T[] | undefined): readonly T[] =>
+  Array.isArray(value) ? value : [];
+
+const SCOPE_KEYS = new Set(["paths", "tools", "mcp", "hosts", "git"]);
+
+const isStrings = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
 const flavor = (platform: GrantPlatform) =>
   platform === "win32" ? win32 : posix;
 
@@ -136,23 +145,23 @@ function askCovered(
       // Fail closed: the caller must supply the realpath.
       if (ask.resolvedResource === undefined) return false;
       const forms = [ask.resource, ask.resolvedResource];
-      return (scope.paths ?? []).some((root) =>
+      return list(scope.paths).some((root) =>
         forms.every((form) => isUnder(root, form, platform)),
       );
     }
     case "tool.execute":
-      return (scope.tools ?? []).includes(ask.resource);
+      return list(scope.tools).includes(ask.resource);
     case "mcp.tool.call":
       // Resource is `<server>:<tool>`; server ids cannot contain ":".
-      return (scope.mcp ?? []).some(({ server, tools }) =>
+      return list(scope.mcp).some(({ server, tools }) =>
         tools
-          ? tools.some((tool) => `${server}:${tool}` === ask.resource)
+          ? list(tools).some((tool) => `${server}:${tool}` === ask.resource)
           : ask.resource.startsWith(`${server}:`),
       );
     case "network.connect":
     case "web.request": {
       const hosts = hostForms(ask.resource);
-      return (scope.hosts ?? []).some((pattern) =>
+      return list(scope.hosts).some((pattern) =>
         hosts.some((host) => hostCovers(pattern, host)),
       );
     }
@@ -218,6 +227,41 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   const p = flavor(platform);
   const errors: string[] = [];
   const { scope } = grant;
+  // The shape first: the type is not checked at run time.
+  if (!scope || typeof scope !== "object" || Array.isArray(scope))
+    return ["scope is not an object"];
+  for (const key of Object.keys(scope))
+    if (!SCOPE_KEYS.has(key)) errors.push(`unknown scope kind: ${key}`);
+  for (const key of ["paths", "tools", "hosts"] as const)
+    if (scope[key] !== undefined && !isStrings(scope[key]))
+      errors.push(`scope ${key} is not a list of strings`);
+  if (
+    scope.mcp !== undefined &&
+    !(
+      Array.isArray(scope.mcp) &&
+      scope.mcp.every(
+        (entry) =>
+          entry &&
+          typeof entry.server === "string" &&
+          (entry.tools === undefined || isStrings(entry.tools)),
+      )
+    )
+  )
+    errors.push("scope mcp is not a list of servers");
+  if (
+    scope.git !== undefined &&
+    !(
+      Array.isArray(scope.git) &&
+      scope.git.every(
+        (entry) =>
+          entry &&
+          typeof entry.remote === "string" &&
+          isStrings(entry.branches),
+      )
+    )
+  )
+    errors.push("scope git is not a list of remotes");
+  if (errors.length) return errors;
 
   const expires = Date.parse(grant.expiresAt);
   if (Number.isNaN(expires)) errors.push("expiry is missing or invalid");

@@ -1118,6 +1118,47 @@ const EXTENSION_FILES: readonly {
   { relative: ".pi/agents", dimension: "agents", atRoot: false },
 ];
 
+// The whole directories these surfaces live in, so one added later is covered.
+const PROJECT_CONFIG_SURFACES: readonly (readonly string[])[] = [
+  ...new Set([
+    ".pi",
+    ".piship",
+    ".claude",
+    ".agents",
+    ...[...CANDIDATES, ...CLAUDE_SURFACES, ...EXTENSION_FILES].map(
+      ({ relative }) => relative,
+    ),
+  ]),
+].map((relative) => relative.split("/"));
+
+/**
+ * Whether `path` is, or lies inside, a project configuration surface PiShip
+ * or an extension loads (the candidates, Claude surfaces, and extension
+ * files above) in any directory: what a later start would load, so
+ * something that only approves for this session (a task grant) never
+ * covers writing it. Compared by path segment, ignoring case on macOS and
+ * Windows, and on Windows a segment's trailing dots and spaces.
+ */
+export function isProjectConfigPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const fold =
+    platform === "darwin" || platform === "win32"
+      ? (text: string) => text.toLowerCase()
+      : (text: string) => text;
+  const segments = fold(path)
+    .split(/[\\/]/)
+    .map((segment) =>
+      platform === "win32" ? segment.replace(/[. ]+$/, "") : segment,
+    );
+  return PROJECT_CONFIG_SURFACES.some((surface) =>
+    segments.some((_, start) =>
+      surface.every((part, offset) => segments[start + offset] === fold(part)),
+    ),
+  );
+}
+
 const COMPANY_APPROVED_REASON =
   "company-approved admits only distribution-approved items";
 

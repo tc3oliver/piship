@@ -21,6 +21,7 @@ import { toPosixPath } from "./glob.js";
 import {
   discoverProjectResources,
   identifyProject,
+  isProjectConfigPath,
   normalizeRemote,
   type ProjectResourceCandidate,
   parseConfigIncludes,
@@ -321,6 +322,37 @@ describe("identifyProject", () => {
     const link = join(base, `link-${counter}`);
     if (!trySymlink(root, link, "dir")) return;
     expect(identifyProject(link, trust).root).toBe(posix(root));
+  });
+});
+
+describe("isProjectConfigPath", () => {
+  it.each([
+    "/w/.piship/policy.json",
+    "/w/.piship/anything-new",
+    "/w/.pi/extensions/x.ts",
+    "/w/.pi/settings.json",
+    "/w/.mcp.json",
+    "/w/sub/.mcp.json",
+    "/w/.claude/settings.json",
+    "/w/sub/.claude/hooks/h.sh",
+    "/w/AGENTS.md",
+    "/w/CLAUDE.local.md",
+    "/w/.agents/skills/s/SKILL.md",
+  ])("is true for %s", (path) => {
+    expect(isProjectConfigPath(path, "linux")).toBe(true);
+  });
+
+  it.each(["/w/src/app.ts", "/w/pi/x", "/w/.pirate", "/w/docs/mcp.json"])(
+    "is false for %s",
+    (path) => {
+      expect(isProjectConfigPath(path, "linux")).toBe(false);
+    },
+  );
+
+  it("ignores case on macOS and Windows, and Windows trailing dots", () => {
+    expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "linux")).toBe(false);
+    expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "darwin")).toBe(true);
+    expect(isProjectConfigPath("C:\\w\\.pi.\\x.ts", "win32")).toBe(true);
   });
 });
 

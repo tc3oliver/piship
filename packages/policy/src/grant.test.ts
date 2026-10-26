@@ -366,4 +366,32 @@ describe("validateGrant", () => {
     expect(errs({ tools: ["ed*"] })).not.toEqual([]);
     expect(errs({ mcp: [{ server: "a:b" }] })).not.toEqual([]);
   });
+
+  it("refuses a scope whose shape is not the declared one", () => {
+    const loose = (scope: unknown) => errs(scope as TaskGrant["scope"]);
+    expect(loose({ tools: "bashread" })).not.toEqual([]);
+    expect(loose({ paths: "/work/proj" })).not.toEqual([]);
+    expect(loose({ hosts: [1] })).not.toEqual([]);
+    expect(loose({ mcp: [{ server: "s", tools: "t" }] })).not.toEqual([]);
+    expect(loose({ git: [{ remote: "o", branches: "feat" }] })).not.toEqual([]);
+    expect(loose({ shell: ["rm"] })).toEqual(["unknown scope kind: shell"]);
+    expect(loose(null)).toEqual(["scope is not an object"]);
+  });
+});
+
+describe("grantCovers with a scope of the wrong shape", () => {
+  it("covers nothing through a string where a list belongs", () => {
+    const loose = (scope: unknown) => grant(scope as TaskGrant["scope"]);
+    // `"bashread".includes("bash")` would match; a list compares exactly.
+    expect(
+      covers(loose({ tools: "bashread" }), [
+        ask({ action: "tool.execute", resource: "bash" }),
+      ]),
+    ).toBe(false);
+    expect(
+      covers(loose({ mcp: [{ server: "s", tools: "search-all" }] }), [
+        ask({ action: "mcp.tool.call", resource: "s:search" }),
+      ]),
+    ).toBe(false);
+  });
 });
