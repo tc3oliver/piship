@@ -16,8 +16,8 @@ schema: piship/v1
 #     configuration for themselves (see the filter below), and its user scope is
 #     moved into the distribution's state.
 #   - pi-lens installs nothing on its own.
-#   - The permission provider permits routine tools, shell and declared MCP
-#     calls without a second prompt; the explicit high-risk denies still apply.
+#   - The permission provider permits known coding tools, shell and declared
+#     MCP calls without a second prompt; unknown tools and high-risk denies stay.
 #     Its file is enforced and rewritten at every launch.
 #   - Project configuration is closed until the company declares an origin it
 #     trusts. --yolo is refused (policy.userAuto is not declared).
