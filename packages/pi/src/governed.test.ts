@@ -728,6 +728,37 @@ describe("governed built-in tools", () => {
       expect(readFileSync(join(workspace, "b.txt"), "utf8")).toBe("3");
     });
 
+    it("remembers a managed workspace rule without enabling auto mode", async () => {
+      const { session, workspace, home } = await open([], { mode: "managed" });
+      const tools = governedTools(session, workspace);
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      await run(tool(tools, "write"), { path: "first.txt", content: "1" }, ctx);
+      await run(tool(tools, "write"), { path: "second.txt", content: "2" }, ctx);
+      expect(seen).toHaveLength(1);
+      expect(readFileSync(join(workspace, "second.txt"), "utf8")).toBe("2");
+      await expect(
+        run(
+          tool(tools, "read"),
+          { path: join(home, ".ssh", "id_rsa") },
+          ctx,
+        ),
+      ).rejects.toThrow(/rule secrets/);
+      expect(seen).toHaveLength(1);
+    });
+
+    it("does not extend a managed workspace grant to project config", async () => {
+      const { session, workspace } = await open([], { mode: "managed" });
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      await run(write, { path: "ordinary.txt", content: "1" }, ctx);
+      await run(write, { path: ".mcp.json", content: "{}" }, ctx);
+      expect(seen).toHaveLength(2);
+      await run(write, { path: "another.txt", content: "2" }, ctx);
+      expect(seen).toHaveLength(2);
+    });
+
     it("lasts one session, and allow once is never remembered", async () => {
       const first = await open();
       const seen: string[][] = [];
