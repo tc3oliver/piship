@@ -734,15 +734,15 @@ describe("governed built-in tools", () => {
       const seen: string[][] = [];
       const ctx = choosing("Allow for this session", seen);
       await run(tool(tools, "write"), { path: "first.txt", content: "1" }, ctx);
-      await run(tool(tools, "write"), { path: "second.txt", content: "2" }, ctx);
+      await run(
+        tool(tools, "write"),
+        { path: "second.txt", content: "2" },
+        ctx,
+      );
       expect(seen).toHaveLength(1);
       expect(readFileSync(join(workspace, "second.txt"), "utf8")).toBe("2");
       await expect(
-        run(
-          tool(tools, "read"),
-          { path: join(home, ".ssh", "id_rsa") },
-          ctx,
-        ),
+        run(tool(tools, "read"), { path: join(home, ".ssh", "id_rsa") }, ctx),
       ).rejects.toThrow(/rule secrets/);
       expect(seen).toHaveLength(1);
     });
