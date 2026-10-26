@@ -67,7 +67,7 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
       for (const sink of status.sinks) {
         const where =
           targets.find((item) => item.id === sink.id)?.target ?? "unknown";
-        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
+        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.replayed ? `; ${sink.replayed} of them replayed from ${sink.spool}` : ""}${sink.rejected ? `; ${sink.rejected} replayed event(s) the collector refused set aside in ${sink.spool}` : ""}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
         const label = `sink ${sink.id}`;
         if (sink.required && (sink.pending > 0 || sink.dropped > 0))
           out.bad(label, detail);
@@ -84,7 +84,12 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
       if (spool.quarantined.length)
         out.bad(
           label,
-          `corrupt spool set aside in ${spool.directory}: ${spool.quarantined.join(", ")}; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl`,
+          `corrupt spool set aside in ${spool.directory}: ${spool.quarantined.join(", ")}; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl (one over the cap split into files under it)`,
+        );
+      if (spool.rejected.length)
+        out.warn(
+          label,
+          `replayed events the collector refused set aside in ${spool.directory}: ${spool.rejected.join(", ")}; never sent again; review them, then remove the file`,
         );
       if (!spool.files) continue;
       const held = `${spool.files} file(s), ${spool.bytes} bytes of undelivered events in ${spool.directory}`;

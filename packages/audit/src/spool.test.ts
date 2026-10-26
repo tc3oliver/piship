@@ -12,6 +12,7 @@ import {
   rmSync,
   statSync,
   utimesSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -50,6 +51,8 @@ interface Collector {
   received: { id: string; resource?: string }[];
   /** Status to answer non-empty batches with (the readiness probe always passes). */
   status: number;
+  /** Answers 400 to a batch holding an event with this resource. */
+  refuse?: string;
 }
 
 function collector(): Collector {
@@ -61,6 +64,12 @@ function collector(): Collector {
       if (!events.length) return new Response(null, { status: 200 });
       if (state.status !== 200)
         return new Response(null, { status: state.status });
+      if (
+        events.some(
+          (event: { resource?: string }) => event.resource === state.refuse,
+        )
+      )
+        return new Response(null, { status: 400 });
       state.received.push(...events);
       return new Response(null, { status: 200 });
     },
@@ -640,5 +649,98 @@ describe("required HTTP sink spool", () => {
     expect(readFileSync(taken, "utf8")).toBe(takenContent);
     await log.close(50);
     rmSync(taken);
+  });
+
+  it("replays a backlog of 150,000 events without passing the argument limit", async () => {
+    const file = await crashWith(["seed"]);
+    const lines: string[] = [];
+    for (let index = 0; index < 150_000; index += 1)
+      lines.push(
+        JSON.stringify({
+          schema: "piship-audit/v1",
+          id: `e${index}`,
+          event: "mcp.call",
+          time: "2026-01-01T00:00:00.000Z",
+          user: null,
+          session: null,
+          distribution: "acmecode",
+        }),
+      );
+    writeFileSync(file, `${lines.join("\n")}\n`);
+    const target = collector();
+    target.status = 503;
+    const log = await open(target, { spoolMaxBytes: 64 * 1024 * 1024 });
+    expect(log.status().sinks[0]).toMatchObject({
+      pending: 150_000,
+      replayed: 150_000,
+    });
+    await log.close(50);
+  }, 30_000);
+
+  it("sets aside a replayed event the collector keeps refusing, and goes on delivering", async () => {
+    await crashWith(["good1", "bad", "good2"]);
+    const target = collector();
+    target.refuse = "bad";
+    const log = await open(target);
+    for (let attempt = 0; attempt < 4; attempt += 1) await log.flush();
+    emit(log, "live");
+    await log.flush();
+    expect(target.received.map((event) => event.resource)).toEqual([
+      "good1",
+      "good2",
+      "live",
+    ]);
+    expect(log.status()).toMatchObject({
+      state: "ok",
+      sinks: [expect.objectContaining({ pending: 0, rejected: 1 })],
+    });
+    const [report] = auditSpools(temp, ["company"]);
+    expect(report?.rejected).toHaveLength(1);
+    const rejected = join(
+      temp,
+      report?.directory as string,
+      report?.rejected[0] as string,
+    );
+    expect(readFileSync(rejected, "utf8")).toContain('"bad"');
+    if (posix) expect(statSync(rejected).mode & 0o777).toBe(0o600);
+    await log.close();
+  });
+
+  it("keeps retrying a replayed event the collector answers 429 or 5xx", async () => {
+    await crashWith(["later"]);
+    const target = collector();
+    target.status = 429;
+    const log = await open(target);
+    for (let attempt = 0; attempt < 4; attempt += 1) await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 1 });
+    expect(log.status().sinks[0]).not.toHaveProperty("rejected");
+    target.status = 200;
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual(["later"]);
+  });
+
+  it("counts against maxEvents again once the replayed events are delivered", async () => {
+    await crashWith(["r1", "r2", "r3"]);
+    const target = collector();
+    const log = await open(target, { config: config(true, 2) });
+    await log.flush();
+    expect(target.received).toHaveLength(3);
+    target.status = 503;
+    for (const resource of ["n1", "n2", "n3"]) emit(log, resource);
+    expect(log.status().sinks[0]).toMatchObject({ pending: 2, dropped: 1 });
+    await log.close(50);
+  });
+
+  it("treats a claimed spool deleted before it is read as empty", async () => {
+    await crashWith(["swept"]);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.mocked(renameSync).mockImplementationOnce((from, to) => {
+      actual.renameSync(from, to);
+      actual.rmSync(to);
+    });
+    const target = collector();
+    const log = await open(target);
+    await log.close();
+    expect(target.received).toEqual([]);
   });
 });

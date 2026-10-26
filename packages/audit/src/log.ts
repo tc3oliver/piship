@@ -88,6 +88,12 @@ export interface AuditSinkStatus {
   readonly pending: number;
   /** Redacted description of the most recent delivery failure. */
   readonly lastError?: string;
+  /** Of `pending`, events replayed from crashed processes' spools. */
+  readonly replayed?: number;
+  /** Replayed events the collector kept refusing, set aside as rejected. */
+  readonly rejected?: number;
+  /** The sink's spool directory under the state directory, when either is set. */
+  readonly spool?: string;
 }
 
 export interface AuditStatus {
@@ -574,9 +580,15 @@ export const AUDIT_SPOOL_LEASE_MS = 10 * 60_000;
 const SPOOL_HEARTBEAT_MS = 60_000;
 /**
  * Spool files this process owns. Any other file named with this process's ID
- * belongs to an earlier process that had the same ID and is gone.
+ * belongs to an earlier process that had the same ID and is gone. Shared
+ * through globalThis, so a second bundled copy of this module sees it too.
  */
-const ownedSpools = new Set<string>();
+const OWNED_SPOOLS = Symbol.for("piship.audit.ownedSpools");
+const registry = globalThis as { [OWNED_SPOOLS]?: Set<string> };
+registry[OWNED_SPOOLS] ??= new Set<string>();
+const ownedSpools = registry[OWNED_SPOOLS];
+/** 4xx refusals of the same replayed event before it is set aside as rejected. */
+const REPLAY_REFUSALS = 3;
 
 /** `<pid>-<host id>-<random>`, the owner a spool file is named after. */
 function ownerToken(): string {
@@ -616,6 +628,7 @@ const NONBLOCK = constants.O_NONBLOCK ?? 0;
  * `id`, which the collector de-duplicates) but never lose one it had taken in.
  */
 class HttpSpool {
+  readonly key: string;
   readonly directory: string;
   readonly path: string;
   #size = 0;
@@ -627,11 +640,8 @@ class HttpSpool {
     sinkId: string,
     readonly maxBytes: number,
   ) {
-    this.directory = join(
-      stateDir,
-      AUDIT_SPOOL_DIRECTORY,
-      auditSpoolKey(sinkId),
-    );
+    this.key = auditSpoolKey(sinkId);
+    this.directory = join(stateDir, AUDIT_SPOOL_DIRECTORY, this.key);
     this.path = join(this.directory, `${ownerToken()}.jsonl`);
   }
 
@@ -700,7 +710,7 @@ class HttpSpool {
       const events: AuditEvent[] = [];
       const corrupt = new Set<string>();
       for (const { path } of claimed) {
-        const spool = readSpool(path, this.maxBytes);
+        const spool = readSpool(path);
         if (spool.corrupt) corrupt.add(path);
         for (const event of spool.events)
           if (!ids.has(event.id as string)) {
@@ -726,7 +736,7 @@ class HttpSpool {
         .sort();
       if (quarantined.length)
         throw new Error(
-          `${this.directory} holds a spool set aside as corrupt or over the cap, ${quarantined.join(", ")}; its valid events are kept but not sent while it is there; remove it, or repair it and rename it back to .jsonl`,
+          `${this.directory} holds a spool set aside as corrupt or over the cap, ${quarantined.join(", ")}; its valid events are kept but not sent while it is there; remove it, or repair it and rename it back to .jsonl (one over the cap, ${this.maxBytes} bytes, split into files under it)`,
         );
       return events;
     } catch (error) {
@@ -828,6 +838,31 @@ class HttpSpool {
       throw new Error(`audit spool is full (${this.maxBytes} bytes)`);
   }
 
+  /**
+   * Set aside an event the collector keeps refusing in `<spool>.rejected`
+   * (0600, at most the cap), never to be sent again. Throws when it cannot be
+   * written or is full; the event then stays queued.
+   */
+  reject(event: AuditEvent): void {
+    const path = `${this.path}.rejected`;
+    const line = `${JSON.stringify(event)}\n`;
+    const fd = openSync(
+      path,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (fstatSync(fd).size + Buffer.byteLength(line, "utf8") > this.maxBytes)
+        throw new Error(
+          `audit spool rejected file is full (${this.maxBytes} bytes)`,
+        );
+      writeFileSync(fd, line, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
   /** At close: delete the spool when `queue` is empty, else leave it holding `queue` for the next launch. */
   release(queue: readonly AuditEvent[]): void {
     try {
@@ -852,6 +887,8 @@ export interface AuditSpoolReport {
   readonly stale: number;
   /** Corrupt spools set aside (`*.corrupt`), by name. */
   readonly quarantined: readonly string[];
+  /** Replayed events the collector refused, set aside (`*.rejected`), by name. */
+  readonly rejected: readonly string[];
 }
 
 /**
@@ -872,16 +909,18 @@ export function auditSpools(
     let bytes = 0;
     let stale = 0;
     const quarantined: string[] = [];
+    const rejected: string[] = [];
     for (const name of safeReaddir(join(root, key)).sort()) {
       const entry = lstatSync(join(root, key, name), { throwIfNoEntry: false });
       if (!entry?.isFile()) continue;
       if (name.endsWith(".corrupt")) quarantined.push(name);
+      if (name.endsWith(".rejected")) rejected.push(name);
       if (!name.endsWith(".jsonl")) continue;
       files += 1;
       bytes += entry.size;
       if (now - entry.mtimeMs > AUDIT_SPOOL_LEASE_MS) stale += 1;
     }
-    if (!files && !quarantined.length) continue;
+    if (!files && !quarantined.length && !rejected.length) continue;
     const sink = sinks.get(key);
     reports.push({
       directory: join(AUDIT_SPOOL_DIRECTORY, key),
@@ -890,6 +929,7 @@ export function auditSpools(
       bytes,
       stale,
       quarantined,
+      rejected,
     });
   }
   return reports;
@@ -936,6 +976,18 @@ function claimRename(from: string, to: string): boolean {
   }
 }
 
+/** A 4xx answer other than 408 and 429: the collector will not take the batch as it is. */
+function refused(error: unknown): boolean {
+  const status = (error as { status?: unknown }).status;
+  return (
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  );
+}
+
 /** Content of a replayed event, filtered again by the current `audit.capture`. */
 function withCapture(event: AuditEvent, capture: AuditCapture): AuditEvent {
   if (!event.content) return event;
@@ -954,17 +1006,19 @@ function withCapture(event: AuditEvent, capture: AuditCapture): AuditEvent {
  * Any other line that is not an event, or a file that is not a regular file,
  * makes the spool corrupt; its valid lines are still returned.
  */
-function readSpool(
-  path: string,
-  maxBytes: number,
-): { events: AuditEvent[]; corrupt: boolean } {
-  const fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+function readSpool(path: string): { events: AuditEvent[]; corrupt: boolean } {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (error) {
+    // Deleted since it was claimed (a sweep run by another release): empty.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { events: [], corrupt: false };
+    throw error;
+  }
   let text: string;
   try {
-    const stat = fstatSync(fd);
-    // Grown past the cap since it was listed: set aside unread too.
-    if (!stat.isFile() || stat.size > maxBytes)
-      return { events: [], corrupt: true };
+    if (!fstatSync(fd).isFile()) return { events: [], corrupt: true };
     text = readFileSync(fd, "utf8");
   } finally {
     closeSync(fd);
@@ -1035,7 +1089,10 @@ export class HttpSinkWriter implements AuditSink {
     });
     await response.body?.cancel().catch(() => undefined);
     if (response.status < 200 || response.status > 299)
-      throw new Error(`collector answered HTTP ${response.status}`);
+      throw Object.assign(
+        new Error(`collector answered HTTP ${response.status}`),
+        { status: response.status },
+      );
   }
 }
 
@@ -1089,6 +1146,12 @@ class Sink {
   spoolFailed = false;
   /** Replayed events still at the head of `queue`: not counted against `maxEvents`. */
   replayed = 0;
+  /** Events per batch: narrowed while the collector refuses a replayed batch. */
+  batchLimit = BATCH_LIMIT;
+  /** The replayed head event the collector refused, and how many times in a row. */
+  refusedId: string | undefined;
+  refusals = 0;
+  rejected = 0;
 
   constructor(
     readonly config: AuditSinkConfig,
@@ -1106,6 +1169,11 @@ class Sink {
       dropped: this.dropped,
       pending: this.queue.length,
       ...(this.lastError ? { lastError: this.lastError } : {}),
+      ...(this.replayed ? { replayed: this.replayed } : {}),
+      ...(this.rejected ? { rejected: this.rejected } : {}),
+      ...(this.spool && (this.replayed || this.rejected)
+        ? { spool: join(AUDIT_SPOOL_DIRECTORY, this.spool.key) }
+        : {}),
     };
   }
 
@@ -1281,7 +1349,7 @@ export class AuditLog implements AuditEmitter {
     );
     throw new PiShipError(
       "AUDIT_UNAVAILABLE",
-      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and ${sink?.spoolFailed ? "its audit spool cannot keep its events" : "the audit buffer is full"}`,
+      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and ${sink?.spoolFailed ? "its audit spool cannot keep its events" : "the audit buffer is full"}${sink?.replayed && sink.spool ? `, holding ${sink.replayed} event(s) replayed from ${sink.spool.directory}` : ""}`,
       {
         component: "audit",
         userAction:
@@ -1386,9 +1454,9 @@ export class AuditLog implements AuditEmitter {
       } catch (error) {
         this.#spoolFailure(sink, error);
       }
-    let delivered = false;
+    let changed = false;
     while (remaining > 0) {
-      const batch = sink.queue.slice(0, Math.min(remaining, BATCH_LIMIT));
+      const batch = sink.queue.slice(0, Math.min(remaining, sink.batchLimit));
       try {
         if (!sink.writer) throw new Error(sink.lastError ?? "sink is not open");
         if (this.#abort.signal.aborted) throw new Error("audit log closed");
@@ -1399,6 +1467,36 @@ export class AuditLog implements AuditEmitter {
       } catch (error) {
         sink.lastError = sink.describeError(error);
         if (sink.config.required) {
+          if (sink.replayed > 0 && refused(error)) {
+            // A replayed event the collector will not take (forged, or an
+            // older schema) must not wedge the queue: narrow the batch down
+            // to it, then set it aside once refused alone REPLAY_REFUSALS
+            // times in a row.
+            if (batch.length > 1) {
+              sink.batchLimit = Math.ceil(batch.length / 2);
+              continue;
+            }
+            const head = batch[0] as AuditEvent;
+            sink.refusals = sink.refusedId === head.id ? sink.refusals + 1 : 1;
+            sink.refusedId = head.id;
+            if (sink.refusals >= REPLAY_REFUSALS && sink.spool) {
+              try {
+                sink.spool.reject(head);
+              } catch (rejectError) {
+                this.#spoolFailure(sink, rejectError);
+                break;
+              }
+              sink.queue.splice(0, 1);
+              sink.replayed -= 1;
+              sink.rejected += 1;
+              remaining -= 1;
+              sink.refusedId = undefined;
+              sink.refusals = 0;
+              sink.batchLimit = BATCH_LIMIT;
+              changed = true;
+              continue;
+            }
+          }
           // Retain for retry; the queue bound turns sustained failure into `failed`.
           if (sink.state !== "failed") sink.state = "degraded";
           break;
@@ -1414,11 +1512,14 @@ export class AuditLog implements AuditEmitter {
       remaining -= batch.length;
       sink.state = "ok";
       sink.lastError = undefined;
-      delivered = true;
+      sink.refusedId = undefined;
+      sink.refusals = 0;
+      if (sink.replayed === 0) sink.batchLimit = BATCH_LIMIT;
+      changed = true;
     }
     // Once per flush, not per batch: a rewrite costs the whole queue (bounded
     // by the cap) and two fsyncs.
-    if (sink.spool && delivered)
+    if (sink.spool && changed)
       try {
         sink.spool.replace(sink.queue);
         sink.spoolFailed = false;
@@ -1513,7 +1614,8 @@ async function openSink(
         options.config.capture,
         options.replaySpool === true,
       );
-      sink.queue.push(...replayed);
+      // One at a time: spreading a large replay passes V8's argument limit.
+      for (const event of replayed) sink.queue.push(event);
       sink.replayed = replayed.length;
     } catch (error) {
       throw unavailable(

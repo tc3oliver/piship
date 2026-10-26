@@ -1763,6 +1763,7 @@ describe("Audit group", () => {
                 bytes: 900,
                 stale: 2,
                 quarantined: [],
+                rejected: [],
               },
               {
                 directory: "logs/audit-spool/fedcba9876543210",
@@ -1771,6 +1772,7 @@ describe("Audit group", () => {
                 bytes: 300,
                 stale: 1,
                 quarantined: ["1-a.jsonl.corrupt"],
+                rejected: ["2-b.jsonl.rejected"],
               },
             ],
           },
@@ -1783,7 +1785,10 @@ describe("Audit group", () => {
       `  ! ${"spool orphaned".padEnd(20)} 2 file(s), 900 bytes of undelivered events in logs/audit-spool/0123456789abcdef, of a sink no longer configured: never replayed; the audit retention sweep or an administrator removes them`,
     );
     expect(audit).toContain(
-      `  ✗ ${"spool siem".padEnd(20)} corrupt spool set aside in logs/audit-spool/fedcba9876543210: 1-a.jsonl.corrupt; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl`,
+      `  ✗ ${"spool siem".padEnd(20)} corrupt spool set aside in logs/audit-spool/fedcba9876543210: 1-a.jsonl.corrupt; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl (one over the cap split into files under it)`,
+    );
+    expect(audit).toContain(
+      `  ! ${"spool siem".padEnd(20)} replayed events the collector refused set aside in logs/audit-spool/fedcba9876543210: 2-b.jsonl.rejected; never sent again; review them, then remove the file`,
     );
     expect(audit).toContain(
       `  ! ${"spool siem".padEnd(20)} 1 file(s), 300 bytes of undelivered events in logs/audit-spool/fedcba9876543210; 1 not renewed for 10 minutes, replayed by the next launch that reaches the sink`,
