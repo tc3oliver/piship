@@ -23,6 +23,18 @@ import type { TaskGrant } from "@piship/policy";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 
+const realpaths = vi.hoisted(() => vi.fn());
+vi.mock("@piship/sandbox", async (actual) => {
+  const sandbox = await actual<typeof import("@piship/sandbox")>();
+  return {
+    ...sandbox,
+    realpathNearest: (path: string) => {
+      realpaths(path);
+      return sandbox.realpathNearest(path);
+    },
+  };
+});
+
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
 afterEach(async () => {
@@ -108,7 +120,7 @@ async function open(setup: Setup = {}) {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as AuditEvent);
-  return { session, workspace, home, stateDir, options, raw, events };
+  return { session, workspace, home, stateDir, dir, options, raw, events };
 }
 
 /** A prompt that counts how often it is shown, and approves once. */
@@ -167,7 +179,7 @@ describe("a task grant", () => {
   it("approves an ask inside its scope without a prompt, and counts each use", async () => {
     const { session, workspace } = await open();
     const { shown, channel } = counted();
-    const added = session.addGrant(grant({ paths: [workspace] }));
+    const added = await session.addGrant(grant({ paths: [workspace] }));
     for (const name of ["a.txt", "b.txt"])
       expect(
         await session.decide(
@@ -187,7 +199,7 @@ describe("a task grant", () => {
 
   it("is counted as grant in local metrics, not as auto, and shows no dialog", async () => {
     const { session, workspace } = await open();
-    session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ paths: [workspace] }));
     await session.decide(
       "filesystem.write",
       join(workspace, "a.txt"),
@@ -200,7 +212,7 @@ describe("a task grant", () => {
 
   it("never approves a deny", async () => {
     const { session, workspace } = await open();
-    session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ paths: [workspace] }));
     expect(
       await session.decide(
         "filesystem.write",
@@ -213,7 +225,7 @@ describe("a task grant", () => {
   it("never approves an ask that keeps its prompt", async () => {
     const { session, workspace } = await open();
     const { shown, channel } = counted();
-    session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ paths: [workspace] }));
     expect(
       await session.decide(
         "filesystem.write",
@@ -234,11 +246,11 @@ describe("a task grant", () => {
       );
     // The path is covered, the tool ask is not: one grant per scope kind
     // does not add up to one that covers both.
-    const paths = session.addGrant(grant({ paths: [workspace] }));
-    session.addGrant(grant({ tools: ["write"] }));
+    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ tools: ["write"] }));
     expect(await combined("a.txt")).toMatchObject({ approval: "approved" });
     expect(shown.count).toBe(1);
-    const both = session.addGrant(
+    const both = await session.addGrant(
       grant({ paths: [workspace], tools: ["write"] }),
     );
     expect(await combined("b.txt")).toMatchObject({
@@ -254,8 +266,8 @@ describe("a task grant", () => {
   it("uses the first grant that covers, and the next once it is revoked", async () => {
     const { session, workspace } = await open();
     const sub = join(workspace, "sub");
-    const wide = session.addGrant(grant({ paths: [workspace] }));
-    const narrow = session.addGrant(grant({ paths: [sub] }));
+    const wide = await session.addGrant(grant({ paths: [workspace] }));
+    const narrow = await session.addGrant(grant({ paths: [sub] }));
     const target = join(sub, "a.txt");
     expect(
       await session.decide("filesystem.write", target, undefined),
@@ -277,7 +289,7 @@ describe("a task grant", () => {
 
   it("does not approve once it has expired", async () => {
     const { session, workspace } = await open();
-    session.addGrant(
+    await session.addGrant(
       grant(
         { paths: [workspace] },
         { expiresAt: new Date(Date.now() + 60_000).toISOString() },
@@ -311,7 +323,7 @@ describe("a task grant", () => {
       first.channel,
     );
     await first.asked;
-    const added = session.addGrant(grant({ paths: [workspace] }));
+    const added = await session.addGrant(grant({ paths: [workspace] }));
     first.release("approved");
     await open1;
     expect(await queued1).toMatchObject({
@@ -334,7 +346,9 @@ describe("a task grant", () => {
       second.channel,
     );
     await second.asked;
-    session.revokeGrant(session.addGrant(grant({ paths: [workspace] })).id);
+    session.revokeGrant(
+      (await session.addGrant(grant({ paths: [workspace] }))).id,
+    );
     second.release("approved");
     await open2;
     expect(await queued2).toMatchObject({ approval: "approved" });
@@ -353,7 +367,7 @@ describe("a task grant", () => {
       third.channel,
     );
     await third.asked;
-    session.addGrant(
+    await session.addGrant(
       grant(
         { paths: [workspace] },
         { expiresAt: new Date(Date.now() + 60_000).toISOString() },
@@ -368,7 +382,7 @@ describe("a task grant", () => {
 
   it("never changes what --yolo approves", async () => {
     const { session, workspace } = await open({ yolo: true });
-    session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ paths: [workspace] }));
     for (const name of ["a.txt", join("kept", "a.txt")])
       expect(
         await session.decide(
@@ -386,36 +400,133 @@ describe("a task grant", () => {
   it("is refused in a managed distribution", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     expect(session.grantsAllowed).toBe(false);
-    expect(() => session.addGrant(grant({ paths: [workspace] }))).toThrow(
-      expect.objectContaining({ code: "POLICY_DENIED" }),
-    );
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
     expect(session.listGrants()).toEqual([]);
   });
 
-  it("refuses a grant validateGrant refuses, a relative or .. root, and a taken ID", async () => {
-    const { session, workspace, home, stateDir } = await open();
+  it("refuses a grant validateGrant refuses, a relative or .. root, a taken ID, and a 33rd grant", async () => {
+    const { session, workspace, home, stateDir, dir } = await open();
     const refused = (scope: TaskGrant["scope"], overrides = {}) =>
-      expect(() => session.addGrant(grant(scope, overrides))).toThrow(
-        expect.objectContaining({ code: "CONFIG_INVALID" }),
-      );
-    refused({ paths: [home] });
-    refused({ paths: [join(stateDir, "logs")] });
-    refused({ paths: ["workspace"] });
-    refused({ paths: [`${workspace}/../workspace`] });
-    refused({ hosts: ["*.example.com"] });
-    refused(
+      expect(session.addGrant(grant(scope, overrides))).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+      });
+    await refused({ paths: [home] });
+    await refused({ paths: [join(stateDir, "logs")] });
+    // The files that define the policy: the user's rules and the distribution.
+    await refused({ paths: [join(stateDir, "config")] });
+    await refused({ paths: [dir] });
+    await refused({ paths: ["workspace"] });
+    await refused({ paths: [`${workspace}/../workspace`] });
+    await refused({ hosts: ["*.example.com"] });
+    await refused(
       { paths: [workspace] },
       { expiresAt: new Date(Date.now() + 9 * 3600_000).toISOString() },
     );
-    refused({ paths: [workspace] }, { id: "has space" });
-    session.addGrant(grant({ paths: [workspace] }, { id: "taken" }));
-    refused({ paths: [workspace] }, { id: "taken" });
+    await refused({ paths: [workspace] }, { id: "has space" });
+    await session.addGrant(grant({ paths: [workspace] }, { id: "taken" }));
+    await refused({ paths: [workspace] }, { id: "taken" });
+    for (let index = 1; index < 32; index += 1)
+      await session.addGrant(grant({ tools: [`tool-${index}`] }));
+    expect(session.listGrants()).toHaveLength(32);
+    await refused({ tools: ["one-more"] });
+  });
+
+  it("cannot be widened through the object it was given or the one it returns", async () => {
+    const { session, workspace } = await open();
+    const input = grant({ paths: [join(workspace, "sub")], tools: ["read"] });
+    const added = await session.addGrant(input);
+    (input.scope.paths as string[]).push(workspace);
+    (input.scope.tools as string[]).push("bash");
+    expect(() => (added.scope.tools as string[]).push("bash")).toThrow(
+      TypeError,
+    );
+    expect(() => (added.scope.paths as string[]).push("/")).toThrow(TypeError);
+    const [listed] = session.listGrants();
+    if (!listed) throw new Error("no grant listed");
+    expect(() => {
+      (listed as { uses: number }).uses = 99;
+    }).toThrow(TypeError);
+    expect(() => (listed.grant.scope.tools as string[]).push("bash")).toThrow(
+      TypeError,
+    );
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+    expect(
+      await session.decide("tool.execute", "bash", undefined),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("expires on the monotonic clock even when the wall clock is set back", async () => {
+    const { session, workspace } = await open();
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    const later = performance.now() + 120_000;
+    vi.spyOn(performance, "now").mockReturnValue(later);
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("is not added when a required audit sink did not take its creation event", async () => {
+    const { session, workspace } = await open();
+    const status = session.audit.status();
+    vi.spyOn(session.audit, "status").mockReturnValue({
+      ...status,
+      sinks: [
+        ...status.sinks,
+        { id: "collector", required: true, pending: 1, dropped: 0 },
+      ],
+    } as never);
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    vi.restoreAllMocks();
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("adds no realpath work to a decision while the session holds no grant", async () => {
+    const { session, workspace } = await open();
+    realpaths.mockClear();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      undefined,
+    );
+    expect(realpaths).not.toHaveBeenCalled();
+    await session.addGrant(grant({ tools: ["other"] }));
+    realpaths.mockClear();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      undefined,
+    );
+    expect(realpaths).toHaveBeenCalled();
+  });
+
+  it("records each grant still held as revoked when the session closes", async () => {
+    const { session, workspace, events } = await open();
+    const held = await session.addGrant(grant({ paths: [workspace] }));
+    await session.close();
+    expect(
+      (await events()).find((event) => event.event === "policy.grant_revoked"),
+    ).toMatchObject({
+      detail: { grant: held.id, uses: 0, reason: "session.end" },
+    });
   });
 
   it("is audited as metadata only: never a path, host, tool, or the task label", async () => {
     const { session, workspace, events, raw } = await open();
     const canaryRoot = join(workspace, "canary-path-root");
-    const created = session.addGrant(
+    const created = await session.addGrant(
       grant({
         paths: [canaryRoot],
         hosts: ["canary-host.example"],
@@ -428,7 +539,7 @@ describe("a task grant", () => {
       undefined,
     );
     session.revokeGrant(created.id);
-    session.addGrant(
+    await session.addGrant(
       grant(
         { paths: [canaryRoot] },
         { id: "short", expiresAt: new Date(Date.now() + 60_000).toISOString() },
@@ -477,7 +588,7 @@ describe("a task grant", () => {
 
   it("is not seen by a subagent child, even when it asks to be inherited", async () => {
     const { session, workspace, options } = await open();
-    session.addGrant(
+    await session.addGrant(
       grant({ paths: [workspace] }, { inheritToSubagents: true }),
     );
     const child = await GovernanceSession.open({

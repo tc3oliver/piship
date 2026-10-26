@@ -136,6 +136,16 @@ const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
 /** A grant ID is shown to the user and recorded in audit, so it is plain. */
 const GRANT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** The most task grants one session holds at once. */
+const MAX_GRANTS = 32;
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) deepFreeze(item);
+    Object.freeze(value);
+  }
+  return value;
+}
 
 /** A grant's scope as audit metadata: the number of entries of each kind, never one of them. */
 function grantScopeCounts(grant: TaskGrant): Record<string, number> {
@@ -653,8 +663,11 @@ export class GovernanceSession {
           effect: decision.effect,
         })),
       );
+    // No grant: no realpath or keepsPrompt work for this decision.
     const covering = () =>
-      decision.effect === "ask" ? this.#coveringGrant(grantAsks()) : undefined;
+      decision.effect === "ask" && this.#grants.size > 0
+        ? this.#coveringGrant(grantAsks())
+        : undefined;
     const grantApproved = (grantId: string) => ({
       ...decision,
       outcome: "allow" as const,
@@ -1010,7 +1023,15 @@ export class GovernanceSession {
    * only, so no other session (a subagent child included) sees them; an
    * expired grant is dropped when it is next looked at.
    */
-  readonly #grants = new Map<string, { grant: TaskGrant; uses: number }>();
+  readonly #grants = new Map<
+    string,
+    {
+      readonly grant: TaskGrant;
+      /** `performance.now()` deadline: a wall clock set back does not extend it. */
+      readonly deadline: number;
+      uses: number;
+    }
+  >();
 
   /**
    * Whether this session takes task grants. A managed distribution has no
@@ -1021,25 +1042,23 @@ export class GovernanceSession {
   }
 
   /**
-   * Add a task grant, with its path roots resolved to their real paths.
-   * Throws POLICY_DENIED where grants are not allowed, and CONFIG_INVALID
-   * for an ID that is taken or not plain, or a grant `validateGrant`
-   * refuses: at most 8 hours, never the home directory or a directory
-   * containing it, nothing in the state directory, no wildcard hosts.
+   * Add a task grant, with its path roots resolved to their real paths, and
+   * return the stored copy, frozen. Throws POLICY_DENIED where grants are
+   * not allowed; CONFIG_INVALID for an ID that is taken or not plain, past
+   * 32 grants, or a grant `validateGrant` refuses: at most 8 hours, never
+   * the home directory or a directory containing it, nothing in the state
+   * or distribution directory (which hold the policy), no wildcard hosts;
+   * and, like switching auto mode on, AUDIT_UNAVAILABLE when a required sink
+   * did not take its `policy.grant_created` event, which leaves it unadded.
    */
-  addGrant(grant: TaskGrant): TaskGrant {
+  async addGrant(grant: TaskGrant): Promise<TaskGrant> {
     if (!this.grantsAllowed)
       throw new PiShipError(
         "POLICY_DENIED",
         "Task grants are not available in a managed distribution",
         { component: "policy" },
       );
-    if (!GRANT_ID.test(grant.id) || this.#grants.has(grant.id))
-      throw new PiShipError(
-        "CONFIG_INVALID",
-        "A task grant needs a new ID of letters, digits, - and _",
-        { component: "policy" },
-      );
+    this.#checkGrantSlot(grant.id);
     const limits = {
       now: Date.now(),
       maxTtlMs: GRANT_MAX_TTL_MS,
@@ -1052,25 +1071,29 @@ export class GovernanceSession {
           path: realpathNearest(this.options.stateDir),
           mode: "subtree" as const,
         },
+        {
+          path: realpathNearest(this.options.distributionDir),
+          mode: "subtree" as const,
+        },
       ],
       wildcardHosts: false,
     };
-    // The roots as given are checked first: resolving them would hide a
+    // A copy, so the caller cannot widen it after it was validated. The
+    // roots as given are checked first: resolving them would hide a
     // relative root or a `..`.
-    const given = validateGrant(grant, limits);
-    const stored: TaskGrant = given.length
-      ? grant
-      : {
-          ...grant,
-          scope: {
-            ...grant.scope,
-            ...(grant.scope.paths
-              ? {
-                  paths: grant.scope.paths.map((root) => realpathNearest(root)),
-                }
-              : {}),
+    const copy = structuredClone(grant);
+    const given = validateGrant(copy, limits);
+    const stored: TaskGrant = deepFreeze(
+      given.length || !copy.scope.paths
+        ? copy
+        : {
+            ...copy,
+            scope: {
+              ...copy.scope,
+              paths: copy.scope.paths.map((root) => realpathNearest(root)),
+            },
           },
-        };
+    );
     const errors = given.length ? given : validateGrant(stored, limits);
     if (errors.length)
       throw new PiShipError(
@@ -1078,14 +1101,45 @@ export class GovernanceSession {
         `The task grant was refused: ${errors.join("; ")}`,
         { component: "policy" },
       );
-    this.#grants.set(stored.id, { grant: stored, uses: 0 });
-    this.#grantEvent("policy.grant_created", {
-      grant: stored.id,
-      createdBy: stored.createdBy,
-      expiresAt: stored.expiresAt,
-      ...grantScopeCounts(stored),
+    this.audit.assertAvailable();
+    this.emit("policy.grant_created", {
+      policy: this.policyId,
+      detail: {
+        grant: stored.id,
+        createdBy: stored.createdBy,
+        expiresAt: stored.expiresAt,
+        ...grantScopeCounts(stored),
+      },
+    });
+    await this.audit.flush();
+    const loss = requiredAuditLoss(
+      this.audit.status(),
+      "The task grant was not added, because its audit was not recorded",
+    );
+    if (loss) throw loss;
+    // Another grant may have taken the ID or the last slot meanwhile.
+    this.#checkGrantSlot(stored.id);
+    this.#grants.set(stored.id, {
+      grant: stored,
+      deadline: performance.now() + (Date.parse(stored.expiresAt) - limits.now),
+      uses: 0,
     });
     return stored;
+  }
+
+  #checkGrantSlot(id: string): void {
+    if (!GRANT_ID.test(id) || this.#grants.has(id))
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "A task grant needs a new ID of letters, digits, - and _",
+        { component: "policy" },
+      );
+    if (this.#grants.size >= MAX_GRANTS)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `A session holds at most ${MAX_GRANTS} task grants; revoke one first`,
+        { component: "policy" },
+      );
   }
 
   /** Remove a task grant; false when there is none with that ID. */
@@ -1103,15 +1157,13 @@ export class GovernanceSession {
     readonly uses: number;
   }[] {
     this.#expireGrants(Date.now());
-    return [...this.#grants.values()].map(({ grant, uses }) => ({
-      grant,
-      uses,
-    }));
+    return [...this.#grants.values()].map(({ grant, uses }) =>
+      Object.freeze({ grant, uses }),
+    );
   }
 
   /** The first grant, in the order they were added, that covers every ask. */
   #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
-    if (this.#grants.size === 0) return undefined;
     const now = Date.now();
     this.#expireGrants(now);
     for (const [id, { grant }] of this.#grants)
@@ -1119,9 +1171,11 @@ export class GovernanceSession {
     return undefined;
   }
 
+  /** Drop each grant past its wall-clock expiry or its monotonic deadline. */
   #expireGrants(now: number): void {
-    for (const [id, { grant, uses }] of this.#grants)
-      if (!(now < Date.parse(grant.expiresAt))) {
+    const elapsed = performance.now();
+    for (const [id, { grant, deadline, uses }] of this.#grants)
+      if (!(now < Date.parse(grant.expiresAt)) || !(elapsed < deadline)) {
         this.#grants.delete(id);
         this.#grantEvent("policy.grant_expired", { grant: id, uses });
       }
@@ -1287,6 +1341,15 @@ export class GovernanceSession {
   async close(): Promise<AuditStatus> {
     if (this.#closed) return this.audit.status();
     this.#closed = true;
+    // Every grant ends with the session; each one still held is recorded.
+    this.#expireGrants(Date.now());
+    for (const [id, { uses }] of this.#grants)
+      this.#grantEvent("policy.grant_revoked", {
+        grant: id,
+        uses,
+        reason: "session.end",
+      });
+    this.#grants.clear();
     this.emit("session.end");
     let status: AuditStatus | undefined;
     try {

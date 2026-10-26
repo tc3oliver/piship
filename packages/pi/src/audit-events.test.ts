@@ -346,12 +346,12 @@ describe("governed session audit events (real flows)", () => {
       scope: { tools: ["granted-tool"] },
       inheritToSubagents: false,
     });
-    session.addGrant(grant("used", 3_600_000));
+    await session.addGrant(grant("used", 3_600_000));
     expect(
       await session.decide("tool.execute", "granted-tool", undefined),
     ).toMatchObject({ approval: "grant" });
     session.revokeGrant("used");
-    session.addGrant(grant("expires", 60_000));
+    await session.addGrant(grant("expires", 60_000));
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
     expect(session.listGrants()).toEqual([]);
