@@ -67,10 +67,10 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
   },
   {
     condition:
-      "the collector refuses a replayed event (4xx other than 408 and 429)",
+      "the collector refuses a replayed event (400, 413, or 422) and takes others",
     sink: "required",
     behavior:
-      "the batch is narrowed to that event, which after three refusals in a row moves to <spool>.jsonl.rejected and is never sent again; other failures keep it queued",
+      "the batch is narrowed to that event, which after three refusals in a row, once the collector takes another event alone, moves to <spool>.jsonl.rejected and is never sent again; a collector refusing everything, any other 4xx, and 5xx keep it queued",
     logState: "degraded",
     governedActions: "continue",
   },

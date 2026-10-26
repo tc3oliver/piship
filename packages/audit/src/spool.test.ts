@@ -51,13 +51,17 @@ interface Collector {
   received: { id: string; resource?: string }[];
   /** Status to answer non-empty batches with (the readiness probe always passes). */
   status: number;
-  /** Answers 400 to a batch holding an event with this resource. */
+  /** Answers `refuseStatus` (400) to a batch holding an event with this resource. */
   refuse?: string;
+  refuseStatus?: number;
+  /** Size of every batch the collector took. */
+  sizes: number[];
 }
 
 function collector(): Collector {
   const state: Collector = {
     received: [],
+    sizes: [],
     status: 200,
     fetch: async (_url, init) => {
       const { events } = JSON.parse(String(init?.body));
@@ -69,8 +73,9 @@ function collector(): Collector {
           (event: { resource?: string }) => event.resource === state.refuse,
         )
       )
-        return new Response(null, { status: 400 });
+        return new Response(null, { status: state.refuseStatus ?? 400 });
       state.received.push(...events);
+      state.sizes.push(events.length);
       return new Response(null, { status: 200 });
     },
   };
@@ -742,5 +747,63 @@ describe("required HTTP sink spool", () => {
     const log = await open(target);
     await log.close();
     expect(target.received).toEqual([]);
+  });
+  it.each([401, 403, 404, 409])(
+    "never sets replayed events aside on HTTP %i, which says nothing about them",
+    async (status) => {
+      await crashWith(["a", "b"]);
+      const target = collector();
+      // Only batches holding "a" fail: were that read as a refusal of "a",
+      // the others would be taken and "a" set aside.
+      target.refuse = "a";
+      target.refuseStatus = status;
+      const log = await open(target);
+      emit(log, "live");
+      for (let attempt = 0; attempt < 5; attempt += 1) await log.flush();
+      expect(log.status().sinks[0]).toMatchObject({ pending: 3 });
+      expect(log.status().sinks[0]).not.toHaveProperty("rejected");
+      delete target.refuse;
+      await log.close();
+      expect(target.received).toHaveLength(3);
+    },
+  );
+
+  it("never drains the backlog into the rejected file when the collector refuses everything with 400", async () => {
+    await crashWith(["a", "b"]);
+    const target = collector();
+    target.status = 400;
+    const log = await open(target);
+    emit(log, "live");
+    for (let attempt = 0; attempt < 6; attempt += 1) await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 3 });
+    expect(log.status().sinks[0]).not.toHaveProperty("rejected");
+    expect(auditSpools(temp, ["company"])[0]?.rejected).toEqual([]);
+    await log.close(50);
+  });
+
+  it("keeps a live event the collector refuses with 400 queued", async () => {
+    const target = collector();
+    const log = await open(target);
+    target.refuse = "live";
+    emit(log, "live");
+    emit(log, "other");
+    for (let attempt = 0; attempt < 5; attempt += 1) await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 2 });
+    expect(log.status().sinks[0]).not.toHaveProperty("rejected");
+    await log.close(50);
+  });
+
+  it("sends whole batches again once a refused replayed event is set aside", async () => {
+    const good = Array.from({ length: 9 }, (_, index) => `g${index}`);
+    await crashWith(["bad", ...good]);
+    const target = collector();
+    target.refuse = "bad";
+    const log = await open(target);
+    for (let attempt = 0; attempt < 4; attempt += 1) await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 0, rejected: 1 });
+    expect(target.received).toHaveLength(9);
+    // The probe took g8 alone; the rest went in one batch.
+    expect(target.sizes.at(-1)).toBe(8);
+    await log.close();
   });
 });

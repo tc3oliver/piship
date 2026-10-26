@@ -976,16 +976,14 @@ function claimRename(from: string, to: string): boolean {
   }
 }
 
-/** A 4xx answer other than 408 and 429: the collector will not take the batch as it is. */
+/**
+ * 400, 413, or 422: the collector will not take what the batch holds. Any
+ * other 4xx (401, 403, 404, ...) says nothing about the events, and is
+ * retried like a 5xx.
+ */
 function refused(error: unknown): boolean {
   const status = (error as { status?: unknown }).status;
-  return (
-    typeof status === "number" &&
-    status >= 400 &&
-    status < 500 &&
-    status !== 408 &&
-    status !== 429
-  );
+  return status === 400 || status === 413 || status === 422;
 }
 
 /** Content of a replayed event, filtered again by the current `audit.capture`. */
@@ -1471,7 +1469,7 @@ export class AuditLog implements AuditEmitter {
             // A replayed event the collector will not take (forged, or an
             // older schema) must not wedge the queue: narrow the batch down
             // to it, then set it aside once refused alone REPLAY_REFUSALS
-            // times in a row.
+            // times in a row while the collector takes another event.
             if (batch.length > 1) {
               sink.batchLimit = Math.ceil(batch.length / 2);
               continue;
@@ -1480,6 +1478,19 @@ export class AuditLog implements AuditEmitter {
             sink.refusals = sink.refusedId === head.id ? sink.refusals + 1 : 1;
             sink.refusedId = head.id;
             if (sink.refusals >= REPLAY_REFUSALS && sink.spool) {
+              // The last event of this flush, alone: a collector that
+              // refuses it too refuses everything (misconfigured, not this
+              // event), and the head stays queued.
+              const probe = sink.queue[remaining - 1] as AuditEvent;
+              if (remaining < 2 || !(await this.#deliverAlone(sink, probe))) {
+                if (sink.state !== "failed") sink.state = "degraded";
+                break;
+              }
+              sink.queue.splice(remaining - 1, 1);
+              if (remaining - 1 < sink.replayed) sink.replayed -= 1;
+              sink.delivered += 1;
+              remaining -= 1;
+              changed = true;
               try {
                 sink.spool.reject(head);
               } catch (rejectError) {
@@ -1514,7 +1525,8 @@ export class AuditLog implements AuditEmitter {
       sink.lastError = undefined;
       sink.refusedId = undefined;
       sink.refusals = 0;
-      if (sink.replayed === 0) sink.batchLimit = BATCH_LIMIT;
+      // Widen again after narrowing down to a refused event.
+      sink.batchLimit = Math.min(BATCH_LIMIT, sink.batchLimit * 2);
       changed = true;
     }
     // Once per flush, not per batch: a rewrite costs the whole queue (bounded
@@ -1526,6 +1538,19 @@ export class AuditLog implements AuditEmitter {
       } catch (error) {
         this.#spoolFailure(sink, error);
       }
+  }
+
+  /** Send one event on its own; whether the collector took it. */
+  async #deliverAlone(sink: Sink, event: AuditEvent): Promise<boolean> {
+    try {
+      await sink.writer?.write(
+        { schema: AUDIT_BATCH_SCHEMA, events: [event] },
+        this.#abort.signal,
+      );
+      return sink.writer !== undefined;
+    } catch {
+      return false;
+    }
   }
 
   #spoolFailure(sink: Sink, error: unknown): void {
