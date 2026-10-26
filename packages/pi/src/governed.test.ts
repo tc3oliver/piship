@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   createWriteStream,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -48,6 +49,7 @@ import {
   GOVERNED_READ_LIMIT_BYTES,
   governedBashOperations,
   governedTools,
+  isProtectedDirectoryPath,
   isProtectedGitPath,
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
@@ -499,6 +501,60 @@ describe("governed built-in tools", () => {
       "utf8",
     );
     expect(audit).toContain('"rule":"piship.project.git-config"');
+  });
+
+  it("compares protected directories without case where the filesystem ignores it", () => {
+    const dirs = ["/ws/.claude"];
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(
+        isProtectedDirectoryPath(
+          dirs,
+          ["/ws/.CLAUDE/settings.json"],
+          false,
+          platform,
+        ),
+      ).toBe(true);
+      expect(
+        isProtectedDirectoryPath(dirs, ["/ws/.Claude"], false, platform),
+      ).toBe(true);
+    }
+    expect(
+      isProtectedDirectoryPath(
+        dirs,
+        ["/ws/.CLAUDE/settings.json"],
+        false,
+        "linux",
+      ),
+    ).toBe(false);
+    expect(
+      isProtectedDirectoryPath(
+        dirs,
+        ["/ws/.claude/settings.json"],
+        false,
+        "linux",
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedDirectoryPath(dirs, ["/ws/src/a.ts"], false, "darwin"),
+    ).toBe(false);
+  });
+
+  it("refuses to write a file that has another hard link, but not an ordinary or new one", async () => {
+    const { session, workspace, home } = await open();
+    const write = tool(governedTools(session, workspace), "write");
+    const approve = context(true);
+    const outside = join(home, "rc");
+    writeFileSync(outside, "keep\n");
+    linkSync(outside, join(workspace, "rc"));
+    await expect(
+      run(write, { path: "rc", content: "attacker" }, approve),
+    ).rejects.toThrow(/hard link/);
+    expect(readFileSync(outside, "utf8")).toBe("keep\n");
+    writeFileSync(join(workspace, "plain.txt"), "old");
+    await run(write, { path: "plain.txt", content: "new" }, approve);
+    await run(write, { path: "fresh.txt", content: "new" }, approve);
+    expect(readFileSync(join(workspace, "plain.txt"), "utf8")).toBe("new");
+    expect(readFileSync(join(workspace, "fresh.txt"), "utf8")).toBe("new");
   });
 
   it("compares protected git paths without case where the filesystem ignores it", () => {

@@ -228,17 +228,39 @@ function builtinDenial(
       gov.sandbox.profile.homeDir,
     );
     if (
-      posix.some((path) =>
-        protection.directories.some(
-          (dir) =>
-            isWithinPosix(toPosixPath(dir), path) ||
-            (!existingDirectory && isWithinPosix(path, toPosixPath(dir))),
-        ),
-      )
+      isProtectedDirectoryPath(protection.directories, posix, existingDirectory)
     )
       return CLAUDE_CONFIG_RULE;
   }
   return undefined;
+}
+
+/**
+ * Whether one of `paths` (POSIX separators) lies in a protected directory, or
+ * is an ancestor that could be replaced by one while the directory does not
+ * exist yet. Case-insensitive where the filesystem is, like
+ * `isProtectedGitPath`.
+ */
+export function isProtectedDirectoryPath(
+  directories: readonly string[],
+  paths: readonly string[],
+  existingDirectory: boolean,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const fold =
+    platform === "darwin" || platform === "win32"
+      ? (path: string) => path.toLowerCase()
+      : (path: string) => path;
+  const dirs = directories.map((dir) => fold(toPosixPath(dir)));
+  return paths
+    .map(fold)
+    .some((path) =>
+      dirs.some(
+        (dir) =>
+          isWithinPosix(dir, path) ||
+          (!existingDirectory && isWithinPosix(path, dir)),
+      ),
+    );
 }
 
 /**
@@ -1021,6 +1043,12 @@ export function governedTools(
       constants.O_WRONLY,
     );
     try {
+      // Writing in place would change the other name of a hard-linked file,
+      // which may lie outside the workspace.
+      if ((await handle.stat()).nlink > 1)
+        throw blocked(
+          `${path} has more than one hard link; tools may not write it.`,
+        );
       await handle.truncate(0);
       await handle.writeFile(content, "utf8");
     } finally {
