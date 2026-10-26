@@ -1348,6 +1348,22 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       ).toHaveLength(1);
     });
 
+    it("recovers from transient provider failures during a live-session renewal", async () => {
+      services.knobs.tokenFaults.push({ status: 503 }, { status: 503 });
+      const credential = await session.requestSecret();
+      expect(credential?.reveal()).toBeTruthy();
+      expect(
+        services.state.requests.filter((item: { body: string }) =>
+          item.body.includes("grant_type=refresh_token"),
+        ),
+      ).toHaveLength(3);
+      expect(
+        names().filter((name) => name === "identity.refresh"),
+      ).toHaveLength(1);
+      const audit = JSON.stringify(events);
+      for (const secret of leaks()) expect(audit).not.toContain(secret);
+    });
+
     it("renews the sign-in silently and keeps the credential through an identity provider outage", async () => {
       const first = (await session.requestSecret())?.reveal();
       expect(names()).toContain("identity.refresh");
