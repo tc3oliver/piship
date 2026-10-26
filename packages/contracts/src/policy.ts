@@ -121,6 +121,7 @@ export interface ResolvedDecision extends PolicyDecision {
   /**
    * How an `ask` was resolved. `auto`: the user's auto mode, which the
    * distribution allows (`policy.userAuto`), approved it without a prompt.
+   * `grant`: a task grant (`grantId`) covered every ask without a prompt.
    */
   readonly approval?:
     | "approved"
@@ -128,7 +129,10 @@ export interface ResolvedDecision extends PolicyDecision {
     | "cancelled"
     | "unavailable"
     | "auto"
-    | "session";
+    | "session"
+    | "grant";
+  /** The task grant that approved it, with `approval: "grant"`. */
+  readonly grantId?: string;
   /**
    * What the person asked to keep: `allow` or `deny` (stored for the project,
    * personal mode only), or `session` (in memory until the session ends: the
