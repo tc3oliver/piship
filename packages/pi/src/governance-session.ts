@@ -957,12 +957,10 @@ export class GovernanceSession {
   readonly #sessionAllowed = new Map<string, number>();
 
   /**
-   * What "allow for this session" grants for one ask. Where the user owns the
-   * policy or the administrator allows auto-approval (`policy.userAuto`), an
-   * ask that one rule of the user's preferences or the distribution defaults
-   * decides on every target, that no rule keeps the prompt of, and whose
-   * pattern does not match everything, grants that rule for that action: any
-   * target it asks for next. Any other grants its exact targets.
+   * What "allow for this session" grants for one ask. A personal user or a
+   * managed distribution with auto enabled can remember a bounded rule. Without
+   * auto, managed distributions only remember explicit workspace/tmp file rules,
+   * never shell commands or executable tools. A deny or keepsPrompt still wins.
    */
   #sessionGrant(ask: ApprovalTarget): {
     key: string;
@@ -977,9 +975,25 @@ export class GovernanceSession {
       ask.resources.some((resource) => resource.includes("*"))
     )
       return exact;
+    const managedWithoutAuto =
+      this.options.lock.deployment.mode === "managed" &&
+      !this.#userAuto.allowed;
+    // Routine file scopes may be remembered in managed mode without granting
+    // arbitrary command execution or tool access for the rest of the session.
     if (
-      this.options.lock.deployment.mode !== "personal" &&
-      !this.#userAuto.allowed
+      managedWithoutAuto &&
+      ask.action !== "filesystem.read" &&
+      ask.action !== "filesystem.write"
+    )
+      return exact;
+    // Project configuration can change the agent's next launch. It never
+    // rides on a remembered workspace-wide file approval.
+    if (
+      this.options.lock.deployment.mode === "managed" &&
+      isPathAction(ask.action) &&
+      ask.resources.some((resource) =>
+        isProjectConfigPath(realpathNearest(resource)),
+      )
     )
       return exact;
     const explained = ask.resources
@@ -1008,6 +1022,15 @@ export class GovernanceSession {
         match.ruleId === first.ruleId,
     )?.resource;
     if (pattern === undefined) return exact;
+    // Only the distribution's explicit workspace/tmp scopes qualify in a
+    // managed session without auto mode. An absolute home or drive prefix
+    // could otherwise make a single file approval cover unrelated paths.
+    if (
+      managedWithoutAuto &&
+      (first.layer !== "distribution-default" ||
+        !/^(workspace|tmp)(\/|$)/.test(pattern))
+    )
+      return exact;
     const pathAction = isPathAction(ask.action);
     if (
       !hasLiteralPrefix(
