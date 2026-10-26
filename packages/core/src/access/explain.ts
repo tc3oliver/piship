@@ -94,6 +94,25 @@ function governanceRows(
           ),
         ]
       : []),
+    ...(policy.taskGrants
+      ? [
+          row(
+            "policy.taskGrants",
+            policy.taskGrants.mode,
+            `${[
+              policy.taskGrants.maxTtlMinutes
+                ? `ttl <= ${policy.taskGrants.maxTtlMinutes} min`
+                : "no ttl cap",
+              policy.taskGrants.actions
+                ? `actions ${policy.taskGrants.actions.join(", ")}`
+                : "any action",
+              policy.taskGrants.wildcardHosts
+                ? "wildcard hosts allowed"
+                : "no wildcard hosts",
+            ].join("; ")}`,
+          ),
+        ]
+      : []),
     row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
     ...mcp.servers.flatMap((server) => [
       ...(server.transport === "streamable-http"
