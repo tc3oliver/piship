@@ -97,6 +97,7 @@ const idParameter = {
 export function taskTools(
   gov: GovernanceSession,
   cwd: string,
+  platform: NodeJS.Platform = process.platform,
 ): ToolDefinition[] {
   const tasks = sessionTasks(gov);
   const unknown = (id: string) => {
@@ -141,7 +142,7 @@ export function taskTools(
         const enforced = gov.sandbox.report.level === "enforced";
         // Uncontained, the sandbox runs cmd.exe on Windows while the bash
         // tool runs Pi's bash, whose syntax the command checks assume.
-        if (!enforced && process.platform === "win32")
+        if (!enforced && platform === "win32")
           throw blocked(
             "Background tasks need an enforced sandbox on Windows, where an uncontained task would run in cmd.exe rather than the shell the bash tool uses. Use bash instead.",
           );

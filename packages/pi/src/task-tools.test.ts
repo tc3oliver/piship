@@ -21,6 +21,14 @@ import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
+import { taskTools } from "./task-tools.js";
+
+/**
+ * Whether a task can start on this host. Windows refuses a task without an
+ * enforced sandbox (asserted below on every host), and these unit sessions
+ * have none there, so the cases that run one are POSIX only.
+ */
+const tasksRun = process.platform !== "win32";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -141,7 +149,7 @@ const text = (result: unknown) =>
   (result as { content: { text: string }[] }).content[0]?.text ?? "";
 
 describe("task_start decides a command as bash does", () => {
-  it.each([
+  it.runIf(tasksRun).each([
     ["an allowed command", "echo hi", undefined, "ok"],
     ["a denied command", "rm -rf x", true, "not allowed by unit@1 rule no-rm"],
     ["an ask, approved", "true", true, "ok"],
@@ -162,42 +170,48 @@ describe("task_start decides a command as bash does", () => {
     expect(counts[0]).toBeLessThanOrEqual(1);
   });
 
-  it("is refused in Plan mode, as bash is, while reading and stopping a task are not", async () => {
-    const { session, call } = await open();
-    const started = await call("task_start")(
-      { command: "sleep 30" },
-      context().ctx,
-    );
-    const id = (started as { details: { id: string } }).details.id;
-    session.workflowMode = "plan";
-    for (const tool of ["bash", "task_start"])
-      expect(
-        await outcome(call(tool)({ command: "echo hi" }, context(true).ctx)),
-      ).toMatch(/Plan mode/);
-    expect(text(await call("task_output")({ id }, context().ctx))).toContain(
-      ": running",
-    );
-    expect(text(await call("task_stop")({ id }, context().ctx))).toContain(
-      ": stopped",
-    );
-  });
+  it.runIf(tasksRun)(
+    "is refused in Plan mode, as bash is, while reading and stopping a task are not",
+    async () => {
+      const { session, call } = await open();
+      const started = await call("task_start")(
+        { command: "sleep 30" },
+        context().ctx,
+      );
+      const id = (started as { details: { id: string } }).details.id;
+      session.workflowMode = "plan";
+      for (const tool of ["bash", "task_start"])
+        expect(
+          await outcome(call(tool)({ command: "echo hi" }, context(true).ctx)),
+        ).toMatch(/Plan mode/);
+      expect(text(await call("task_output")({ id }, context().ctx))).toContain(
+        ": running",
+      );
+      expect(text(await call("task_stop")({ id }, context().ctx))).toContain(
+        ": stopped",
+      );
+    },
+  );
 
-  it("is covered by a task grant that covers the command, with no prompt", async () => {
-    const { session, workspace, call } = await open();
-    await session.addGrant({
-      id: "g1",
-      task: "",
-      createdBy: "user-command",
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      scope: { paths: [workspace], commands: ["true"] },
-      inheritToSubagents: false,
-    });
-    for (const tool of ["bash", "task_start"]) {
-      const { ctx, prompts } = context(false);
-      expect(await outcome(call(tool)({ command: "true" }, ctx))).toBe("ok");
-      expect(prompts.count).toBe(0);
-    }
-  });
+  it.runIf(tasksRun)(
+    "is covered by a task grant that covers the command, with no prompt",
+    async () => {
+      const { session, workspace, call } = await open();
+      await session.addGrant({
+        id: "g1",
+        task: "",
+        createdBy: "user-command",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        scope: { paths: [workspace], commands: ["true"] },
+        inheritToSubagents: false,
+      });
+      for (const tool of ["bash", "task_start"]) {
+        const { ctx, prompts } = context(false);
+        expect(await outcome(call(tool)({ command: "true" }, ctx))).toBe("ok");
+        expect(prompts.count).toBe(0);
+      }
+    },
+  );
 
   it("defers its tool ask to the command's decision, as bash does", async () => {
     const { session } = await open();
@@ -207,6 +221,31 @@ describe("task_start decides a command as bash does", () => {
     expect(session.resourceTools.has("task_output")).toBe(false);
   });
 
+  it("is refused on Windows without an enforced sandbox, before any decision", async () => {
+    const { session, workspace } = await open();
+    // As every unit host without a sandbox adapter: nothing contains it.
+    (session as unknown as { sandbox: object }).sandbox = {
+      ...session.sandbox,
+      report: { ...session.sandbox.report, level: "unavailable" },
+    };
+    const start = taskTools(session, workspace, "win32").find(
+      (tool) => tool.name === "task_start",
+    ) as ToolDefinition;
+    const { ctx, prompts } = context(true);
+    expect(
+      await outcome(
+        start.execute(
+          "call-win",
+          { command: "true" } as never,
+          undefined,
+          undefined,
+          ctx,
+        ),
+      ),
+    ).toContain("Background tasks need an enforced sandbox on Windows");
+    expect(prompts.count).toBe(0);
+  });
+
   it("is not offered to a subagent child", async () => {
     const { tools } = await open({ subagent: true });
     expect(tools.map((tool) => tool.name)).not.toContain("task_start");
@@ -214,7 +253,7 @@ describe("task_start decides a command as bash does", () => {
   });
 });
 
-describe("a background task", () => {
+describe.runIf(tasksRun)("a background task", () => {
   it("returns at once with its first output, reads new output, and stops", async () => {
     const { call, events } = await open();
     const { ctx } = context();
