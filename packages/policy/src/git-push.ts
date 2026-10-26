@@ -14,9 +14,12 @@ const MAX_RESOURCES = 64;
 /** More git options than this before the subcommand count as a push to `*`. */
 const MAX_GIT_OPTIONS = 64;
 
-/** A substitution being read: `$(`, or a backtick. */
+/**
+ * A substitution being read: `$(`, a backtick, or arithmetic (`((` or
+ * `$((`), whose words are read as commands too and where `<<` is a shift.
+ */
 interface Frame {
-  readonly kind: "paren" | "backtick";
+  readonly kind: "paren" | "backtick" | "arithmetic";
   /** Unclosed `(` inside it. */
   depth: number;
   /** Whether it opened inside double quotes, and the word it interrupted. */
@@ -50,9 +53,11 @@ function simpleCommands(text: string): Scan {
   let quoted = false;
   let quoteStart = 0;
   let redirect = false;
-  // Open `((` or `$((`: inside arithmetic `<<` is a shift, not a heredoc.
-  let arithmetic = 0;
   let unterminated = "";
+  // Only the first text left unread counts; a later one may be empty.
+  const unread = (from: number) => {
+    if (!unterminated) unterminated = text.slice(from);
+  };
   const frames: Frame[] = [];
   const overflow = (): Scan => ({ commands, overflow: true, unterminated });
   const heredocs: { delimiter: string; tabs: boolean }[] = [];
@@ -104,14 +109,18 @@ function simpleCommands(text: string): Scan {
       if (char === '"') quoted = false;
       else if (char === "\\" && next !== undefined && '$`"\\'.includes(next))
         word = (word ?? "") + text[++index];
-      // `$((...))` in quotes is arithmetic, read as text.
-      else if (char === "$" && next === "(" && text[index + 2] !== "(") {
-        if (!open("paren")) return overflow();
-        index++;
+      else if (char === "$" && next === "(") {
+        const arithmetic = text[index + 2] === "(";
+        if (!open(arithmetic ? "arithmetic" : "paren")) return overflow();
+        index += arithmetic ? 2 : 1;
       } else if (char === "`") {
         if (!open("backtick")) return overflow();
       } else word = (word ?? "") + char;
-    } else if (char === "#" && word === undefined) {
+    } else if (
+      char === "#" &&
+      word === undefined &&
+      (index === 0 || /[\s;&|(]/.test(text[index - 1] as string))
+    ) {
       // A comment, to the end of the line.
       const lineEnd = text.indexOf("\n", index);
       index = (lineEnd === -1 ? text.length : lineEnd) - 1;
@@ -119,7 +128,7 @@ function simpleCommands(text: string): Scan {
       // `$'...'` keeps its backslash escapes as written.
       const start = char === "$" ? index + 2 : index + 1;
       const stop = text.indexOf("'", start);
-      if (stop === -1) unterminated = text.slice(start);
+      if (stop === -1) unread(start);
       word = (word ?? "") + text.slice(start, stop === -1 ? text.length : stop);
       index = stop === -1 ? text.length : stop;
     } else if (char === '"') {
@@ -132,11 +141,27 @@ function simpleCommands(text: string): Scan {
       (char === "$" && next === "(" && text[index + 2] === "(") ||
       (char === "(" && next === "(" && word === undefined)
     ) {
-      arithmetic++;
+      if (!open("arithmetic")) return overflow();
       index += char === "$" ? 2 : 1;
-    } else if (char === ")" && next === ")" && arithmetic > 0) {
-      arithmetic--;
-      index++;
+    } else if (char === ")" && frames.at(-1)?.kind === "arithmetic") {
+      const frame = frames.at(-1) as Frame;
+      if (frame.depth > 0) {
+        frame.depth--;
+        split();
+      } else {
+        // `))` ends it; a lone `)` does too, so it never stays open.
+        if (next === ")") index++;
+        close();
+      }
+    } else if (char === "$" && next === "{") {
+      // A parameter expansion is data unless it holds a substitution.
+      const stop = text.indexOf("}", index);
+      const body = text.slice(index, stop === -1 ? text.length : stop + 1);
+      if (/\$\(|`/.test(body)) word = (word ?? "") + char;
+      else {
+        word = (word ?? "") + body;
+        index += body.length - 1;
+      }
     } else if (char === "$" && next === "(") {
       if (!open("paren")) return overflow();
       index++;
@@ -144,7 +169,10 @@ function simpleCommands(text: string): Scan {
       const frame = frames.at(-1);
       if (frame?.kind === "backtick") close();
       else if (!open("backtick")) return overflow();
-    } else if (arithmetic > 0 && (char === "<" || char === ">")) {
+    } else if (
+      frames.at(-1)?.kind === "arithmetic" &&
+      (char === "<" || char === ">")
+    ) {
       word = (word ?? "") + char;
     } else if (char === "<" && next === "<" && text[index + 2] !== "<") {
       // A heredoc: its body, from the next line to the delimiter, is data.
@@ -188,8 +216,12 @@ function simpleCommands(text: string): Scan {
         split();
       }
     } else if (SEPARATORS.has(char)) {
-      if (char === "(" && frames.at(-1)?.kind === "paren")
-        (frames.at(-1) as Frame).depth++;
+      const frame = frames.at(-1);
+      if (
+        char === "(" &&
+        (frame?.kind === "paren" || frame?.kind === "arithmetic")
+      )
+        frame.depth++;
       split();
       if (char === "\n")
         for (const heredoc of heredocs.splice(0)) {
@@ -204,7 +236,7 @@ function simpleCommands(text: string): Scan {
               break;
             }
             if (stop === text.length) {
-              unterminated = text.slice(index + 1);
+              unread(index + 1);
               index = stop;
               break;
             }
@@ -217,7 +249,7 @@ function simpleCommands(text: string): Scan {
       word = (word ?? "") + char;
     }
   }
-  if (quoted && !frames.length) unterminated = text.slice(quoteStart);
+  if (quoted && !frames.length) unread(quoteStart);
   split();
   while (frames.length) close();
   if (command.length) commands.push(command);

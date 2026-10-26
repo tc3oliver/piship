@@ -99,6 +99,26 @@ describe("gitPushResources", () => {
     ["echo 'unended; git push origin main", ["*"]],
     ['echo "unended; git push origin main', ["*"]],
     ["cat <<EOF\nnever ended", []],
+    // `#` after a substitution is part of the word, not a comment.
+    ["echo $(true)#; git push origin main", ["origin/main"]],
+    ["echo `true`#; git push origin main", ["origin/main"]],
+    ["echo $(( 1 ))#; git push origin main", ["origin/main"]],
+    ["x=1 # c\ngit push origin main", ["origin/main"]],
+    // Arithmetic ends with its own parentheses and never leaks.
+    ["((:) ); git push 2>/dev/null origin main", ["origin/main"]],
+    [
+      "echo $(( $(git push 2>/dev/null origin main; echo 1) ))",
+      ["origin/main"],
+    ],
+    ['echo "$((git push origin main) )"', ["origin/main"]],
+    ['echo "$((1<<2))"; git push origin main', ["origin/main"]],
+    // A second unended heredoc keeps the first one's unread text.
+    ["cat <<A <<B\nx\ngit push origin main", ["*"]],
+    // `<<` inside `${...}` is no heredoc.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion is the input
+    ["echo ${x:1<<2}\ngit push origin main\n2}", ["origin/main"]],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion is the input
+    ["echo ${x:-$(git push origin main)}", ["origin/main"]],
     // A quoted string is data, not a command.
     ['echo "git push origin main"', []],
     ['git commit -m "fix git push"', []],
@@ -152,7 +172,7 @@ describe("gitPushResources", () => {
       "utf8",
     );
     expect(security).toContain(
-      "`git.push` is recognized from the command text only.",
+      "`git.push` is recognized from the command text only, by a best-effort parser of shell syntax: a `git.push` rule is not a guarantee",
     );
     for (const wrapper of [
       "`sh -c 'git push'`",
