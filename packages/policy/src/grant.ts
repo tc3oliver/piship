@@ -233,13 +233,14 @@ function askCovered(
     case "shell.execute": {
       // One plain command: no chaining, redirect, substitution, variable,
       // or grouping, not even quoted, and never a git push.
-      const [program = "", second = ""] = ask.resource
+      const [program = ""] = ask.resource
         .replace(/^[ \t]+/, "")
         .split(/[ \t]+/);
       return (
         !chainsBeyondPattern("", ask.resource) &&
-        // The shell expands these, so the program or its subcommand is unknown.
-        !/[{}*?[]/.test(program + second) &&
+        // A program the shell expands (`n?m`, `{git,x}`) is unknown; a
+        // globbed git subcommand counts as a push (gitPushResources).
+        !/[{}*?[]/.test(program) &&
         gitPushResources(ask.resource).length === 0 &&
         list(scope.commands).includes(program)
       );

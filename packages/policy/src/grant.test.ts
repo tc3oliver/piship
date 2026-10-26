@@ -473,6 +473,9 @@ describe("a command scope", () => {
     expect(run("  git status --short")).toBe(true);
     expect(run("git diff 'src/a b.ts'")).toBe(true);
     expect(run("npm\ttest")).toBe(true);
+    // Arguments may be globs; only the program must be spelled out.
+    expect(run("pytest tests/test_*.py")).toBe(true);
+    expect(run("pytest *")).toBe(true);
     // Only a space or tab separates words; another blank keeps one word.
     expect(run("npm\u00a0test")).toBe(false);
   });
@@ -498,8 +501,8 @@ describe("a command scope", () => {
     "git {push,origin} main",
     "git pu?h origin main",
     "git --attr-source HEAD push origin main",
-    "npm *",
     "n?m test",
+    "{git,x} status",
   ])("does not cover %s", (command) => {
     expect(run(command)).toBe(false);
   });
