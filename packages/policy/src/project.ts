@@ -1151,12 +1151,14 @@ export function isProjectConfigPath(
       : (text: string) => text;
   const segments = fold(path)
     .split(/[\\/]/)
-    .map((segment) =>
+    .map((segment) => {
+      if (platform !== "win32") return segment;
       // An NTFS stream (`.mcp.json::$DATA`) names the file before the colon.
-      platform === "win32"
-        ? (segment.split(":")[0] ?? "").replace(/[. ]+$/, "")
-        : segment,
-    );
+      let name = segment.split(":")[0] ?? "";
+      // Windows ignores trailing dots and spaces (a loop: no backtracking regex).
+      while (name.endsWith(".") || name.endsWith(" ")) name = name.slice(0, -1);
+      return name;
+    });
   return PROJECT_CONFIG_SURFACES.some((surface) =>
     segments.some((_, start) =>
       surface.every((part, offset) => segments[start + offset] === fold(part)),
