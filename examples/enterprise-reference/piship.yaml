@@ -133,6 +133,11 @@ policy:
   id: acme-engineering
   version: 1
   default: ask
+  # /grant lets a user pre-approve one folder and its plain build and test
+  # commands for a while. The sandbox still limits writes and denies network.
+  taskGrants:
+    mode: session
+    actions: [filesystem.write, shell.execute]
   projectTrust:
     company:
       match:
@@ -172,7 +177,7 @@ policy:
     - id: acme.workspace.write
       action: filesystem.write
       resource: "workspace/**"
-      effect: ask
+      effect: allow
     - id: acme.shell
       action: shell.execute
       resource: "**"

@@ -119,7 +119,7 @@ async function add(
               "A covered program runs whatever code it is given (an npm script, a Makefile target), so the agent can run any code through it until the grant ends.",
             ]
           : []),
-        "Deny rules, rules that always ask, project configuration (.pi, .piship, .claude, .mcp.json), and everything outside this still prompt.",
+        "Deny rules, rules that always ask, and everything outside this still prompt. A grant never approves a write to project configuration (.pi, .piship, .claude, .mcp.json); what the policy decides for those stays in force.",
       ].join("\n"),
     ),
   );

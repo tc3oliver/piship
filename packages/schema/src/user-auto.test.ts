@@ -10,6 +10,8 @@ const example = (path: string) =>
     fileURLToPath(new URL(`../../../examples/${path}`, import.meta.url)),
   ) as Json;
 const MANAGED = example("demo-company/piship.yaml");
+// The example declares taskGrants; these tests start from a manifest without.
+delete (MANAGED.policy as Json).taskGrants;
 const PERSONAL = example("personal/piship.yaml");
 
 function withUserAuto(manifest: Json, value: unknown, schema?: string): Json {

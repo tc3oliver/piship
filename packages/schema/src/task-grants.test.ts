@@ -9,6 +9,8 @@ const example = (path: string) =>
     fileURLToPath(new URL(`../../../examples/${path}`, import.meta.url)),
   ) as Json;
 const MANAGED = example("demo-company/piship.yaml");
+// The example declares taskGrants; these tests start from a manifest without.
+delete (MANAGED.policy as Json).taskGrants;
 
 function withGrants(manifest: Json, value: unknown, schema?: string): Json {
   const copy = structuredClone(manifest);
