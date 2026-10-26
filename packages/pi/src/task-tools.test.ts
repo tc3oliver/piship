@@ -162,13 +162,24 @@ describe("task_start decides a command as bash does", () => {
     expect(counts[0]).toBeLessThanOrEqual(1);
   });
 
-  it("is refused in Plan mode, as bash is", async () => {
+  it("is refused in Plan mode, as bash is, while reading and stopping a task are not", async () => {
     const { session, call } = await open();
+    const started = await call("task_start")(
+      { command: "sleep 30" },
+      context().ctx,
+    );
+    const id = (started as { details: { id: string } }).details.id;
     session.workflowMode = "plan";
     for (const tool of ["bash", "task_start"])
       expect(
         await outcome(call(tool)({ command: "echo hi" }, context(true).ctx)),
       ).toMatch(/Plan mode/);
+    expect(text(await call("task_output")({ id }, context().ctx))).toContain(
+      ": running",
+    );
+    expect(text(await call("task_stop")({ id }, context().ctx))).toContain(
+      ": stopped",
+    );
   });
 
   it("is covered by a task grant that covers the command, with no prompt", async () => {

@@ -187,4 +187,86 @@ describe("TaskRegistry", () => {
     const id = tasks.start(() => new Promise(() => {}), "stuck");
     expect(await tasks.stop(id)).toMatchObject({ status: "stopped" });
   });
+
+  it.each([-1, 0, Number.NaN, Number.POSITIVE_INFINITY, "5"])(
+    "gives a timeout of %s the default",
+    async (timeout) => {
+      const { run, runs, registry } = fake();
+      registry().start(run, "a", timeout as number);
+      await tick();
+      expect(runs[0]?.timeout).toBe(TASK_LIMITS.defaultTimeoutSeconds);
+    },
+  );
+
+  it("drops a finished task once its last output was read, and keeps at most 16 finished", async () => {
+    const { run, runs, registry } = fake();
+    const tasks = registry();
+    const id = tasks.start(run, "a");
+    await tick();
+    runs[0]?.print("bye");
+    runs[0]?.exit(0);
+    await tasks.settled(id);
+    expect(tasks.read(id)).toMatchObject({ status: "exited", output: "bye" });
+    expect(tasks.read(id)).toBeUndefined();
+    const ids: string[] = [];
+    for (let index = 0; index < 20; index++) {
+      const next = tasks.start(run, `t${index}`);
+      ids.push(next);
+      await tick();
+      runs.at(-1)?.exit(0);
+      await tasks.settled(next);
+    }
+    expect(ids.slice(0, 4).map((item) => tasks.read(item))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(tasks.read(ids[19] as string)?.status).toBe("exited");
+  });
+
+  it("holds a stopped task's slot until its process has ended", async () => {
+    let finish: () => void = () => {};
+    const slow: TaskRunner = () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ exitCode: null });
+      });
+    const tasks = new TaskRegistry(
+      { start() {}, exit() {}, stop() {}, refused() {} },
+      { ...TASK_LIMITS, maxTasks: 1, stopWaitMs: 10 },
+    );
+    const id = tasks.start(slow, "a");
+    await tasks.stop(id);
+    expect(tasks.running).toBe(1);
+    expect(() => tasks.start(slow, "b")).toThrow(TaskLimitError);
+    finish();
+    await tasks.settled(id);
+    expect(tasks.running).toBe(0);
+  });
+
+  it("records a task still ending at close during closeAll, and nothing after", async () => {
+    let finish: () => void = () => {};
+    const events: string[] = [];
+    const tasks = new TaskRegistry(
+      {
+        start: () => events.push("start"),
+        exit: () => events.push("exit"),
+        stop: (event) => events.push(`stop:${event.reason}`),
+        refused: () => events.push("refused"),
+      },
+      { ...TASK_LIMITS, stopWaitMs: 10 },
+    );
+    const id = tasks.start(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ exitCode: null });
+        }),
+      "a",
+    );
+    await tasks.closeAll();
+    expect(events).toEqual(["start", "stop:close"]);
+    finish();
+    await tasks.settled(id);
+    expect(events).toEqual(["start", "stop:close"]);
+  });
 });

@@ -68,12 +68,16 @@ const inside = (root: string, path: string) => isWithin(path, root);
 
 /**
  * The only tools a Plan-mode session may run: the governed `read` and
- * `ask_user`. Everything else, including MCP and extension tools whose
- * effects PiShip cannot know, is blocked until the user switches to Build.
+ * `ask_user`, and reading or stopping a background task (stopping only
+ * removes effects; starting one stays refused). Everything else, including
+ * MCP and extension tools whose effects PiShip cannot know, is blocked
+ * until the user switches to Build.
  */
 export const PLAN_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "read",
   "ask_user",
+  "task_output",
+  "task_stop",
 ]);
 export const PLAN_RULE = "piship-workflow.plan";
 /**
@@ -92,13 +96,18 @@ export function planRefusal(
   gov: GovernanceSession,
   tool: string,
 ): string | undefined {
-  // `ask_user` is PiShip's only while its builtin is loaded; without it, a
-  // tool of that name is an extension's, with effects PiShip cannot know.
-  if (
-    gov.workflowMode !== "plan" ||
-    (PLAN_ALLOWED_TOOLS.has(tool) &&
-      (tool !== "ask_user" || gov.loader.builtin.has("piship-ask-user")))
-  )
+  // `ask_user` is PiShip's only while its builtin is loaded, and the task
+  // tools only where PiShip offers them (not in a subagent child, not
+  // hidden); otherwise a tool of that name is an extension's, with effects
+  // PiShip cannot know.
+  const ours =
+    tool === "ask_user"
+      ? gov.loader.builtin.has("piship-ask-user")
+      : tool === "task_output" || tool === "task_stop"
+        ? gov.backgroundTasks !== undefined &&
+          gov.exposure?.get(tool) !== "hidden"
+        : true;
+  if (gov.workflowMode !== "plan" || (PLAN_ALLOWED_TOOLS.has(tool) && ours))
     return undefined;
   gov.metrics.recordPolicyDenial("tool.execute");
   gov.emit("tool.denied", {

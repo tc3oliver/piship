@@ -31,6 +31,8 @@ export interface TaskLimits {
   readonly maxTimeoutSeconds: number;
   /** How long `stop` waits for a stopped task to end before it reports. */
   readonly stopWaitMs: number;
+  /** Finished tasks kept for a later read; the oldest are dropped. */
+  readonly keepFinished: number;
 }
 
 export const TASK_LIMITS: TaskLimits = {
@@ -39,6 +41,7 @@ export const TASK_LIMITS: TaskLimits = {
   defaultTimeoutSeconds: 30 * 60,
   maxTimeoutSeconds: 2 * 60 * 60,
   stopWaitMs: 5000,
+  keepFinished: 16,
 };
 
 /** What a task's events record: metadata, plus the command for capture opt-in. */
@@ -115,6 +118,10 @@ class Task {
   exitCode: number | null = null;
   read = 0;
   stopReason: TaskEvent["reason"];
+  /** The runner settled: the process is gone. */
+  ended = false;
+  /** Its stop or exit event was recorded. */
+  reported = false;
   done: Promise<void> = Promise.resolve();
 
   constructor(
@@ -148,9 +155,9 @@ export class TaskRegistry {
   ) {}
 
   /** Tasks still running. */
+  /** Tasks whose process has not ended, a stopped one included until it has. */
   get running(): number {
-    return [...this.#tasks.values()].filter((task) => task.status === "running")
-      .length;
+    return [...this.#tasks.values()].filter((task) => !task.ended).length;
   }
 
   /**
@@ -162,10 +169,14 @@ export class TaskRegistry {
     const refusal = this.refusal(command);
     if (refusal) throw new TaskLimitError(refusal);
     const task = new Task(command, this.limits.bufferBytes);
-    const timeout = Math.min(
-      timeoutSeconds ?? this.limits.defaultTimeoutSeconds,
-      this.limits.maxTimeoutSeconds,
-    );
+    // A caller from JavaScript can pass anything; the sandbox sets no timer
+    // for 0, a negative, or a non-number, so those get the default.
+    const timeout =
+      typeof timeoutSeconds === "number" &&
+      Number.isFinite(timeoutSeconds) &&
+      timeoutSeconds > 0
+        ? Math.min(timeoutSeconds, this.limits.maxTimeoutSeconds)
+        : this.limits.defaultTimeoutSeconds;
     this.#tasks.set(task.id, task);
     this.events.start(task.event());
     task.done = Promise.resolve()
@@ -193,12 +204,11 @@ export class TaskRegistry {
             task.tail.append(Buffer.from(`\n${message || "failed"}\n`));
         },
       )
-      .then(() =>
-        (task.stopReason ? this.events.stop : this.events.exit).call(
-          this.events,
-          task.event(),
-        ),
-      );
+      .then(() => {
+        task.ended = true;
+        this.#report(task);
+        this.#prune();
+      });
     return task.id;
   }
 
@@ -217,12 +227,36 @@ export class TaskRegistry {
       : `${this.limits.maxTasks} background tasks are already running; stop one with task_stop first`;
   }
 
-  /** The task's state and its output since the last read; undefined for an unknown id. */
+  /** Record a task's stop or exit, once; never after the session closed. */
+  #report(task: Task): void {
+    if (task.reported) return;
+    task.reported = true;
+    (task.stopReason ? this.events.stop : this.events.exit).call(
+      this.events,
+      task.event(),
+    );
+  }
+
+  /** Keep at most `keepFinished` ended tasks, dropping the oldest. */
+  #prune(): void {
+    const ended = [...this.#tasks.values()].filter((task) => task.ended);
+    for (const task of ended.slice(
+      0,
+      Math.max(0, ended.length - this.limits.keepFinished),
+    ))
+      this.#tasks.delete(task.id);
+  }
+
+  /**
+   * The task's state and its output since the last read; undefined for an
+   * unknown id. An ended task is dropped once its last output was read.
+   */
   read(id: string): TaskReport | undefined {
     const task = this.#tasks.get(id);
     if (!task) return undefined;
     const { text, dropped } = task.tail.since(task.read);
     task.read = task.tail.written;
+    if (task.ended) this.#tasks.delete(id);
     return {
       id,
       status: task.status,
@@ -264,8 +298,10 @@ export class TaskRegistry {
   /** Stop every running task and refuse new ones; the session is closing. */
   async closeAll(): Promise<void> {
     this.#closed = true;
-    await Promise.all(
-      [...this.#tasks.keys()].map((id) => this.stop(id, "close")),
-    );
+    const tasks = [...this.#tasks.values()];
+    await Promise.all(tasks.map((task) => this.stop(task.id, "close")));
+    // A task still ending past the grace is recorded now, while audit is
+    // open; its runner settling later records nothing.
+    for (const task of tasks) this.#report(task);
   }
 }

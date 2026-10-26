@@ -114,6 +114,7 @@ export function taskTools(
           command: { type: "string", description: "The shell command." },
           timeout: {
             type: "number",
+            minimum: 1,
             description:
               "Seconds before the task is stopped (default 1800, at most 7200).",
           },
@@ -129,6 +130,13 @@ export function taskTools(
           throw blocked(
             `Background tasks run on this machine; the ${gov.sandbox.report.adapter} sandbox backend runs commands elsewhere. Use bash instead.`,
           );
+        const enforced = gov.sandbox.report.level === "enforced";
+        // Uncontained, the sandbox runs cmd.exe on Windows while the bash
+        // tool runs Pi's bash, whose syntax the command checks assume.
+        if (!enforced && process.platform === "win32")
+          throw blocked(
+            "Background tasks need an enforced sandbox on Windows, where an uncontained task would run in cmd.exe rather than the shell the bash tool uses. Use bash instead.",
+          );
         // Refused before the decision, so a full registry asks nothing.
         const full = tasks.refusal(input.command);
         if (full) throw blocked(`${full}.`);
@@ -141,7 +149,6 @@ export function taskTools(
         );
         const commandRefusal = await gateCommand(gov, spawn.command, "bash");
         if (commandRefusal) throw blocked(commandRefusal);
-        const enforced = gov.sandbox.report.level === "enforced";
         let started: string;
         try {
           started = tasks.start(
@@ -152,9 +159,11 @@ export function taskTools(
                 timeout: options.timeout,
                 // The sandbox narrows an environment it contains; an
                 // uncontained task is narrowed as the bash tool narrows it.
-                env: enforced
-                  ? (spawn.env ?? process.env)
-                  : uncontainedEnvironment(spawn.env, "bash"),
+                ...(enforced
+                  ? spawn.env
+                    ? { env: spawn.env }
+                    : {}
+                  : { env: uncontainedEnvironment(spawn.env, "bash") }),
               }),
             spawn.command,
             input.timeout,
@@ -163,10 +172,14 @@ export function taskTools(
           if (error instanceof TaskLimitError) throw blocked(error.message);
           throw error;
         }
+        let timer: NodeJS.Timeout | undefined;
         await Promise.race([
           tasks.settled(started),
-          new Promise((done) => setTimeout(done, FIRST_OUTPUT_MS)),
+          new Promise((done) => {
+            timer = setTimeout(done, FIRST_OUTPUT_MS);
+          }),
         ]);
+        clearTimeout(timer);
         const first = tasks.read(started) as TaskReport;
         return reply(report(first, "Started. "), first);
       },
