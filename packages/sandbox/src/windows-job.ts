@@ -58,9 +58,22 @@ function jobRequest(
   // Windows needs SystemRoot to resolve side-by-side runtime assemblies when
   // CreateProcess receives an explicit environment block. Keep the rest of
   // the child's environment restricted to the caller-approved values.
-  const childEnv = { ...target.env };
+  // Windows environment names are case-insensitive. Pi can supply PATH
+  // alongside Path; PowerShell's ConvertFrom-Json refuses those duplicates.
+  // Match Node's sorted, first-key-wins handling of Windows environment keys.
+  const childEnv: Record<string, string> = {};
+  const names = new Set<string>();
+  for (const name of Object.keys(target.env).sort()) {
+    const folded = name.toUpperCase();
+    if (names.has(folded)) continue;
+    names.add(folded);
+    childEnv[name] = target.env[name] as string;
+  }
   for (const name of ["SystemRoot", "WINDIR"] as const)
-    if (!(name in childEnv) && host[name]) childEnv[name] = host[name];
+    if (!names.has(name.toUpperCase()) && host[name]) {
+      childEnv[name] = host[name];
+      names.add(name.toUpperCase());
+    }
   const request = Buffer.from(
     JSON.stringify({ ...target, env: childEnv }),
   ).toString("base64");

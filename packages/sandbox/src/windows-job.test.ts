@@ -74,6 +74,26 @@ describe("windowsJobCommand", () => {
     });
   });
 
+  it("folds case-duplicate environment names before decoding the request", () => {
+    const { env } = windowsJobCommand(
+      {
+        ...target,
+        env: {
+          PATH: "C:\\\\first",
+          Path: "C:\\\\second",
+          systemroot: "C:\\\\Windows",
+        },
+      },
+      host,
+    );
+    const child = request(env).env as Record<string, string>;
+    const names = Object.keys(child).map((name) => name.toUpperCase());
+    expect(names.filter((name) => name === "PATH")).toHaveLength(1);
+    expect(names.filter((name) => name === "SYSTEMROOT")).toHaveLength(1);
+    expect(child.PATH).toBe("C:\\\\first");
+    expect(child.systemroot).toBe("C:\\\\Windows");
+  });
+
   it("falls back to WINDIR, and fails closed without an absolute one", () => {
     expect(windowsJobCommand(target, { WINDIR: "C:\\Windows" }).file).toBe(
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -124,6 +144,21 @@ describe.runIf(process.platform === "win32")(
     // supervisor, the fallback.
     beforeEach(() => {
       vi.stubEnv("PISHIP_WINDOWS_JOB_HELPER", "off");
+    });
+
+    it("runs cmd.exe builtins through the Job Object supervisor", async () => {
+      let stdout = "";
+      const child = spawnProcess({
+        file: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", "echo piship-shell-ready"],
+        cwd: process.cwd(),
+        env: process.env as Record<string, string>,
+        onStdout: (chunk) => {
+          stdout += chunk.toString("utf8");
+        },
+      });
+      expect(await child.exited).toMatchObject({ code: 0, timedOut: false });
+      expect(stdout).toContain("piship-shell-ready");
     });
 
     it("runs a governed child to its marker and exit 0 with only the approved environment", async () => {
