@@ -568,10 +568,6 @@ describe("governed distribution (local fixtures)", () => {
         )
         // Only the distribution can relax its managed `ask` defaults.
         .replace(
-          '      resource: "workspace/**"\n      effect: ask',
-          '      resource: "workspace/**"\n      effect: allow',
-        )
-        .replace(
           '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
           '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
         ),
