@@ -37,6 +37,9 @@ interface E2EFile {
  * passing run yet: its figures are an estimate from personal-clean-machine.
  */
 export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
+  // Estimated from one darwin run (two demo builds and launches); skipped on
+  // Windows, where background tasks need an enforced sandbox.
+  "background-tasks": { seconds: { linux: 30, darwin: 36, win32: 2 } },
   cli: { seconds: { linux: 171, darwin: 110, win32: 241 } },
   // Estimated, not yet measured: a build of the developer example from its
   // committed lock, one more with a locked copy, and about a dozen launches.

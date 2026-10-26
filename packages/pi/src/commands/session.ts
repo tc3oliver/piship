@@ -174,6 +174,22 @@ export async function runSmoke(
   );
   startupMark("pi_initialized");
   let sessionFailed = false;
+  // An acceptance run has no Pi signal handler, and Node's default exit on
+  // SIGTERM or SIGHUP skips the exit hook that stops governed children. End
+  // the governance session first (it stops background tasks and records
+  // them), as Pi's own modes do, then exit with the signal's code.
+  const onSignal = (signal: NodeJS.Signals) => {
+    const code = signal === "SIGHUP" ? 129 : 143;
+    // A loop that drains before either exit still ends with the signal's code.
+    process.exitCode = code;
+    setTimeout(() => process.exit(code), 10_000).unref();
+    void Promise.resolve(gov?.close())
+      .catch(() => undefined)
+      .finally(() => process.exit(code));
+  };
+  const signals: NodeJS.Signals[] =
+    process.platform === "win32" ? ["SIGTERM"] : ["SIGTERM", "SIGHUP"];
+  for (const signal of signals) process.once(signal, onSignal);
   try {
     const { resourceLoader } = runtime.services;
     const sessionManager = runtime.session.sessionManager;
@@ -284,6 +300,7 @@ export async function runSmoke(
     sessionFailed = true;
     throw error;
   } finally {
+    for (const signal of signals) process.off(signal, onSignal);
     await endSession(ctx, prepared, runtime, gov, sessionFailed, ownership);
   }
 }
