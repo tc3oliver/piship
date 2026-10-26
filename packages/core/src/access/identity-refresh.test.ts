@@ -88,4 +88,23 @@ describe("identity refresh retry bounds", () => {
     ).rejects.toThrow("unexpected failure");
     expect(calls).toBe(1);
   });
+
+  it("rejects invalid retry-after values without another request", async () => {
+    for (const delay of [NaN, -1, Infinity]) {
+      let calls = 0;
+      await expect(
+        refreshWithRetry<string>(
+          async () => {
+            calls++;
+            throw new PiShipError("GATEWAY_RATE_LIMITED", "Try later", {
+              retryable: true,
+              retryAfterMs: delay,
+            });
+          },
+          { sleep: async () => { throw new Error("unexpected sleep"); } },
+        ),
+      ).rejects.toBeInstanceOf(PiShipError);
+      expect(calls).toBe(1);
+    }
+  });
 });
