@@ -131,6 +131,31 @@ describe("formatDecision", () => {
   });
 });
 
+describe("an ask a task grant approves", () => {
+  const engine = new PolicyEngine({
+    policy: makePolicy({ default: "ask" }),
+    context,
+  });
+  const ask = engine.explain({ action: "model.select", resource: "m" });
+
+  it("names the grant in both forms, and only for an ask", () => {
+    const text = formatDecision(ask, { grantId: "a1b2" });
+    expect(text).toMatch(/^GRANT-APPROVED\n/);
+    expect(text).toContain("Effect:\n  ask (approved by task grant a1b2)");
+    expect(
+      JSON.parse(formatDecisionJSON(ask, { grantId: "a1b2" })),
+    ).toMatchObject({ effect: "ask", grantId: "a1b2" });
+    const allow = new PolicyEngine({
+      policy: makePolicy({ default: "allow" }),
+      context,
+    }).explain({ action: "model.select", resource: "m" });
+    expect(formatDecision(allow, { grantId: "a1b2" })).toMatch(/^ALLOWED\n/);
+    expect(
+      JSON.parse(formatDecisionJSON(allow, { grantId: "a1b2" })),
+    ).not.toHaveProperty("grantId");
+  });
+});
+
 describe("enforcement status in explain", () => {
   it("never prints enforced for an action without a runtime seam", () => {
     const contained = { filesystem: true, network: true, shell: true };

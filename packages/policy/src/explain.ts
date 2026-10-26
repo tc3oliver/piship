@@ -40,6 +40,8 @@ function enforcementLine(explanation: PolicyExplanation): string {
  */
 export interface DecisionFormatOptions {
   readonly autoApproved?: boolean;
+  /** The task grant that approves an `ask` without a prompt (in-session only). */
+  readonly grantId?: string;
 }
 
 const AUTO_APPROVED = "ask (auto-approved by user)";
@@ -50,9 +52,18 @@ export function formatDecision(
 ): string {
   const { decision } = explanation;
   const auto = !!options.autoApproved && decision.effect === "ask";
+  const grant =
+    !auto && decision.effect === "ask" ? options.grantId : undefined;
   const blocks = [
-    auto ? "AUTO-APPROVED" : HEADINGS[decision.effect],
+    auto
+      ? "AUTO-APPROVED"
+      : grant
+        ? "GRANT-APPROVED"
+        : HEADINGS[decision.effect],
     ...(auto ? [section("Effect", AUTO_APPROVED)] : []),
+    ...(grant
+      ? [section("Effect", `ask (approved by task grant ${grant})`)]
+      : []),
     section("Action", decision.action),
     section("Resource", decision.resource),
     section("Rule", decision.ruleId),
@@ -98,6 +109,9 @@ export function decisionToJSON(
     effect: decision.effect,
     ...(options.autoApproved && decision.effect === "ask"
       ? { autoApproved: true }
+      : {}),
+    ...(!options.autoApproved && options.grantId && decision.effect === "ask"
+      ? { grantId: options.grantId }
       : {}),
     action: decision.action,
     resource: redact(decision.resource),

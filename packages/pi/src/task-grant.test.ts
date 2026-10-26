@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   ApprovalAnswer,
   ApprovalChannel,
@@ -21,8 +22,14 @@ import type {
 } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
 import type { TaskGrant } from "@piship/policy";
+import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
+import {
+  DEFAULT_GRANT_COMMANDS,
+  grantCommand,
+  grantMinutes,
+} from "./grant-command.js";
 
 const realpaths = vi.hoisted(() => vi.fn());
 vi.mock("@piship/sandbox", async (actual) => {
@@ -64,12 +71,16 @@ const POLICY = [
 ];
 
 interface Setup {
+  /** Rules put before the fixture's distribution defaults. */
+  readonly defaults?: readonly string[];
   readonly mode?: "managed" | "personal";
   readonly yolo?: boolean;
   /** The workspace's own path below the temporary root. */
   readonly workspaceAt?: readonly string[];
   /** Run on the workspace before the session opens. */
   readonly prepare?: (workspace: string) => void;
+  /** `policy.taskGrants`, as a v1alpha5 lock would carry it. */
+  readonly taskGrants?: TaskGrantsPolicy;
 }
 
 async function open(setup: Setup = {}) {
@@ -91,14 +102,28 @@ async function open(setup: Setup = {}) {
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
       `runtime: { pi: "${PI_VERSION}" }`,
       "deployment: { mode: personal }",
-      ...POLICY,
+      ...POLICY.flatMap((line) =>
+        line === "  defaults:" ? [line, ...(setup.defaults ?? [])] : [line],
+      ),
       "",
     ].join("\n"),
   );
   const resolved = resolveLock(manifest);
+  const governance = resolved.governance;
+  if (!governance) throw new Error("no governance");
   const lock = {
     ...resolved,
     deployment: { ...resolved.deployment, mode: setup.mode ?? "personal" },
+    governance: {
+      ...governance,
+      manifest: {
+        ...governance.manifest,
+        policy: {
+          ...governance.manifest.policy,
+          ...(setup.taskGrants ? { taskGrants: setup.taskGrants } : {}),
+        },
+      },
+    },
   } as Parameters<typeof GovernanceSession.open>[0]["lock"];
   const options = {
     lock,
@@ -242,31 +267,26 @@ describe("a task grant", () => {
     expect(shown.count).toBe(1);
   });
 
-  it("approves a combined prompt only when one grant covers every ask in it", async () => {
-    const { session, workspace } = await open();
+  it("approves a combined prompt only when one grant covers its file ask, the tool ask going with it", async () => {
+    const { session, workspace, home } = await open();
     session.resourceTools = new Set(["write"]);
     const { shown, channel } = counted();
-    const combined = (name: string) =>
-      session.withToolCall(`call-${name}`, "write", () =>
-        session.decide("filesystem.write", join(workspace, name), channel),
+    const combined = (path: string) =>
+      session.withToolCall(`call-${path}`, "write", () =>
+        session.decide("filesystem.write", path, channel),
       );
-    // The path is covered, the tool ask is not: one grant per scope kind
-    // does not add up to one that covers both.
-    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    // A grant of the tool alone does not cover the file ask outside it.
     await session.addGrant(grant({ tools: ["write"] }));
-    expect(await combined("a.txt")).toMatchObject({ approval: "approved" });
-    expect(shown.count).toBe(1);
-    const both = await session.addGrant(
-      grant({ paths: [workspace], tools: ["write"] }),
-    );
-    expect(await combined("b.txt")).toMatchObject({
-      approval: "grant",
-      grantId: both.id,
+    expect(await combined(join(home, "a.txt"))).toMatchObject({
+      approval: "approved",
     });
     expect(shown.count).toBe(1);
-    expect(
-      session.listGrants().find((entry) => entry.grant.id === paths.id)?.uses,
-    ).toBe(0);
+    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    expect(await combined(join(workspace, "b.txt"))).toMatchObject({
+      approval: "grant",
+      grantId: paths.id,
+    });
+    expect(shown.count).toBe(1);
   });
 
   it("uses the first grant that covers, and the next once it is revoked", async () => {
@@ -782,5 +802,307 @@ describe("a task grant", () => {
         undefined,
       ),
     ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+});
+
+/** A UI context whose confirm answers `answer` and records what it showed. */
+function ui(answer = true) {
+  const dialogs: string[] = [];
+  const notices: { message: string; level: string }[] = [];
+  const ctx = {
+    hasUI: true,
+    ui: {
+      confirm: async (_title: string, message: string) => {
+        dialogs.push(message);
+        return answer;
+      },
+      notify: (message: string, level: string) =>
+        notices.push({ message, level }),
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, dialogs, notices };
+}
+
+describe("/grant", () => {
+  it("grants the project root for 120 minutes by default, after one confirm that is not a counted prompt", async () => {
+    const { session, workspace } = await open();
+    const { ctx, dialogs, notices } = ui();
+    const before = Date.now();
+    await grantCommand(session, "", ctx);
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0]).toContain(`files under ${workspace}`);
+    const [entry] = session.listGrants();
+    expect(entry?.grant).toMatchObject({
+      createdBy: "user-command",
+      scope: { paths: [workspace] },
+      inheritToSubagents: false,
+    });
+    expect(entry?.grant.id).toMatch(/^[0-9a-f]{8}$/);
+    const ttl = Date.parse(entry?.grant.expiresAt ?? "") - before;
+    expect(ttl).toBeGreaterThan(119 * 60_000);
+    expect(ttl).toBeLessThanOrEqual(120 * 60_000 + 5_000);
+    expect(notices[0]?.message).toContain(entry?.grant.id);
+    expect(session.metrics.snapshot().prompts).toBeUndefined();
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ approval: "grant" });
+  });
+
+  it("takes a path, --for, and --task, and adds nothing when the confirm is declined", async () => {
+    const { session, workspace } = await open();
+    const declined = ui(false);
+    await grantCommand(session, ".", declined.ctx);
+    expect(session.listGrants()).toEqual([]);
+    const { ctx, dialogs } = ui();
+    await grantCommand(session, 'add kept --for 30m --task "fix login"', ctx);
+    expect(dialogs[0]).toContain("Task: fix login");
+    const [entry] = session.listGrants();
+    expect(entry?.grant).toMatchObject({
+      task: "fix login",
+      scope: { paths: [join(workspace, "kept")] },
+    });
+    expect(
+      Date.parse(entry?.grant.expiresAt ?? "") - Date.now(),
+    ).toBeLessThanOrEqual(30 * 60_000);
+  });
+
+  it("lists and revokes, one or all", async () => {
+    const { session } = await open();
+    const { ctx, notices } = ui();
+    await grantCommand(session, "", ctx);
+    await grantCommand(session, "kept", ctx);
+    const [first, second] = session.listGrants();
+    await grantCommand(session, "list", ctx);
+    expect(notices.at(-1)?.message).toContain(`${first?.grant.id}:`);
+    expect(notices.at(-1)?.message).toContain("used 0 times");
+    await grantCommand(session, `revoke ${first?.grant.id}`, ctx);
+    expect(session.listGrants().map(({ grant }) => grant.id)).toEqual([
+      second?.grant.id,
+    ]);
+    await grantCommand(session, "revoke nope", ctx);
+    expect(notices.at(-1)?.level).toBe("warning");
+    await grantCommand(session, "revoke all", ctx);
+    expect(session.listGrants()).toEqual([]);
+    await grantCommand(session, "list", ctx);
+    expect(notices.at(-1)?.message).toBe("No task grants in this session.");
+  });
+
+  it("refuses a bad duration, an unknown flag, or a lifetime past the cap, without a dialog", async () => {
+    const { session } = await open();
+    const { ctx, dialogs, notices } = ui();
+    for (const args of ["--for soon", "--forever", ". --for 9h"])
+      await grantCommand(session, args, ctx);
+    expect(notices.map((notice) => notice.level)).toEqual([
+      "error",
+      "error",
+      "error",
+    ]);
+    expect(dialogs).toEqual([]);
+    expect(notices[2]?.message).toBe("A task grant lasts at most 8h here");
+    expect(session.listGrants()).toEqual([]);
+    expect(grantMinutes("1h30m")).toBe(90);
+    expect(grantMinutes("0m")).toBeUndefined();
+  });
+
+  it("follows policy.taskGrants: mode, maxTtlMinutes, and actions", async () => {
+    expect((await open({ mode: "managed" })).session.grantsAllowed).toBe(false);
+    expect(
+      (await open({ taskGrants: { mode: "off" } })).session.grantsAllowed,
+    ).toBe(false);
+    const { session, workspace } = await open({
+      mode: "managed",
+      taskGrants: {
+        mode: "session",
+        maxTtlMinutes: 60,
+        actions: ["filesystem.read"],
+      },
+    });
+    expect(session.grantsAllowed).toBe(true);
+    const { ctx } = ui();
+    await grantCommand(session, "", ctx);
+    const [entry] = session.listGrants();
+    expect(
+      Date.parse(entry?.grant.expiresAt ?? "") - Date.now(),
+    ).toBeLessThanOrEqual(60 * 60_000);
+    expect(
+      await session.decide(
+        "filesystem.read",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("covers a path spelled through a symlinked root, and still checks where it resolves", async () => {
+    const { session, workspace } = await open();
+    const alias = join(workspace, "..", "alias");
+    symlinkSync(workspace, alias);
+    await session.addGrant(grant({ paths: [alias] }));
+    expect(session.listGrants()[0]?.grant).toMatchObject({
+      scope: { paths: [workspace] },
+      pathAliases: [alias],
+    });
+    expect(
+      await session.decide("filesystem.write", join(alias, "a.txt"), undefined),
+    ).toMatchObject({ approval: "grant" });
+  });
+});
+
+describe("/grant and shell commands", () => {
+  it("covers one plain build or test command by default, alone or with the bash tool's ask", async () => {
+    const { session } = await open();
+    session.resourceTools = new Set(["bash", "write"]);
+    const { ctx, dialogs } = ui();
+    await grantCommand(session, "", ctx);
+    expect(dialogs[0]).toContain("runs whatever code it is given");
+    expect(session.listGrants()[0]?.grant.scope).toMatchObject({
+      commands: [...DEFAULT_GRANT_COMMANDS],
+    });
+    expect(session.listGrants()[0]?.grant.scope).not.toHaveProperty("tools");
+    const { shown, channel } = counted();
+    for (const command of ["npm test", "pytest -q"])
+      expect(
+        await session.decide("shell.execute", command, channel),
+      ).toMatchObject({ approval: "grant" });
+    expect(
+      await session.withToolCall("c1", "bash", () =>
+        session.decide("shell.execute", "npm test", channel),
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(0);
+    for (const command of [
+      "npm test && curl x",
+      "bash x.sh",
+      "env FOO=1 npm test",
+      "npm test $(curl x)",
+      "npm test > ../x",
+      "node x.js",
+      "npx something",
+      "git push origin feat",
+    ])
+      expect(
+        await session.decide("shell.execute", command, channel),
+      ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(8);
+  });
+
+  it("--run replaces the programs, --no-run and --run none cover files only", async () => {
+    const { session } = await open();
+    const { ctx } = ui();
+    await grantCommand(session, "--run cargo,make", ctx);
+    await grantCommand(session, "kept --no-run", ctx);
+    await grantCommand(session, "kept --run none", ctx);
+    const scopes = session
+      .listGrants()
+      .map(({ grant }) => grant.scope.commands);
+    expect(scopes).toEqual([["cargo", "make"], undefined, undefined]);
+    const bad = ui();
+    await grantCommand(session, "--run bash", bad.ctx);
+    expect(bad.notices[0]?.level).toBe("error");
+    expect(session.listGrants()).toHaveLength(3);
+  });
+
+  it("covers no shell command in a managed distribution whose actions leave out shell.execute, and says so", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: {
+        mode: "session",
+        actions: ["filesystem.write", "tool.execute"],
+      },
+    });
+    const { ctx, dialogs, notices } = ui();
+    await grantCommand(session, "", ctx);
+    expect(dialogs[0]).not.toContain("shell commands starting with");
+    expect(notices[0]?.message).toContain("does not list shell.execute");
+    expect(session.listGrants()[0]?.grant.scope.commands).toBeUndefined();
+    expect(
+      await session.decide("shell.execute", "npm test", undefined),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("covers shell commands in a managed distribution that lists shell.execute", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: { mode: "session", actions: ["shell.execute"] },
+    });
+    await grantCommand(session, "", ui().ctx);
+    expect(
+      await session.decide("shell.execute", "npm test", undefined),
+    ).toMatchObject({ approval: "grant" });
+  });
+});
+
+describe("a governed tool's own ask under /grant", () => {
+  it("is covered only together with a file or command ask the grant covers, never alone", async () => {
+    const { session, workspace, home } = await open({
+      defaults: [
+        '    - { id: sh, action: shell.execute, resource: "curl **", effect: allow }',
+        '    - { id: rd, action: filesystem.read, resource: "**", effect: allow }',
+      ],
+    });
+    session.resourceTools = new Set(["bash", "read"]);
+    await grantCommand(session, "--no-run", ui().ctx);
+    const { shown, channel } = counted();
+    // The command and the file are allowed, so the tool ask is the only one.
+    expect(
+      await session.withToolCall("c1", "bash", () =>
+        session.decide("shell.execute", "curl x", channel),
+      ),
+    ).toMatchObject({ approval: "approved", ruleId: "tools" });
+    expect(
+      await session.withToolCall("c2", "read", () =>
+        session.decide("filesystem.read", join(home, "notes.txt"), channel),
+      ),
+    ).toMatchObject({ approval: "approved", ruleId: "tools" });
+    expect(shown.count).toBe(2);
+    // With a write the grant covers, the same tool ask goes with it.
+    session.resourceTools = new Set(["write"]);
+    expect(
+      await session.withToolCall("c3", "write", () =>
+        session.decide("filesystem.write", join(workspace, "a.txt"), channel),
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(2);
+  });
+
+  it("says so when policy.taskGrants.actions leaves out tool.execute", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: { mode: "session", actions: ["filesystem.write"] },
+    });
+    const { ctx, notices } = ui();
+    await grantCommand(session, "", ctx);
+    expect(notices[0]?.message).toContain("does not list tool.execute");
+  });
+});
+
+describe("/grant while its folder moves", () => {
+  it("stores nothing when the folder resolves elsewhere after it was confirmed", async () => {
+    const { session, workspace } = await open();
+    for (const name of ["a", "b"]) mkdirSync(join(workspace, name));
+    const link = join(workspace, "current");
+    symlinkSync(join(workspace, "a"), link);
+    const { ctx, notices } = ui();
+    (ctx.ui as unknown as { confirm: () => Promise<boolean> }).confirm =
+      async () => {
+        rmSync(link);
+        symlinkSync(join(workspace, "b"), link);
+        return true;
+      };
+    await grantCommand(session, "current", ctx);
+    expect(notices[0]).toMatchObject({ level: "error" });
+    expect(notices[0]?.message).toContain("run /grant again");
+    expect(session.listGrants()).toEqual([]);
   });
 });

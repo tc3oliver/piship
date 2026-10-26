@@ -52,6 +52,43 @@ describe("grantCovers", () => {
     expect(covers(paths, [ask({ resource: "/a/bc" })])).toBe(false);
   });
 
+  it("takes the lexical form under an alias of a root, the resolved form only under the root", () => {
+    const aliased = {
+      ...grant({ paths: ["/private/var/w"] }),
+      pathAliases: ["/var/w"],
+    };
+    expect(
+      covers(aliased, [
+        ask({
+          resource: "/var/w/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(true);
+    // The alias never stands for the resolved form.
+    expect(
+      covers(aliased, [
+        ask({ resource: "/var/w/a.ts", resolvedResource: "/var/w/a.ts" }),
+      ]),
+    ).toBe(false);
+    expect(
+      covers(aliased, [
+        ask({
+          resource: "/var/other/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      covers(grant({ paths: ["/private/var/w"] }), [
+        ask({
+          resource: "/var/w/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(false);
+  });
+
   it("does not cover when the realpath leaves the root", () => {
     expect(
       covers(paths, [
@@ -382,6 +419,21 @@ describe("validateGrant", () => {
         limits,
       ),
     ).toEqual(["grant id is missing"]);
+    expect(
+      validateGrant(
+        { ...grant({ paths: ["/work/proj"] }), pathAliases: ["/home/u"] },
+        limits,
+      ),
+    ).not.toEqual([]);
+    expect(
+      validateGrant(
+        {
+          ...grant({ paths: ["/work/proj"] }),
+          pathAliases: "/w",
+        } as unknown as TaskGrant,
+        limits,
+      ),
+    ).not.toEqual([]);
   });
 });
 
@@ -398,6 +450,108 @@ describe("grantCovers with a scope of the wrong shape", () => {
       covers(loose({ mcp: [{ server: "s", tools: "search-all" }] }), [
         ask({ action: "mcp.tool.call", resource: "s:search" }),
       ]),
+    ).toBe(false);
+  });
+});
+
+describe("a command scope", () => {
+  const errs = (scope: TaskGrant["scope"]) =>
+    validateGrant(grant(scope), {
+      now: NOW,
+      maxTtlMs: 2 * 3600_000,
+      forbiddenRoots: [],
+      wildcardHosts: false,
+      platform: "posix",
+    });
+  const shell = grant({ commands: ["npm", "pytest", "git"] });
+  const run = (command: string) =>
+    covers(shell, [ask({ action: "shell.execute", resource: command })]);
+
+  it("covers one plain command that starts with a granted program", () => {
+    expect(run("npm test")).toBe(true);
+    expect(run("pytest -q")).toBe(true);
+    expect(run("  git status --short")).toBe(true);
+    expect(run("git diff 'src/a b.ts'")).toBe(true);
+    expect(run("npm\ttest")).toBe(true);
+    // Arguments may be globs; only the program must be spelled out.
+    expect(run("pytest tests/test_*.py")).toBe(true);
+    expect(run("pytest *")).toBe(true);
+    // Only a space or tab separates words; another blank keeps one word.
+    expect(run("npm\u00a0test")).toBe(false);
+  });
+
+  it.each([
+    "npm test && curl x",
+    "npm test; rm -rf ~",
+    "npm test | sh",
+    "npm test > ../x",
+    "npm test $(curl x)",
+    "npm test `id`",
+    "npm test $HOME",
+    "npm run 'a;b'",
+    "npm test\ncurl x",
+    "(npm test)",
+    "bash x.sh",
+    "env FOO=1 npm test",
+    "FOO=1 npm test",
+    "NPM test",
+    "./npm test",
+    "git push origin feat",
+    "git push",
+    "git {push,origin} main",
+    "git pu?h origin main",
+    "git --attr-source HEAD push origin main",
+    "n?m test",
+    "{git,x} status",
+  ])("does not cover %s", (command) => {
+    expect(run(command)).toBe(false);
+  });
+
+  it("refuses a wrapper, a path, or a glob as a program", () => {
+    for (const program of [
+      "bash",
+      "env",
+      "sudo",
+      "xargs",
+      "Bash",
+      "bash.exe",
+      "BASH.EXE",
+      "cmd.bat",
+      "ash",
+      "nu",
+      "yash",
+      "mksh",
+      "/usr/bin/npm",
+      "np*",
+      "npm test",
+    ])
+      expect(errs({ commands: [program] })).not.toEqual([]);
+    expect(errs({ commands: ["npm", "cargo", "go", "make"] })).toEqual([]);
+  });
+});
+
+describe("a tool ask that comes with another ask", () => {
+  const files = grant({ paths: ["/a/b"] });
+  const tool = (over: Partial<GrantAsk> = {}): GrantAsk => ({
+    action: "tool.execute",
+    resource: "write",
+    keepsPrompt: false,
+    effect: "ask",
+    companion: true,
+    ...over,
+  });
+
+  it("is covered with a covered ask, never alone, and never when it keeps its prompt", () => {
+    expect(covers(files, [tool(), ask({ resource: "/a/b/c" })])).toBe(true);
+    expect(covers(files, [tool()])).toBe(false);
+    expect(covers(files, [tool(), ask({ resource: "/elsewhere" })])).toBe(
+      false,
+    );
+    expect(
+      covers(files, [tool({ keepsPrompt: true }), ask({ resource: "/a/b/c" })]),
+    ).toBe(false);
+    expect(
+      covers(files, [tool({ companion: false }), ask({ resource: "/a/b/c" })]),
     ).toBe(false);
   });
 });

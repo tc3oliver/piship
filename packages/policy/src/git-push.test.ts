@@ -18,6 +18,12 @@ describe("gitPushResources", () => {
     ["git push --repo=upstream", ["upstream/*"]],
     ["git -C ../repo push origin main", ["origin/main"]],
     ["git -c push.default=current push origin dev", ["origin/dev"]],
+    ["git --attr-source HEAD push origin main", ["origin/main"]],
+    // A subcommand the shell expands may be push.
+    ["git {push,origin} main", ["*"]],
+    ["git pu?h origin main", ["*"]],
+    ["git p* origin main", ["*"]],
+    ["git [p]ush origin main", ["*"]],
     ["git --no-pager --git-dir .git push origin main", ["origin/main"]],
     ["/usr/bin/git push origin main", ["origin/main"]],
     [

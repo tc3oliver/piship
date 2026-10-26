@@ -265,6 +265,7 @@ const GIT_VALUE_OPTIONS = new Set([
   "--namespace",
   "--config-env",
   "--super-prefix",
+  "--attr-source",
 ]);
 // `git push` options that take the next word as a value.
 const PUSH_VALUE_OPTIONS = new Set([
@@ -304,6 +305,8 @@ function pushTargets(
     if (GIT_VALUE_OPTIONS.has(words[index] as string)) index++;
     index++;
   }
+  // A subcommand the shell expands (`{push,x}`, `pu?h`) may be push.
+  if (/[{*?[]/.test(words[index] ?? "")) return ["*"];
   if (words[index] !== "push") return undefined;
   let remote: string | undefined;
   let repo: string | undefined;

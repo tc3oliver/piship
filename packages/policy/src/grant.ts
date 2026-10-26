@@ -1,4 +1,6 @@
 import { posix, win32 } from "node:path";
+import { chainsBeyondPattern } from "./engine.js";
+import { gitPushResources } from "./git-push.js";
 
 /**
  * A task grant turns an `ask` into `allow` strictly inside its scope. This
@@ -25,8 +27,20 @@ export interface TaskGrant {
     /** Exact `host[:port]`, or `*.suffix` when the manifest allows it. */
     readonly hosts?: readonly string[];
     readonly git?: readonly { remote: string; branches: readonly string[] }[];
+    /**
+     * Exact program names a shell command may start with. A covered program
+     * runs whatever code it is given (an npm script, a Makefile target).
+     */
+    readonly commands?: readonly string[];
   };
   readonly inheritToSubagents: boolean;
+  /**
+   * The roots as the user spelled them, where that differs from their
+   * realpath (`/var/x` for `/private/var/x`). An ask's lexical form may lie
+   * under one of these; its resolved form must still lie under a root in
+   * `scope.paths`.
+   */
+  readonly pathAliases?: readonly string[];
 }
 
 /** One ask of a (possibly combined) prompt. */
@@ -37,6 +51,12 @@ export interface GrantAsk {
   readonly resolvedResource?: string;
   readonly keepsPrompt: boolean;
   readonly effect: "allow" | "ask" | "deny";
+  /**
+   * A governed tool's own `tool.execute` ask, decided together with the file
+   * or command ask it makes: covered with that ask, never alone, and never
+   * when it keeps its prompt.
+   */
+  readonly companion?: boolean;
 }
 
 export type GrantPlatform = "posix" | "win32";
@@ -48,7 +68,62 @@ const DEFAULT_BRANCHES = ["main", "master"];
 const list = <T>(value: readonly T[] | undefined): readonly T[] =>
   Array.isArray(value) ? value : [];
 
-const SCOPE_KEYS = new Set(["paths", "tools", "mcp", "hosts", "git"]);
+const SCOPE_KEYS = new Set([
+  "paths",
+  "tools",
+  "mcp",
+  "hosts",
+  "git",
+  "commands",
+]);
+
+/** A plain program name: no path, no glob, no shell syntax. */
+const PROGRAM = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
+
+/**
+ * Programs that run another command or a shell given as their arguments, so
+ * naming one would cover every command.
+ */
+const WRAPPERS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+  "mksh",
+  "ash",
+  "yash",
+  "nu",
+  "fish",
+  "csh",
+  "tcsh",
+  "env",
+  "sudo",
+  "doas",
+  "su",
+  "xargs",
+  "eval",
+  "exec",
+  "nohup",
+  "time",
+  "timeout",
+  "nice",
+  "command",
+  "builtin",
+  "busybox",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "watch",
+  "script",
+  "chroot",
+  "flock",
+  "setsid",
+  "strace",
+  "stdbuf",
+  "unbuffer",
+  "parallel",
+]);
 
 const isStrings = (value: unknown): boolean =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -144,13 +219,32 @@ function askCovered(
     case "filesystem.write": {
       // Fail closed: the caller must supply the realpath.
       if (ask.resolvedResource === undefined) return false;
-      const forms = [ask.resource, ask.resolvedResource];
-      return list(scope.paths).some((root) =>
-        forms.every((form) => isUnder(root, form, platform)),
+      const { resource, resolvedResource } = ask;
+      const roots = list(scope.paths);
+      return (
+        roots.some((root) => isUnder(root, resolvedResource, platform)) &&
+        [...roots, ...list(grant.pathAliases)].some((root) =>
+          isUnder(root, resource, platform),
+        )
       );
     }
     case "tool.execute":
       return list(scope.tools).includes(ask.resource);
+    case "shell.execute": {
+      // One plain command: no chaining, redirect, substitution, variable,
+      // or grouping, not even quoted, and never a git push.
+      const [program = ""] = ask.resource
+        .replace(/^[ \t]+/, "")
+        .split(/[ \t]+/);
+      return (
+        !chainsBeyondPattern("", ask.resource) &&
+        // A program the shell expands (`n?m`, `{git,x}`) is unknown; a
+        // globbed git subcommand counts as a push (gitPushResources).
+        !/[{}*?[]/.test(program) &&
+        gitPushResources(ask.resource).length === 0 &&
+        list(scope.commands).includes(program)
+      );
+    }
     case "mcp.tool.call":
       // Resource is `<server>:<tool>`; server ids cannot contain ":".
       return list(scope.mcp).some(({ server, tools }) =>
@@ -186,11 +280,12 @@ export function grantCovers(
   const expires = Date.parse(grant.expiresAt);
   if (!(now < expires)) return false; // also false for an unparsable date
   if (asks.length === 0) return false;
+  const carried = asks.some((ask) => ask.companion !== true);
   return asks.every(
     (ask) =>
       ask.effect === "ask" &&
       ask.keepsPrompt === false &&
-      askCovered(grant, ask, platform),
+      (ask.companion === true ? carried : askCovered(grant, ask, platform)),
   );
 }
 
@@ -234,7 +329,7 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
     return ["scope is not an object"];
   for (const key of Object.keys(scope))
     if (!SCOPE_KEYS.has(key)) errors.push(`unknown scope kind: ${key}`);
-  for (const key of ["paths", "tools", "hosts"] as const)
+  for (const key of ["paths", "tools", "hosts", "commands"] as const)
     if (scope[key] !== undefined && !isStrings(scope[key]))
       errors.push(`scope ${key} is not a list of strings`);
   if (
@@ -263,6 +358,8 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
     )
   )
     errors.push("scope git is not a list of remotes");
+  if (grant.pathAliases !== undefined && !isStrings(grant.pathAliases))
+    errors.push("path aliases are not a list of strings");
   if (errors.length) return errors;
 
   const expires = Date.parse(grant.expiresAt);
@@ -271,7 +368,7 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   else if (expires > limits.now + limits.maxTtlMs)
     errors.push("expiry exceeds the maximum lifetime");
 
-  for (const root of scope.paths ?? []) {
+  for (const root of [...(scope.paths ?? []), ...(grant.pathAliases ?? [])]) {
     if (!p.isAbsolute(root)) errors.push(`path root is not absolute: ${root}`);
     else if (
       platform === "win32" &&
@@ -326,6 +423,16 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   for (const { server } of scope.mcp ?? []) {
     if (server.includes(":") || GLOB_CHARS.test(server))
       errors.push(`invalid MCP server id: ${server}`);
+  }
+  for (const program of scope.commands ?? []) {
+    if (!PROGRAM.test(program))
+      errors.push(`command is not a plain program name: ${program}`);
+    else if (
+      WRAPPERS.has(program.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, ""))
+    )
+      errors.push(
+        `command runs other commands, so it cannot be granted: ${program}`,
+      );
   }
   for (const tool of scope.tools ?? []) {
     if (GLOB_CHARS.test(tool))

@@ -3,7 +3,7 @@
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
@@ -134,7 +134,7 @@ interface DeferredToolAsk {
 }
 const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 
-/** The longest a task grant may last until the manifest sets a cap (S4). */
+/** The longest a task grant may last unless `policy.taskGrants` sets a cap. */
 const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
 /** A grant ID is shown to the user and recorded in audit, so it is plain. */
 const GRANT_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -654,8 +654,10 @@ export class GovernanceSession {
     // A project configuration file (policy, extensions, hooks, MCP) takes
     // effect at the next start, outside this session: a grant never writes
     // it, by its own path or the one it resolves to.
+    // The deferred tool ask rides on the file or command ask of the same
+    // prompt; alone (the resource was allowed) it needs the tool in scope.
     const grantAsks = (): GrantAsk[] =>
-      asks.flatMap((ask) =>
+      asks.flatMap((ask, index) =>
         ask.resources.map((item) => {
           const resolved = isPathAction(ask.action)
             ? realpathNearest(item)
@@ -673,6 +675,9 @@ export class GovernanceSession {
                 resolved !== undefined &&
                 (this.#projectConfig(item) || this.#projectConfig(resolved))),
             effect: decision.effect,
+            ...(tool && index === 0 && asks.length > 1
+              ? { companion: true }
+              : {}),
           };
         }),
       );
@@ -1047,11 +1052,21 @@ export class GovernanceSession {
   >();
 
   /**
-   * Whether this session takes task grants. A managed distribution has no
-   * manifest field that allows them yet, so it takes none.
+   * Whether this session takes task grants: `policy.taskGrants.mode`, which
+   * defaults to `session` in a personal distribution and `off` in a managed
+   * one.
    */
   get grantsAllowed(): boolean {
-    return this.options.lock.deployment.mode === "personal";
+    const mode =
+      this.manifest.policy.taskGrants?.mode ??
+      (this.options.lock.deployment.mode === "personal" ? "session" : "off");
+    return mode === "session";
+  }
+
+  /** The longest a grant may last here, in milliseconds. */
+  get grantMaxTtlMs(): number {
+    const minutes = this.manifest.policy.taskGrants?.maxTtlMinutes;
+    return minutes === undefined ? GRANT_MAX_TTL_MS : minutes * 60_000;
   }
 
   /**
@@ -1076,7 +1091,7 @@ export class GovernanceSession {
     const started = performance.now();
     const limits = {
       now: Date.now(),
-      maxTtlMs: GRANT_MAX_TTL_MS,
+      maxTtlMs: this.grantMaxTtlMs,
       forbiddenRoots: [
         {
           path: realpathNearest(this.options.homeDir ?? homedir()),
@@ -1091,23 +1106,17 @@ export class GovernanceSession {
           mode: "subtree" as const,
         },
       ],
-      wildcardHosts: false,
+      wildcardHosts: this.manifest.policy.taskGrants?.wildcardHosts === true,
     };
     // A copy, so the caller cannot widen it after it was validated. The
     // roots as given are checked first: resolving them would hide a
     // relative root or a `..`.
-    const copy = structuredClone(grant);
+    const { pathAliases: _, ...copy } = structuredClone(grant);
     const given = validateGrant(copy, limits);
     const stored: TaskGrant = deepFreeze(
       given.length || !copy.scope.paths
         ? copy
-        : {
-            ...copy,
-            scope: {
-              ...copy.scope,
-              paths: copy.scope.paths.map((root) => realpathNearest(root)),
-            },
-          },
+        : this.#canonicalRoots(copy, copy.scope.paths),
     );
     const errors = given.length ? given : validateGrant(stored, limits);
     if (errors.length)
@@ -1228,8 +1237,27 @@ export class GovernanceSession {
     );
   }
 
+  /** The grant with its roots resolved, and the spellings that differ kept as aliases. */
+  #canonicalRoots(grant: TaskGrant, roots: readonly string[]): TaskGrant {
+    const given = roots.map((root) => resolve(root));
+    const paths = given.map((root) => realpathNearest(root));
+    const pathAliases = given.filter((root, index) => root !== paths[index]);
+    return {
+      ...grant,
+      scope: { ...grant.scope, paths },
+      ...(pathAliases.length ? { pathAliases } : {}),
+    };
+  }
+
   /** The first grant, in the order they were added, that covers every ask. */
   #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
+    const actions = this.manifest.policy.taskGrants?.actions;
+    // `policy.taskGrants.actions`: a grant covers no prompt that asks for another action.
+    if (
+      actions &&
+      !asks.every((ask) => actions.includes(ask.action as PolicyAction))
+    )
+      return undefined;
     const now = Date.now();
     this.#expireGrants(now);
     for (const [id, { grant }] of this.#grants)
