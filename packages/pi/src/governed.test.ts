@@ -1857,10 +1857,10 @@ describe.runIf(process.platform === "win32")(
           'const { spawn } = require("node:child_process");',
           'const { existsSync } = require("node:fs");',
           'spawn(process.execPath, ["child.cjs"], { detached: true, stdio: "ignore" }).unref();',
-          'const timer = setInterval(() => {',
+          "const timer = setInterval(() => {",
           '  if (existsSync("child-ready")) { clearInterval(timer); process.exit(0); }',
-          '}, 20);',
-          'setTimeout(() => process.exit(2), 10000);',
+          "} , 20);",
+          "setTimeout(() => process.exit(2), 10000);",
         ].join("\n"),
       );
       const result = await governedBashOperations(session, "bash").exec(
