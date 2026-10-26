@@ -5,8 +5,8 @@ schema: piship/v1
 # broker, and gateway at its own services, and runs `piship lock` itself.
 #
 # What changes from piship.yaml, and why:
-#   - policy.default is ask, and the secret denies are enforced rules no user,
-#     project, or --yolo can relax.
+#   - policy.default stays ask for unclassified actions; routine coding is
+#     explicitly allowed, while enforced secret denies cannot be relaxed.
 #   - Packages are `company` class (a managed user class is denied), and the
 #     package trust stays strict: npm integrity, no local paths.
 #   - The browser package and the background-task package are not shipped. The
@@ -16,8 +16,9 @@ schema: piship/v1
 #     configuration for themselves (see the filter below), and its user scope is
 #     moved into the distribution's state.
 #   - pi-lens installs nothing on its own.
-#   - The permission provider's file is enforced: it is rewritten at every
-#     launch, so a user's edit does not outlive one.
+#   - The permission provider permits routine tools, shell and declared MCP
+#     calls without a second prompt; the explicit high-risk denies still apply.
+#     Its file is enforced and rewritten at every launch.
 #   - Project configuration is closed until the company declares an origin it
 #     trusts. --yolo is refused (policy.userAuto is not declared).
 #   - Codemode is off: a managed distribution must give every tool a script can
@@ -162,7 +163,7 @@ resources:
             debugLog: false
             yoloMode: false
             permission:
-              "*": ask
+              "*": allow
               read: allow
               grep: allow
               find: allow
@@ -221,7 +222,7 @@ resources:
               external_directory:
                 "*": ask
               bash:
-                "*": ask
+                "*": allow
                 "git status*": allow
                 "git diff*": allow
                 "git log*": allow
@@ -236,7 +237,7 @@ resources:
                 "rm -r*": deny
                 "sudo *": deny
               mcp:
-                "*": ask
+                "*": allow
 
 # The package is the permission provider, as in the personal profile. This
 # variant sets no autoApprove settings: nothing switches its yoloMode on.
