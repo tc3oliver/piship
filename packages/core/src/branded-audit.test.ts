@@ -16,7 +16,11 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AuditConfig } from "@piship/audit";
+import {
+  AUDIT_SPOOL_DIRECTORY,
+  type AuditConfig,
+  auditSpoolKey,
+} from "@piship/audit";
 import type { AuditEvent } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import {
@@ -320,6 +324,60 @@ describe("branded command audit with a required sink", () => {
     expect(errors).toEqual([
       "Warning: sessions past their retention were kept: the data.swept audit event was not recorded",
     ]);
+  });
+
+  it("sweeps only spools of sinks no longer configured, and records it although the configured sink's spool holds a set-aside file", async () => {
+    const { ctx, errors } = context(sinks(collector.url, true));
+    const swept: BrandedContext = {
+      ...ctx,
+      metadata: {
+        ...ctx.metadata,
+        data: {
+          contract: DATA_CONTRACT_VERSION,
+          declared: parseData({
+            audit: { retention: "180d" },
+          }) as DataManifest,
+        },
+      },
+    };
+    const spool = (key: string, name: string, content: string) => {
+      const directory = join(ctx.stateDir, AUDIT_SPOOL_DIRECTORY, key);
+      mkdirSync(directory, { recursive: true });
+      const path = join(directory, name);
+      writeFileSync(path, content);
+      const old = new Date(Date.now() - 200 * 24 * 60 * 60_000);
+      utimesSync(path, old, old);
+      return path;
+    };
+    const event = JSON.stringify({
+      schema: "piship-audit/v1",
+      id: "crashed-event",
+      event: "mcp.call",
+      time: "2026-01-01T00:00:00.000Z",
+      user: null,
+      session: null,
+      distribution: "acmecode",
+    });
+    const company = auditSpoolKey("company");
+    // A crashed session's spool, a set-aside one, and a removed sink's spool.
+    const crashed = spool(company, "1-000000000000-aa.jsonl", `${event}\n`);
+    const corrupt = spool(company, "2-000000000000-bb.jsonl.corrupt", "x\n");
+    const orphan = spool("0123456789abcdef", "3-000000000000-cc.jsonl", "x\n");
+    const result = await sweepDistributionData(swept, "launch");
+    expect(errors).toEqual([]);
+    expect(result?.classes).toEqual([
+      { class: "audit", removed: 1, held: 0, kept: 0, failed: 0 },
+    ]);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(crashed)).toBe(true);
+    expect(existsSync(corrupt)).toBe(true);
+    const delivered = collector.batches.flatMap((batch) => batch.events);
+    // The short command sent its own event and replayed nothing.
+    expect(delivered.map((item) => item.event)).toEqual(["data.swept"]);
+    expect(delivered[0]?.detail).toMatchObject({
+      files: 1,
+      spools: "0123456789abcdef:1",
+    });
   });
 
   it("fails the command when the required sink does not take the events", async () => {

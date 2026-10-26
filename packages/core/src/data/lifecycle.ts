@@ -8,9 +8,10 @@
 //   including their `codemode-store` entries). A session held by a live owner
 //   record (packages/pi `SessionOwnership`) is skipped.
 // - audit: the rotated `logs/audit.jsonl.N` files, never the live
-//   `audit.jsonl`, and the files under `logs/audit-spool` (a required HTTP
-//   sink's undelivered events, which may hold opted-in content). A live
-//   owner renews its spool every minute, so only an abandoned one ages out.
+//   `audit.jsonl`, and the files of `logs/audit-spool/<key>` directories of
+//   sinks no longer configured (undelivered events, which may hold opted-in
+//   content, that nothing replays). A configured sink's spool is never
+//   swept: its events are still to be delivered, and `doctor` reports them.
 // - cache: regular files under `<state>/cache`.
 //
 // Credential metadata, the secret fallback, the Pi agent directory,
@@ -37,6 +38,7 @@ import {
   AUDIT_ROTATION,
   AUDIT_SPOOL_DIRECTORY,
   type AuditRotation,
+  auditSpoolKey,
 } from "@piship/audit";
 import type { AuditEventType } from "@piship/contracts";
 import {
@@ -70,6 +72,8 @@ export interface DataSweptEvent {
     readonly files: number;
     /** Sessions old enough but held by a live owner, and kept. */
     readonly held?: number;
+    /** Spool files about to be deleted, as `<sink key>:<count>` joined by commas. */
+    readonly spools?: string;
   };
 }
 
@@ -158,6 +162,11 @@ export interface DataSweepOptions {
    * the deletion are not atomic.
    */
   readonly claimSession?: (sessionFile: string) => (() => void) | undefined;
+  /**
+   * The required HTTP sinks configured now, whose spools are never swept.
+   * Without it no spool file is swept.
+   */
+  readonly spoolSinks?: readonly string[];
   /** Wall clock in milliseconds; tests pass a fixed one. */
   readonly now?: number;
 }
@@ -241,7 +250,11 @@ function walk(
   return found;
 }
 
-function candidates(stateDir: string, dataClass: SweptDataClass): string[] {
+function candidates(
+  stateDir: string,
+  dataClass: SweptDataClass,
+  spoolSinks: readonly string[] | undefined,
+): string[] {
   switch (dataClass) {
     case "sessions":
       return walk(
@@ -257,12 +270,40 @@ function candidates(stateDir: string, dataClass: SweptDataClass): string[] {
           .filter((name) => ROTATED_AUDIT.test(name))
           .map((name) => join(logs, name))
           .filter((path) => lstat(path)?.isFile() === true),
-        ...walk(join(stateDir, AUDIT_SPOOL_DIRECTORY), () => true),
+        ...orphanedSpools(stateDir, spoolSinks),
       ];
     }
     case "cache":
       return walk(join(stateDir, "cache"), () => true);
   }
+}
+
+/** Files of the spool directories of sinks not in `spoolSinks`. */
+function orphanedSpools(
+  stateDir: string,
+  spoolSinks: readonly string[] | undefined,
+): string[] {
+  if (!spoolSinks) return [];
+  const root = join(stateDir, AUDIT_SPOOL_DIRECTORY);
+  if (!lstat(root)?.isDirectory()) return [];
+  const configured = new Set(spoolSinks.map(auditSpoolKey));
+  return entries(root)
+    .filter((key) => !configured.has(key))
+    .flatMap((key) => walk(join(root, key), () => true));
+}
+
+/** `<sink key>:<count>` of the spool files among `paths`, or undefined. */
+function spoolCounts(stateDir: string, paths: readonly string[]) {
+  const root = join(stateDir, AUDIT_SPOOL_DIRECTORY);
+  const counts = new Map<string, number>();
+  for (const path of paths)
+    if (path.startsWith(root)) {
+      const key = path.slice(root.length + 1).split(/[\\/]/)[0] as string;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  return counts.size
+    ? [...counts].map(([key, count]) => `${key}:${count}`).join(",")
+    : undefined;
 }
 
 /**
@@ -314,7 +355,11 @@ async function sweepClass(
     dataClass === "sessions" && safeHeld(held, path);
   const selected: string[] = [];
   let heldCount = 0;
-  for (const path of candidates(options.stateDir, dataClass)) {
+  for (const path of candidates(
+    options.stateDir,
+    dataClass,
+    options.spoolSinks,
+  )) {
     if (!old(path)) continue;
     if (isHeld(path)) heldCount += 1;
     else selected.push(path);
@@ -323,6 +368,8 @@ async function sweepClass(
     return heldCount > 0
       ? [{ class: dataClass, removed: 0, held: heldCount, kept: 0, failed: 0 }]
       : [];
+  const spools =
+    dataClass === "audit" ? spoolCounts(options.stateDir, selected) : undefined;
   try {
     await options.record({
       event: "data.swept",
@@ -334,6 +381,7 @@ async function sweepClass(
         cutoff: new Date(cutoff).toISOString(),
         files: selected.length,
         ...(dataClass === "sessions" ? { held: heldCount } : {}),
+        ...(spools ? { spools } : {}),
       },
     });
   } catch {

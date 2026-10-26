@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AUDIT_ROTATION } from "@piship/audit";
+import { AUDIT_ROTATION, auditSpoolKey } from "@piship/audit";
 import { type DataManifest, parseData } from "@piship/schema";
 import { STATE_DATA_CLASSES } from "../migration.js";
 import {
@@ -103,28 +103,41 @@ describe("retention", () => {
 });
 
 describe("sweepData", () => {
-  it("deletes audit spool files past retention, including orphaned and set-aside ones", async () => {
-    const orphaned = file("logs/audit-spool/0123456789abcdef/1-a.jsonl", 200);
-    const corrupt = file(
-      "logs/audit-spool/fedcba9876543210/2-b.jsonl.corrupt",
-      200,
-    );
-    const live = file("logs/audit-spool/fedcba9876543210/3-c.jsonl", 0);
-    const { events, record } = recorder();
-    const result = await sweepData({
-      stateDir: state,
-      trigger: "launch",
-      retention: { audit: 180 * DAY },
-      record,
-      now: NOW,
-    });
-    expect(existsSync(orphaned)).toBe(false);
-    expect(existsSync(corrupt)).toBe(false);
-    expect(existsSync(live)).toBe(true);
+  it("deletes old spool files only of sinks no longer configured, never a configured sink's", async () => {
+    const configured = auditSpoolKey("siem");
+    const kept = [
+      file(`logs/audit-spool/${configured}/1-a.jsonl`, 200),
+      file(`logs/audit-spool/${configured}/2-b.jsonl.corrupt`, 200),
+    ];
+    const orphaned = [
+      file("logs/audit-spool/0123456789abcdef/3-c.jsonl", 200),
+      file("logs/audit-spool/0123456789abcdef/4-d.jsonl.corrupt", 200),
+    ];
+    const recent = file("logs/audit-spool/0123456789abcdef/5-e.jsonl", 1);
+    const sweep = async (spoolSinks?: readonly string[]) => {
+      const { events, record } = recorder();
+      const result = await sweepData({
+        stateDir: state,
+        trigger: "launch",
+        retention: { audit: 180 * DAY },
+        record,
+        now: NOW,
+        ...(spoolSinks ? { spoolSinks } : {}),
+      });
+      return { events, result };
+    };
+    // Without the configured sinks nothing in the spool is swept.
+    expect((await sweep()).result.classes).toEqual([]);
+    const { events, result } = await sweep(["siem"]);
+    for (const path of [...kept, recent]) expect(existsSync(path)).toBe(true);
+    for (const path of orphaned) expect(existsSync(path)).toBe(false);
     expect(result.classes).toEqual([
       { class: "audit", removed: 2, held: 0, kept: 0, failed: 0 },
     ]);
-    expect(events[0]?.detail.files).toBe(2);
+    expect(events[0]?.detail).toMatchObject({
+      files: 2,
+      spools: "0123456789abcdef:2",
+    });
   });
 
   it("deletes only rotated audit files past retention, never the live log", async () => {
