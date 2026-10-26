@@ -666,21 +666,32 @@ describe("the managed variant", () => {
     );
     expect(capability?.provider?.package).toBe("pi-permission-system");
     expect(capability?.settings).toEqual({});
-    // Stricter than the personal profile: a tool or command it does not list
-    // asks, key material and env files are denied, and a short list of
-    // commands runs.
+    // Known coding tools avoid duplicate prompts; an unknown tool must
+    // still ask. Command and path denies take precedence.
     expect(config.permission["*"]).toBe("ask");
-    expect(rules(config, "bash")["*"]).toBe("ask");
-    expect(rules(config, "mcp")["*"]).toBe("ask");
+    expect(rules(config, "bash")["*"]).toBe("allow");
+    expect(rules(config, "mcp")["*"]).toBe("allow");
     const bash = rules(config, "bash");
-    expect(decide(bash, "npm test")).toBe("allow");
-    expect(decide(bash, "rm -rf build")).toBe("deny");
-    expect(decide(bash, "sudo ls")).toBe("deny");
-    expect(decide(bash, "npm install left-pad")).toBe("ask");
+    for (const command of [
+      "npm test",
+      "npm install left-pad",
+      "pnpm run build",
+      "git -C app status",
+      "git push origin feature/agent",
+    ])
+      expect(decide(bash, command), command).toBe("allow");
+    for (const command of [
+      "rm -rf build",
+      "sudo ls",
+      "git push origin main --force",
+      "git reset --hard HEAD",
+    ])
+      expect(decide(bash, command), command).toBe("deny");
     const paths = rules(config, "path");
     expect(decide(paths, "/work/app/.env", "allow")).toBe("deny");
     expect(decide(paths, "/work/app/.env.example", "allow")).toBe("allow");
     expect(decide(paths, "~/.ssh/id_rsa", "allow")).toBe("deny");
+    expect(decide(rules(config, "external_directory"), "/outside")).toBe("ask");
   });
 
   it("declares the five Claude dimensions for every origin: hooks closed, the rest company-approved", () => {
