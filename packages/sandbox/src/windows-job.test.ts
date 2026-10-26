@@ -74,6 +74,26 @@ describe("windowsJobCommand", () => {
     });
   });
 
+  it("folds case-duplicate environment names before decoding the request", () => {
+    const { env } = windowsJobCommand(
+      {
+        ...target,
+        env: {
+          PATH: "C:\\\\first",
+          Path: "C:\\\\second",
+          systemroot: "C:\\\\Windows",
+        },
+      },
+      host,
+    );
+    const child = request(env).env as Record<string, string>;
+    const names = Object.keys(child).map((name) => name.toUpperCase());
+    expect(names.filter((name) => name === "PATH")).toHaveLength(1);
+    expect(names.filter((name) => name === "SYSTEMROOT")).toHaveLength(1);
+    expect(child.PATH).toBe("C:\\\\first");
+    expect(child.systemroot).toBe("C:\\\\Windows");
+  });
+
   it("falls back to WINDIR, and fails closed without an absolute one", () => {
     expect(windowsJobCommand(target, { WINDIR: "C:\\Windows" }).file).toBe(
       "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
