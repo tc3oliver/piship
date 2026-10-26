@@ -2,6 +2,7 @@
 import {
   normalizePolicyAction,
   POLICY_ACTIONS,
+  type PolicyAction,
   type PolicyEffect,
   SESSION_EXPORT_RESOURCES,
 } from "@piship/contracts";
@@ -17,10 +18,13 @@ import {
   type ProjectResourceTrust,
   type ProjectTrustPolicy,
   PROVIDER_TRUST_CLASSES,
+  TASK_GRANT_MODES,
+  type TaskGrantsPolicy,
   type TrustSetting,
   USER_AUTO_SETTINGS,
 } from "../governance.js";
 import {
+  bool,
   conflict,
   fail,
   type Json,
@@ -284,6 +288,58 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
+/** `policy.taskGrants` (piship/v1alpha5): the cap a session applies to task grants. */
+function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
+  if (value === undefined) return undefined;
+  const grants = record(value, "policy.taskGrants", [
+    "mode",
+    "maxTtlMinutes",
+    "actions",
+    "wildcardHosts",
+  ]);
+  const mode = oneOf(grants.mode, "policy.taskGrants.mode", TASK_GRANT_MODES);
+  const actions =
+    grants.actions === undefined
+      ? undefined
+      : list(grants.actions, "policy.taskGrants.actions", (entry, path) => {
+          const action = plainString(entry, path, 64);
+          if (!(POLICY_ACTIONS as readonly string[]).includes(action))
+            fail(
+              path,
+              `Expected one policy action (${POLICY_ACTIONS.join(", ")})`,
+            );
+          return action as PolicyAction;
+        });
+  if (actions?.length === 0)
+    fail(
+      "policy.taskGrants.actions",
+      "Expected at least one action; use mode off to forbid grants, or omit actions for no restriction",
+    );
+  return {
+    mode,
+    ...(grants.maxTtlMinutes === undefined
+      ? {}
+      : {
+          maxTtlMinutes: positiveInteger(
+            grants.maxTtlMinutes,
+            "policy.taskGrants.maxTtlMinutes",
+            1,
+            24 * 60,
+          ),
+        }),
+    ...(actions === undefined ? {} : { actions }),
+    ...(grants.wildcardHosts === undefined
+      ? {}
+      : {
+          wildcardHosts: bool(
+            grants.wildcardHosts,
+            "policy.taskGrants.wildcardHosts",
+            false,
+          ),
+        }),
+  };
+}
+
 /**
  * `policy.acknowledgeUnenforced` (piship/v1alpha6): `<action>:<resource>`
  * entries naming one exact action. Whether the action is actually
@@ -320,10 +376,11 @@ export function parsePolicy(
     "projectTrust",
     "enforced",
     "defaults",
-    ...(options.userAuto ? ["userAuto"] : []),
+    ...(options.userAuto ? ["userAuto", "taskGrants"] : []),
     ...(options.acknowledgeUnenforced ? ["acknowledgeUnenforced"] : []),
   ]);
   const userAuto = parseUserAuto(policy.userAuto, mode);
+  const taskGrants = parseTaskGrants(policy.taskGrants);
   const id =
     policy.id === undefined ? app.id : plainString(policy.id, "policy.id", 128);
   if (!RULE_ID.test(id))
@@ -383,6 +440,7 @@ export function parsePolicy(
       ? {}
       : { adapter: modulePath(policy.adapter, "policy.adapter") }),
     ...(userAuto === undefined ? {} : { userAuto }),
+    ...(taskGrants === undefined ? {} : { taskGrants }),
     ...(options.acknowledgeUnenforced
       ? {
           acknowledgeUnenforced: list(

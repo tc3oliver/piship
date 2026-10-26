@@ -66,6 +66,53 @@ export function policy(
             "Users can no longer switch on auto mode; a switch that is on stops applying.",
           ],
   );
+  // Absent is off, so declaring `mode: off` changes nothing.
+  const bg = bp?.taskGrants;
+  const ag = ap?.taskGrants;
+  out.scalar(
+    "policy",
+    "policy taskGrants.mode",
+    bg?.mode ?? "off",
+    ag?.mode ?? "off",
+    (_, y) =>
+      y === "session"
+        ? [
+            "medium",
+            "Lets a session offer task grants, which approve asks for a bounded time; deny and enforced rules still apply.",
+          ]
+        : [
+            "medium",
+            "Task grants are no longer offered; a grant in use stops applying.",
+          ],
+  );
+  const widerCap = (x: string, y: string): Verdict =>
+    (y === "" ? Infinity : Number(y)) > (x === "" ? Infinity : Number(x))
+      ? ["medium", "Raises the cap on how long a task grant may last."]
+      : ["low", "Lowers the cap on how long a task grant may last."];
+  out.scalar(
+    "policy",
+    "policy taskGrants.maxTtlMinutes",
+    bg?.maxTtlMinutes,
+    ag?.maxTtlMinutes,
+    widerCap,
+  );
+  out.scalar(
+    "policy",
+    "policy taskGrants.actions",
+    bg?.actions ? [...bg.actions].sort(compare).join(",") : "any",
+    ag?.actions ? [...ag.actions].sort(compare).join(",") : "any",
+    ["medium", "Changes which actions a task grant may cover."],
+  );
+  out.scalar(
+    "policy",
+    "policy taskGrants.wildcardHosts",
+    bg?.wildcardHosts ?? false,
+    ag?.wildcardHosts ?? false,
+    (_, y) =>
+      y === "true"
+        ? ["high", "Lets a task grant name a wildcard host."]
+        : ["low", "Task grants can no longer name a wildcard host."],
+  );
   out.scalar("policy", "policy adapter", bp?.adapter, ap?.adapter, (_, y) =>
     y === ""
       ? [

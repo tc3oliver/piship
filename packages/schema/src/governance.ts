@@ -438,6 +438,20 @@ export interface ProjectTrustPolicy {
 export const USER_AUTO_SETTINGS = ["off", "allowed"] as const;
 export type UserAutoSetting = (typeof USER_AUTO_SETTINGS)[number];
 
+export const TASK_GRANT_MODES = ["off", "session"] as const;
+export type TaskGrantMode = (typeof TASK_GRANT_MODES)[number];
+
+/** `policy.taskGrants`: the cap on task grants a session may offer. */
+export interface TaskGrantsPolicy {
+  readonly mode: TaskGrantMode;
+  /** Upper bound on a grant's lifetime, in minutes (at most 24 hours). */
+  readonly maxTtlMinutes?: number;
+  /** Policy actions a grant may cover; absent means no restriction. */
+  readonly actions?: readonly PolicyAction[];
+  /** Whether a grant may name a wildcard host; absent means no. */
+  readonly wildcardHosts?: boolean;
+}
+
 export interface PolicyConfig {
   readonly id: string;
   readonly version: number;
@@ -453,6 +467,12 @@ export interface PolicyConfig {
    * the manifest declares it (piship/v1alpha5, managed mode); absent is `off`.
    */
   readonly userAuto?: UserAutoSetting;
+  /**
+   * Cap on task grants (piship/v1alpha5 and later). Present only when the
+   * manifest declares it; absent means off for a managed distribution. It
+   * only defines the cap: a session consumes it separately.
+   */
+  readonly taskGrants?: TaskGrantsPolicy;
   /**
    * piship/v1alpha6: `<action>:<resource>` pairs whose `deny` or `ask` rule
    * names an action PiShip cannot enforce, acknowledged by the owner.

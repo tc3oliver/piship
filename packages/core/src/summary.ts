@@ -100,6 +100,14 @@ export function formatInspection(info: Inspection): string {
         "policy",
         `${policy.id}@${policy.version} (default ${policy.default}${policy.userAuto ? `, user auto ${policy.userAuto}` : ""})`,
       ),
+      ...(policy.taskGrants
+        ? [
+            row(
+              "grants",
+              `${policy.taskGrants.mode}${policy.taskGrants.maxTtlMinutes ? ` (ttl <= ${policy.taskGrants.maxTtlMinutes} min)` : ""}`,
+            ),
+          ]
+        : []),
       row(
         "sandbox",
         `${sandbox.provider ?? "native"}${sandbox.required ? ", required" : ""}, network ${sandbox.network.mode}`,
