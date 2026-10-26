@@ -23,16 +23,19 @@ export async function refreshWithRetry<T>(
     try {
       return await refresh();
     } catch (error) {
+      if (!(error instanceof PiShipError)) throw error;
+      const retryAfter = error.retryAfterMs ?? 0;
       if (
-        !(error instanceof PiShipError) ||
         !error.retryable ||
         (error.code !== "GATEWAY_UNREACHABLE" &&
           error.code !== "GATEWAY_RATE_LIMITED") ||
         attempt === MAX_ATTEMPTS - 1 ||
-        (error.retryAfterMs ?? 0) > MAX_RETRY_AFTER_MS
+        !Number.isFinite(retryAfter) ||
+        retryAfter < 0 ||
+        retryAfter > MAX_RETRY_AFTER_MS
       )
         throw error;
-      const backoff = Math.max(100 * 2 ** attempt, error.retryAfterMs ?? 0);
+      const backoff = Math.max(100 * 2 ** attempt, retryAfter);
       await sleep(backoff + Math.floor(random() * 50));
     }
   }
