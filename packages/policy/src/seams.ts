@@ -152,4 +152,3 @@ export function decisionStatus(decision: {
 export function isPolicyAction(action: string): action is PolicyAction {
   return (POLICY_ACTIONS as readonly string[]).includes(action);
 }
-
