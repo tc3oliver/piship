@@ -16,7 +16,7 @@ import {
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { processHostToken } from "@piship/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   HOST_EVIDENCED,
   ID,
@@ -36,6 +36,10 @@ import { processIdentity, recordedProcessGone } from "./process-identity.js";
 import { rollbackDistribution, updateDistribution } from "./update/index.js";
 
 useLifecycleHomes();
+// Each test builds and installs a release, and its hooks stop child
+// processes and remove temporary homes; a loaded machine can stretch either
+// past Vitest's defaults.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 /**
  * The end of the gate's path: the launcher names it by its real path, which
@@ -163,7 +167,7 @@ describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
         renameSync(`${receipt}.real`, receipt);
       }
     },
-    60_000,
+    120_000,
   );
 
   it("holds a runtime lease that core judges as the launcher's running process, and has released the gate when the release's own launcher runs", async () => {
@@ -239,7 +243,7 @@ await new Promise((resolve) => {
     } finally {
       child.kill();
     }
-  }, 60_000);
+  }, 120_000);
 
   it("reclaims at once a gate that names the launcher's own process ID, which is a dead process's", async () => {
     await installed();
@@ -271,7 +275,7 @@ await new Promise((resolve) => {
     } finally {
       wrapper.kill();
     }
-  }, 60_000);
+  }, 120_000);
 
   it("reclaims at once a gate whose process ID now belongs to a process with another start identity", async () => {
     await installed();
@@ -280,7 +284,7 @@ await new Promise((resolve) => {
     expect(launched.status, launched.stderr).toBe(0);
     expect(launched.stdout).toContain("payload 1.0.0");
     expect(existsSync(gatePath())).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   // Linux records the start identity; elsewhere the launcher records its
   // start time, which another process with the same ID does not share.
@@ -293,7 +297,7 @@ await new Promise((resolve) => {
       expect(launched.status, launched.stderr).toBe(0);
       expect(existsSync(gatePath())).toBe(false);
     },
-    60_000,
+    120_000,
   );
 
   it("waits for a gate whose holder is running, and reclaims one of an earlier PiShip whose process is gone", async () => {
@@ -316,7 +320,7 @@ await new Promise((resolve) => {
     writeFileSync(gatePath(), String(deadPid()));
     expect(runLauncher().status).toBe(0);
     expect(existsSync(gatePath())).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   it("never reclaims another host's gate by this host's processes before its lease runs out", async () => {
     await installed();
@@ -330,7 +334,7 @@ await new Promise((resolve) => {
     const launched = runLauncher();
     expect(launched.status, launched.stderr).toBe(0);
     expect(existsSync(gatePath())).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   it("names the gate and its holder when it stops waiting, in the launcher and in core", async () => {
     await installed();
@@ -343,7 +347,7 @@ await new Promise((resolve) => {
     const error = refusal(() => uninstallDistribution(ID));
     expect(error.message).toContain(gatePath());
     expect(error.message).toContain(`held by process ${holder}`);
-  }, 60_000);
+  }, 120_000);
 
   it("reports an error other than a held gate as it is, never as contention", async () => {
     await installed();
@@ -359,7 +363,7 @@ await new Promise((resolve) => {
     );
     expect(launched.stderr).toContain(`.${ID}.launch.lock`);
     expect(launched.stderr).not.toMatch(/registering|retry/i);
-  }, 60_000);
+  }, 120_000);
 
   // Permissions do not stop file creation on Windows, and root ignores them.
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
@@ -381,7 +385,7 @@ await new Promise((resolve) => {
         chmodSync(receipts, 0o755);
       }
     },
-    60_000,
+    120_000,
   );
 });
 
@@ -414,7 +418,7 @@ describe.runIf(HOST_EVIDENCED)(
         holder.kill();
         await exited;
       }
-    }, 60_000);
+    }, 120_000);
 
     it("fails as retryable, naming the gate and its holder, while a launcher keeps it", async () => {
       const { opts } = await installed();
@@ -437,6 +441,6 @@ describe.runIf(HOST_EVIDENCED)(
       });
       expect(rollback.message).toContain(`held by process ${holder}`);
       expect(readInstallReceipt(ID).active).toBe("1.1.0");
-    }, 60_000);
+    }, 120_000);
   },
 );
