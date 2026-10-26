@@ -40,6 +40,8 @@ import type {
 import {
   type CapabilityState,
   denialHint,
+  expandPathTokens,
+  isPathAction,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -93,6 +95,21 @@ function sessionAllowKey(
   resources: readonly string[],
 ): string {
   return JSON.stringify([action, [...resources].sort()]);
+}
+
+/**
+ * Whether a rule pattern (path tokens already expanded) has a literal
+ * character other than `/`, `:`, or whitespace before its first `*`, after a
+ * path's drive letter. A pattern led by a wildcard, a root, a drive root, or
+ * a space (`**`, `*:*`, a bare `/` or `C:/` before the first `*`) reaches
+ * every target and grants no rule for the session.
+ */
+export function hasLiteralPrefix(
+  pattern: string,
+  pathAction: boolean,
+): boolean {
+  const literal = pathAction ? pattern.replace(/^[A-Za-z]:/, "") : pattern;
+  return /[^/:\s]/.test(literal.split("*")[0] ?? "");
 }
 
 /** One `ask` a prompt answers: its action and exact targets. */
@@ -535,6 +552,12 @@ export class GovernanceSession {
         : []),
       ...(own.effect === "ask" ? [{ action, resources }] : []),
     ];
+    // What "allow for this session" grants for each ask, in `asks` order.
+    const grants = asks.map((ask) => this.#sessionGrant(ask));
+    const offersSession =
+      decision.effect === "ask" &&
+      channel !== undefined &&
+      asks.every((ask) => this.#offersSession(ask.action, ask.resources));
     const prompt = {
       title: `${this.options.lock.app.name} policy approval`,
       // A combined prompt names the tool ask, and each ask's reason, so the
@@ -550,6 +573,18 @@ export class GovernanceSession {
         ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
       ].join("\n"),
     };
+    // A grant wider than the target shown says so, for each ask, where the
+    // session answer is shown.
+    const sessionCovers = grants.some((grant) => grant.rule)
+      ? asks
+          .map((ask, index) => {
+            const grant = grants[index];
+            return grant?.rule
+              ? `Allow for this session covers any target matching ${grant.pattern} (rule ${grant.rule}) for ${ask.action} in this session`
+              : `Allow for this session covers this ${ask.action} target only`;
+          })
+          .join("\n")
+      : undefined;
     // Pi does not queue extension dialogs: a second confirm replaces the
     // first, whose promise never settles. Approvals of concurrent tool
     // calls (parallel top-level calls, Codemode's nested calls) wait their
@@ -560,26 +595,25 @@ export class GovernanceSession {
       outcome: "allow" as const,
       approval: "auto" as const,
     };
-    // A session allow is the user's own earlier answer to this very ask: it
-    // is looked up only for an `ask` (never a `deny`), under the exact action
-    // and targets, and looked up again once the prompt queue reaches this call.
-    // A combined prompt is covered only when every ask in it was allowed.
-    const remembered = asks.map((ask) =>
-      sessionAllowKey(ask.action, ask.resources),
-    );
+    // A session allow is the user's own earlier answer to this ask (or, for a
+    // rule grant, to the same rule's ask for the same action): it is looked
+    // up only for an `ask` (never a `deny`), and looked up again once the
+    // prompt queue reaches this call. A combined prompt is covered only when
+    // every ask in it was allowed.
     const sessionAllowed = () =>
-      remembered.every((key) => this.#sessionAllowed.has(key));
+      grants.every((grant) => this.#sessionAllowed.has(grant.key));
     const sessionApproved = {
       ...decision,
       outcome: "allow" as const,
       approval: "session" as const,
     };
-    const offered =
-      decision.effect === "ask" &&
-      channel &&
-      asks.every((ask) => this.#offersSession(ask.action, ask.resources))
-        ? { ...prompt, scopes: ["once", "session"] as const }
-        : prompt;
+    const offered = offersSession
+      ? {
+          ...prompt,
+          scopes: ["once", "session"] as const,
+          ...(sessionCovers ? { sessionCovers } : {}),
+        }
+      : prompt;
     let auto = this.#autoApproval(asks, decision);
     let prompted = false;
     const resolved: ResolvedDecision = auto
@@ -612,8 +646,26 @@ export class GovernanceSession {
               return answered;
             })
           : await resolveDecision(decision, channel, prompt);
+    // An answer for a grant already held keeps its count of uses.
     if (resolved.remember === "session")
-      for (const key of remembered) this.#sessionAllowed.add(key);
+      for (const { key } of grants)
+        if (!this.#sessionAllowed.has(key)) this.#sessionAllowed.set(key, 0);
+    if (resolved.approval === "session")
+      for (const { key } of grants)
+        this.#sessionAllowed.set(key, (this.#sessionAllowed.get(key) ?? 0) + 1);
+    // The grant and each use it satisfied: the rule grant marked, and the
+    // number of uses so far. Counts only, never a target.
+    const sessionUse = resolved.approval === "session";
+    const grantDetail = (index: number) => {
+      const grant = grants[index];
+      if (!grant || !(resolved.remember === "session" || sessionUse)) return {};
+      return {
+        ...(grant.rule ? { sessionGrant: "rule" } : {}),
+        ...(sessionUse
+          ? { sessionUses: String(this.#sessionAllowed.get(grant.key)) }
+          : {}),
+      };
+    };
     const answer = {
       ...(resolved.approval ? { approval: resolved.approval } : {}),
       ...(resolved.remember ? { remember: resolved.remember } : {}),
@@ -640,7 +692,12 @@ export class GovernanceSession {
                 policy: tool.decision.policyId,
                 rule: tool.decision.ruleId,
                 enforcement: tool.decision.enforcement,
-                detail: { action: "tool.execute", ...tool.detail, ...answer },
+                detail: {
+                  action: "tool.execute",
+                  ...tool.detail,
+                  ...answer,
+                  ...grantDetail(0),
+                },
               },
             },
           ]
@@ -659,7 +716,9 @@ export class GovernanceSession {
                 detail: {
                   action,
                   ...(events?.detail ?? {}),
-                  ...(own.effect === "ask" ? answer : {}),
+                  ...(own.effect === "ask"
+                    ? { ...answer, ...grantDetail(tool ? 1 : 0) }
+                    : {}),
                 },
                 ...(events?.content ? { content: events.content } : {}),
               },
@@ -798,11 +857,72 @@ export class GovernanceSession {
   }
 
   /**
-   * The asks the user answered "allow for this session": action and exact
-   * targets. In memory only, so it ends with the session; a `deny` never
-   * consults it, and nothing here is stored.
+   * The asks the user answered "allow for this session" (see `#sessionGrant`),
+   * with the number of later asks each one approved. In memory only, so it
+   * ends with the session and no other session (a subagent child included)
+   * sees it; a `deny` never consults it, and nothing here is stored.
    */
-  readonly #sessionAllowed = new Set<string>();
+  readonly #sessionAllowed = new Map<string, number>();
+
+  /**
+   * What "allow for this session" grants for one ask. Where the user owns the
+   * policy or the administrator allows auto-approval (`policy.userAuto`), an
+   * ask that one rule of the user's preferences or the distribution defaults
+   * decides on every target, that no rule keeps the prompt of, and whose
+   * pattern does not match everything, grants that rule for that action: any
+   * target it asks for next. Any other grants its exact targets.
+   */
+  #sessionGrant(ask: ApprovalTarget): {
+    key: string;
+    rule?: string;
+    pattern?: string;
+  } {
+    const exact = { key: sessionAllowKey(ask.action, ask.resources) };
+    if (
+      this.options.lock.deployment.mode !== "personal" &&
+      !this.#userAuto.allowed
+    )
+      return exact;
+    const explained = ask.resources
+      .map((resource) => this.engine.explain({ action: ask.action, resource }))
+      .filter((explanation) => explanation.decision.effect !== "allow");
+    const asked = explained.map((explanation) => explanation.decision);
+    const [first] = asked;
+    const byRule =
+      first !== undefined &&
+      (first.layer === "user-preference" ||
+        first.layer === "distribution-default") &&
+      asked.every(
+        (decision) =>
+          decision.effect === "ask" &&
+          decision.layer === first.layer &&
+          decision.ruleId === first.ruleId,
+      ) &&
+      !ask.resources.some((resource) =>
+        this.engine.keepsPrompt({ action: ask.action, resource }),
+      );
+    if (!byRule) return exact;
+    const pattern = explained[0]?.matches.find(
+      (match) =>
+        match.first &&
+        match.layer === first.layer &&
+        match.ruleId === first.ruleId,
+    )?.resource;
+    if (pattern === undefined) return exact;
+    const pathAction = isPathAction(ask.action);
+    if (
+      !hasLiteralPrefix(
+        pathAction ? expandPathTokens(pattern, this.engine.context) : pattern,
+        pathAction,
+      )
+    )
+      return exact;
+    return {
+      key: JSON.stringify([ask.action, first.layer, first.ruleId]),
+      rule: first.ruleId,
+      pattern,
+    };
+  }
 
   /**
    * Whether the prompt may offer "allow for this session". Not for an ask an

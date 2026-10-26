@@ -124,7 +124,9 @@ export function uiChannel(ctx: ExtensionContext): ApprovalChannel | undefined {
     // its `confirm` only two.
     if (options.length > 2) {
       const choice = await ctx.ui.select(
-        `${detail.title}\n${detail.message}`,
+        [detail.title, detail.message, detail.sessionCovers]
+          .filter((line) => line !== undefined)
+          .join("\n"),
         options.map((option) => option.label),
         signal ? { signal } : undefined,
       );
