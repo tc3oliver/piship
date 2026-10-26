@@ -52,6 +52,43 @@ describe("grantCovers", () => {
     expect(covers(paths, [ask({ resource: "/a/bc" })])).toBe(false);
   });
 
+  it("takes the lexical form under an alias of a root, the resolved form only under the root", () => {
+    const aliased = {
+      ...grant({ paths: ["/private/var/w"] }),
+      pathAliases: ["/var/w"],
+    };
+    expect(
+      covers(aliased, [
+        ask({
+          resource: "/var/w/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(true);
+    // The alias never stands for the resolved form.
+    expect(
+      covers(aliased, [
+        ask({ resource: "/var/w/a.ts", resolvedResource: "/var/w/a.ts" }),
+      ]),
+    ).toBe(false);
+    expect(
+      covers(aliased, [
+        ask({
+          resource: "/var/other/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      covers(grant({ paths: ["/private/var/w"] }), [
+        ask({
+          resource: "/var/w/a.ts",
+          resolvedResource: "/private/var/w/a.ts",
+        }),
+      ]),
+    ).toBe(false);
+  });
+
   it("does not cover when the realpath leaves the root", () => {
     expect(
       covers(paths, [
@@ -382,6 +419,21 @@ describe("validateGrant", () => {
         limits,
       ),
     ).toEqual(["grant id is missing"]);
+    expect(
+      validateGrant(
+        { ...grant({ paths: ["/work/proj"] }), pathAliases: ["/home/u"] },
+        limits,
+      ),
+    ).not.toEqual([]);
+    expect(
+      validateGrant(
+        {
+          ...grant({ paths: ["/work/proj"] }),
+          pathAliases: "/w",
+        } as unknown as TaskGrant,
+        limits,
+      ),
+    ).not.toEqual([]);
   });
 });
 

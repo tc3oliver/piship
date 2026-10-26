@@ -27,6 +27,13 @@ export interface TaskGrant {
     readonly git?: readonly { remote: string; branches: readonly string[] }[];
   };
   readonly inheritToSubagents: boolean;
+  /**
+   * The roots as the user spelled them, where that differs from their
+   * realpath (`/var/x` for `/private/var/x`). An ask's lexical form may lie
+   * under one of these; its resolved form must still lie under a root in
+   * `scope.paths`.
+   */
+  readonly pathAliases?: readonly string[];
 }
 
 /** One ask of a (possibly combined) prompt. */
@@ -144,9 +151,13 @@ function askCovered(
     case "filesystem.write": {
       // Fail closed: the caller must supply the realpath.
       if (ask.resolvedResource === undefined) return false;
-      const forms = [ask.resource, ask.resolvedResource];
-      return list(scope.paths).some((root) =>
-        forms.every((form) => isUnder(root, form, platform)),
+      const { resource, resolvedResource } = ask;
+      const roots = list(scope.paths);
+      return (
+        roots.some((root) => isUnder(root, resolvedResource, platform)) &&
+        [...roots, ...list(grant.pathAliases)].some((root) =>
+          isUnder(root, resource, platform),
+        )
       );
     }
     case "tool.execute":
@@ -263,6 +274,8 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
     )
   )
     errors.push("scope git is not a list of remotes");
+  if (grant.pathAliases !== undefined && !isStrings(grant.pathAliases))
+    errors.push("path aliases are not a list of strings");
   if (errors.length) return errors;
 
   const expires = Date.parse(grant.expiresAt);
@@ -271,7 +284,7 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   else if (expires > limits.now + limits.maxTtlMs)
     errors.push("expiry exceeds the maximum lifetime");
 
-  for (const root of scope.paths ?? []) {
+  for (const root of [...(scope.paths ?? []), ...(grant.pathAliases ?? [])]) {
     if (!p.isAbsolute(root)) errors.push(`path root is not absolute: ${root}`);
     else if (
       platform === "win32" &&
