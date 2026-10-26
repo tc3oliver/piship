@@ -786,16 +786,20 @@ describe("allow for this session", () => {
     },
   );
 
-  it("is exact-target only in a managed distribution that does not allow auto-approval", async () => {
+  it("remembers only bounded file rules without managed auto-approval", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     const { shown, channel } = sessionPrompt();
     await session.decide("filesystem.write", join(workspace, "a.txt"), channel);
     expect(shown[0]?.scopes).toEqual(["once", "session"]);
-    expect(shown[0]?.sessionCovers).toBeUndefined();
+    expect(shown[0]?.sessionCovers).toBe(
+      covers("workspace/**", "write", "filesystem.write"),
+    );
     await session.decide("filesystem.write", join(workspace, "a.txt"), channel);
-    expect(shown).toHaveLength(1);
     await session.decide("filesystem.write", join(workspace, "b.txt"), channel);
+    expect(shown).toHaveLength(1);
+    await session.decide("filesystem.write", join(workspace, ".mcp.json"), channel);
     expect(shown).toHaveLength(2);
+    expect(shown[1]?.sessionCovers).toBeUndefined();
   });
 
   it("covers a default rule where the administrator allows auto-approval, never a managed user's own ask", async () => {
