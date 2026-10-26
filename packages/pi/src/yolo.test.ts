@@ -34,7 +34,7 @@ import {
 } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { governanceHooks } from "./builtins.js";
-import { GovernanceSession } from "./governance-session.js";
+import { GovernanceSession, hasLiteralPrefix } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 
 const roots: string[] = [];
@@ -718,10 +718,15 @@ describe("allow for this session", () => {
     ["*:**", "mcp.tool.call", "one:a", "two:b"],
     ["* **", "shell.execute", "ls a", "cat b"],
     ["**/*", "filesystem.read", "a.txt", "b.txt"],
-    ["/**", "filesystem.read", "a.txt", "b.txt"],
     ["**/x", "filesystem.read", "a/x", "b/x"],
-    // With a home of `/`, `~/**` is `/**` once expanded.
-    ["~/**", "filesystem.read", "a.txt", "b.txt"],
+    // Paths are `C:/...` on Windows: a POSIX root matches nothing there.
+    ...(process.platform === "win32"
+      ? []
+      : ([
+          ["/**", "filesystem.read", "a.txt", "b.txt"],
+          // With a home of `/`, `~/**` is `/**` once expanded.
+          ["~/**", "filesystem.read", "a.txt", "b.txt"],
+        ] as const)),
   ] as const)(
     "grants only the exact target for a rule whose pattern %s reaches every target",
     async (resource, action, first, second) => {
@@ -747,6 +752,17 @@ describe("allow for this session", () => {
       expect(shown).toHaveLength(2);
     },
   );
+
+  it("refuses a rule grant for a pattern that reaches every target, on any platform", () => {
+    for (const pattern of ["*", "**", "*:*", "*:**", "* **", " **", "\t*"])
+      expect(hasLiteralPrefix(pattern, false), pattern).toBe(false);
+    for (const pattern of ["**/*", "/**", "**/x", "C:/**", "C:**", "c:/*"])
+      expect(hasLiteralPrefix(pattern, true), pattern).toBe(false);
+    for (const pattern of ["git *", "npm run *", "r*", "server:*", "write"])
+      expect(hasLiteralPrefix(pattern, false), pattern).toBe(true);
+    for (const pattern of ["/home/me/src/**", "C:/Users/me/**", "a.txt"])
+      expect(hasLiteralPrefix(pattern, true), pattern).toBe(true);
+  });
 
   it.each([
     ["git *", "git status", "git log"],

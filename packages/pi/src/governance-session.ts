@@ -97,6 +97,21 @@ function sessionAllowKey(
   return JSON.stringify([action, [...resources].sort()]);
 }
 
+/**
+ * Whether a rule pattern (path tokens already expanded) has a literal
+ * character other than `/`, `:`, or whitespace before its first `*`, after a
+ * path's drive letter. A pattern led by a wildcard, a root, a drive root, or
+ * a space (`**`, `*:*`, a bare `/` or `C:/` before the first `*`) reaches
+ * every target and grants no rule for the session.
+ */
+export function hasLiteralPrefix(
+  pattern: string,
+  pathAction: boolean,
+): boolean {
+  const literal = pathAction ? pattern.replace(/^[A-Za-z]:/, "") : pattern;
+  return /[^/:\s]/.test(literal.split("*")[0] ?? "");
+}
+
 /** One `ask` a prompt answers: its action and exact targets. */
 interface ApprovalTarget {
   readonly action: PolicyAction;
@@ -894,13 +909,14 @@ export class GovernanceSession {
         match.ruleId === first.ruleId,
     )?.resource;
     if (pattern === undefined) return exact;
-    // Only a pattern with a literal character other than `/` or `:` before
-    // its first `*`, once `~`, `workspace`, and `tmp` are expanded: `**`,
-    // `*:*`, `* **`, `**/x`, or `~/**` with a home of `/` reach too far.
-    const expanded = isPathAction(ask.action)
-      ? expandPathTokens(pattern, this.engine.context)
-      : pattern;
-    if (!/[^/:]/.test(expanded.split("*")[0] ?? "")) return exact;
+    const pathAction = isPathAction(ask.action);
+    if (
+      !hasLiteralPrefix(
+        pathAction ? expandPathTokens(pattern, this.engine.context) : pattern,
+        pathAction,
+      )
+    )
+      return exact;
     return {
       key: JSON.stringify([ask.action, first.layer, first.ruleId]),
       rule: first.ruleId,
