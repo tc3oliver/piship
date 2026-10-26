@@ -114,6 +114,11 @@ describe("sweepData", () => {
       file("logs/audit-spool/0123456789abcdef/4-d.jsonl.corrupt", 200),
     ];
     const recent = file("logs/audit-spool/0123456789abcdef/5-e.jsonl", 1);
+    const emptied = [
+      file("logs/audit-spool/1111111111111111/6-f.jsonl", 200),
+      file("logs/audit-spool/1111111111111111/6-f.jsonl.rejected", 200),
+      file("logs/audit-spool/1111111111111111/7-g.jsonl.corrupt", 200),
+    ];
     const sweep = async (spoolSinks?: readonly string[]) => {
       const { events, record } = recorder();
       const result = await sweepData({
@@ -130,13 +135,18 @@ describe("sweepData", () => {
     expect((await sweep()).result.classes).toEqual([]);
     const { events, result } = await sweep(["siem"]);
     for (const path of [...kept, recent]) expect(existsSync(path)).toBe(true);
-    for (const path of orphaned) expect(existsSync(path)).toBe(false);
+    for (const path of [...orphaned, ...emptied])
+      expect(existsSync(path)).toBe(false);
+    // A directory the sweep emptied goes; one still holding a file stays.
+    expect(existsSync(dirname(emptied[0] as string))).toBe(false);
+    expect(existsSync(dirname(recent))).toBe(true);
+    expect(existsSync(dirname(kept[0] as string))).toBe(true);
     expect(result.classes).toEqual([
-      { class: "audit", removed: 2, held: 0, kept: 0, failed: 0 },
+      { class: "audit", removed: 5, held: 0, kept: 0, failed: 0 },
     ]);
     expect(events[0]?.detail).toMatchObject({
-      files: 2,
-      spools: "0123456789abcdef:2",
+      files: 5,
+      spools: "0123456789abcdef:2,1111111111111111:3",
     });
   });
 

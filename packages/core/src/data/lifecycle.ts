@@ -29,6 +29,7 @@ import {
   lstatSync,
   readdirSync,
   readFileSync,
+  rmdirSync,
   type Stats,
   unlinkSync,
   writeFileSync,
@@ -278,8 +279,8 @@ function candidates(
   }
 }
 
-/** Files of the spool directories of sinks not in `spoolSinks`. */
-function orphanedSpools(
+/** The spool directories of sinks not in `spoolSinks`. */
+function orphanedSpoolDirectories(
   stateDir: string,
   spoolSinks: readonly string[] | undefined,
 ): string[] {
@@ -289,7 +290,18 @@ function orphanedSpools(
   const configured = new Set(spoolSinks.map(auditSpoolKey));
   return entries(root)
     .filter((key) => !configured.has(key))
-    .flatMap((key) => walk(join(root, key), () => true));
+    .map((key) => join(root, key))
+    .filter((path) => lstat(path)?.isDirectory() === true);
+}
+
+/** Every file (spool, `.corrupt`, `.rejected`, `.tmp`) of those directories. */
+function orphanedSpools(
+  stateDir: string,
+  spoolSinks: readonly string[] | undefined,
+): string[] {
+  return orphanedSpoolDirectories(stateDir, spoolSinks).flatMap((directory) =>
+    walk(directory, () => true),
+  );
 }
 
 /** `<sink key>:<count>` of the spool files among `paths`, or undefined. */
@@ -329,6 +341,18 @@ export async function sweepData(
       classes.push(
         ...(await sweepClass(options, dataClass, retention, now, held)),
       );
+      // An orphaned spool directory the sweep emptied goes too; one still
+      // holding a file is kept (rmdir refuses it).
+      if (dataClass === "audit")
+        for (const directory of orphanedSpoolDirectories(
+          options.stateDir,
+          options.spoolSinks,
+        ))
+          try {
+            rmdirSync(directory);
+          } catch {
+            // Not empty, or already gone.
+          }
     } finally {
       release();
     }
