@@ -194,14 +194,14 @@ Pi renames a command two packages register: pi-code's `/tasks` and the backgroun
 
 [`managed.piship.yaml`](managed.piship.yaml) is the same profile as a managed distribution. It is validated by the test suite but not locked or built, because a company supplies its own identity provider, credential broker, and gateway: copy it next to your own resources, set those, and run `piship lock`. What changes, and why:
 
-- `policy.default: ask`, and `userAuto` is not declared, so `--yolo` is refused. The secret denies are enforced rules, and a `sudo` deny is added.
+- `policy.default: ask` remains the fallback for unclassified actions; the declared workspace, tool and shell defaults allow ordinary coding. `userAuto` is not declared, so `--yolo` is refused. Secret and `sudo` denies remain enforced.
 - The packages are `company` class, because a managed distribution denies the `user` class. The package trust stays strict.
 - `pi-browser-use` and `pi-background-tasks` are not shipped. The browser keeps a logged-in profile under `~/.pi`, and `bg_run` starts commands outside the sandbox and the shell policy.
 - `pi-code` keeps its tools and loses its readers of Claude Code configuration (MCP client, hooks, `env` settings, rules, commands, skills, imports, output styles) by a package filter, and its `CLAUDE_CONFIG_DIR` is moved into the state.
 - `pi-lens` installs nothing and uses what the machine has. Codemode is off, because a managed distribution must give every tool a script can reach an explicit policy rule.
-- The permission configuration is `enforce` mode: rewritten at every launch. `permissionReviewLog` is off.
+- The permission configuration is `enforce` mode: rewritten at every launch. Routine tools, shell commands and declared MCP calls default to `allow` in the provider, avoiding a duplicate prompt after PiShip permits them. Explicit destructive-command and credential-path denies remain; outside-directory access still asks. `permissionReviewLog` is off.
 - All five Claude dimensions are declared for all three origins: `claudeHooks` is `deny`, and the other four are `company-approved`, which admits no project content until the company declares `allow` for an origin it trusts. Its `company.match` combines `remote` with `path`.
-- The sandbox is required. The default HTTP dispatcher admits declared hosts only; child processes require organization egress controls.
+- The sandbox is required. The default HTTP dispatcher admits declared hosts only; child processes require organization egress controls. The provider's shell patterns are not a security boundary against scripts or wrappers; containment depends on the enforced sandbox and destination-side permissions. Windows has no native sandbox and requires a remote backend for this profile.
 
 ## Known limits
 
