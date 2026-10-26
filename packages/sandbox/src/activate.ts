@@ -174,6 +174,12 @@ export interface SandboxExecOptions {
   /** Seconds, as in Pi's bash tool. */
   timeout?: number;
   env?: NodeJS.ProcessEnv;
+  /** Shell override for uncontained commands only; never bypasses an enforced backend. */
+  shell?: {
+    shell: string;
+    args: readonly string[];
+    commandTransport?: "argv" | "stdin";
+  };
 }
 
 export interface ActiveSandbox {
@@ -653,24 +659,32 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     if (!(enforced && remote) && !existsSync(cwd))
       throw new Error(`Working directory does not exist: ${cwd}`);
     if (!enforced) {
-      // Not contained: behave like a plain local shell, environment untouched.
-      const shell = shellFor(platform);
-      const exit = await spawnProcess({
-        file: shell.file,
-        args: [...shell.flag, command],
+      // Not contained: preserve the caller's shell syntax and environment.
+      const fallback = shellFor(platform);
+      const stdin = options.shell?.commandTransport === "stdin";
+      const child = spawnProcess({
+        file: options.shell?.shell ?? fallback.file,
+        args: options.shell
+          ? [...options.shell.args, ...(stdin ? [] : [command])]
+          : [...fallback.flag, command],
         cwd,
         env: options.env ?? sourceEnv,
         ...(options.timeout ? { timeoutMs: options.timeout * 1000 } : {}),
         graceMs: 1000,
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(stdin ? { stdin: "pipe" as const } : {}),
         onStdout: options.onData,
         onStderr: options.onData,
-      }).exited;
+      });
+      if (stdin) child.stdin?.end(command);
+      const exit = await child.exited;
       if (exit.error) throw new Error(exit.error);
       if (exit.cancelled) throw new Error("aborted");
       if (exit.timedOut) throw new Error(`timeout:${options.timeout}`);
       return { exitCode: exitCodeOf(exit.code, exit.signal) };
     }
+    if (options.shell)
+      throw new Error("A contained command cannot override its sandbox shell");
     if (unsafe) throw unsafe;
     if (retired || disposed) throw retiredError(report);
     const relativeCwd = workspacePath(profile.workspace, cwd);
