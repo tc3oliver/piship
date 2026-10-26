@@ -431,14 +431,20 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     live.set(pid, platform);
   }
   if (options.onStdout) child.stdout?.on("data", options.onStdout);
-  let jobError = false;
+  let jobError: string | undefined;
   child.stderr?.on("data", (chunk: Buffer) => {
-    if (
-      platform === "win32" &&
-      chunk.toString("utf8").includes("PISHIP_WINDOWS_JOB_ERROR")
-    )
-      jobError = true;
-    else options.onStderr?.(chunk);
+    const message = chunk.toString("utf8");
+    if (platform === "win32" && message.includes("PISHIP_WINDOWS_JOB_ERROR")) {
+      // Report only a known Win32 operation and numeric error code. The
+      // supervisor's raw exception may contain a path or environment value.
+      const failure =
+        /PISHIP_WINDOWS_JOB_ERROR:\s*(CreateProcess|AssignProcessToJobObject|ResumeThread|CreateJobObject|SetInformationJobObject|CreatePipe|SetHandleInformation|WaitForSingleObject|GetExitCodeProcess) failed: (\d+)/.exec(
+          message,
+        );
+      jobError = failure
+        ? `Windows Job Object ${failure[1]} failed (${failure[2]})`
+        : "Windows Job Object startup failed";
+    } else options.onStderr?.(chunk);
   });
   child.stdin?.on("error", () => {});
 
@@ -498,13 +504,7 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   };
   const exited = waitForExit(child, cleanup).then((result) => ({
     ...result,
-    ...(jobError
-      ? {
-          code: null,
-          signal: null,
-          error: "ENOENT or Windows Job Object startup failed",
-        }
-      : {}),
+    ...(jobError ? { code: null, signal: null, error: jobError } : {}),
     timedOut,
     cancelled,
   }));
