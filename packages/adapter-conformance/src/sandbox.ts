@@ -1793,7 +1793,10 @@ const checks: Record<SandboxBehavior, Check> = {
       `mkdir -p ${quote(h.scratch)}`,
       "creating a directory",
     );
-    const wait = markerWaitScript(release, h.observable, RELEASE_POLLS);
+    // A buffered backend may not report "started" until the command exits.
+    // Keep it alive past whileRunning's fallback even on a busy runner;
+    // releasing after abort still detects commands that fail to stop.
+    const wait = markerWaitScript(release, h.observable, RELEASE_POLLS * 3);
     const execution = h.start(
       instance,
       `echo started; ( ${wait}; printf late > ${quote(marker)} ) & wait`,
