@@ -934,6 +934,9 @@ export class GovernanceSession {
    * layer, as with `--yolo`.
    */
   #offersSession(action: PolicyAction, resources: readonly string[]): boolean {
+    // A grant for an unnamed push target would cover every later bare push.
+    if (action === "git.push" && resources.some((item) => item.includes("*")))
+      return false;
     if (this.options.lock.deployment.mode === "personal") return true;
     return !resources.some((item) =>
       this.engine.keepsPrompt({ action, resource: item }),

@@ -134,16 +134,23 @@ describe("decision tables for every action", () => {
     // `git push origin` or a bare `git push` could reach main.
     expect(push("origin/*")).toBe("main");
     expect(push("*")).toBe("main");
-    // A rule for every action is not widened to unnamed targets.
-    const wildcard = engine({
-      policy: makePolicy({
-        default: "allow",
-        defaults: [rule("secret", "*", "secret", "deny")],
-      }),
-    });
-    expect(
-      wildcard.evaluate({ action: "git.push", resource: "*" }).ruleId,
-    ).toBe("builtin:default");
+    // A rule for every action never applies to git.push: shell.execute
+    // already decides the command by it.
+    for (const effect of ["allow", "ask", "deny"] as const) {
+      const wildcard = engine({
+        policy: makePolicy({
+          default: "allow",
+          enforced: [rule("all", "*", "**", effect)],
+        }),
+      });
+      for (const resource of ["*", "origin/main"])
+        expect(wildcard.evaluate({ action: "git.push", resource }).ruleId).toBe(
+          "builtin:default",
+        );
+      expect(
+        wildcard.evaluate({ action: "shell.execute", resource: "git push" }),
+      ).toMatchObject({ ruleId: "all", effect });
+    }
   });
   it("never applies the policy default to git.push: it only narrows", () => {
     const enforcedAsk = engine({

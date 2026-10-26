@@ -1582,6 +1582,61 @@ describe("git.push in the shell gate", () => {
     expect(result.outcome).toMatch(/rule me\.no-push/);
   });
 
+  it("leaves rules for every action to shell.execute, as before", async () => {
+    const denied = await bash(
+      "git push origin main",
+      [{ id: "me.all", action: "*", effect: "deny" }],
+      context(true),
+    );
+    expect(denied).toMatchObject({ ran: false, prompts: [] });
+    expect(denied.outcome).toMatch(/rule me\.all/);
+    // One prompt for the tool and the command, none for the push.
+    const asked = await bash(
+      "git push origin main",
+      [{ id: "me.all", action: "*", effect: "ask" }],
+      context(true),
+    );
+    expect(asked).toMatchObject({ outcome: "ran", ran: true });
+    expect(asked.prompts).toHaveLength(1);
+  });
+
+  it("offers Allow for this session only for a named push target", async () => {
+    const offered: string[][] = [];
+    const ctx = context(true);
+    const recording = {
+      ...ctx,
+      ui: {
+        ...ctx.ui,
+        select: async (_title: string, options: string[]) => {
+          offered.push(options);
+          return options[0];
+        },
+        // Without the session scope the prompt is a plain confirmation.
+        confirm: async () => {
+          offered.push(["confirm"]);
+          return true;
+        },
+      },
+    } as ExtensionToolContext;
+    const rules = [
+      ...SHELL,
+      {
+        id: "me.ask",
+        action: "git.push",
+        resource: "origin/**",
+        effect: "ask",
+      },
+    ];
+    expect((await bash("git push origin main", rules, recording)).ran).toBe(
+      true,
+    );
+    expect((await bash("git push origin", rules, recording)).ran).toBe(true);
+    expect(offered).toEqual([
+      ["Allow once", "Allow for this session", "Deny"],
+      ["confirm"],
+    ]);
+  });
+
   it("asks for an enforced git.push ask although the policy default is deny", async () => {
     expect((await bash("git push origin prod", SHELL)).outcome).toMatch(
       /rule prod.*approval needs an interactive session/,

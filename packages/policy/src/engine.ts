@@ -433,16 +433,14 @@ export class PolicyEngine {
       chainsBeyondPattern(pattern, resource)
     )
       return false;
-    // A push target the command does not name (`*`) could be any branch, so
-    // every deny and ask rule written for pushes covers it; an allow, or a
-    // rule for every action (`*`), covers only what it spells.
-    if (
-      action === "git.push" &&
-      entry.rule.action !== "*" &&
-      entry.rule.effect !== "allow" &&
-      resource.includes("*")
-    )
-      return true;
+    if (action === "git.push") {
+      // Only rules written for pushes apply: a rule for every action (`*`)
+      // already decides the command through shell.execute.
+      if (entry.rule.action === "*") return false;
+      // A target the command does not name (`*`) could be any branch, so
+      // every deny and ask covers it; an allow covers only what it spells.
+      if (entry.rule.effect !== "allow" && resource.includes("*")) return true;
+    }
     return matchGlob(pattern, resource);
   }
 

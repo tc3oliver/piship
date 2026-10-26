@@ -53,6 +53,29 @@ describe("gitPushResources", () => {
     ["x=$(git push origin main)", ["origin/main"]],
     ['echo "`git push origin main`"', ["origin/main"]],
     ["echo `git push origin main`", ["origin/main"]],
+    // Substitutions read quotes: a quoted `)` does not close them.
+    [`x="$(echo ')'; git push origin main)"`, ["origin/main"]],
+    ['x="$(echo ")"; git push origin main)"', ["origin/main"]],
+    // A redirection's target, and its file descriptor, are no arguments.
+    ["git push origin main>/dev/null", ["origin/main"]],
+    ["git push origin main 2>&1 | tee log", ["origin/main"]],
+    ["git push origin main </dev/null", ["origin/main"]],
+    ["git push <<< x origin main", ["origin/main"]],
+    // A heredoc body is data.
+    ["git commit -m \"$(cat <<'EOF'\nFix git push gate\nEOF\n)\"", []],
+    ["cat <<EOF > notes\ngit push origin main\nEOF\ngit status", []],
+    [
+      'cat <<-"EOF"\n\tgit push origin main\n\tEOF\ngit push origin dev',
+      ["origin/dev"],
+    ],
+    // `$'...'` is read to its next quote.
+    ["git push $'origin' main", ["origin/main"]],
+    // A push's arguments are not commands: one push per simple command.
+    [
+      "git push origin git push upstream x",
+      ["origin/git", "origin/push", "origin/upstream", "origin/x"],
+    ],
+    ["git push origin main; git push origin main", ["origin/main"]],
     // A quoted string is data, not a command.
     ['echo "git push origin main"', []],
     ['git commit -m "fix git push"', []],
@@ -71,6 +94,33 @@ describe("gitPushResources", () => {
     "python -c \"import subprocess; subprocess.run(['git', 'push'])\"",
   ])("does not recognize %s", (command) => {
     expect(gitPushResources(command)).toEqual([]);
+  });
+
+  it("stays linear and bounded on hostile input", () => {
+    for (const [command, bound] of [
+      ["git push ".repeat(8_000), 1],
+      ["a; ".repeat(350_000), 0],
+      [`git push origin ${"b ".repeat(100_000)}`, 1],
+      ['"$('.repeat(10_000), 1],
+      [`${"$(".repeat(10_000)}git push origin main`, 1],
+      [`git${" -C git".repeat(20_000)}`, 1],
+      ["git -C git ".repeat(20_000), 0],
+    ] as const) {
+      const started = performance.now();
+      const resources = gitPushResources(command);
+      expect(performance.now() - started).toBeLessThan(1500);
+      expect(resources.length).toBeLessThanOrEqual(64);
+      if (bound === 0) expect(resources).toEqual([]);
+      else expect(resources.length).toBeGreaterThan(0);
+    }
+    // Past the limits, the target is unnamed.
+    expect(gitPushResources('"$('.repeat(10_000))).toEqual(["*"]);
+    expect(gitPushResources(`git${" -C git".repeat(20_000)}`)).toEqual(["*"]);
+    expect(
+      gitPushResources(
+        Array.from({ length: 65 }, (_, i) => `git push origin b${i}`).join(";"),
+      ),
+    ).toEqual(["*"]);
   });
 
   it("is documented as command text only, not a boundary", () => {
