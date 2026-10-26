@@ -1529,7 +1529,9 @@ describeIsolated(isolator)(
 
     it.concurrent("passes a reference that returns a command's output only when it ends", async () => {
       const report = await run({ variant: "shared", buffered: true });
-      expect(statuses(report)).toEqual(expected.shared);
+      expect(statuses(report), JSON.stringify(reasons(report))).toEqual(
+        expected.shared,
+      );
     }, 120_000);
 
     it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
