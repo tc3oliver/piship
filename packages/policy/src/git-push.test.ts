@@ -76,6 +76,29 @@ describe("gitPushResources", () => {
       ["origin/git", "origin/push", "origin/upstream", "origin/x"],
     ],
     ["git push origin main; git push origin main", ["origin/main"]],
+    // A comment ends at the line end, also inside a substitution.
+    ["git push origin  # current branch", ["origin/*"]],
+    ["# don't forget\ngit push origin main", ["origin/main"]],
+    ["x=$(# note's\ngit push origin main)", ["origin/main"]],
+    ["echo a#b; git push origin main", ["origin/main"]],
+    // `<<` in arithmetic is a shift, not a heredoc.
+    ["echo $((1<<2))\ngit push origin main", ["origin/main"]],
+    ['echo "$((1<<2))"\ngit push origin main', ["origin/main"]],
+    ["((x <<= 1))\ngit push origin main", ["origin/main"]],
+    // A heredoc delimiter is one quoted word.
+    ['cat <<"E O F"\nE O F\ngit push origin main', ["origin/main"]],
+    ['cat <<"EOF;"\nEOF;\ngit push origin main', ["origin/main"]],
+    ["x=`cat <<EOF`\ngit push origin main", ["origin/main"]],
+    // A substitution as a redirection target still runs.
+    ["echo >$(git push origin main)", ["origin/main"]],
+    ['echo >"$(git push origin main)" next', ["origin/main"]],
+    // A positional repository wins over --repo, as in git.
+    ["git push --repo=x origin main", ["origin/main"]],
+    // Text an unended quote or heredoc leaves unread counts as an unnamed push.
+    ["cat <<EOF\nnever ended\ngit push origin main", ["*"]],
+    ["echo 'unended; git push origin main", ["*"]],
+    ['echo "unended; git push origin main', ["*"]],
+    ["cat <<EOF\nnever ended", []],
     // A quoted string is data, not a command.
     ['echo "git push origin main"', []],
     ['git commit -m "fix git push"', []],

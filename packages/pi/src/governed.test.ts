@@ -70,7 +70,6 @@ const POLICY = [
   "  default: deny",
   "  enforced:",
   '    - { id: secrets, action: filesystem.read, resource: "~/.ssh/**", effect: deny, reason: Keys stay private }',
-  '    - { id: prod, action: git.push, resource: "origin/prod", effect: ask }',
   "  defaults:",
   '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
   '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
@@ -90,6 +89,8 @@ async function open(
     readonly metrics?: LocalMetrics;
     /** The `class` of every declared MCP server (piship/v1alpha6). */
     readonly mcpClass?: "company" | "user";
+    /** More `policy.enforced` rules, as manifest lines. */
+    readonly enforced?: readonly string[];
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -120,7 +121,9 @@ async function open(
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
       'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
-      ...POLICY,
+      ...POLICY.flatMap((line) =>
+        line === "  enforced:" ? [line, ...(options.enforced ?? [])] : [line],
+      ),
       ...extra,
       "",
     ].join("\n"),
@@ -1481,8 +1484,9 @@ describe("git.push in the shell gate", () => {
     command: string,
     userRules: readonly unknown[],
     ctx = context(),
+    enforced: readonly string[] = [],
   ) {
-    const { session, workspace } = await open([], { userRules });
+    const { session, workspace } = await open([], { userRules, enforced });
     const prompts: string[] = [];
     const counted = {
       ...ctx,
@@ -1637,11 +1641,62 @@ describe("git.push in the shell gate", () => {
     ]);
   });
 
+  it("never lets a session grant approve an unnamed push target", async () => {
+    const { session, workspace } = await open([], {
+      userRules: [
+        ...SHELL,
+        {
+          id: "me.ask",
+          action: "git.push",
+          resource: "origin/**",
+          effect: "ask",
+        },
+      ],
+    });
+    const prompts: string[] = [];
+    const ctx = context(true);
+    const granting = {
+      ...ctx,
+      ui: {
+        ...ctx.ui,
+        select: async (_title: string, options: string[]) => {
+          prompts.push("select");
+          return options.find((option) => option === "Allow for this session");
+        },
+        confirm: async () => {
+          prompts.push("confirm");
+          return true;
+        },
+      },
+    } as ExtensionToolContext;
+    const bashTool = tool(governedTools(session, workspace), "bash");
+    const push = (command: string) =>
+      run(bashTool, { command: `true || ${command}` }, granting);
+    await push("git push origin main");
+    expect(prompts).toEqual(["select"]);
+    // The rule grant covers another named target of the same rule.
+    await push("git push origin dev");
+    expect(prompts).toEqual(["select"]);
+    // An unnamed target still asks each time, with no session answer.
+    await push("git push");
+    await push("git push upstream");
+    await push("git push");
+    expect(prompts).toEqual(["select", "confirm", "confirm", "confirm"]);
+  });
+
   it("asks for an enforced git.push ask although the policy default is deny", async () => {
-    expect((await bash("git push origin prod", SHELL)).outcome).toMatch(
-      /rule prod.*approval needs an interactive session/,
+    const prod = [
+      '    - { id: prod, action: git.push, resource: "origin/prod", effect: ask }',
+    ];
+    expect(
+      (await bash("git push origin prod", SHELL, context(), prod)).outcome,
+    ).toMatch(/rule prod.*approval needs an interactive session/);
+    const approved = await bash(
+      "git push origin prod",
+      SHELL,
+      context(true),
+      prod,
     );
-    const approved = await bash("git push origin prod", SHELL, context(true));
     expect(approved).toMatchObject({ outcome: "ran", ran: true });
     expect(approved.prompts).toHaveLength(1);
   });

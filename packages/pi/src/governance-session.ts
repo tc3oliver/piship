@@ -881,6 +881,13 @@ export class GovernanceSession {
     pattern?: string;
   } {
     const exact = { key: sessionAllowKey(ask.action, ask.resources) };
+    // An unnamed push target matches every git.push ask, so a rule grant
+    // would approve it; it gets only its own key, which is never granted.
+    if (
+      ask.action === "git.push" &&
+      ask.resources.some((resource) => resource.includes("*"))
+    )
+      return exact;
     if (
       this.options.lock.deployment.mode !== "personal" &&
       !this.#userAuto.allowed
