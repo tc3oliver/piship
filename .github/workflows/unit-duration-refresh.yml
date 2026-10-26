@@ -1,0 +1,93 @@
+name: Refresh unit shard durations
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: unit-duration-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.repository == 'tc3oliver/piship'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.19.x
+      - name: Collect successful main unit logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/unit-logs"
+          mapfile -t runs < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --status success --limit 4 --json databaseId --jq '.[].databaseId')
+          if [ "${#runs[@]}" -lt 3 ]; then
+            echo "Need at least three successful main CI runs" >&2
+            exit 1
+          fi
+          for run in "${runs[@]}"; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" \
+              --jq '.jobs[] | select(.conclusion == "success" and (.name | contains(", unit "))) | [.id,.name] | @tsv' > "$RUNNER_TEMP/unit-jobs.tsv"
+            if [ "$(wc -l < "$RUNNER_TEMP/unit-jobs.tsv")" -ne 5 ]; then
+              echo "Expected all five successful unit shards in CI run $run" >&2
+              exit 1
+            fi
+            while IFS=$'\t' read -r job name; do
+              gh run view "$run" --repo "$GITHUB_REPOSITORY" --job "$job" --log > "$RUNNER_TEMP/unit-logs/$job.log"
+              if ! grep -q '\.test\.ts' "$RUNNER_TEMP/unit-logs/$job.log"; then
+                echo "No test results found in job $job ($name)" >&2
+                exit 1
+              fi
+            done < "$RUNNER_TEMP/unit-jobs.tsv"
+          done
+      - name: Refresh and validate the timing table
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp tests/helpers/unit-durations.json "$RUNNER_TEMP/previous-unit-durations.json"
+          node scripts/unit-durations.mjs "$RUNNER_TEMP"/unit-logs/*.log
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const old = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const next = JSON.parse(readFileSync(process.argv[2], "utf8"));
+            if (Object.keys(next).length < Object.keys(old).length * 0.95)
+              throw new Error("Unit timing refresh unexpectedly lost more than 5% of files");
+            for (const [file, seconds] of Object.entries(next))
+              if (!Array.isArray(seconds) || seconds.length !== 3 ||
+                  seconds.some((n) => !Number.isFinite(n) || n < 0))
+                throw new Error("Invalid durations for " + file);
+          ' "$RUNNER_TEMP/previous-unit-durations.json" tests/helpers/unit-durations.json
+      - name: Open refresh PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- tests/helpers/unit-durations.json; then
+            echo "Unit shard durations have not changed"
+            exit 0
+          fi
+          branch="automation/unit-durations-$(date -u +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add tests/helpers/unit-durations.json
+          git commit -m "test: refresh measured unit shard durations"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "test: refresh unit shard durations" \
+            --body "Refresh unit shard timing estimates from the four most recent successful main CI runs. Each run must contain all five unit shards; incomplete samples fail without opening a PR.\n\nRefs #332."
+          # PR events created by GITHUB_TOKEN do not start checks. Dispatch
+          # both required workflows on this exact branch instead.
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          gh workflow run codeql.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
