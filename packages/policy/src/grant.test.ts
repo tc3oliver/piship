@@ -472,6 +472,9 @@ describe("a command scope", () => {
     expect(run("pytest -q")).toBe(true);
     expect(run("  git status --short")).toBe(true);
     expect(run("git diff 'src/a b.ts'")).toBe(true);
+    expect(run("npm\ttest")).toBe(true);
+    // Only a space or tab separates words; another blank keeps one word.
+    expect(run("npm\u00a0test")).toBe(false);
   });
 
   it.each([
@@ -492,6 +495,11 @@ describe("a command scope", () => {
     "./npm test",
     "git push origin feat",
     "git push",
+    "git {push,origin} main",
+    "git pu?h origin main",
+    "git --attr-source HEAD push origin main",
+    "npm *",
+    "n?m test",
   ])("does not cover %s", (command) => {
     expect(run(command)).toBe(false);
   });
@@ -503,11 +511,44 @@ describe("a command scope", () => {
       "sudo",
       "xargs",
       "Bash",
+      "bash.exe",
+      "BASH.EXE",
+      "cmd.bat",
+      "ash",
+      "nu",
+      "yash",
+      "mksh",
       "/usr/bin/npm",
       "np*",
       "npm test",
     ])
       expect(errs({ commands: [program] })).not.toEqual([]);
     expect(errs({ commands: ["npm", "cargo", "go", "make"] })).toEqual([]);
+  });
+});
+
+describe("a tool ask that comes with another ask", () => {
+  const files = grant({ paths: ["/a/b"] });
+  const tool = (over: Partial<GrantAsk> = {}): GrantAsk => ({
+    action: "tool.execute",
+    resource: "write",
+    keepsPrompt: false,
+    effect: "ask",
+    companion: true,
+    ...over,
+  });
+
+  it("is covered with a covered ask, never alone, and never when it keeps its prompt", () => {
+    expect(covers(files, [tool(), ask({ resource: "/a/b/c" })])).toBe(true);
+    expect(covers(files, [tool()])).toBe(false);
+    expect(covers(files, [tool(), ask({ resource: "/elsewhere" })])).toBe(
+      false,
+    );
+    expect(
+      covers(files, [tool({ keepsPrompt: true }), ask({ resource: "/a/b/c" })]),
+    ).toBe(false);
+    expect(
+      covers(files, [tool({ companion: false }), ask({ resource: "/a/b/c" })]),
+    ).toBe(false);
   });
 });

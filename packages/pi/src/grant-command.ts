@@ -115,7 +115,7 @@ async function add(
         `  reading and writing files under ${shown}`,
         ...(commands.length
           ? [
-              `  shell commands starting with ${commands.join(", ")}, one at a time: a chained, redirected, or substituted command, and git push, still prompt`,
+              `  shell commands starting with ${commands.join(", ")}, one at a time: a chained, redirected, or substituted command, and a git push written out in the command, still prompt`,
               "A covered program runs whatever code it is given (an npm script, a Makefile target), so the agent can run any code through it until the grant ends.",
             ]
           : []),
@@ -129,16 +129,22 @@ async function add(
     task,
     createdBy: "user-command",
     expiresAt,
-    // The governed file and shell tools, whose tool ask is decided together
-    // with the file or command ask they make (one combined prompt).
+    // No tools: a governed tool's own ask is covered only together with the
+    // file or command ask of the same prompt (GrantAsk.companion).
     scope: {
       paths: [root],
-      tools: [...gov.resourceTools],
       ...(commands.length ? { commands } : {}),
     },
     inheritToSubagents: false,
   });
-  return `Task grant ${grant.id}: ${describe(grant)}. /grant revoke ${grant.id} ends it.${shellRefused ? " Shell commands are not covered: this distribution's policy.taskGrants.actions does not list shell.execute." : ""}`;
+  // The folder confirmed is the one stored; it resolved elsewhere meanwhile.
+  if (grant.scope.paths?.[0] !== shown) {
+    gov.revokeGrant(grant.id);
+    throw new Error(
+      `${root} changed while the grant was confirmed; run /grant again`,
+    );
+  }
+  return `Task grant ${grant.id}: ${describe(grant)}. /grant revoke ${grant.id} ends it.${shellRefused ? " Shell commands are not covered: this distribution's policy.taskGrants.actions does not list shell.execute." : ""}${actions !== undefined && !actions.includes("tool.execute") ? " A file or command ask that comes with a tool prompt is not covered: policy.taskGrants.actions does not list tool.execute." : ""}`;
 }
 
 /** `/grant`: add (the default), list, or revoke this session's task grants. */

@@ -654,8 +654,10 @@ export class GovernanceSession {
     // A project configuration file (policy, extensions, hooks, MCP) takes
     // effect at the next start, outside this session: a grant never writes
     // it, by its own path or the one it resolves to.
+    // The deferred tool ask rides on the file or command ask of the same
+    // prompt; alone (the resource was allowed) it needs the tool in scope.
     const grantAsks = (): GrantAsk[] =>
-      asks.flatMap((ask) =>
+      asks.flatMap((ask, index) =>
         ask.resources.map((item) => {
           const resolved = isPathAction(ask.action)
             ? realpathNearest(item)
@@ -673,6 +675,9 @@ export class GovernanceSession {
                 resolved !== undefined &&
                 (this.#projectConfig(item) || this.#projectConfig(resolved))),
             effect: decision.effect,
+            ...(tool && index === 0 && asks.length > 1
+              ? { companion: true }
+              : {}),
           };
         }),
       );
@@ -1232,7 +1237,6 @@ export class GovernanceSession {
     );
   }
 
-  /** The first grant, in the order they were added, that covers every ask. */
   /** The grant with its roots resolved, and the spellings that differ kept as aliases. */
   #canonicalRoots(grant: TaskGrant, roots: readonly string[]): TaskGrant {
     const given = roots.map((root) => resolve(root));
@@ -1245,6 +1249,7 @@ export class GovernanceSession {
     };
   }
 
+  /** The first grant, in the order they were added, that covers every ask. */
   #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
     const actions = this.manifest.policy.taskGrants?.actions;
     // `policy.taskGrants.actions`: a grant covers no prompt that asks for another action.

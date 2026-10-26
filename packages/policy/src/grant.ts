@@ -51,6 +51,12 @@ export interface GrantAsk {
   readonly resolvedResource?: string;
   readonly keepsPrompt: boolean;
   readonly effect: "allow" | "ask" | "deny";
+  /**
+   * A governed tool's own `tool.execute` ask, decided together with the file
+   * or command ask it makes: covered with that ask, never alone, and never
+   * when it keeps its prompt.
+   */
+  readonly companion?: boolean;
 }
 
 export type GrantPlatform = "posix" | "win32";
@@ -84,6 +90,10 @@ const WRAPPERS = new Set([
   "zsh",
   "dash",
   "ksh",
+  "mksh",
+  "ash",
+  "yash",
+  "nu",
   "fish",
   "csh",
   "tcsh",
@@ -223,9 +233,13 @@ function askCovered(
     case "shell.execute": {
       // One plain command: no chaining, redirect, substitution, variable,
       // or grouping, not even quoted, and never a git push.
-      const program = ask.resource.trim().split(/\s+/)[0] ?? "";
+      const [program = "", second = ""] = ask.resource
+        .replace(/^[ \t]+/, "")
+        .split(/[ \t]+/);
       return (
         !chainsBeyondPattern("", ask.resource) &&
+        // The shell expands these, so the program or its subcommand is unknown.
+        !/[{}*?[]/.test(program + second) &&
         gitPushResources(ask.resource).length === 0 &&
         list(scope.commands).includes(program)
       );
@@ -265,11 +279,12 @@ export function grantCovers(
   const expires = Date.parse(grant.expiresAt);
   if (!(now < expires)) return false; // also false for an unparsable date
   if (asks.length === 0) return false;
+  const carried = asks.some((ask) => ask.companion !== true);
   return asks.every(
     (ask) =>
       ask.effect === "ask" &&
       ask.keepsPrompt === false &&
-      askCovered(grant, ask, platform),
+      (ask.companion === true ? carried : askCovered(grant, ask, platform)),
   );
 }
 
@@ -411,7 +426,9 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   for (const program of scope.commands ?? []) {
     if (!PROGRAM.test(program))
       errors.push(`command is not a plain program name: ${program}`);
-    else if (WRAPPERS.has(program.toLowerCase()))
+    else if (
+      WRAPPERS.has(program.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, ""))
+    )
       errors.push(
         `command runs other commands, so it cannot be granted: ${program}`,
       );

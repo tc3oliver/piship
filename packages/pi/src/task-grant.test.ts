@@ -71,6 +71,8 @@ const POLICY = [
 ];
 
 interface Setup {
+  /** Rules put before the fixture's distribution defaults. */
+  readonly defaults?: readonly string[];
   readonly mode?: "managed" | "personal";
   readonly yolo?: boolean;
   /** The workspace's own path below the temporary root. */
@@ -100,7 +102,9 @@ async function open(setup: Setup = {}) {
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
       `runtime: { pi: "${PI_VERSION}" }`,
       "deployment: { mode: personal }",
-      ...POLICY,
+      ...POLICY.flatMap((line) =>
+        line === "  defaults:" ? [line, ...(setup.defaults ?? [])] : [line],
+      ),
       "",
     ].join("\n"),
   );
@@ -263,31 +267,26 @@ describe("a task grant", () => {
     expect(shown.count).toBe(1);
   });
 
-  it("approves a combined prompt only when one grant covers every ask in it", async () => {
-    const { session, workspace } = await open();
+  it("approves a combined prompt only when one grant covers its file ask, the tool ask going with it", async () => {
+    const { session, workspace, home } = await open();
     session.resourceTools = new Set(["write"]);
     const { shown, channel } = counted();
-    const combined = (name: string) =>
-      session.withToolCall(`call-${name}`, "write", () =>
-        session.decide("filesystem.write", join(workspace, name), channel),
+    const combined = (path: string) =>
+      session.withToolCall(`call-${path}`, "write", () =>
+        session.decide("filesystem.write", path, channel),
       );
-    // The path is covered, the tool ask is not: one grant per scope kind
-    // does not add up to one that covers both.
-    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    // A grant of the tool alone does not cover the file ask outside it.
     await session.addGrant(grant({ tools: ["write"] }));
-    expect(await combined("a.txt")).toMatchObject({ approval: "approved" });
-    expect(shown.count).toBe(1);
-    const both = await session.addGrant(
-      grant({ paths: [workspace], tools: ["write"] }),
-    );
-    expect(await combined("b.txt")).toMatchObject({
-      approval: "grant",
-      grantId: both.id,
+    expect(await combined(join(home, "a.txt"))).toMatchObject({
+      approval: "approved",
     });
     expect(shown.count).toBe(1);
-    expect(
-      session.listGrants().find((entry) => entry.grant.id === paths.id)?.uses,
-    ).toBe(0);
+    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    expect(await combined(join(workspace, "b.txt"))).toMatchObject({
+      approval: "grant",
+      grantId: paths.id,
+    });
+    expect(shown.count).toBe(1);
   });
 
   it("uses the first grant that covers, and the next once it is revoked", async () => {
@@ -969,8 +968,8 @@ describe("/grant and shell commands", () => {
     expect(dialogs[0]).toContain("runs whatever code it is given");
     expect(session.listGrants()[0]?.grant.scope).toMatchObject({
       commands: [...DEFAULT_GRANT_COMMANDS],
-      tools: ["bash", "write"],
     });
+    expect(session.listGrants()[0]?.grant.scope).not.toHaveProperty("tools");
     const { shown, channel } = counted();
     for (const command of ["npm test", "pytest -q"])
       expect(
@@ -1041,5 +1040,69 @@ describe("/grant and shell commands", () => {
     expect(
       await session.decide("shell.execute", "npm test", undefined),
     ).toMatchObject({ approval: "grant" });
+  });
+});
+
+describe("a governed tool's own ask under /grant", () => {
+  it("is covered only together with a file or command ask the grant covers, never alone", async () => {
+    const { session, workspace, home } = await open({
+      defaults: [
+        '    - { id: sh, action: shell.execute, resource: "curl **", effect: allow }',
+        '    - { id: rd, action: filesystem.read, resource: "**", effect: allow }',
+      ],
+    });
+    session.resourceTools = new Set(["bash", "read"]);
+    await grantCommand(session, "--no-run", ui().ctx);
+    const { shown, channel } = counted();
+    // The command and the file are allowed, so the tool ask is the only one.
+    expect(
+      await session.withToolCall("c1", "bash", () =>
+        session.decide("shell.execute", "curl x", channel),
+      ),
+    ).toMatchObject({ approval: "approved", ruleId: "tools" });
+    expect(
+      await session.withToolCall("c2", "read", () =>
+        session.decide("filesystem.read", join(home, "notes.txt"), channel),
+      ),
+    ).toMatchObject({ approval: "approved", ruleId: "tools" });
+    expect(shown.count).toBe(2);
+    // With a write the grant covers, the same tool ask goes with it.
+    session.resourceTools = new Set(["write"]);
+    expect(
+      await session.withToolCall("c3", "write", () =>
+        session.decide("filesystem.write", join(workspace, "a.txt"), channel),
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(2);
+  });
+
+  it("says so when policy.taskGrants.actions leaves out tool.execute", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: { mode: "session", actions: ["filesystem.write"] },
+    });
+    const { ctx, notices } = ui();
+    await grantCommand(session, "", ctx);
+    expect(notices[0]?.message).toContain("does not list tool.execute");
+  });
+});
+
+describe("/grant while its folder moves", () => {
+  it("stores nothing when the folder resolves elsewhere after it was confirmed", async () => {
+    const { session, workspace } = await open();
+    for (const name of ["a", "b"]) mkdirSync(join(workspace, name));
+    const link = join(workspace, "current");
+    symlinkSync(join(workspace, "a"), link);
+    const { ctx, notices } = ui();
+    (ctx.ui as unknown as { confirm: () => Promise<boolean> }).confirm =
+      async () => {
+        rmSync(link);
+        symlinkSync(join(workspace, "b"), link);
+        return true;
+      };
+    await grantCommand(session, "current", ctx);
+    expect(notices[0]).toMatchObject({ level: "error" });
+    expect(notices[0]?.message).toContain("run /grant again");
+    expect(session.listGrants()).toEqual([]);
   });
 });
