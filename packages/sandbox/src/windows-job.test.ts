@@ -146,6 +146,21 @@ describe.runIf(process.platform === "win32")(
       vi.stubEnv("PISHIP_WINDOWS_JOB_HELPER", "off");
     });
 
+    it("runs cmd.exe builtins through the Job Object supervisor", async () => {
+      let stdout = "";
+      const child = spawnProcess({
+        file: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", "echo piship-shell-ready"],
+        cwd: process.cwd(),
+        env: process.env as Record<string, string>,
+        onStdout: (chunk) => {
+          stdout += chunk.toString("utf8");
+        },
+      });
+      expect(await child.exited).toMatchObject({ code: 0, timedOut: false });
+      expect(stdout).toContain("piship-shell-ready");
+    });
+
     it("runs a governed child to its marker and exit 0 with only the approved environment", async () => {
       vi.stubEnv("PISHIP_TEST_SECRET", "should-not-arrive-1");
       vi.stubEnv("GITHUB_TOKEN", "should-not-arrive-2");
