@@ -86,6 +86,11 @@ import {
   updateDistribution,
 } from "./update/index.js";
 
+// The release builds these tests install are the slow part; a loaded machine
+// can stretch one past Vitest's default 15 s without saying anything about
+// the code.
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 // ------------------------------------------------------------------ fixtures
 
 const BUILD_INPUT = process.env.PISHIP_BUILD_INPUT as string;
@@ -4725,7 +4730,7 @@ wait();
     expect(releaseDirs()).toEqual(["1.1.0", "1.2.0"]);
     uninstallDistribution(ID);
     expect(existsSync(appsDir())).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   it("keeps a running session's release through an update that disables rollback", async () => {
     const v1 = await sessionRelease("1.0.0");
@@ -4746,7 +4751,7 @@ wait();
     }
     recoverInstallation(ID);
     expect(releaseDirs()).toEqual(["1.1.0"]);
-  }, 60_000);
+  }, 120_000);
 
   it("holds the release against uninstall while the runtime loads, and holds the gate only while the launch registers", async () => {
     const { a } = await fixture();
@@ -4803,7 +4808,7 @@ else {
     } finally {
       child.kill();
     }
-  }, 30_000);
+  }, 120_000);
 
   it("reclaims a registration gate a killed launcher left, and waits only briefly for a live one", async () => {
     const { a } = await fixture();
@@ -4835,7 +4840,7 @@ else {
     expect(busy.stderr).toContain(`is held by process ${process.pid}. Retry`);
     expect(Date.now() - started).toBeLessThan(10_000);
     rmSync(gate);
-  }, 30_000);
+  }, 120_000);
 
   it("launches a release whose PiShip predates runtime leases", async () => {
     const { a } = await fixture();

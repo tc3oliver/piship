@@ -207,8 +207,14 @@ type WorkspaceDeclaration = NonNullable<SandboxCapabilities["workspace"]>;
 const VALIDITY_MS = 30 * 60_000;
 const DEFAULT_PROPAGATION_MS = 10_000;
 const POLL_MS = 200;
-/** A marker command writes its marker after `sleep 1`. */
+/**
+ * The fixed marker delay a command uses where the host cannot see its
+ * workspace, and the extra window a silent command is watched for a late
+ * start.
+ */
 const LATE_MS = 1_000;
+/** Polls in the fixed marker delay, for a command waiting for its release. */
+const RELEASE_POLLS = Math.ceil(LATE_MS / 50);
 /** How long after that the kit looks for the marker. */
 const MARGIN_MS = 800;
 /** How long a command runs before the kit's timeout aborts it. */
@@ -577,6 +583,22 @@ function connectScript(host: string, port: number): string {
     `elif command -v bash >/dev/null 2>&1; then if command -v timeout >/dev/null 2>&1; then w='timeout 3'; else w=''; fi; if $w bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$t" "$p" >/dev/null 2>&1; then echo piship-net connected; else echo piship-net refused; fi`,
     "else echo piship-net unchecked; fi",
   ].join("\n");
+}
+
+/**
+ * How a marker command waits for the kit's release file: an event when the
+ * host sees the workspace, so the kit decides when the marker may be written
+ * rather than the command waiting a fixed delay; it still writes after that
+ * delay if no release arrives. Where the host cannot write into the
+ * sandbox's workspace, the fixed delay is all it can use.
+ */
+function markerWaitScript(
+  release: string,
+  observable: boolean,
+  polls: number,
+): string {
+  if (!observable) return "sleep 1";
+  return `i=0; until [ -e ${quote(release)} ] || [ "$i" -ge ${polls} ]; do if sleep 0.05 2>/dev/null; then i=$((i+1)); else sleep 1; i=$((i+20)); fi; done`;
 }
 
 // ---------------------------------------------------------------- harness
@@ -1168,6 +1190,36 @@ class Harness {
     return undefined;
   }
 
+  /**
+   * Wait until a marker appears or the window for it closes, polling so a
+   * command released after the abort is seen as soon as its marker lands.
+   * The window counts from the first output (a backend may start the command
+   * late), or from `from` plus `silentMs` while the command has printed
+   * nothing. A backend whose workspace the host cannot see keeps the fixed
+   * marker delay; an observable one writes it as soon as it is released.
+   */
+  async markerAfter(
+    instance: SandboxInstance | undefined,
+    marker: string,
+    execution: Execution,
+    from: number,
+    silentMs = 0,
+  ): Promise<boolean | undefined> {
+    const delay = this.observable ? 0 : LATE_MS;
+    for (;;) {
+      const present = await this.marker(instance, marker);
+      if (present !== false) return present;
+      const first = execution.firstOutputAt();
+      const deadline =
+        first === undefined
+          ? from + silentMs + LATE_MS + delay + MARGIN_MS
+          : Math.max(from, first) + delay + MARGIN_MS;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return present;
+      await sleep(Math.min(POLL_MS, remaining));
+    }
+  }
+
   // ------------------------------------------------------------ workspace
 
   /** Run PiShip's two-way sentinel once in `instance`. */
@@ -1733,29 +1785,32 @@ const checks: Record<SandboxBehavior, Check> = {
   async timeout(h) {
     await h.capabilities();
     const instance = await h.prepare();
-    const marker = `${h.scratch}/timeout-${randomBytes(4).toString("hex")}`;
+    const nonce = randomBytes(4).toString("hex");
+    const marker = `${h.scratch}/timeout-${nonce}`;
+    const release = `${h.scratch}/timeout-${nonce}.release`;
     await h.ok(
       instance,
       `mkdir -p ${quote(h.scratch)}`,
       "creating a directory",
     );
+    const wait = markerWaitScript(release, h.observable, RELEASE_POLLS);
     const execution = h.start(
       instance,
-      `echo started; ( sleep 1; printf late > ${quote(marker)} ) & wait`,
+      `echo started; ( ${wait}; printf late > ${quote(marker)} ) & wait`,
     );
     check(
       await whileRunning(execution),
       "the command ended before its timeout, so the kit could not time it out while it ran",
     );
     execution.controller.abort();
-    const aborted = Date.now();
     const settled = await settle(() => execution.settled, h.settleMs);
+    const released = Date.now();
+    if (h.observable) writeFileSync(join(h.workspace, release), "");
     check(
       settled.kind === "resolved",
       `exec() did not settle within ${h.settleMs} ms after io.signal aborted for a timeout, so PiShip would retire the instance and end the session`,
     );
-    await markerWindow(execution, aborted);
-    const present = await h.marker(instance, marker);
+    const present = await h.markerAfter(instance, marker, execution, released);
     check(
       present === false,
       "the timed-out command kept running and wrote its marker after the timeout",
@@ -1784,19 +1839,39 @@ const checks: Record<SandboxBehavior, Check> = {
     );
     let retired = false;
     const cancel = async (
-      command: string,
       marker: string,
       when: "before it started" | "while it ran",
     ): Promise<string | undefined> => {
+      const release = `${marker}.release`;
+      const wait = markerWaitScript(release, h.observable, RELEASE_POLLS);
+      // The command aborted before it started prints a line as it starts, so
+      // the kit sees a backend that ignored the abort start it late; the one
+      // aborted while it ran stays silent, as a command streaming no output.
+      const command =
+        when === "before it started"
+          ? `echo started; ${wait}; printf late > ${quote(marker)}`
+          : `${wait}; printf late > ${quote(marker)}`;
       const execution = h.start(instance, command);
       // Before it started: while the backend is still setting it up. While
       // it ran: before it printed anything (a timeout usually hits a command
       // that is streaming output; the timeout check covers that).
       if (when === "while it ran") await sleep(RUNNING_MS);
       execution.controller.abort();
-      const aborted = Date.now();
       const settled = await settle(() => execution.settled, h.settleMs);
+      const released = Date.now();
+      if (h.observable) writeFileSync(join(h.workspace, release), "");
       if (settled.kind !== "resolved") {
+        // A command that ignored the abort writes its marker once released;
+        // give it that chance before dispose(), which stops it, if the host
+        // can see the marker.
+        if (h.observable)
+          await h.markerAfter(
+            undefined,
+            marker,
+            execution,
+            released,
+            when === "before it started" ? LATE_MS : 0,
+          );
         // PiShip retires a backend that did not stop the command.
         retired = true;
         const disposed = await h.dispose(instance);
@@ -1813,12 +1888,13 @@ const checks: Record<SandboxBehavior, Check> = {
       // A command aborted before it started prints nothing if the backend
       // honored the abort; one that ignored it may start later than the
       // marker window, so a silent command is watched LATE_MS longer.
-      await markerWindow(
+      const present = await h.markerAfter(
+        retired ? undefined : instance,
+        marker,
         execution,
-        aborted,
+        released,
         when === "before it started" ? LATE_MS : 0,
       );
-      const present = await h.marker(retired ? undefined : instance, marker);
       if (present === undefined)
         return `skipped: the backend did not stop a command cancelled ${when}, so the kit retired the instance, and it cannot see inside a disposed sandbox whether dispose() stopped it`;
       check(
@@ -1830,19 +1906,11 @@ const checks: Record<SandboxBehavior, Check> = {
     const early = `${h.scratch}/cancel-early-${randomBytes(4).toString("hex")}`;
     // The first command prints a line as it starts, which tells the kit when
     // a backend that starts it late did; it is cancelled before that line.
-    const skip = await cancel(
-      `echo started; sleep 1; printf late > ${quote(early)}`,
-      early,
-      "before it started",
-    );
+    const skip = await cancel(early, "before it started");
     if (skip) return skip;
     if (retired) return undefined;
     const running = `${h.scratch}/cancel-running-${randomBytes(4).toString("hex")}`;
-    const skipped = await cancel(
-      `sleep 1; printf late > ${quote(running)}`,
-      running,
-      "while it ran",
-    );
+    const skipped = await cancel(running, "while it ran");
     if (skipped) return skipped;
     if (retired) return undefined;
     const next = await h.exec(
