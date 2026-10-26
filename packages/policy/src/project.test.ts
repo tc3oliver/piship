@@ -355,6 +355,13 @@ describe("isProjectConfigPath", () => {
     expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "linux")).toBe(false);
     expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "darwin")).toBe(true);
     expect(isProjectConfigPath("C:\\w\\.pi.\\x.ts", "win32")).toBe(true);
+    // An NTFS stream name, also of a file that does not exist yet.
+    // Unverified on a real Windows host: the platform flag is simulated.
+    expect(isProjectConfigPath("C:\\w\\.mcp.json::$DATA", "win32")).toBe(true);
+    expect(
+      isProjectConfigPath("C:\\w\\.claude\\settings.json:x", "win32"),
+    ).toBe(true);
+    expect(isProjectConfigPath("C:\\w\\src\\a.ts::$DATA", "win32")).toBe(false);
   });
 });
 

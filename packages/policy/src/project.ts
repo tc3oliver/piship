@@ -1138,7 +1138,8 @@ const PROJECT_CONFIG_SURFACES: readonly (readonly string[])[] = [
  * other candidate directories above) in any directory: what a later start
  * would load, so something that only approves for this session (a task
  * grant) never covers writing it. Compared by path segment, ignoring case on macOS and
- * Windows, and on Windows a segment's trailing dots and spaces.
+ * Windows, and on Windows a segment's stream suffix and trailing dots and
+ * spaces.
  */
 export function isProjectConfigPath(
   path: string,
@@ -1151,7 +1152,10 @@ export function isProjectConfigPath(
   const segments = fold(path)
     .split(/[\\/]/)
     .map((segment) =>
-      platform === "win32" ? segment.replace(/[. ]+$/, "") : segment,
+      // An NTFS stream (`.mcp.json::$DATA`) names the file before the colon.
+      platform === "win32"
+        ? (segment.split(":")[0] ?? "").replace(/[. ]+$/, "")
+        : segment,
     );
   return PROJECT_CONFIG_SURFACES.some((surface) =>
     segments.some((_, start) =>

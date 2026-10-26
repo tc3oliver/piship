@@ -376,6 +376,12 @@ describe("validateGrant", () => {
     expect(loose({ git: [{ remote: "o", branches: "feat" }] })).not.toEqual([]);
     expect(loose({ shell: ["rm"] })).toEqual(["unknown scope kind: shell"]);
     expect(loose(null)).toEqual(["scope is not an object"]);
+    expect(
+      validateGrant(
+        { ...grant({ tools: ["t"] }), id: undefined } as unknown as TaskGrant,
+        limits,
+      ),
+    ).toEqual(["grant id is missing"]);
   });
 });
 

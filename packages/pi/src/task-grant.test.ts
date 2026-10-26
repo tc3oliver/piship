@@ -66,6 +66,8 @@ const POLICY = [
 interface Setup {
   readonly mode?: "managed" | "personal";
   readonly yolo?: boolean;
+  /** The workspace's own path below the temporary root. */
+  readonly workspaceAt?: readonly string[];
 }
 
 async function open(setup: Setup = {}) {
@@ -73,7 +75,7 @@ async function open(setup: Setup = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-grant-")));
   roots.push(root);
   const dir = join(root, "distribution");
-  const workspace = join(root, "workspace");
+  const workspace = join(root, ...(setup.workspaceAt ?? ["workspace"]));
   const home = join(root, "home");
   const stateDir = join(root, "state");
   for (const path of [dir, join(workspace, "kept"), home])
@@ -511,6 +513,34 @@ describe("a task grant", () => {
       undefined,
     );
     expect(realpaths).toHaveBeenCalled();
+  });
+
+  it("judges configuration below the project root only, and only for writes", async () => {
+    const { session, workspace } = await open({
+      workspaceAt: [".claude", "worktrees", "w"],
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "app.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    for (const name of ["AGENTS.md", join(".claude", "settings.json")])
+      expect(
+        await session.decide("filesystem.read", join(workspace, name), channel),
+      ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(0);
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, ".claude", "x"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
   });
 
   it("never covers a project configuration file, by its own path or a symlink's target", async () => {

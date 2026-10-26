@@ -228,6 +228,8 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   const errors: string[] = [];
   const { scope } = grant;
   // The shape first: the type is not checked at run time.
+  if (typeof grant.id !== "string" || grant.id === "")
+    return ["grant id is missing"];
   if (!scope || typeof scope !== "object" || Array.isArray(scope))
     return ["scope is not an object"];
   for (const key of Object.keys(scope))

@@ -3,6 +3,7 @@
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
+import { isAbsolute, relative, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
@@ -668,8 +669,9 @@ export class GovernanceSession {
                 action: ask.action,
                 resource: item,
               }) === true ||
-              (resolved !== undefined &&
-                (isProjectConfigPath(item) || isProjectConfigPath(resolved))),
+              (ask.action === "filesystem.write" &&
+                resolved !== undefined &&
+                (this.#projectConfig(item) || this.#projectConfig(resolved))),
             effect: decision.effect,
           };
         }),
@@ -1150,6 +1152,24 @@ export class GovernanceSession {
     } finally {
       this.#pendingGrants.delete(stored.id);
     }
+  }
+
+  /**
+   * Whether a write to `path` changes project configuration. Only the part
+   * below the project root counts, so a project inside a `.claude` or `.pi`
+   * directory is not configuration throughout; a path outside it is checked
+   * whole.
+   */
+  #projectConfig(path: string): boolean {
+    for (const root of new Set([
+      this.project.root,
+      realpathNearest(this.project.root),
+    ])) {
+      const below = relative(root, path);
+      if (!isAbsolute(below) && below.split(sep)[0] !== "..")
+        return isProjectConfigPath(below);
+    }
+    return isProjectConfigPath(path);
   }
 
   /** IDs of grants whose creation event is being delivered; they count toward the cap. */
