@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-a2365dfaed27c72d3d6338400eb9cb240691ebd79f576b09cb4f958b580eefec"
+    "sha256": "sha256-3b29d820ea0be9bd932a0df2141585a99397b8033589443a384f49361dfe2669"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1225,7 +1225,7 @@
             "id": "acme.workspace.write",
             "action": "filesystem.write",
             "resource": "workspace/**",
-            "effect": "ask"
+            "effect": "allow"
           },
           {
             "id": "acme.shell",
@@ -1424,7 +1424,7 @@
   },
   "digests": {
     "resources": "sha256-9ddfc766c8c8016160e148cde2665b34c9155f237a695d7eacd3c78d166e012d",
-    "policy": "sha256-f6a64100895306bba04b54b9d6bb263067588f9ac3819f6c50c97e3331a62a87",
+    "policy": "sha256-f64239024b79119a5bc1660b88b6bc1a159301e9cf071dc7eef67b89f6a2af5d",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
     "sandbox": "sha256-07750fd7b86a9767b567a9380fd0af05e0f43a284093783a7e8e2baf39c7d02f",

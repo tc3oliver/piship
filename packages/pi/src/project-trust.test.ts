@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -875,4 +876,63 @@ describe("what a launch leaves out", () => {
       "Not loaded from this project: AGENTS.md (set policy.projectTrust.unknown.instructions to allow in piship.yaml and rebuild to trust it).",
     ]);
   });
+});
+
+describe("the managed examples allow ordinary workspace writes", () => {
+  it("demo-company keeps config and git control denied while source is allowed without a prompt", async () => {
+    const name = "demo-company";
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-example-")));
+    roots.push(root);
+    const workspace = join(root, "workspace");
+    mkdirSync(join(workspace, ".git/hooks"), { recursive: true });
+    const example = join(import.meta.dirname, `../../../examples/${name}`);
+    const lock = resolveLock(join(example, "piship.yaml"));
+    // The payload keeps resources under resources/, as the lock names them.
+    const distribution = join(root, "distribution");
+    mkdirSync(distribution);
+    symlinkSync(example, join(distribution, "resources"));
+    const session = await GovernanceSession.open({
+      lock: lock as Parameters<typeof GovernanceSession.open>[0]["lock"],
+      distributionDir: distribution,
+      stateDir: join(root, "state"),
+      cwd: workspace,
+      piVersion: PI_VERSION,
+      interactive: false,
+      fetch: (() => {
+        throw new Error("no network in unit tests");
+      }) as unknown as ManagedFetch,
+      resolveTemplate: (_key, template) => template,
+      homeDir: join(root, "home"),
+      user: "alice",
+      startupApproval: async () => "approved",
+    });
+    sessions.push(session);
+    const gate = (path: string) =>
+      gatePath(session, "filesystem.write", join(workspace, path), "write");
+    for (const path of [".claude/settings.json", ".git/hooks/x"])
+      await expect(gate(path)).rejects.toThrow(
+        /managed tools|tools may not change/,
+      );
+    // Not interactive: a rule that asked would reject here.
+    await expect(gate("src/a.ts")).resolves.toBe(join(workspace, "src/a.ts"));
+  });
+});
+
+describe("the enterprise reference manifests", () => {
+  it.each(["", "sandbox/"])(
+    "%sallow ordinary workspace writes like demo-company",
+    (dir) => {
+      const lock = resolveLock(
+        join(
+          import.meta.dirname,
+          `../../../examples/enterprise-reference/${dir}piship.yaml`,
+        ),
+      );
+      const policy = lock.governance?.manifest.policy;
+      expect(
+        policy?.defaults.find((rule) => rule.id === "acme.workspace.write"),
+      ).toMatchObject({ effect: "allow" });
+      expect(policy?.projectTrust.company).not.toHaveProperty("claudeHooks");
+    },
+  );
 });

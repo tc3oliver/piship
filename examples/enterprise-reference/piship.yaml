@@ -177,7 +177,7 @@ policy:
     - id: acme.workspace.write
       action: filesystem.write
       resource: "workspace/**"
-      effect: ask
+      effect: allow
     - id: acme.shell
       action: shell.execute
       resource: "**"
