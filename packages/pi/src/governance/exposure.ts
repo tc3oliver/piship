@@ -369,6 +369,12 @@ export function buildExposureTable(
             ]
           : []),
       ].some((decision) => decision.ruleId === BUILTIN_DEFAULT_RULE);
+      // A policy written before the task tools existed names no rule for
+      // them: they are not offered rather than failing the launch.
+      if (fallback && TASK_TOOLS.includes(name)) {
+        set(name, "hidden");
+        continue;
+      }
       if (fallback)
         throw new PiShipError(
           "POLICY_DENIED",

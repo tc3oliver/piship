@@ -267,6 +267,43 @@ describe("session tool exposure table", () => {
     ).toBe(true);
   });
 
+  it("managed: hides the task tools under Codemode when no rule names them, and launches", () => {
+    // Rules name read, write, edit, and bash individually; none names a task tool.
+    const individually = gov({
+      mode: "managed",
+      fallback: TASK_TOOLS.map((name) => `tool.execute ${name}`),
+    });
+    const table = buildExposureTable(
+      individually,
+      config({ codemode: "on" }),
+      new Map(),
+    );
+    expect(table.codemodeOn).toBe(true);
+    for (const name of TASK_TOOLS) {
+      expect(table.get(name)).toBe("hidden");
+      expect(table.excluded()).toContain(name);
+    }
+    expect(table.get("bash")).toBe("direct");
+    // A rule that names them (`task_*`, `*`): they are offered.
+    const named = buildExposureTable(
+      gov({ mode: "managed" }),
+      config({ codemode: "on" }),
+      new Map(),
+    );
+    for (const name of TASK_TOOLS) expect(named.get(name)).toBe("direct");
+    // Any other tool still fails the launch.
+    expect(() =>
+      buildExposureTable(
+        gov({
+          mode: "managed",
+          fallback: ["tool.execute bash", "tool.execute task_start"],
+        }),
+        config({ codemode: "on" }),
+        new Map(),
+      ),
+    ).toThrow(expect.objectContaining({ code: "POLICY_DENIED" }));
+  });
+
   it("keeps Codemode off when the policy denies the codemode tool", () => {
     const table = buildExposureTable(
       gov({ deny: ["tool.execute codemode"] }),
