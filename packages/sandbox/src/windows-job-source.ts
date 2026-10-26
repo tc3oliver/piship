@@ -112,7 +112,7 @@ public static class PiShipJob {
       // unquoted switches, keeping the user's shell text verbatim.
       var command = Path.GetFileName(start.FileName).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase) &&
         args.Length == 4 && args[0] == "/d" && args[1] == "/s" && args[2] == "/c"
-        ? new StringBuilder(Arguments(new string[] { start.FileName }) + " /d /s /c \\"" + args[3] + "\\"")
+        ? new StringBuilder(Arguments(new string[] { start.FileName }) + " /d /s /c \"" + args[3] + "\"")
         : new StringBuilder(Arguments(new string[] { start.FileName }) + " " + Arguments(args));
       // CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT.
       if (!CreateProcessW(null, command, IntPtr.Zero, IntPtr.Zero, true, 0x4 | 0x08000000 | 0x400,
