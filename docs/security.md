@@ -89,7 +89,7 @@ A `piship/v1alpha3` or later launch opens a governance session before Pi starts 
 
 | Plane | Meaning | Actions |
 | --- | --- | --- |
-| `control-plane` | PiShip decides before the action runs, inside the Pi process | Model selection (`model.select`) and dispatch (`model.dispatch`), resource and extension loading, MCP server start and tool calls, tool calls; file access through the governed `read`, `write`, and `edit` tools and shell command gating when no sandbox is enforced; the `support` resource of `session.export` where Pi runs offline |
+| `control-plane` | PiShip decides before the action runs, inside the Pi process | Model selection (`model.select`) and dispatch (`model.dispatch`), resource and extension loading, MCP server start and tool calls, tool calls; file access through the governed `read`, `write`, and `edit` tools and shell command gating when no sandbox is enforced; `git.push`, read from the command text, with or without a sandbox; the `support` resource of `session.export` where Pi runs offline |
 | `sandbox` | An enforced sandbox backend also contains the action: the OS sandbox proven by a live probe, or a remote or custom backend whose capabilities PiShip checked (the report says `live-probe` or `backend-attested`) | `shell.execute` when the sandbox is enforced; `filesystem.*` only when the backend enforces the path policy (`filesystem-*` planes, as the native sandbox does; a remote backend's `host-filesystem-isolation` does not count); `network.connect` when `network-deny` is enforced |
 | `gateway` | The managed gateway or credential broker prevents the action | Reserved: no current seam reports it |
 | `audit-only` | Observed and recorded, not prevented | None against Pi 1.0.x |

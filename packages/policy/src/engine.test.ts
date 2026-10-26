@@ -165,6 +165,24 @@ describe("decision tables for every action", () => {
       enforcedAsk.explain({ action: "git.push", resource: "origin/main" })
         .decision,
     ).toMatchObject({ effect: "ask", ruleId: "main.ask" });
+    // A team, project, or managed user's own ask holds the same way.
+    const ask = [rule("main.ask", "git.push", "origin/main", "ask")];
+    for (const layers of [
+      { teamRules: ask },
+      { projectRules: ask },
+      { userRules: ask, userRuleMode: "narrowing" as const },
+    ]) {
+      const layered = engine({
+        policy: makePolicy({ default: "deny" }),
+        ...layers,
+      });
+      expect(
+        layered.evaluate({ action: "git.push", resource: "*" }),
+      ).toMatchObject({ effect: "ask", ruleId: "main.ask" });
+      expect(layered.keepsPrompt({ action: "git.push", resource: "*" })).toBe(
+        true,
+      );
+    }
     const none = engine({ policy: makePolicy({ default: "deny" }) });
     const decision = none.evaluate({ action: "git.push", resource: "*" });
     expect(decision).toMatchObject({

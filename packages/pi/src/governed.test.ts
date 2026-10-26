@@ -1516,6 +1516,8 @@ describe("git.push in the shell gate", () => {
       "/usr/bin/git push origin HEAD:main",
       "cd . && git push",
       "git push origin",
+      "git \\\npush origin main",
+      'x="$(git push origin main)"',
     ]) {
       const result = await bash(command, [...SHELL, ...PUSH], context(true));
       expect(result.outcome).toMatch(

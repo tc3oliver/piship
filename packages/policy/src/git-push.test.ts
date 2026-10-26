@@ -81,7 +81,14 @@ describe("gitPushResources", () => {
     expect(security).toContain(
       "`git.push` is recognized from the command text only.",
     );
-    for (const wrapper of ["`sh -c 'git push'`", "git alias", "subprocess"])
+    for (const wrapper of [
+      "`sh -c 'git push'`",
+      "a git alias (`git -c alias.p=push p`)",
+      "a quoted command string",
+      "`$GIT push`",
+      "a script or Makefile that pushes",
+      "a Python or Node subprocess",
+    ])
       expect(security).toContain(wrapper);
     expect(
       readFileSync(

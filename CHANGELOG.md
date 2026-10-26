@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Added
+
+- A `git.push` policy action. A `git push` that a `bash` or `!` command spells out is decided as `git.push` on `<remote>/<branch>` before `shell.execute`, so a distribution can ask for or deny pushes by remote and branch; a remote or branch the command does not name (`git push`, `git push origin`, `HEAD`) is `*`, which every `git.push` deny and ask covers. It only narrows: with no `git.push` rule nothing changes, `policy.default` does not apply to it, and a `git.push` `allow` never lifts a `shell.execute` `deny`. It is control-plane only and read from the command text, with or without a sandbox: a push from a script, an alias, `sh -c`, a variable, or a subprocess is not seen, and `policy explain` says so ([manifest](docs/manifest.md#policy), [security](docs/security.md#limits)). The lock's seam table gains `"git.push": "hook"`, so its `enforcement.digest` changes and `piship diff` reports `seam git.push` as added; the example locks are regenerated for that line only. A PiShip before this change rejects a manifest rule or a `config/policy.json` rule naming `git.push` (or `git.*`) as an unknown policy action.
+
 ### Changed
 
 - Behavior change: a required HTTP audit sink now spools its undelivered events to `<state>/logs/audit-spool/` (0600, after redaction and the `audit.capture` filter, capped at 16 MiB per process), so a crash, a lost terminal, or a session that ends while the collector is down no longer loses them; the next session launch (not `login`, `logout`, `update`, or `rollback`) replays them first. A spool that cannot be written, or a corrupt or oversized spool, fails closed with `AUDIT_UNAVAILABLE`; `doctor` reports leftover, set-aside, and refused spool files, and the audit retention sweep deletes only those of sinks no longer configured ([audit](docs/security.md#audit)).
