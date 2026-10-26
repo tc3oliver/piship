@@ -163,13 +163,14 @@ resources:
             debugLog: false
             yoloMode: false
             permission:
-              "*": allow
+              "*": ask
               read: allow
               grep: allow
               find: allow
               ls: allow
               write: allow
               edit: allow
+              bash: allow
               path:
                 "*": allow
                 "*.pem": deny
