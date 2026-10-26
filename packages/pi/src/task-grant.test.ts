@@ -1,0 +1,786 @@
+// Task grants in governed sessions: a grant approves an `ask` only when it
+// covers every ask of the prompt, never a `deny` or an ask that keeps its
+// prompt, is looked up again in the approval queue, and is audited as
+// metadata only.
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type {
+  ApprovalAnswer,
+  ApprovalChannel,
+  AuditEvent,
+  ManagedFetch,
+} from "@piship/contracts";
+import { PI_VERSION, resolveLock } from "@piship/core";
+import type { TaskGrant } from "@piship/policy";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { GovernanceSession } from "./governance-session.js";
+
+const realpaths = vi.hoisted(() => vi.fn());
+vi.mock("@piship/sandbox", async (actual) => {
+  const sandbox = await actual<typeof import("@piship/sandbox")>();
+  return {
+    ...sandbox,
+    realpathNearest: (path: string) => {
+      realpaths(path);
+      return sandbox.realpathNearest(path);
+    },
+  };
+});
+
+const roots: string[] = [];
+const sessions: GovernanceSession[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const session of sessions.splice(0))
+    await session.close().catch(() => undefined);
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
+});
+
+const POLICY = [
+  "policy:",
+  "  id: unit",
+  "  version: 1",
+  "  default: ask",
+  "  enforced:",
+  '    - { id: no-secret, action: filesystem.write, resource: "workspace/secret/**", effect: deny }',
+  '    - { id: keep-asking, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
+  "  defaults:",
+  '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
+  '    - { id: tools, action: tool.execute, resource: "*", effect: ask }',
+  "audit:",
+  "  enabled: true",
+  "  sinks:",
+  "    - { id: local, type: file, required: false }",
+];
+
+interface Setup {
+  readonly mode?: "managed" | "personal";
+  readonly yolo?: boolean;
+  /** The workspace's own path below the temporary root. */
+  readonly workspaceAt?: readonly string[];
+  /** Run on the workspace before the session opens. */
+  readonly prepare?: (workspace: string) => void;
+}
+
+async function open(setup: Setup = {}) {
+  // Real path: a grant root is resolved, and macOS tmp is a symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-grant-")));
+  roots.push(root);
+  const dir = join(root, "distribution");
+  const workspace = join(root, ...(setup.workspaceAt ?? ["workspace"]));
+  const home = join(root, "home");
+  const stateDir = join(root, "state");
+  for (const path of [dir, join(workspace, "kept"), home])
+    mkdirSync(path, { recursive: true });
+  setup.prepare?.(workspace);
+  const manifest = join(dir, "piship.yaml");
+  writeFileSync(
+    manifest,
+    [
+      "schema: piship/v1alpha3",
+      "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+      `runtime: { pi: "${PI_VERSION}" }`,
+      "deployment: { mode: personal }",
+      ...POLICY,
+      "",
+    ].join("\n"),
+  );
+  const resolved = resolveLock(manifest);
+  const lock = {
+    ...resolved,
+    deployment: { ...resolved.deployment, mode: setup.mode ?? "personal" },
+  } as Parameters<typeof GovernanceSession.open>[0]["lock"];
+  const options = {
+    lock,
+    distributionDir: dir,
+    stateDir,
+    cwd: workspace,
+    piVersion: PI_VERSION,
+    interactive: false,
+    ...(setup.yolo ? { yolo: true } : {}),
+    fetch: (() => {
+      throw new Error("no network in unit tests");
+    }) as unknown as ManagedFetch,
+    resolveTemplate: (_key: string, template: string) => template,
+    homeDir: home,
+    user: "alice",
+  };
+  const session = await GovernanceSession.open(options);
+  sessions.push(session);
+  const raw = async () => {
+    await session.audit.flush();
+    return readFileSync(join(stateDir, "logs", "audit.jsonl"), "utf8");
+  };
+  const events = async () =>
+    (await raw())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as AuditEvent);
+  return { session, workspace, home, stateDir, dir, options, raw, events };
+}
+
+/** A prompt that counts how often it is shown, and approves once. */
+function counted() {
+  const shown = { count: 0 };
+  const channel: ApprovalChannel = async () => {
+    shown.count += 1;
+    return "approved";
+  };
+  return { shown, channel };
+}
+
+/** A prompt that stays open until released, so later calls queue behind it. */
+function held() {
+  const shown = { count: 0 };
+  let release: (answer: ApprovalAnswer) => void = () => undefined;
+  let showing: () => void = () => undefined;
+  const opened = new Promise<ApprovalAnswer>((resolve) => {
+    release = resolve;
+  });
+  const asked = new Promise<void>((resolve) => {
+    showing = resolve;
+  });
+  const channel: ApprovalChannel = async () => {
+    shown.count += 1;
+    showing();
+    return shown.count === 1 ? opened : "approved";
+  };
+  return {
+    shown,
+    channel,
+    /** Settles once the first prompt is open. */
+    asked,
+    release: (answer: ApprovalAnswer) => release(answer),
+  };
+}
+
+let next = 0;
+function grant(
+  scope: TaskGrant["scope"],
+  overrides: Partial<TaskGrant> = {},
+): TaskGrant {
+  next += 1;
+  return {
+    id: `g${next}`,
+    task: "canary-task-label",
+    createdBy: "user-command",
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    scope,
+    inheritToSubagents: false,
+    ...overrides,
+  };
+}
+
+describe("a task grant", () => {
+  it("approves an ask inside its scope without a prompt, and counts each use", async () => {
+    const { session, workspace } = await open();
+    const { shown, channel } = counted();
+    const added = await session.addGrant(grant({ paths: [workspace] }));
+    for (const name of ["a.txt", "b.txt"])
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          channel,
+        ),
+      ).toMatchObject({
+        outcome: "allow",
+        approval: "grant",
+        grantId: added.id,
+        ruleId: "write",
+      });
+    expect(shown.count).toBe(0);
+    expect(session.listGrants()).toEqual([{ grant: added, uses: 2 }]);
+  });
+
+  it("is counted as grant in local metrics, not as auto, and shows no dialog", async () => {
+    const { session, workspace } = await open();
+    await session.addGrant(grant({ paths: [workspace] }));
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      counted().channel,
+    );
+    const snapshot = session.metrics.snapshot();
+    expect(snapshot.approvals).toEqual({ "filesystem.write:grant": 1 });
+    expect(snapshot.prompts).toBeUndefined();
+  });
+
+  it("never approves a deny", async () => {
+    const { session, workspace } = await open();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "secret", "a.txt"),
+        counted().channel,
+      ),
+    ).toMatchObject({ outcome: "deny", ruleId: "no-secret" });
+  });
+
+  it("never approves an ask that keeps its prompt", async () => {
+    const { session, workspace } = await open();
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "kept", "a.txt"),
+        channel,
+      ),
+    ).toMatchObject({ outcome: "allow", approval: "approved" });
+    expect(shown.count).toBe(1);
+  });
+
+  it("approves a combined prompt only when one grant covers every ask in it", async () => {
+    const { session, workspace } = await open();
+    session.resourceTools = new Set(["write"]);
+    const { shown, channel } = counted();
+    const combined = (name: string) =>
+      session.withToolCall(`call-${name}`, "write", () =>
+        session.decide("filesystem.write", join(workspace, name), channel),
+      );
+    // The path is covered, the tool ask is not: one grant per scope kind
+    // does not add up to one that covers both.
+    const paths = await session.addGrant(grant({ paths: [workspace] }));
+    await session.addGrant(grant({ tools: ["write"] }));
+    expect(await combined("a.txt")).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+    const both = await session.addGrant(
+      grant({ paths: [workspace], tools: ["write"] }),
+    );
+    expect(await combined("b.txt")).toMatchObject({
+      approval: "grant",
+      grantId: both.id,
+    });
+    expect(shown.count).toBe(1);
+    expect(
+      session.listGrants().find((entry) => entry.grant.id === paths.id)?.uses,
+    ).toBe(0);
+  });
+
+  it("uses the first grant that covers, and the next once it is revoked", async () => {
+    const { session, workspace } = await open();
+    const sub = join(workspace, "sub");
+    const wide = await session.addGrant(grant({ paths: [workspace] }));
+    const narrow = await session.addGrant(grant({ paths: [sub] }));
+    const target = join(sub, "a.txt");
+    expect(
+      await session.decide("filesystem.write", target, undefined),
+    ).toMatchObject({ grantId: wide.id });
+    expect(session.revokeGrant(wide.id)).toBe(true);
+    expect(session.revokeGrant(wide.id)).toBe(false);
+    expect(
+      await session.decide("filesystem.write", target, undefined),
+    ).toMatchObject({ grantId: narrow.id });
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "b.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+    expect(session.listGrants()).toEqual([{ grant: narrow, uses: 1 }]);
+  });
+
+  it("does not approve once it has expired", async () => {
+    const { session, workspace } = await open();
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    const later = Date.now() + 120_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("is looked up again in the approval queue: added while waiting approves, revoked or expired does not", async () => {
+    const { session, workspace } = await open();
+    const target = (name: string) => join(workspace, name);
+    // Added while the call waits: it is approved by the grant.
+    const first = held();
+    const open1 = session.decide(
+      "filesystem.write",
+      target("a"),
+      first.channel,
+    );
+    const queued1 = session.decide(
+      "filesystem.write",
+      target("b"),
+      first.channel,
+    );
+    await first.asked;
+    const added = await session.addGrant(grant({ paths: [workspace] }));
+    first.release("approved");
+    await open1;
+    expect(await queued1).toMatchObject({
+      approval: "grant",
+      grantId: added.id,
+    });
+    expect(first.shown.count).toBe(1);
+    session.revokeGrant(added.id);
+
+    // Added, then revoked while the call waits: it prompts.
+    const second = held();
+    const open2 = session.decide(
+      "filesystem.write",
+      target("c"),
+      second.channel,
+    );
+    const queued2 = session.decide(
+      "filesystem.write",
+      target("d"),
+      second.channel,
+    );
+    await second.asked;
+    session.revokeGrant(
+      (await session.addGrant(grant({ paths: [workspace] }))).id,
+    );
+    second.release("approved");
+    await open2;
+    expect(await queued2).toMatchObject({ approval: "approved" });
+    expect(second.shown.count).toBe(2);
+
+    // Expired while the call waits: it prompts.
+    const third = held();
+    const open3 = session.decide(
+      "filesystem.write",
+      target("e"),
+      third.channel,
+    );
+    const queued3 = session.decide(
+      "filesystem.write",
+      target("f"),
+      third.channel,
+    );
+    await third.asked;
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+    third.release("approved");
+    await open3;
+    expect(await queued3).toMatchObject({ approval: "approved" });
+    expect(third.shown.count).toBe(2);
+  });
+
+  it("never changes what --yolo approves", async () => {
+    const { session, workspace } = await open({ yolo: true });
+    await session.addGrant(grant({ paths: [workspace] }));
+    for (const name of ["a.txt", join("kept", "a.txt")])
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          undefined,
+        ),
+      ).toMatchObject({ outcome: "allow", approval: "auto" });
+    expect(session.listGrants()[0]?.uses).toBe(0);
+    expect(session.metrics.snapshot().approvals).toEqual({
+      "filesystem.write:auto": 2,
+    });
+  });
+
+  it("is refused in a managed distribution", async () => {
+    const { session, workspace } = await open({ mode: "managed" });
+    expect(session.grantsAllowed).toBe(false);
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("refuses a grant validateGrant refuses, a relative or .. root, a taken ID, and a 33rd grant", async () => {
+    const { session, workspace, home, stateDir, dir } = await open();
+    const refused = (scope: TaskGrant["scope"], overrides = {}) =>
+      expect(session.addGrant(grant(scope, overrides))).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+      });
+    await refused({ paths: [home] });
+    await refused({ paths: [join(stateDir, "logs")] });
+    // The files that define the policy: the user's rules and the distribution.
+    await refused({ paths: [join(stateDir, "config")] });
+    await refused({ paths: [dir] });
+    await refused({ paths: ["workspace"] });
+    await refused({ paths: [`${workspace}/../workspace`] });
+    await refused({ hosts: ["*.example.com"] });
+    await refused(
+      { paths: [workspace] },
+      { expiresAt: new Date(Date.now() + 9 * 3600_000).toISOString() },
+    );
+    await refused({ paths: [workspace] }, { id: "has space" });
+    await session.addGrant(grant({ paths: [workspace] }, { id: "taken" }));
+    await refused({ paths: [workspace] }, { id: "taken" });
+    for (let index = 1; index < 32; index += 1)
+      await session.addGrant(grant({ tools: [`tool-${index}`] }));
+    expect(session.listGrants()).toHaveLength(32);
+    await refused({ tools: ["one-more"] });
+  });
+
+  it("cannot be widened through the object it was given or the one it returns", async () => {
+    const { session, workspace } = await open();
+    const input = grant({ paths: [join(workspace, "sub")], tools: ["read"] });
+    const added = await session.addGrant(input);
+    (input.scope.paths as string[]).push(workspace);
+    (input.scope.tools as string[]).push("bash");
+    expect(() => (added.scope.tools as string[]).push("bash")).toThrow(
+      TypeError,
+    );
+    expect(() => (added.scope.paths as string[]).push("/")).toThrow(TypeError);
+    const [listed] = session.listGrants();
+    if (!listed) throw new Error("no grant listed");
+    expect(() => {
+      (listed as { uses: number }).uses = 99;
+    }).toThrow(TypeError);
+    expect(() => (listed.grant.scope.tools as string[]).push("bash")).toThrow(
+      TypeError,
+    );
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+    expect(
+      await session.decide("tool.execute", "bash", undefined),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("expires on the monotonic clock even when the wall clock is set back", async () => {
+    const { session, workspace } = await open();
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    const later = performance.now() + 120_000;
+    vi.spyOn(performance, "now").mockReturnValue(later);
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("is not added when a required audit sink did not take its creation event", async () => {
+    const { session, workspace } = await open();
+    const status = session.audit.status();
+    vi.spyOn(session.audit, "status").mockReturnValue({
+      ...status,
+      sinks: [
+        ...status.sinks,
+        { id: "collector", required: true, pending: 1, dropped: 0 },
+      ],
+    } as never);
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    vi.restoreAllMocks();
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("adds no realpath work to a decision while the session holds no grant", async () => {
+    const { session, workspace } = await open();
+    realpaths.mockClear();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      undefined,
+    );
+    expect(realpaths).not.toHaveBeenCalled();
+    await session.addGrant(grant({ tools: ["other"] }));
+    realpaths.mockClear();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "a.txt"),
+      undefined,
+    );
+    expect(realpaths).toHaveBeenCalled();
+  });
+
+  it("judges configuration below the project root only, and only for writes", async () => {
+    const { session, workspace } = await open({
+      workspaceAt: [".claude", "worktrees", "w"],
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "app.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    for (const name of ["AGENTS.md", join(".claude", "settings.json")])
+      expect(
+        await session.decide("filesystem.read", join(workspace, name), channel),
+      ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(0);
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, ".claude", "x"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+  });
+
+  it("treats the target of a configuration surface's link inside the tree as configuration", async () => {
+    const { session, workspace } = await open({
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, "extensions"));
+        mkdirSync(join(workspace, ".pi"));
+        symlinkSync(
+          join(workspace, "extensions"),
+          join(workspace, ".pi", "extensions"),
+        );
+      },
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "extensions", "x.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+    for (const name of [join("src", "a.ts"), "AGENTS.md"])
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          channel,
+        ),
+      ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(1);
+  });
+
+  it("never covers a project configuration file, by its own path or a symlink's target", async () => {
+    const { session, workspace } = await open();
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "app.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    // Instruction files are ordinary edits: covered.
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "AGENTS.md"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    const surfaces = [
+      [".piship", "policy.json"],
+      [".pi", "extensions", "x.ts"],
+      [".pi", "settings.json"],
+      [".mcp.json"],
+      [".claude", "settings.json"],
+      ["sub", ".claude", "hooks", "h.sh"],
+    ];
+    for (const parts of surfaces)
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, ...parts),
+          channel,
+        ),
+      ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(surfaces.length);
+    mkdirSync(join(workspace, ".piship"));
+    writeFileSync(join(workspace, ".piship", "policy.json"), "[]");
+    symlinkSync(
+      join(workspace, ".piship", "policy.json"),
+      join(workspace, "notes.txt"),
+    );
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "notes.txt"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(surfaces.length + 1);
+  });
+
+  it("records one creation event for concurrent adds of one ID or past the cap", async () => {
+    const { session, workspace, events } = await open();
+    const created = async () =>
+      (await events()).filter((event) => event.event === "policy.grant_created")
+        .length;
+    const same = await Promise.allSettled([
+      session.addGrant(grant({ paths: [workspace] }, { id: "twice" })),
+      session.addGrant(grant({ paths: [workspace] }, { id: "twice" })),
+    ]);
+    expect(same.map((result) => result.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(await created()).toBe(1);
+    for (let index = 2; index < 32; index += 1)
+      await session.addGrant(grant({ tools: [`tool-${index}`] }));
+    const last = await Promise.allSettled([
+      session.addGrant(grant({ tools: ["last"] })),
+      session.addGrant(grant({ tools: ["over"] })),
+    ]);
+    expect(last.map((result) => result.status)).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(await created()).toBe(32);
+  });
+
+  it("is not added when the session closes while its event is delivered", async () => {
+    const { session, workspace } = await open();
+    let closing: Promise<unknown> | undefined;
+    vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
+      closing = session.close();
+    });
+    await expect(
+      session.addGrant(grant({ paths: [workspace] })),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    await closing;
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("takes its monotonic deadline when it takes its wall-clock time, not after the audit flush", async () => {
+    const { session, workspace } = await open();
+    const start = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(start);
+    const flush = session.audit.flush.bind(session.audit);
+    vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
+      clock.mockReturnValue(start + 50_000);
+      await flush();
+    });
+    await session.addGrant(
+      grant(
+        { paths: [workspace] },
+        { expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    expect(session.listGrants()).toHaveLength(1);
+    clock.mockReturnValue(start + 61_000);
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("records each grant still held as revoked when the session closes", async () => {
+    const { session, workspace, events } = await open();
+    const held = await session.addGrant(grant({ paths: [workspace] }));
+    await session.close();
+    expect(
+      (await events()).find((event) => event.event === "policy.grant_revoked"),
+    ).toMatchObject({
+      detail: { grant: held.id, uses: 0, reason: "session.end" },
+    });
+  });
+
+  it("is audited as metadata only: never a path, host, tool, or the task label", async () => {
+    const { session, workspace, events, raw } = await open();
+    const canaryRoot = join(workspace, "canary-path-root");
+    const created = await session.addGrant(
+      grant({
+        paths: [canaryRoot],
+        hosts: ["canary-host.example"],
+        tools: ["canary-tool"],
+      }),
+    );
+    await session.decide(
+      "filesystem.write",
+      join(canaryRoot, "canary-file.txt"),
+      undefined,
+    );
+    session.revokeGrant(created.id);
+    await session.addGrant(
+      grant(
+        { paths: [canaryRoot] },
+        { id: "short", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      ),
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+    expect(session.listGrants()).toEqual([]);
+    const grantLines = (await raw())
+      .split("\n")
+      .filter((line) => line.includes('"policy.grant_'));
+    expect(grantLines).toHaveLength(5);
+    for (const canary of [
+      "canary-path",
+      "canary-file",
+      "canary-host",
+      "canary-tool",
+      "canary-task",
+      workspace,
+    ])
+      expect(grantLines.join("\n")).not.toContain(canary);
+    const grantEvents = (await events()).filter((event) =>
+      event.event.startsWith("policy.grant_"),
+    );
+    expect(grantEvents.map((event) => event.event)).toEqual([
+      "policy.grant_created",
+      "policy.grant_used",
+      "policy.grant_revoked",
+      "policy.grant_created",
+      "policy.grant_expired",
+    ]);
+    expect(grantEvents[0]?.detail).toEqual({
+      grant: created.id,
+      createdBy: "user-command",
+      expiresAt: created.expiresAt,
+      paths: 1,
+      hosts: 1,
+      tools: 1,
+    });
+    expect(grantEvents[1]?.detail).toEqual({
+      grant: created.id,
+      action: "filesystem.write",
+      uses: 1,
+    });
+    expect(grantEvents[2]?.detail).toEqual({ grant: created.id, uses: 1 });
+  });
+
+  it("is not seen by a subagent child, even when it asks to be inherited", async () => {
+    const { session, workspace, options } = await open();
+    await session.addGrant(
+      grant({ paths: [workspace] }, { inheritToSubagents: true }),
+    );
+    const child = await GovernanceSession.open({
+      ...options,
+      subagent: { parentSession: session.sessionId },
+    });
+    sessions.push(child);
+    expect(child.listGrants()).toEqual([]);
+    expect(
+      await child.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+});

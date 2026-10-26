@@ -1118,6 +1118,54 @@ const EXTENSION_FILES: readonly {
   { relative: ".pi/agents", dimension: "agents", atRoot: false },
 ];
 
+// The whole directories these surfaces live in, so one added later is
+// covered. Top-level instruction files (AGENTS.md, CLAUDE.md) only shape the
+// prompt and are edited in ordinary work, so they are left out.
+const PROJECT_CONFIG_SURFACES: readonly (readonly string[])[] = [
+  ...new Set([
+    ".pi",
+    ".piship",
+    ".claude",
+    ...[...CANDIDATES, ...CLAUDE_SURFACES, ...EXTENSION_FILES]
+      .map(({ relative }) => relative)
+      .filter((relative) => relative.includes("/") || relative === ".mcp.json"),
+  ]),
+].map((relative) => relative.split("/"));
+
+/**
+ * Whether `path` is, or lies inside, a project configuration surface PiShip
+ * or an extension loads (`.pi`, `.piship`, `.claude`, `.mcp.json`, and the
+ * other candidate directories above) in any directory: what a later start
+ * would load, so something that only approves for this session (a task
+ * grant) never covers writing it. Compared by path segment, ignoring case on macOS and
+ * Windows, and on Windows a segment's stream suffix and trailing dots and
+ * spaces.
+ */
+export function isProjectConfigPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const fold =
+    platform === "darwin" || platform === "win32"
+      ? (text: string) => text.toLowerCase()
+      : (text: string) => text;
+  const segments = fold(path)
+    .split(/[\\/]/)
+    .map((segment) => {
+      if (platform !== "win32") return segment;
+      // An NTFS stream (`.mcp.json::$DATA`) names the file before the colon.
+      let name = segment.split(":")[0] ?? "";
+      // Windows ignores trailing dots and spaces (a loop: no backtracking regex).
+      while (name.endsWith(".") || name.endsWith(" ")) name = name.slice(0, -1);
+      return name;
+    });
+  return PROJECT_CONFIG_SURFACES.some((surface) =>
+    segments.some((_, start) =>
+      surface.every((part, offset) => segments[start + offset] === fold(part)),
+    ),
+  );
+}
+
 const COMPANY_APPROVED_REASON =
   "company-approved admits only distribution-approved items";
 

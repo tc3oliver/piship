@@ -27,7 +27,7 @@ import {
   type ManagedFetch,
 } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { governanceHooks } from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
@@ -263,6 +263,7 @@ describe("governed session audit events (real flows)", () => {
       rule("docs", "mcp.server.start", "docs"),
       rule("docs-search", "mcp.tool.call", "docs:search"),
       rule("model", "model.select", "unit/allowed"),
+      rule("granted", "tool.execute", "granted-tool", "ask"),
       "resources:",
       "  extensions:",
       "    builtin: [piship-ask-user, piship-workflow]",
@@ -336,6 +337,25 @@ describe("governed session audit events (real flows)", () => {
     expect(search).toBeDefined();
     const result = await search?.call({ query: "query-canary" });
     expect(JSON.stringify(result)).toContain("query-canary");
+    // A task grant: created, used, revoked, and one that expires.
+    const grant = (id: string, ms: number) => ({
+      id,
+      task: "prompt-canary",
+      createdBy: "user-command" as const,
+      expiresAt: new Date(Date.now() + ms).toISOString(),
+      scope: { tools: ["granted-tool"] },
+      inheritToSubagents: false,
+    });
+    await session.addGrant(grant("used", 3_600_000));
+    expect(
+      await session.decide("tool.execute", "granted-tool", undefined),
+    ).toMatchObject({ approval: "grant" });
+    session.revokeGrant("used");
+    await session.addGrant(grant("expires", 60_000));
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    expect(session.listGrants()).toEqual([]);
+    vi.restoreAllMocks();
     await session.close();
 
     // A managed session: a user rule that tries to widen the policy, a

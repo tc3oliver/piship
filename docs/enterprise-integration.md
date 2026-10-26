@@ -429,6 +429,7 @@ audit:
             "mcp.server.start", "mcp.call", "mcp.denied",
             "policy.loaded", "policy.violation",
             "policy.auto_enabled", "policy.auto_disabled", "policy.auto_approved",
+            "policy.grant_created", "policy.grant_used", "policy.grant_expired", "policy.grant_revoked",
             "runtime.update", "runtime.rollback",
             "model.dispatch", "session.export",
             "runtime.mutation.reverted", "data.swept"

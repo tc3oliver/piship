@@ -499,6 +499,7 @@ describe("LocalMetrics", () => {
     metrics.recordApproval("shell.execute", "prompted");
     metrics.recordApproval("shell.execute", "prompted");
     metrics.recordApproval("shell.execute", "approved");
+    metrics.recordApproval("filesystem.write", "grant");
     metrics.recordApproval("cat ~/.ssh/id_rsa", "approved");
     metrics.recordApproval("shell.execute", "rm -rf /");
     metrics.save();
@@ -506,6 +507,7 @@ describe("LocalMetrics", () => {
     expect(reloaded.snapshot().approvals).toEqual({
       "shell.execute:prompted": 2,
       "shell.execute:approved": 1,
+      "filesystem.write:grant": 1,
     });
   });
 

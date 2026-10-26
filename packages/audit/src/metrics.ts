@@ -118,7 +118,7 @@ export interface MetricsSnapshot {
    * Policy decision records by `<action>:<kind>`: `prompted` (the user was
    * asked), `approved` and `denied` (final outcome of an ask, plus deny-effect
    * rules and headless refusals), `auto` (auto mode, `--yolo`, or a session
-   * allow). Per record, not per tool call.
+   * allow), `grant` (a task grant). Per record, not per tool call.
    */
   readonly approvals?: Readonly<Record<string, number>>;
   /**
@@ -166,6 +166,7 @@ const APPROVAL_KINDS = new Set<string>([
   "approved",
   "denied",
   "auto",
+  "grant",
 ]);
 function approvalKey(key: string): boolean {
   const [action, kind, extra] = key.split(":");

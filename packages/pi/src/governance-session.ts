@@ -3,6 +3,7 @@
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
+import { isAbsolute, relative, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
@@ -41,15 +42,21 @@ import {
   type CapabilityState,
   denialHint,
   expandPathTokens,
+  type GrantAsk,
+  grantCovers,
   isPathAction,
+  isProjectConfigPath,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
+  type TaskGrant,
+  validateGrant,
 } from "@piship/policy";
 import {
   type ActiveSandbox,
   activateSandbox,
   describeWorkspace,
+  realpathNearest,
   type WorkspaceReport,
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
@@ -126,6 +133,30 @@ interface DeferredToolAsk {
   readonly detail: Readonly<Record<string, string>>;
 }
 const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
+
+/** The longest a task grant may last until the manifest sets a cap (S4). */
+const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
+/** A grant ID is shown to the user and recorded in audit, so it is plain. */
+const GRANT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** The most task grants one session holds at once. */
+const MAX_GRANTS = 32;
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) deepFreeze(item);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** A grant's scope as audit metadata: the number of entries of each kind, never one of them. */
+function grantScopeCounts(grant: TaskGrant): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(grant.scope)
+      .filter(([, entries]) => Array.isArray(entries))
+      .map(([kind, entries]) => [kind, (entries as unknown[]).length]),
+  );
+}
 
 /**
  * Local metrics are operational telemetry: a record or save that fails (a
@@ -617,38 +648,82 @@ export class GovernanceSession {
           ...(sessionCovers ? { sessionCovers } : {}),
         }
       : prompt;
+    // A task grant approves only when one grant covers every ask of this
+    // prompt; looked up after the session allow, and again once the queue
+    // reaches this call, so a grant revoked or expired meanwhile does not.
+    // A project configuration file (policy, extensions, hooks, MCP) takes
+    // effect at the next start, outside this session: a grant never writes
+    // it, by its own path or the one it resolves to.
+    const grantAsks = (): GrantAsk[] =>
+      asks.flatMap((ask) =>
+        ask.resources.map((item) => {
+          const resolved = isPathAction(ask.action)
+            ? realpathNearest(item)
+            : undefined;
+          return {
+            action: ask.action,
+            resource: item,
+            ...(resolved !== undefined ? { resolvedResource: resolved } : {}),
+            keepsPrompt:
+              this.engine.keepsPrompt({
+                action: ask.action,
+                resource: item,
+              }) === true ||
+              (ask.action === "filesystem.write" &&
+                resolved !== undefined &&
+                (this.#projectConfig(item) || this.#projectConfig(resolved))),
+            effect: decision.effect,
+          };
+        }),
+      );
+    // No grant: no realpath or keepsPrompt work for this decision.
+    const covering = () =>
+      decision.effect === "ask" && this.#grants.size > 0
+        ? this.#coveringGrant(grantAsks())
+        : undefined;
+    const grantApproved = (grantId: string) => ({
+      ...decision,
+      outcome: "allow" as const,
+      approval: "grant" as const,
+      grantId,
+    });
     let auto = this.#autoApproval(asks, decision);
     let prompted = false;
+    let grantId = auto || sessionAllowed() ? undefined : covering();
     const resolved: ResolvedDecision = auto
       ? approved
       : decision.effect === "ask" && sessionAllowed()
         ? sessionApproved
-        : decision.effect === "ask" && channel
-          ? await this.#serialized(async () => {
-              auto = this.#autoApproval(asks, decision);
-              if (auto) return approved;
-              if (sessionAllowed()) return sessionApproved;
-              prompted = true;
-              bestEffort(() => this.metrics.recordPrompt("shown"));
-              const answered = await resolveDecision(
-                decision,
-                channel,
-                offered,
-              );
-              bestEffort(() => {
-                this.metrics.recordPrompt(
-                  answered.outcome === "allow"
-                    ? "allowed"
-                    : answered.approval === "denied"
-                      ? "denied"
-                      : "cancelled",
+        : grantId
+          ? grantApproved(grantId)
+          : decision.effect === "ask" && channel
+            ? await this.#serialized(async () => {
+                auto = this.#autoApproval(asks, decision);
+                if (auto) return approved;
+                if (sessionAllowed()) return sessionApproved;
+                grantId = covering();
+                if (grantId) return grantApproved(grantId);
+                prompted = true;
+                bestEffort(() => this.metrics.recordPrompt("shown"));
+                const answered = await resolveDecision(
+                  decision,
+                  channel,
+                  offered,
                 );
-                if (answered.remember === "session")
-                  this.metrics.recordPrompt("sessionGrants");
-              });
-              return answered;
-            })
-          : await resolveDecision(decision, channel, prompt);
+                bestEffort(() => {
+                  this.metrics.recordPrompt(
+                    answered.outcome === "allow"
+                      ? "allowed"
+                      : answered.approval === "denied"
+                        ? "denied"
+                        : "cancelled",
+                  );
+                  if (answered.remember === "session")
+                    this.metrics.recordPrompt("sessionGrants");
+                });
+                return answered;
+              })
+            : await resolveDecision(decision, channel, prompt);
     // An answer for a grant already held keeps its count of uses.
     if (resolved.remember === "session")
       for (const { key } of grants)
@@ -669,8 +744,11 @@ export class GovernanceSession {
           : {}),
       };
     };
+    if (resolved.approval === "grant" && resolved.grantId)
+      this.#grantUsed(resolved.grantId, decision);
     const answer = {
       ...(resolved.approval ? { approval: resolved.approval } : {}),
+      ...(resolved.grantId ? { grantId: resolved.grantId } : {}),
       ...(resolved.remember ? { remember: resolved.remember } : {}),
       // `source` is taken (a tool call's origin), so the switch that
       // approved gets its own key. The stored auto mode, the usual one,
@@ -747,10 +825,12 @@ export class GovernanceSession {
           ? []
           : resolved.approval === "auto" || resolved.approval === "session"
             ? ["auto"]
-            : [
-                ...(prompted ? ["prompted"] : []),
-                resolved.outcome === "allow" ? "approved" : "denied",
-              ];
+            : resolved.approval === "grant"
+              ? ["grant"]
+              : [
+                  ...(prompted ? ["prompted"] : []),
+                  resolved.outcome === "allow" ? "approved" : "denied",
+                ];
       for (const kind of kinds)
         bestEffort(() => this.metrics.recordApproval(record.action, kind));
       if (resolved.outcome === "deny") {
@@ -763,7 +843,8 @@ export class GovernanceSession {
           decision:
             fields.detail.approval === "approved" ||
             fields.detail.approval === "auto" ||
-            fields.detail.approval === "session"
+            fields.detail.approval === "session" ||
+            fields.detail.approval === "grant"
               ? "approved"
               : "allowed",
         });
@@ -950,6 +1031,251 @@ export class GovernanceSession {
     );
   }
 
+  /**
+   * Task grants of this session and the uses each one approved. In memory
+   * only, so no other session (a subagent child included) sees them; an
+   * expired grant is dropped when it is next looked at.
+   */
+  readonly #grants = new Map<
+    string,
+    {
+      readonly grant: TaskGrant;
+      /** `performance.now()` deadline: a wall clock set back does not extend it. */
+      readonly deadline: number;
+      uses: number;
+    }
+  >();
+
+  /**
+   * Whether this session takes task grants. A managed distribution has no
+   * manifest field that allows them yet, so it takes none.
+   */
+  get grantsAllowed(): boolean {
+    return this.options.lock.deployment.mode === "personal";
+  }
+
+  /**
+   * Add a task grant, with its path roots resolved to their real paths, and
+   * return the stored copy, frozen. Throws POLICY_DENIED where grants are
+   * not allowed; CONFIG_INVALID for an ID that is taken or not plain, past
+   * 32 grants, or a grant `validateGrant` refuses: at most 8 hours, never
+   * the home directory or a directory containing it, nothing in the state
+   * or distribution directory (which hold the policy), no wildcard hosts;
+   * and, like switching auto mode on, AUDIT_UNAVAILABLE when a required sink
+   * did not take its `policy.grant_created` event, which leaves it unadded.
+   */
+  async addGrant(grant: TaskGrant): Promise<TaskGrant> {
+    if (!this.grantsAllowed)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "Task grants are not available in a managed distribution",
+        { component: "policy" },
+      );
+    this.#checkGrantSlot(grant.id);
+    // Both clocks at one instant: the monotonic deadline is the same lifetime.
+    const started = performance.now();
+    const limits = {
+      now: Date.now(),
+      maxTtlMs: GRANT_MAX_TTL_MS,
+      forbiddenRoots: [
+        {
+          path: realpathNearest(this.options.homeDir ?? homedir()),
+          mode: "self-and-above" as const,
+        },
+        {
+          path: realpathNearest(this.options.stateDir),
+          mode: "subtree" as const,
+        },
+        {
+          path: realpathNearest(this.options.distributionDir),
+          mode: "subtree" as const,
+        },
+      ],
+      wildcardHosts: false,
+    };
+    // A copy, so the caller cannot widen it after it was validated. The
+    // roots as given are checked first: resolving them would hide a
+    // relative root or a `..`.
+    const copy = structuredClone(grant);
+    const given = validateGrant(copy, limits);
+    const stored: TaskGrant = deepFreeze(
+      given.length || !copy.scope.paths
+        ? copy
+        : {
+            ...copy,
+            scope: {
+              ...copy.scope,
+              paths: copy.scope.paths.map((root) => realpathNearest(root)),
+            },
+          },
+    );
+    const errors = given.length ? given : validateGrant(stored, limits);
+    if (errors.length)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `The task grant was refused: ${errors.join("; ")}`,
+        { component: "policy" },
+      );
+    this.audit.assertAvailable();
+    // Reserved before its event, so a concurrent add of the same ID or past
+    // the cap is refused before it records anything.
+    this.#checkGrantSlot(stored.id);
+    this.#pendingGrants.add(stored.id);
+    try {
+      this.emit("policy.grant_created", {
+        policy: this.policyId,
+        detail: {
+          grant: stored.id,
+          createdBy: stored.createdBy,
+          expiresAt: stored.expiresAt,
+          ...grantScopeCounts(stored),
+        },
+      });
+      await this.audit.flush();
+      const loss = requiredAuditLoss(
+        this.audit.status(),
+        "The task grant was not added, because its audit was not recorded",
+      );
+      if (loss) throw loss;
+      if (this.#closed)
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "The task grant was not added, because the session ended",
+          { component: "policy" },
+        );
+      this.#grants.set(stored.id, {
+        grant: stored,
+        deadline: started + (Date.parse(stored.expiresAt) - limits.now),
+        uses: 0,
+      });
+      return stored;
+    } finally {
+      this.#pendingGrants.delete(stored.id);
+    }
+  }
+
+  /**
+   * Whether a write to `path` changes project configuration. Only the part
+   * below the project root counts, so a project inside a `.claude` or `.pi`
+   * directory is not configuration throughout; a path outside it is checked
+   * whole. A surface that links elsewhere in the tree (`.pi/extensions ->
+   * ../extensions`) makes its target configuration too, as the next start
+   * loads it; prompt text (instructions, Claude rules) stays editable.
+   */
+  #projectConfig(path: string): boolean {
+    if (
+      this.projectCandidates.some((candidate) => {
+        if (
+          candidate.dimension === "instructions" ||
+          candidate.dimension === "claudeRules"
+        )
+          return false;
+        const below = relative(candidate.resolvedPath, path);
+        return !isAbsolute(below) && below.split(sep)[0] !== "..";
+      })
+    )
+      return true;
+    for (const root of new Set([
+      this.project.root,
+      realpathNearest(this.project.root),
+    ])) {
+      const below = relative(root, path);
+      if (!isAbsolute(below) && below.split(sep)[0] !== "..")
+        return isProjectConfigPath(below);
+    }
+    return isProjectConfigPath(path);
+  }
+
+  /** IDs of grants whose creation event is being delivered; they count toward the cap. */
+  readonly #pendingGrants = new Set<string>();
+
+  #checkGrantSlot(id: string): void {
+    if (
+      !GRANT_ID.test(id) ||
+      this.#grants.has(id) ||
+      this.#pendingGrants.has(id)
+    )
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "A task grant needs a new ID of letters, digits, - and _",
+        { component: "policy" },
+      );
+    if (this.#grants.size + this.#pendingGrants.size >= MAX_GRANTS)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `A session holds at most ${MAX_GRANTS} task grants; revoke one first`,
+        { component: "policy" },
+      );
+  }
+
+  /** Remove a task grant; false when there is none with that ID. */
+  revokeGrant(id: string): boolean {
+    const entry = this.#grants.get(id);
+    if (!entry) return false;
+    this.#grants.delete(id);
+    this.#grantEvent("policy.grant_revoked", { grant: id, uses: entry.uses });
+    return true;
+  }
+
+  /** The task grants still in force, with their uses so far. */
+  listGrants(): readonly {
+    readonly grant: TaskGrant;
+    readonly uses: number;
+  }[] {
+    this.#expireGrants(Date.now());
+    return [...this.#grants.values()].map(({ grant, uses }) =>
+      Object.freeze({ grant, uses }),
+    );
+  }
+
+  /** The first grant, in the order they were added, that covers every ask. */
+  #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
+    const now = Date.now();
+    this.#expireGrants(now);
+    for (const [id, { grant }] of this.#grants)
+      if (grantCovers(grant, asks, now)) return id;
+    return undefined;
+  }
+
+  /** Drop each grant past its wall-clock expiry or its monotonic deadline. */
+  #expireGrants(now: number): void {
+    const elapsed = performance.now();
+    for (const [id, { grant, deadline, uses }] of this.#grants)
+      if (!(now < Date.parse(grant.expiresAt)) || !(elapsed < deadline)) {
+        this.#grants.delete(id);
+        this.#grantEvent("policy.grant_expired", { grant: id, uses });
+      }
+  }
+
+  #grantUsed(id: string, decision: PolicyDecision): void {
+    const entry = this.#grants.get(id);
+    if (entry) entry.uses += 1;
+    this.#grantEvent(
+      "policy.grant_used",
+      { grant: id, action: decision.action, uses: entry?.uses ?? 0 },
+      decision,
+    );
+  }
+
+  /**
+   * A task grant event. Metadata only: the grant ID, counts, and times,
+   * never a path, host, command, or the task label. Best effort: it never
+   * fails the decision or the command that caused it.
+   */
+  #grantEvent(
+    event: AuditEventType,
+    detail: Record<string, string | number>,
+    decision?: PolicyDecision,
+  ): void {
+    bestEffort(() =>
+      this.emit(event, {
+        policy: decision?.policyId ?? this.policyId,
+        ...(decision ? { rule: decision.ruleId } : {}),
+        detail,
+      }),
+    );
+  }
+
   #approvalTail: Promise<unknown> = Promise.resolve();
 
   /** Run `prompt` after every approval prompt queued before it settled. */
@@ -1081,6 +1407,15 @@ export class GovernanceSession {
   async close(): Promise<AuditStatus> {
     if (this.#closed) return this.audit.status();
     this.#closed = true;
+    // Every grant ends with the session; each one still held is recorded.
+    this.#expireGrants(Date.now());
+    for (const [id, { uses }] of this.#grants)
+      this.#grantEvent("policy.grant_revoked", {
+        grant: id,
+        uses,
+        reason: "session.end",
+      });
+    this.#grants.clear();
     this.emit("session.end");
     let status: AuditStatus | undefined;
     try {
