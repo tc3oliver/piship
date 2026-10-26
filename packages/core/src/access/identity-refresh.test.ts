@@ -101,7 +101,11 @@ describe("identity refresh retry bounds", () => {
               retryAfterMs: delay,
             });
           },
-          { sleep: async () => { throw new Error("unexpected sleep"); } },
+          {
+            sleep: async () => {
+              throw new Error("unexpected sleep");
+            },
+          },
         ),
       ).rejects.toBeInstanceOf(PiShipError);
       expect(calls).toBe(1);
