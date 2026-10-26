@@ -676,10 +676,17 @@ export function governedBashOperations(
         ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
         ...(options.env ? { env: options.env } : {}),
       });
-    return local.exec(command, cwd, {
-      ...options,
-      env: uncontainedEnvironment(options.env, source),
-    });
+    const env = uncontainedEnvironment(options.env, source);
+    // The local Pi runner has no Windows Job Object. Use the same
+    // kill-on-close supervisor as background tasks for unsandboxed bash.
+    if (process.platform === "win32")
+      return gov.sandbox.exec(command, cwd, {
+        onData: options.onData,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+        env,
+      });
+    return local.exec(command, cwd, { ...options, env });
   };
   return {
     exec: async (command, cwd, options) => {
