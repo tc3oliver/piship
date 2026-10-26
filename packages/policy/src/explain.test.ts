@@ -158,6 +158,28 @@ describe("enforcement status in explain", () => {
         }
       }
   });
+
+  it("says git.push is read from the command text, even with a shell sandbox", () => {
+    for (const shell of [false, true]) {
+      const engine = new PolicyEngine({
+        policy: makePolicy({
+          enforced: [rule("no.main", "git.push", "origin/main", "deny")],
+        }),
+        context: {
+          ...context,
+          containment: { filesystem: true, network: true, shell },
+        },
+      });
+      const explanation = engine.explain({
+        action: "git.push",
+        resource: "origin/main",
+      });
+      expect(formatDecision(explanation)).toContain(
+        "Enforcement:\n  enforced (control-plane, command text only: a push from a script, alias, or wrapper is not recognized)",
+      );
+      expect(decisionToJSON(explanation).enforcement).toBe("control-plane");
+    }
+  });
 });
 
 describe("managed user rules in explain", () => {

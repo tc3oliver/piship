@@ -35,10 +35,13 @@ import {
   type ApprovalDetail,
   type PolicyAction,
   processNetworkEnvironment,
+  type ResolvedDecision,
   redact,
 } from "@piship/contracts";
 import type { GovernedMcpTool } from "@piship/mcp";
 import {
+  BUILTIN_DEFAULT_RULE,
+  gitPushResources,
   isWithin as isWithinPosix,
   normalizePathResource,
   projectGitControlDirectories,
@@ -520,20 +523,46 @@ async function gateCommand(
     });
     return PLAN_SHELL_REFUSAL;
   }
+  const events = {
+    allowed: "tool.allowed",
+    denied: "tool.denied",
+    resource: source,
+    prompt: `${source}: ${command}`,
+    detail: { commandBytes: Buffer.byteLength(command) },
+    content: { command },
+  } as const;
+  // `git.push` only narrows: a push no rule covers is left to
+  // `shell.execute` without an event. A command `shell.execute` denies is
+  // refused there, before any push prompt.
+  const pushes = gitPushResources(command).filter(
+    (resource) =>
+      gov.engine.evaluate({ action: "git.push", resource }).ruleId !==
+      BUILTIN_DEFAULT_RULE,
+  );
+  if (
+    pushes.length &&
+    gov.engine.evaluate({ action: "shell.execute", resource: command })
+      .effect !== "deny"
+  ) {
+    const push = await gov.decide(
+      "git.push",
+      pushes,
+      gov.currentChannel(),
+      events,
+    );
+    if (push.outcome !== "allow") return refusal(gov, push);
+  }
   const decision = await gov.decide(
     "shell.execute",
     command,
     gov.currentChannel(),
-    {
-      allowed: "tool.allowed",
-      denied: "tool.denied",
-      resource: source,
-      prompt: `${source}: ${command}`,
-      detail: { commandBytes: Buffer.byteLength(command) },
-      content: { command },
-    },
+    events,
   );
   if (decision.outcome === "allow") return undefined;
+  return refusal(gov, decision);
+}
+
+function refusal(gov: GovernanceSession, decision: ResolvedDecision): string {
   return `This command is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}`;
 }
 

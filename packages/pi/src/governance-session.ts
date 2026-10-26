@@ -383,6 +383,7 @@ export class GovernanceSession {
     new Set<PolicyAction>([
       "tool.execute",
       "shell.execute",
+      "git.push",
       "filesystem.read",
       "filesystem.write",
       "resource.load",
@@ -880,6 +881,13 @@ export class GovernanceSession {
     pattern?: string;
   } {
     const exact = { key: sessionAllowKey(ask.action, ask.resources) };
+    // An unnamed push target matches every git.push ask, so a rule grant
+    // would approve it; it gets only its own key, which is never granted.
+    if (
+      ask.action === "git.push" &&
+      ask.resources.some((resource) => resource.includes("*"))
+    )
+      return exact;
     if (
       this.options.lock.deployment.mode !== "personal" &&
       !this.#userAuto.allowed
@@ -933,6 +941,9 @@ export class GovernanceSession {
    * layer, as with `--yolo`.
    */
   #offersSession(action: PolicyAction, resources: readonly string[]): boolean {
+    // A grant for an unnamed push target would cover every later bare push.
+    if (action === "git.push" && resources.some((item) => item.includes("*")))
+      return false;
     if (this.options.lock.deployment.mode === "personal") return true;
     return !resources.some((item) =>
       this.engine.keepsPrompt({ action, resource: item }),
