@@ -1308,6 +1308,10 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       ...services.state.accessTokens.keys(),
       ...services.state.refreshTokens.keys(),
     ];
+    const refreshCount = () =>
+      services.state.requests.filter((item: { body: string }) =>
+        item.body.includes("grant_type=refresh_token"),
+      ).length;
     const failure = async () => {
       const error = await session.requestSecret().catch((caught) => caught);
       expect(error).toBeInstanceOf(PiShipError);
@@ -1393,6 +1397,7 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
 
     it("ends the session's credential when the sign-in was revoked", async () => {
       await session.requestSecret();
+      const before = refreshCount();
       // Revoke the refresh tokens, keeping them for the leak scan.
       const revoked = [...services.state.refreshTokens.keys()];
       services.state.refreshTokens.clear();
@@ -1402,6 +1407,7 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
           `${error.message}\n${error.stack}\n${JSON.stringify(error)}\n${JSON.stringify(events)}`,
         ).not.toContain(token);
       expect(error).toMatchObject({ code: "IDENTITY_EXPIRED" });
+      expect(refreshCount()).toBe(before + 1);
       // A later outage does not bring the old credential back.
       services.knobs.tokenStatus = 503;
       expect(await failure()).toMatchObject({ retryable: true });
@@ -1409,8 +1415,12 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
 
     it("ends the session's credential when the renewed sign-in names another subject", async () => {
       await session.requestSecret();
+      const before = refreshCount();
+      const issued = services.state.credentialCount;
       services.knobs.refreshSubject = "demo-user-2";
       expect(await failure()).toMatchObject({ code: "IDENTITY_INVALID" });
+      expect(refreshCount()).toBe(before + 1);
+      expect(services.state.credentialCount).toBe(issued);
       services.knobs.tokenStatus = 503;
       expect(await failure()).toMatchObject({ retryable: true });
     });
