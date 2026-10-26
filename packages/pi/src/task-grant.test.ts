@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
   ApprovalAnswer,
   ApprovalChannel,
@@ -21,8 +22,10 @@ import type {
 } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
 import type { TaskGrant } from "@piship/policy";
+import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
+import { grantCommand, grantMinutes } from "./grant-command.js";
 
 const realpaths = vi.hoisted(() => vi.fn());
 vi.mock("@piship/sandbox", async (actual) => {
@@ -70,6 +73,8 @@ interface Setup {
   readonly workspaceAt?: readonly string[];
   /** Run on the workspace before the session opens. */
   readonly prepare?: (workspace: string) => void;
+  /** `policy.taskGrants`, as a v1alpha5 lock would carry it. */
+  readonly taskGrants?: TaskGrantsPolicy;
 }
 
 async function open(setup: Setup = {}) {
@@ -96,9 +101,21 @@ async function open(setup: Setup = {}) {
     ].join("\n"),
   );
   const resolved = resolveLock(manifest);
+  const governance = resolved.governance;
+  if (!governance) throw new Error("no governance");
   const lock = {
     ...resolved,
     deployment: { ...resolved.deployment, mode: setup.mode ?? "personal" },
+    governance: {
+      ...governance,
+      manifest: {
+        ...governance.manifest,
+        policy: {
+          ...governance.manifest.policy,
+          ...(setup.taskGrants ? { taskGrants: setup.taskGrants } : {}),
+        },
+      },
+    },
   } as Parameters<typeof GovernanceSession.open>[0]["lock"];
   const options = {
     lock,
@@ -782,5 +799,159 @@ describe("a task grant", () => {
         undefined,
       ),
     ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+});
+
+/** A UI context whose confirm answers `answer` and records what it showed. */
+function ui(answer = true) {
+  const dialogs: string[] = [];
+  const notices: { message: string; level: string }[] = [];
+  const ctx = {
+    hasUI: true,
+    ui: {
+      confirm: async (_title: string, message: string) => {
+        dialogs.push(message);
+        return answer;
+      },
+      notify: (message: string, level: string) =>
+        notices.push({ message, level }),
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, dialogs, notices };
+}
+
+describe("/grant", () => {
+  it("grants the project root for 120 minutes by default, after one confirm that is not a counted prompt", async () => {
+    const { session, workspace } = await open();
+    const { ctx, dialogs, notices } = ui();
+    const before = Date.now();
+    await grantCommand(session, "", ctx);
+    expect(dialogs).toHaveLength(1);
+    expect(dialogs[0]).toContain(`files under ${workspace}`);
+    const [entry] = session.listGrants();
+    expect(entry?.grant).toMatchObject({
+      createdBy: "user-command",
+      scope: { paths: [workspace] },
+      inheritToSubagents: false,
+    });
+    expect(entry?.grant.id).toMatch(/^[0-9a-f]{8}$/);
+    const ttl = Date.parse(entry?.grant.expiresAt ?? "") - before;
+    expect(ttl).toBeGreaterThan(119 * 60_000);
+    expect(ttl).toBeLessThanOrEqual(120 * 60_000 + 5_000);
+    expect(notices[0]?.message).toContain(entry?.grant.id);
+    expect(session.metrics.snapshot().prompts).toBeUndefined();
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ approval: "grant" });
+  });
+
+  it("takes a path, --for, and --task, and adds nothing when the confirm is declined", async () => {
+    const { session, workspace } = await open();
+    const declined = ui(false);
+    await grantCommand(session, ".", declined.ctx);
+    expect(session.listGrants()).toEqual([]);
+    const { ctx, dialogs } = ui();
+    await grantCommand(session, 'add kept --for 30m --task "fix login"', ctx);
+    expect(dialogs[0]).toContain("Task: fix login");
+    const [entry] = session.listGrants();
+    expect(entry?.grant).toMatchObject({
+      task: "fix login",
+      scope: { paths: [join(workspace, "kept")] },
+    });
+    expect(
+      Date.parse(entry?.grant.expiresAt ?? "") - Date.now(),
+    ).toBeLessThanOrEqual(30 * 60_000);
+  });
+
+  it("lists and revokes, one or all", async () => {
+    const { session } = await open();
+    const { ctx, notices } = ui();
+    await grantCommand(session, "", ctx);
+    await grantCommand(session, "kept", ctx);
+    const [first, second] = session.listGrants();
+    await grantCommand(session, "list", ctx);
+    expect(notices.at(-1)?.message).toContain(`${first?.grant.id}:`);
+    expect(notices.at(-1)?.message).toContain("used 0 times");
+    await grantCommand(session, `revoke ${first?.grant.id}`, ctx);
+    expect(session.listGrants().map(({ grant }) => grant.id)).toEqual([
+      second?.grant.id,
+    ]);
+    await grantCommand(session, "revoke nope", ctx);
+    expect(notices.at(-1)?.level).toBe("warning");
+    await grantCommand(session, "revoke all", ctx);
+    expect(session.listGrants()).toEqual([]);
+    await grantCommand(session, "list", ctx);
+    expect(notices.at(-1)?.message).toBe("No task grants in this session.");
+  });
+
+  it("refuses a bad duration, an unknown flag, or a lifetime past the cap, without a dialog", async () => {
+    const { session } = await open();
+    const { ctx, dialogs, notices } = ui();
+    for (const args of ["--for soon", "--forever", ". --for 9h"])
+      await grantCommand(session, args, ctx);
+    expect(notices.map((notice) => notice.level)).toEqual([
+      "error",
+      "error",
+      "error",
+    ]);
+    expect(dialogs).toEqual([]);
+    expect(notices[2]?.message).toBe("A task grant lasts at most 8h here");
+    expect(session.listGrants()).toEqual([]);
+    expect(grantMinutes("1h30m")).toBe(90);
+    expect(grantMinutes("0m")).toBeUndefined();
+  });
+
+  it("follows policy.taskGrants: mode, maxTtlMinutes, and actions", async () => {
+    expect((await open({ mode: "managed" })).session.grantsAllowed).toBe(false);
+    expect(
+      (await open({ taskGrants: { mode: "off" } })).session.grantsAllowed,
+    ).toBe(false);
+    const { session, workspace } = await open({
+      mode: "managed",
+      taskGrants: {
+        mode: "session",
+        maxTtlMinutes: 60,
+        actions: ["filesystem.read"],
+      },
+    });
+    expect(session.grantsAllowed).toBe(true);
+    const { ctx } = ui();
+    await grantCommand(session, "", ctx);
+    const [entry] = session.listGrants();
+    expect(
+      Date.parse(entry?.grant.expiresAt ?? "") - Date.now(),
+    ).toBeLessThanOrEqual(60 * 60_000);
+    expect(
+      await session.decide(
+        "filesystem.read",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "a.txt"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("covers a path spelled through a symlinked root, and still checks where it resolves", async () => {
+    const { session, workspace } = await open();
+    const alias = join(workspace, "..", "alias");
+    symlinkSync(workspace, alias);
+    await session.addGrant(grant({ paths: [alias] }));
+    expect(session.listGrants()[0]?.grant).toMatchObject({
+      scope: { paths: [workspace] },
+      pathAliases: [alias],
+    });
+    expect(
+      await session.decide("filesystem.write", join(alias, "a.txt"), undefined),
+    ).toMatchObject({ approval: "grant" });
   });
 });

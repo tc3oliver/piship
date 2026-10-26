@@ -1,0 +1,138 @@
+// `/grant`: the user's own task grants for this session. Only this typed
+// command creates one; tool output and project files cannot.
+import { randomBytes } from "node:crypto";
+import { resolve } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { formatError } from "@piship/contracts";
+import type { TaskGrant } from "@piship/policy";
+import { realpathNearest } from "@piship/sandbox";
+import type { GovernanceSession } from "./governance-session.js";
+
+const DEFAULT_TTL_MINUTES = 120;
+const USAGE =
+  'Usage: /grant [add] [path] [--for 2h] [--task "label"] | /grant list | /grant revoke <id|all>';
+
+/** Words of the arguments; `"..."` or `'...'` keeps spaces in one. */
+function words(args: string): string[] {
+  return [...args.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+    (match) => match[1] ?? match[2] ?? match[3] ?? "",
+  );
+}
+
+/** Minutes in `2h`, `90m`, or `1h30m`; undefined when it is none of them. */
+export function grantMinutes(text: string): number | undefined {
+  const match = /^(?:(\d+)h)?(?:(\d+)m)?$/.exec(text);
+  if (!match || (match[1] === undefined && match[2] === undefined))
+    return undefined;
+  const minutes = Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0);
+  return minutes > 0 ? minutes : undefined;
+}
+
+function duration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [hours ? `${hours}h` : "", rest ? `${rest}m` : ""].join("");
+}
+
+function describe(grant: TaskGrant): string {
+  const scope = [
+    ...(grant.scope.paths ?? []).map((path) => `files under ${path}`),
+    ...(grant.scope.tools ?? []).map((tool) => `tool ${tool}`),
+  ].join(", ");
+  return `${scope || "nothing"}, until ${new Date(grant.expiresAt).toLocaleString()}`;
+}
+
+async function add(
+  gov: GovernanceSession,
+  rest: readonly string[],
+  ctx: ExtensionContext,
+): Promise<string> {
+  let target: string | undefined;
+  let minutes: number | undefined;
+  let task = "";
+  for (let index = 0; index < rest.length; index++) {
+    const word = rest[index] as string;
+    if (word === "--for") {
+      minutes = grantMinutes(rest[++index] ?? "");
+      if (minutes === undefined)
+        throw new Error(`${USAGE} (--for takes 2h, 90m, or 1h30m)`);
+    } else if (word === "--task") task = rest[++index] ?? "";
+    else if (word.startsWith("--") || target !== undefined)
+      throw new Error(USAGE);
+    else target = word;
+  }
+  const maxMinutes = Math.floor(gov.grantMaxTtlMs / 60_000);
+  minutes ??= Math.min(DEFAULT_TTL_MINUTES, maxMinutes);
+  if (minutes > maxMinutes)
+    throw new Error(`A task grant lasts at most ${duration(maxMinutes)} here`);
+  // `.` and no path are the project, not the current directory.
+  const root =
+    target === undefined || target === "."
+      ? gov.project.root
+      : resolve(gov.options.cwd, target);
+  if (!ctx.hasUI) throw new Error("/grant needs an interactive session");
+  const expiresAt = new Date(Date.now() + minutes * 60_000).toISOString();
+  const shown = realpathNearest(root);
+  const approved = await gov.serializeDialog(() =>
+    ctx.ui.confirm(
+      `${gov.options.lock.app.name} task grant`,
+      [
+        ...(task ? [`Task: ${task}`] : []),
+        `Approve without a prompt, for ${duration(minutes)} (until ${new Date(expiresAt).toLocaleString()}):`,
+        `  reading and writing files under ${shown}`,
+        "Deny rules, rules that always ask, project configuration (.pi, .piship, .claude, .mcp.json), shell commands, and everything outside it still prompt.",
+      ].join("\n"),
+    ),
+  );
+  if (!approved) return "No task grant was added.";
+  const grant = await gov.addGrant({
+    id: randomBytes(4).toString("hex"),
+    task,
+    createdBy: "user-command",
+    expiresAt,
+    scope: { paths: [root] },
+    inheritToSubagents: false,
+  });
+  return `Task grant ${grant.id}: ${describe(grant)}. /grant revoke ${grant.id} ends it.`;
+}
+
+/** `/grant`: add (the default), list, or revoke this session's task grants. */
+export async function grantCommand(
+  gov: GovernanceSession,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const [first, ...rest] = words(args);
+  let message: string;
+  let level: "info" | "warning" | "error" = "info";
+  try {
+    if (first === "list") {
+      const grants = gov.listGrants();
+      message = grants.length
+        ? grants
+            .map(
+              ({ grant, uses }) =>
+                `${grant.id}: ${describe(grant)}; used ${uses} time${uses === 1 ? "" : "s"}${grant.task ? ` (${grant.task})` : ""}`,
+            )
+            .join("\n")
+        : "No task grants in this session.";
+    } else if (first === "revoke") {
+      const [id] = rest;
+      if (!id || rest.length > 1) throw new Error(USAGE);
+      const ids =
+        id === "all" ? gov.listGrants().map(({ grant }) => grant.id) : [id];
+      const revoked = ids.filter((item) => gov.revokeGrant(item));
+      message =
+        id === "all"
+          ? `Revoked ${revoked.length} task grant${revoked.length === 1 ? "" : "s"}.`
+          : revoked.length
+            ? `Task grant ${id} revoked.`
+            : `No task grant ${id} in this session.`;
+      if (id !== "all" && !revoked.length) level = "warning";
+    } else message = await add(gov, first === "add" ? rest : words(args), ctx);
+  } catch (error) {
+    message = formatError(error);
+    level = "error";
+  }
+  if (ctx.hasUI) ctx.ui.notify(message, level);
+}

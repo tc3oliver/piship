@@ -18,6 +18,7 @@ import { describeUserAuto, describeYolo } from "@piship/core";
 import type { ToolExposure } from "@piship/schema";
 import { CODEMODE_TOOL, widerExposure } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
+import { grantCommand } from "./grant-command.js";
 import {
   governedBashOperations,
   planRefusal,
@@ -258,6 +259,12 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
               ? "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply"
               : "Yolo: show whether every ask is approved without a prompt in this session (status), or end it (off)",
           handler: (args, ctx) => autoCommand(gov, args, ctx),
+        });
+      if (gov.grantsAllowed)
+        pi.registerCommand("grant", {
+          description:
+            "Task grant: approve asks inside a folder without a prompt for a while (add [path] [--for 2h] [--task label], list, revoke <id|all>)",
+          handler: (args, ctx) => grantCommand(gov, args, ctx),
         });
       // Audit is keyed on tool_execution_start/end, not tool_call: a call
       // to an unknown tool or with invalid arguments ends before tool_call.
