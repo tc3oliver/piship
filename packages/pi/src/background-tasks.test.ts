@@ -208,6 +208,8 @@ describe("TaskRegistry", () => {
     await tasks.settled(id);
     expect(tasks.read(id)).toMatchObject({ status: "exited", output: "bye" });
     expect(tasks.read(id)).toBeUndefined();
+    expect(tasks.gone(id)).toBe("read");
+    expect(tasks.gone("never")).toBeUndefined();
     const ids: string[] = [];
     for (let index = 0; index < 20; index++) {
       const next = tasks.start(run, `t${index}`);
@@ -223,6 +225,7 @@ describe("TaskRegistry", () => {
       undefined,
     ]);
     expect(tasks.read(ids[19] as string)?.status).toBe("exited");
+    expect(tasks.gone(ids[0] as string)).toBe("dropped");
   });
 
   it("holds a stopped task's slot until its process has ended", async () => {

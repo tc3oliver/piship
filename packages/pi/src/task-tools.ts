@@ -99,8 +99,16 @@ export function taskTools(
   cwd: string,
 ): ToolDefinition[] {
   const tasks = sessionTasks(gov);
-  const unknown = (id: string) =>
-    blocked(`No background task ${id} in this session.`);
+  const unknown = (id: string) => {
+    const gone = tasks.gone(id);
+    return blocked(
+      gone === "read"
+        ? `Task ${id} already ended, and its last output was already shown.`
+        : gone === "dropped"
+          ? `Task ${id} ended, and its output is no longer kept.`
+          : `No background task ${id} in this session.`,
+    );
+  };
   return [
     {
       name: "task_start",

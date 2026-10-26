@@ -147,6 +147,8 @@ export class TaskLimitError extends Error {}
 
 export class TaskRegistry {
   readonly #tasks = new Map<string, Task>();
+  /** Ended tasks no longer held, newest last: whether their last output was read. */
+  readonly #gone = new Map<string, "read" | "dropped">();
   #closed = false;
 
   constructor(
@@ -237,6 +239,24 @@ export class TaskRegistry {
     );
   }
 
+  #forget(id: string, how: "read" | "dropped"): void {
+    this.#tasks.delete(id);
+    this.#gone.set(id, how);
+    // Only ids, and a bounded number of them.
+    for (const old of this.#gone.keys()) {
+      if (this.#gone.size <= 256) break;
+      this.#gone.delete(old);
+    }
+  }
+
+  /**
+   * For an id `read` no longer knows: whether it was a task of this session
+   * that ended and whose last output was read, or that was dropped unread.
+   */
+  gone(id: string): "read" | "dropped" | undefined {
+    return this.#gone.get(id);
+  }
+
   /** Keep at most `keepFinished` ended tasks, dropping the oldest. */
   #prune(): void {
     const ended = [...this.#tasks.values()].filter((task) => task.ended);
@@ -244,7 +264,7 @@ export class TaskRegistry {
       0,
       Math.max(0, ended.length - this.limits.keepFinished),
     ))
-      this.#tasks.delete(task.id);
+      this.#forget(task.id, "dropped");
   }
 
   /**
@@ -256,7 +276,7 @@ export class TaskRegistry {
     if (!task) return undefined;
     const { text, dropped } = task.tail.since(task.read);
     task.read = task.tail.written;
-    if (task.ended) this.#tasks.delete(id);
+    if (task.ended) this.#forget(id, "read");
     return {
       id,
       status: task.status,

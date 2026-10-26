@@ -247,11 +247,15 @@ describe("a background task", () => {
     expect(JSON.stringify(await events())).not.toContain("sleep 30");
   });
 
-  it("reports a task that ended, with its exit code", async () => {
+  it("reports a task that ended, with its exit code, and then that it was shown", async () => {
     const { call } = await open();
     const { ctx } = context();
     const result = await call("task_start")({ command: "echo done" }, ctx);
     expect(text(result)).toMatch(/: exited \(exit code 0\)\ndone/);
+    const id = (result as { details: { id: string } }).details.id;
+    expect(await outcome(call("task_output")({ id }, ctx))).toBe(
+      `Task ${id} already ended, and its last output was already shown.`,
+    );
   });
 
   it("refuses an id that is not this session's", async () => {
