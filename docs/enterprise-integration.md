@@ -432,7 +432,8 @@ audit:
             "policy.grant_created", "policy.grant_used", "policy.grant_expired", "policy.grant_revoked",
             "runtime.update", "runtime.rollback",
             "model.dispatch", "session.export",
-            "runtime.mutation.reverted", "data.swept"
+            "runtime.mutation.reverted", "data.swept",
+            "task.start", "task.stop", "task.exit"
           ]
         },
         "time": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },

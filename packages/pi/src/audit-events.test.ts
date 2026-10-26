@@ -57,7 +57,13 @@ const OUTSIDE_A_SESSION = [
  * `session.export` stays until an export flow exists: Pi's /share and
  * /export have no seam, and PiShip has no command that exports a session.
  */
-const NOT_YET_EMITTED: readonly AuditEventType[] = ["session.export"];
+const NOT_YET_EMITTED: readonly AuditEventType[] = [
+  "session.export",
+  // Background tasks: the registry records them; the tools come next.
+  "task.start",
+  "task.stop",
+  "task.exit",
+];
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
