@@ -3,15 +3,16 @@
 // compares the whole file (tests/e2e/personal-local-model.test.ts); this is the
 // fast check for every committed example lock, without building a distribution
 // or relocking it.
-// It hashes the current seam table and compares the digest each lock records.
+//
+// It imports the seam table through a module with no runtime package imports,
+// so the unit tier can hash the current table before the workspace is built.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PI_VERSION } from "@piship/core";
-import { seamEvidence } from "@piship/policy";
 import { describe, expect, it } from "vitest";
+import { seamEvidence } from "./seam-evidence.js";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+const root = fileURLToPath(new URL("../../../", import.meta.url));
 const examples = join(root, "examples");
 
 interface Lock {
@@ -21,7 +22,21 @@ interface Lock {
   };
 }
 
-/** Every `piship.lock` under `examples/`, with `/` separators and sorted. */
+/** The Pi version the current seam table was proven against. */
+function currentPiVersion(): string {
+  const source = readFileSync(
+    join(root, "packages", "core", "src", "compatibility.ts"),
+    "utf8",
+  );
+  const version = /export const PI_VERSION = "([^"]+)"/.exec(source)?.[1];
+  if (!version)
+    throw new Error(
+      "Could not read PI_VERSION from packages/core/src/compatibility.ts.",
+    );
+  return version;
+}
+
+/** Every `piship.lock` under `examples/`, sorted. */
 function lockFiles(): string[] {
   return readdirSync(examples, { recursive: true, encoding: "utf8" })
     .filter((path) => path.split(/[\\/]/).pop() === "piship.lock")
@@ -35,9 +50,7 @@ function inRepository(path: string): string {
 }
 
 describe("the committed example locks", () => {
-  // Pi's seam table is static data; computing the digest needs no distribution
-  // build.
-  const current = seamEvidence(PI_VERSION);
+  const current = seamEvidence(currentPiVersion());
 
   it("finds every committed example lock", () => {
     expect(lockFiles().map(inRepository)).toEqual(
@@ -59,7 +72,7 @@ describe("the committed example locks", () => {
       const stale = `${inRepository(lockPath)} is stale; run \`${command}\` to regenerate it.`;
       const lock = JSON.parse(readFileSync(lockPath, "utf8")) as Lock;
       expect(lock.enforcement?.digest, stale).toBe(current.digest);
-      expect(lock.enforcement?.pi, stale).toBe(PI_VERSION);
+      expect(lock.enforcement?.pi, stale).toBe(current.pi);
     }
   });
 });
