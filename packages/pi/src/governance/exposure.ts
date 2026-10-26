@@ -42,6 +42,9 @@ export const UNGOVERNED_PI_BASE_TOOLS = [
  */
 export const PISHIP_TOOLS = ["read", "write", "edit", "bash", "ask_user"];
 
+/** PiShip's background task tools, offered to every session but a subagent child's. */
+export const TASK_TOOLS = ["task_start", "task_output", "task_stop"];
+
 export const CODEMODE_TOOL = "codemode";
 export const TOOL_SEARCH_TOOL = "tool_search";
 
@@ -295,6 +298,8 @@ export function buildExposureTable(
   for (const name of PISHIP_TOOLS)
     if (name !== "ask_user" || gov.loader.builtin.has("piship-ask-user"))
       set(name, runtimeExposure(name, "direct"));
+  if (!gov.options.subagent)
+    for (const name of TASK_TOOLS) set(name, runtimeExposure(name, "direct"));
   const mcpTools = gov.mcp?.tools() ?? [];
   for (const tool of mcpTools) {
     const exposure = mcpToolExposure(gov, tool.server, tool.tool);

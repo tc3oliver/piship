@@ -1098,7 +1098,8 @@ export function governedTools(
       },
     }) as ToolDefinition,
     governedBashTool(gov, cwd) as ToolDefinition,
-    // A subagent child has no way to stop what it would leave running.
+    // A subagent child has no way to stop what it would leave running
+    // (TASK_TOOLS are left out of its exposure table too).
     ...(gov.options.subagent ? [] : taskTools(gov, cwd)),
     ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
