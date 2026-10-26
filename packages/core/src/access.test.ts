@@ -1328,6 +1328,26 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       await session.login({ openUrl: (url) => void services.approve(url) });
     });
 
+    it("shares one renewal across concurrent requests in a running session", async () => {
+      const [first, second, third] = await Promise.all([
+        session.requestSecret(),
+        session.requestSecret(),
+        session.requestSecret(),
+      ]);
+      // Short-lived broker credentials may rotate separately; only the
+      // identity refresh must be shared by these requests.
+      for (const credential of [first, second, third])
+        expect(credential?.reveal()).toBeTruthy();
+      expect(
+        services.state.requests.filter((item: { body: string }) =>
+          item.body.includes("grant_type=refresh_token"),
+        ),
+      ).toHaveLength(1);
+      expect(
+        names().filter((name) => name === "identity.refresh"),
+      ).toHaveLength(1);
+    });
+
     it("renews the sign-in silently and keeps the credential through an identity provider outage", async () => {
       const first = (await session.requestSecret())?.reveal();
       expect(names()).toContain("identity.refresh");
