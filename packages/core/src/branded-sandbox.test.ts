@@ -201,7 +201,8 @@ describe("sandbox login", () => {
     });
     expect(event?.detail).not.toHaveProperty("mode");
     const log = readFileSync(join(ctx.stateDir, "logs", "audit.jsonl"), "utf8");
-    for (const value of [SECRET, "sandbox-api.test.invalid", "8443"])
+    // A bare port can occur by chance inside a randomly generated audit ID.
+    for (const value of [SECRET, "sandbox-api.test.invalid"])
       expect(log).not.toContain(value);
     expect(scan(ctx.stateDir, SECRET)).toEqual([]);
   });
