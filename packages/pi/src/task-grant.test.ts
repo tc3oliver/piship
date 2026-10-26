@@ -524,6 +524,14 @@ describe("a task grant", () => {
         channel,
       ),
     ).toMatchObject({ approval: "grant" });
+    // Instruction files are ordinary edits: covered.
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "AGENTS.md"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
     const surfaces = [
       [".piship", "policy.json"],
       [".pi", "extensions", "x.ts"],
@@ -531,7 +539,6 @@ describe("a task grant", () => {
       [".mcp.json"],
       [".claude", "settings.json"],
       ["sub", ".claude", "hooks", "h.sh"],
-      ["AGENTS.md"],
     ];
     for (const parts of surfaces)
       expect(

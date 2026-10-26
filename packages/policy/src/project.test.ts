@@ -335,19 +335,21 @@ describe("isProjectConfigPath", () => {
     "/w/sub/.mcp.json",
     "/w/.claude/settings.json",
     "/w/sub/.claude/hooks/h.sh",
-    "/w/AGENTS.md",
-    "/w/CLAUDE.local.md",
     "/w/.agents/skills/s/SKILL.md",
   ])("is true for %s", (path) => {
     expect(isProjectConfigPath(path, "linux")).toBe(true);
   });
 
-  it.each(["/w/src/app.ts", "/w/pi/x", "/w/.pirate", "/w/docs/mcp.json"])(
-    "is false for %s",
-    (path) => {
-      expect(isProjectConfigPath(path, "linux")).toBe(false);
-    },
-  );
+  it.each([
+    "/w/src/app.ts",
+    "/w/pi/x",
+    "/w/.pirate",
+    "/w/docs/mcp.json",
+    "/w/AGENTS.md",
+    "/w/CLAUDE.md",
+  ])("is false for %s", (path) => {
+    expect(isProjectConfigPath(path, "linux")).toBe(false);
+  });
 
   it("ignores case on macOS and Windows, and Windows trailing dots", () => {
     expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "linux")).toBe(false);

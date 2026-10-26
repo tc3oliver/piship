@@ -1118,25 +1118,26 @@ const EXTENSION_FILES: readonly {
   { relative: ".pi/agents", dimension: "agents", atRoot: false },
 ];
 
-// The whole directories these surfaces live in, so one added later is covered.
+// The whole directories these surfaces live in, so one added later is
+// covered. Top-level instruction files (AGENTS.md, CLAUDE.md) only shape the
+// prompt and are edited in ordinary work, so they are left out.
 const PROJECT_CONFIG_SURFACES: readonly (readonly string[])[] = [
   ...new Set([
     ".pi",
     ".piship",
     ".claude",
-    ".agents",
-    ...[...CANDIDATES, ...CLAUDE_SURFACES, ...EXTENSION_FILES].map(
-      ({ relative }) => relative,
-    ),
+    ...[...CANDIDATES, ...CLAUDE_SURFACES, ...EXTENSION_FILES]
+      .map(({ relative }) => relative)
+      .filter((relative) => relative.includes("/") || relative === ".mcp.json"),
   ]),
 ].map((relative) => relative.split("/"));
 
 /**
  * Whether `path` is, or lies inside, a project configuration surface PiShip
- * or an extension loads (the candidates, Claude surfaces, and extension
- * files above) in any directory: what a later start would load, so
- * something that only approves for this session (a task grant) never
- * covers writing it. Compared by path segment, ignoring case on macOS and
+ * or an extension loads (`.pi`, `.piship`, `.claude`, `.mcp.json`, and the
+ * other candidate directories above) in any directory: what a later start
+ * would load, so something that only approves for this session (a task
+ * grant) never covers writing it. Compared by path segment, ignoring case on macOS and
  * Windows, and on Windows a segment's trailing dots and spaces.
  */
 export function isProjectConfigPath(
