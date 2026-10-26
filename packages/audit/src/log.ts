@@ -1,5 +1,23 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { constants, existsSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  ftruncateSync,
+  futimesSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import {
   chmod,
   type FileHandle,
@@ -16,6 +34,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   AUDIT_BATCH_SCHEMA,
+  AUDIT_EVENT_SCHEMA,
   type AuditBatch,
   type AuditCapture,
   type AuditEmitter,
@@ -26,7 +45,13 @@ import {
   NO_CONTENT_CAPTURE,
   PiShipError,
 } from "@piship/contracts";
-import { type AuditEventInput, sanitizeEvent, scrubText } from "./sanitize.js";
+import {
+  AUDIT_CONTENT_CLASSES,
+  type AuditContentClass,
+  type AuditEventInput,
+  sanitizeEvent,
+  scrubText,
+} from "./sanitize.js";
 
 /** Structurally identical to `@piship/schema` AuditSinkConfig. */
 export interface AuditSinkConfig {
@@ -63,6 +88,12 @@ export interface AuditSinkStatus {
   readonly pending: number;
   /** Redacted description of the most recent delivery failure. */
   readonly lastError?: string;
+  /** Of `pending`, events replayed from crashed processes' spools. */
+  readonly replayed?: number;
+  /** Replayed events the collector kept refusing, set aside as rejected. */
+  readonly rejected?: number;
+  /** The sink's spool directory under the state directory, when either is set. */
+  readonly spool?: string;
 }
 
 export interface AuditStatus {
@@ -104,6 +135,14 @@ export interface AuditLogOptions {
    * smaller limits.
    */
   readonly rotation?: AuditRotation;
+  /** Cap on a required HTTP sink's spool. Default AUDIT_SPOOL_MAX_BYTES. */
+  readonly spoolMaxBytes?: number;
+  /**
+   * Claim and replay the spools crashed processes left: a session (launch or
+   * doctor) passes true. A short command that only records its own events
+   * leaves them to the next session and never waits behind a backlog.
+   */
+  readonly replaySpool?: boolean;
 }
 
 /** Size-based retention of the file sink: `audit.jsonl` plus `.1`..`.<files>`. */
@@ -524,6 +563,508 @@ class FileSinkWriter implements AuditSink {
   }
 }
 
+/** Where required HTTP sinks spool: `<dir>/<sink key>/<owner>.jsonl`. */
+export const AUDIT_SPOOL_DIRECTORY = join("logs", "audit-spool");
+/** 16 MiB per spool; an append or rewrite past it fails closed. */
+export const AUDIT_SPOOL_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * A spool not touched for this long is claimable whatever its name says. Its
+ * owner touches it on every flush and every SPOOL_HEARTBEAT_MS, so only a gone
+ * owner leaves one this old: its process ID now names an unrelated process,
+ * or its host ID changed with the hostname (macOS renames the host with the
+ * network). Taking a live owner's spool (a process stopped, or a machine
+ * asleep, past the lease) only duplicates events: the owner's in-memory queue
+ * stays authoritative, and its next touch writes its spool again.
+ */
+export const AUDIT_SPOOL_LEASE_MS = 10 * 60_000;
+const SPOOL_HEARTBEAT_MS = 60_000;
+/**
+ * Spool files this process owns. Any other file named with this process's ID
+ * belongs to an earlier process that had the same ID and is gone. Shared
+ * through globalThis, so a second bundled copy of this module sees it too.
+ */
+const OWNED_SPOOLS = Symbol.for("piship.audit.ownedSpools");
+const registry = globalThis as { [OWNED_SPOOLS]?: Set<string> };
+registry[OWNED_SPOOLS] ??= new Set<string>();
+const ownedSpools = registry[OWNED_SPOOLS];
+/** 4xx refusals of the same replayed event before it is set aside as rejected. */
+const REPLAY_REFUSALS = 3;
+
+/** `<pid>-<host id>-<random>`, the owner a spool file is named after. */
+function ownerToken(): string {
+  return `${process.pid}-${HOST_ID}-${randomBytes(8).toString("hex")}`;
+}
+
+/** The directory of a sink's spools: a digest, so a sink ID never names a path. */
+export function auditSpoolKey(sinkId: string): string {
+  return createHash("sha256").update(sinkId).digest("hex").slice(0, 16);
+}
+
+/** O_NOFOLLOW refuses a planted symlink; it is 0 where unsupported. */
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+/** O_NONBLOCK keeps a planted FIFO from blocking the open; 0 where unsupported. */
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
+
+/**
+ * The durable copy of a required HTTP sink's undelivered events. Each process
+ * writes its own file, so writers never interleave; a file whose owner is gone
+ * (a crash) is claimed by the next launch with one rename, which only one
+ * process can win, replayed, and deleted. Every write is synchronous, so the
+ * file is never behind the in-memory queue:
+ *
+ * - `append` (each emitted event) is one O_APPEND write, which is in the
+ *   file as soon as it returns: a crash of the process loses nothing, and can
+ *   leave only the last line torn, which a reader drops.
+ * - `sync` (once per flush, before the batch is sent) fsyncs those appends,
+ *   so an event is on disk before the collector can have it. An fsync per
+ *   event costs about 8 ms on macOS (F_FULLFSYNC); an operating system crash
+ *   or power loss can lose what was emitted since the last flush.
+ * - `replace` (once per flush that delivered something, at close, and at
+ *   launch) writes the queue to a temporary, fsyncs it, and renames it over
+ *   the file, so a crash leaves the old or the new content, never a mix.
+ *
+ * An event is in the spool before it is sent and leaves it only after the
+ * collector acknowledged it, so a crash can resend an event (each keeps its
+ * `id`, which the collector de-duplicates) but never lose one it had taken in.
+ */
+class HttpSpool {
+  readonly key: string;
+  readonly directory: string;
+  readonly path: string;
+  #size = 0;
+  /** A failed append whose bytes could not be removed: only `replace` repairs it. */
+  #torn = false;
+
+  constructor(
+    readonly stateDir: string,
+    sinkId: string,
+    readonly maxBytes: number,
+  ) {
+    this.key = auditSpoolKey(sinkId);
+    this.directory = join(stateDir, AUDIT_SPOOL_DIRECTORY, this.key);
+    this.path = join(this.directory, `${ownerToken()}.jsonl`);
+  }
+
+  /**
+   * Create this process's spool (proving it writable). With `replay`, also
+   * claim the spools whose owner is gone and return their events:
+   * de-duplicated by `id`, in time order, without content `capture` no
+   * longer admits. A claimed spool with a corrupt line is set aside as
+   * `<name>.corrupt` once its valid lines are taken, and so is one over the
+   * cap, unread. Throws when the spool cannot be written, or, with `replay`,
+   * while a spool is set aside in the directory.
+   */
+  open(capture: AuditCapture, replay: boolean): AuditEvent[] {
+    for (const directory of [
+      join(this.stateDir, "logs"),
+      join(this.stateDir, AUDIT_SPOOL_DIRECTORY),
+      this.directory,
+    ]) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      if (process.platform !== "win32") chmodSync(directory, 0o700);
+    }
+    ownedSpools.add(this.path);
+    if (!replay) {
+      try {
+        this.replace([]);
+      } catch (error) {
+        ownedSpools.delete(this.path);
+        throw error;
+      }
+      return [];
+    }
+    const claimed: { path: string; name: string }[] = [];
+    try {
+      const now = Date.now();
+      let bytes = 0;
+      for (const name of readdirSync(this.directory).sort()) {
+        const path = join(this.directory, name);
+        if (ownedSpools.has(path)) continue;
+        // Only a regular file: a FIFO or a directory in its place is never opened.
+        const entry = lstatSync(path, { throwIfNoEntry: false });
+        if (!entry?.isFile() || !spoolAbandoned(name, entry.mtimeMs, now))
+          continue;
+        if (name.endsWith(".tmp")) {
+          rmSync(path, { force: true });
+          continue;
+        }
+        if (!name.endsWith(".jsonl")) continue;
+        // Never written this large: set aside unread.
+        if (entry.size > this.maxBytes) {
+          claimRename(path, join(this.directory, `${name}.corrupt`));
+          continue;
+        }
+        // Within the cap, so neither this replay nor a later rewrite exceeds
+        // it; the rest waits for the next launch.
+        if (bytes + entry.size > this.maxBytes) continue;
+        // Renamed to a name this process owns: a second launcher's rename of
+        // the same file fails, so no file is replayed twice.
+        const claim = join(this.directory, `${ownerToken()}.jsonl`);
+        ownedSpools.add(claim);
+        if (claimRename(path, claim)) {
+          claimed.push({ path: claim, name });
+          bytes += entry.size;
+        } else ownedSpools.delete(claim);
+      }
+      const ids = new Set<string>();
+      const events: AuditEvent[] = [];
+      const corrupt = new Set<string>();
+      for (const { path } of claimed) {
+        const spool = readSpool(path);
+        if (spool.corrupt) corrupt.add(path);
+        for (const event of spool.events)
+          if (!ids.has(event.id as string)) {
+            ids.add(event.id as string);
+            events.push(withCapture(event, capture));
+          }
+      }
+      // Files are named by owner, not age: order by event time (a stable sort
+      // keeps each file's own order for equal times).
+      events.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+      // Written here before the claimed files go: a crash in between leaves
+      // duplicates, which the next replay drops by id.
+      this.replace(events);
+      for (const { path, name } of claimed) {
+        if (corrupt.has(path))
+          renameSync(path, join(this.directory, `${name}.corrupt`));
+        else rmSync(path, { force: true });
+        ownedSpools.delete(path);
+      }
+      syncDirectory(this.directory);
+      const quarantined = readdirSync(this.directory)
+        .filter((name) => name.endsWith(".corrupt"))
+        .sort();
+      if (quarantined.length)
+        throw new Error(
+          `${this.directory} holds a spool set aside as corrupt or over the cap, ${quarantined.join(", ")}; its valid events are kept but not sent while it is there; remove it, or repair it and rename it back to .jsonl (one over the cap, ${this.maxBytes} bytes, split into files under it)`,
+        );
+      return events;
+    } catch (error) {
+      // Left for the next launch, which fails the same way until it is fixed.
+      ownedSpools.delete(this.path);
+      for (const { path } of claimed) ownedSpools.delete(path);
+      throw error;
+    }
+  }
+
+  append(event: AuditEvent): void {
+    if (this.#torn) throw new Error("audit spool has a partial write");
+    const line = `${JSON.stringify(event)}\n`;
+    const bytes = Buffer.byteLength(line, "utf8");
+    if (this.#size + bytes > this.maxBytes)
+      throw new Error(`audit spool is full (${this.maxBytes} bytes)`);
+    const fd = openSync(
+      this.path,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW,
+      0o600,
+    );
+    try {
+      writeFileSync(fd, line, "utf8");
+      this.#size += bytes;
+    } catch (error) {
+      // A short write (a full disk) must not leave a fragment that the next
+      // line is glued onto.
+      try {
+        ftruncateSync(fd, this.#size);
+      } catch {
+        this.#torn = true;
+      }
+      throw error;
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /**
+   * Renew the lease (touch) and, with `durable`, fsync. A spool that no
+   * longer holds what this process wrote (taken by a launch past the lease,
+   * or swept) is written again from `queue`.
+   */
+  sync(queue: readonly AuditEvent[], durable = true): void {
+    // Windows flushes only through a handle that can write.
+    const fd = openSync(
+      this.path,
+      constants.O_RDWR | constants.O_CREAT | NOFOLLOW,
+      0o600,
+    );
+    let intact: boolean;
+    try {
+      intact = fstatSync(fd).size === this.#size;
+      if (intact) {
+        const now = new Date();
+        futimesSync(fd, now, now);
+        if (durable) fsyncSync(fd);
+      }
+    } finally {
+      closeSync(fd);
+    }
+    if (!intact) this.replace(queue);
+  }
+
+  /**
+   * Atomically make the spool hold `events`, or as many of the oldest as fit
+   * in `limit` bytes; throws once written when not all of them fit, so the
+   * rest are only in memory.
+   */
+  replace(events: readonly AuditEvent[], limit = this.maxBytes): void {
+    const lines: string[] = [];
+    let bytes = 0;
+    for (const event of events) {
+      const line = `${JSON.stringify(event)}\n`;
+      const size = Buffer.byteLength(line, "utf8");
+      if (bytes + size > limit) break;
+      lines.push(line);
+      bytes += size;
+    }
+    const temporary = `${this.path}.tmp`;
+    const fd = openSync(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      writeFileSync(fd, lines.join(""), "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    // No handle stays open on the spool, so the rename also works on Windows.
+    renameSync(temporary, this.path);
+    syncDirectory(this.directory);
+    this.#size = bytes;
+    this.#torn = false;
+    if (lines.length < events.length)
+      throw new Error(`audit spool is full (${this.maxBytes} bytes)`);
+  }
+
+  /**
+   * Set aside an event the collector keeps refusing in `<spool>.rejected`
+   * (0600, at most the cap), never to be sent again. Throws when it cannot be
+   * written or is full; the event then stays queued.
+   */
+  reject(event: AuditEvent): void {
+    const path = `${this.path}.rejected`;
+    const line = `${JSON.stringify(event)}\n`;
+    const fd = openSync(
+      path,
+      constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW,
+      0o600,
+    );
+    try {
+      if (fstatSync(fd).size + Buffer.byteLength(line, "utf8") > this.maxBytes)
+        throw new Error(
+          `audit spool rejected file is full (${this.maxBytes} bytes)`,
+        );
+      writeFileSync(fd, line, "utf8");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** At close: delete the spool when `queue` is empty, else leave it holding `queue` for the next launch. */
+  release(queue: readonly AuditEvent[]): void {
+    try {
+      if (queue.length) this.replace(queue);
+      else rmSync(this.path, { force: true });
+    } finally {
+      ownedSpools.delete(this.path);
+    }
+  }
+}
+
+/** One sink directory of the spool, as `doctor` reports it. */
+export interface AuditSpoolReport {
+  /** `logs/audit-spool/<key>` under the state directory. */
+  readonly directory: string;
+  /** The required HTTP sink it belongs to; absent for one no longer configured. */
+  readonly sink?: string;
+  /** Spool files (`*.jsonl`): undelivered events. */
+  readonly files: number;
+  readonly bytes: number;
+  /** Spool files not touched within AUDIT_SPOOL_LEASE_MS: no live owner. */
+  readonly stale: number;
+  /** Corrupt spools set aside (`*.corrupt`), by name. */
+  readonly quarantined: readonly string[];
+  /** Replayed events the collector refused, set aside (`*.rejected`), by name. */
+  readonly rejected: readonly string[];
+}
+
+/**
+ * Every sink directory of the spool that holds a file, with `sinkIds` (the
+ * required HTTP sinks configured now) naming the ones still in use. A
+ * directory of no configured sink (renamed or removed) is never replayed.
+ */
+export function auditSpools(
+  stateDir: string,
+  sinkIds: readonly string[],
+  now = Date.now(),
+): AuditSpoolReport[] {
+  const root = join(stateDir, AUDIT_SPOOL_DIRECTORY);
+  const sinks = new Map(sinkIds.map((id) => [auditSpoolKey(id), id]));
+  const reports: AuditSpoolReport[] = [];
+  for (const key of safeReaddir(root).sort()) {
+    let files = 0;
+    let bytes = 0;
+    let stale = 0;
+    const quarantined: string[] = [];
+    const rejected: string[] = [];
+    for (const name of safeReaddir(join(root, key)).sort()) {
+      const entry = lstatSync(join(root, key, name), { throwIfNoEntry: false });
+      if (!entry?.isFile()) continue;
+      if (name.endsWith(".corrupt")) quarantined.push(name);
+      if (name.endsWith(".rejected")) rejected.push(name);
+      if (!name.endsWith(".jsonl")) continue;
+      files += 1;
+      bytes += entry.size;
+      if (now - entry.mtimeMs > AUDIT_SPOOL_LEASE_MS) stale += 1;
+    }
+    if (!files && !quarantined.length && !rejected.length) continue;
+    const sink = sinks.get(key);
+    reports.push({
+      directory: join(AUDIT_SPOOL_DIRECTORY, key),
+      ...(sink === undefined ? {} : { sink }),
+      files,
+      bytes,
+      stale,
+      quarantined,
+      rejected,
+    });
+  }
+  return reports;
+}
+
+function safeReaddir(directory: string): string[] {
+  try {
+    return readdirSync(directory);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether a spool file's owner is gone: another process on this host that no
+ * longer exists, an earlier process with this one's ID, or any owner that has
+ * not touched it within the lease. A spool another host touches (a shared
+ * home directory) is never taken: its owner's process cannot be seen here.
+ */
+function spoolAbandoned(name: string, mtimeMs: number, now: number): boolean {
+  const owner = tokenOwner(name);
+  if (!owner || !/^\d+-[0-9a-f]{12}-/.test(name)) return false;
+  // An mtime far in the future (a clock set back since) never keeps a spool.
+  if (now - mtimeMs > AUDIT_SPOOL_LEASE_MS || mtimeMs - now > 5 * 60_000)
+    return true;
+  return (
+    owner.sameHost && (owner.pid === process.pid || !processAlive(owner.pid))
+  );
+}
+
+/**
+ * Rename a spool another launcher may take first: false when it is gone
+ * (ENOENT), or, on Windows, open or locked by another process (EPERM,
+ * EBUSY); the file is then skipped, and `doctor` still lists it.
+ */
+function claimRename(from: string, to: string): boolean {
+  try {
+    renameSync(from, to);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "EPERM" || code === "EBUSY") return false;
+    throw error;
+  }
+}
+
+/**
+ * 400, 413, or 422: the collector will not take what the batch holds. Any
+ * other 4xx (401, 403, 404, ...) says nothing about the events, and is
+ * retried like a 5xx.
+ */
+function refused(error: unknown): boolean {
+  const status = (error as { status?: unknown }).status;
+  return status === 400 || status === 413 || status === 422;
+}
+
+/** Content of a replayed event, filtered again by the current `audit.capture`. */
+function withCapture(event: AuditEvent, capture: AuditCapture): AuditEvent {
+  if (!event.content) return event;
+  const { content, ...rest } = event;
+  const kept = Object.entries(content).filter(
+    ([name]) =>
+      Object.hasOwn(AUDIT_CONTENT_CLASSES, name) &&
+      capture[AUDIT_CONTENT_CLASSES[name as AuditContentClass]] === true,
+  );
+  return kept.length ? { ...rest, content: Object.fromEntries(kept) } : rest;
+}
+
+/**
+ * Read a spool's events. A last line without its newline was torn by a crash
+ * mid-append: it is kept if it is still a whole event, and dropped otherwise.
+ * Any other line that is not an event, or a file that is not a regular file,
+ * makes the spool corrupt; its valid lines are still returned.
+ */
+function readSpool(path: string): { events: AuditEvent[]; corrupt: boolean } {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (error) {
+    // Deleted since it was claimed (a sweep run by another release): empty.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { events: [], corrupt: false };
+    throw error;
+  }
+  let text: string;
+  try {
+    if (!fstatSync(fd).isFile()) return { events: [], corrupt: true };
+    text = readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines = text.split("\n");
+  const tail = lines.pop() as string;
+  const events: AuditEvent[] = [];
+  let corrupt = false;
+  for (const line of lines) {
+    const event = spooledEvent(line);
+    if (event) events.push(event);
+    else corrupt = true;
+  }
+  const last = tail && spooledEvent(tail);
+  if (last) events.push(last);
+  return { events, corrupt };
+}
+
+function spooledEvent(line: string): AuditEvent | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const event = value as Partial<AuditEvent> | null;
+  return typeof event === "object" &&
+    event !== null &&
+    !Array.isArray(event) &&
+    event.schema === AUDIT_EVENT_SCHEMA &&
+    typeof event.id === "string" &&
+    typeof event.event === "string" &&
+    typeof event.time === "string"
+    ? (event as AuditEvent)
+    : undefined;
+}
+
+/** Make a created, renamed, or deleted entry durable. Directories cannot be opened on Windows. */
+function syncDirectory(directory: string): void {
+  if (process.platform === "win32") return;
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * The `http` sink's delivery: one POST of a `piship-audit-batch/v1` batch,
  * settled by the collector's answer. `AuditLog` owns queueing and retries;
@@ -546,7 +1087,10 @@ export class HttpSinkWriter implements AuditSink {
     });
     await response.body?.cancel().catch(() => undefined);
     if (response.status < 200 || response.status > 299)
-      throw new Error(`collector answered HTTP ${response.status}`);
+      throw Object.assign(
+        new Error(`collector answered HTTP ${response.status}`),
+        { status: response.status },
+      );
   }
 }
 
@@ -594,6 +1138,18 @@ class Sink {
   delivered = 0;
   dropped = 0;
   lastError: string | undefined;
+  /** A required HTTP sink's durable copy of `queue`. */
+  spool: HttpSpool | undefined;
+  /** The spool could not take an event or the queue: governed actions fail closed. */
+  spoolFailed = false;
+  /** Replayed events still at the head of `queue`: not counted against `maxEvents`. */
+  replayed = 0;
+  /** Events per batch: narrowed while the collector refuses a replayed batch. */
+  batchLimit = BATCH_LIMIT;
+  /** The replayed head event the collector refused, and how many times in a row. */
+  refusedId: string | undefined;
+  refusals = 0;
+  rejected = 0;
 
   constructor(
     readonly config: AuditSinkConfig,
@@ -611,6 +1167,11 @@ class Sink {
       dropped: this.dropped,
       pending: this.queue.length,
       ...(this.lastError ? { lastError: this.lastError } : {}),
+      ...(this.replayed ? { replayed: this.replayed } : {}),
+      ...(this.rejected ? { rejected: this.rejected } : {}),
+      ...(this.spool && (this.replayed || this.rejected)
+        ? { spool: join(AUDIT_SPOOL_DIRECTORY, this.spool.key) }
+        : {}),
     };
   }
 
@@ -649,6 +1210,7 @@ export class AuditLog implements AuditEmitter {
   readonly #onStateChange: AuditLogOptions["onStateChange"];
   readonly #abort = new AbortController();
   #timer: NodeJS.Timeout | undefined;
+  #heartbeat: NodeJS.Timeout | undefined;
   #flushing: Promise<void> = Promise.resolve();
   #flushQueued = false;
   #closed = false;
@@ -672,6 +1234,20 @@ export class AuditLog implements AuditEmitter {
         void this.flush();
       }, config.buffer.flushIntervalMs);
       this.#timer.unref();
+    }
+    // Renews each spool's lease even when flushes are rare or off.
+    if (sinks.some((sink) => sink.spool)) {
+      this.#heartbeat = setInterval(() => {
+        for (const sink of this.#sinks)
+          if (sink.spool)
+            try {
+              sink.spool.sync(sink.queue, false);
+            } catch (error) {
+              this.#spoolFailure(sink, error);
+            }
+        this.#update();
+      }, SPOOL_HEARTBEAT_MS);
+      this.#heartbeat.unref();
     }
   }
 
@@ -705,7 +1281,10 @@ export class AuditLog implements AuditEmitter {
       ids.add(sinkConfig.id);
       sinks.push(await openSink(sinkConfig, options));
     }
-    return new AuditLog(config, options.distribution, sinks, options);
+    const log = new AuditLog(config, options.distribution, sinks, options);
+    // Deliver what a crashed process spooled before anything new.
+    if (sinks.some((sink) => sink.queue.length)) void log.flush();
+    return log;
   }
 
   get capture(): AuditCapture {
@@ -736,15 +1315,22 @@ export class AuditLog implements AuditEmitter {
       const limit = this.#config.buffer.maxEvents;
       let flushSoon = false;
       for (const sink of this.#sinks) {
-        if (sink.queue.length >= limit) {
+        if (sink.queue.length - sink.replayed >= limit) {
           sink.dropped += 1;
           if (sink.config.required) sink.state = "failed";
           else sink.state = "degraded";
           continue;
         }
+        if (sink.spool)
+          try {
+            sink.spool.append(event);
+          } catch (error) {
+            this.#spoolFailure(sink, error);
+          }
         sink.queue.push(event);
         // Early flush at half capacity, but not while a sink is retrying.
-        if (sink.queue.length * 2 >= limit && !sink.lastError) flushSoon = true;
+        if ((sink.queue.length - sink.replayed) * 2 >= limit && !sink.lastError)
+          flushSoon = true;
       }
       this.#update();
       if (flushSoon) void this.flush();
@@ -761,7 +1347,7 @@ export class AuditLog implements AuditEmitter {
     );
     throw new PiShipError(
       "AUDIT_UNAVAILABLE",
-      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and the audit buffer is full`,
+      `Audit is unavailable: required sink ${sink?.config.id ?? "unknown"} is failing and ${sink?.spoolFailed ? "its audit spool cannot keep its events" : "the audit buffer is full"}${sink?.replayed && sink.spool ? `, holding ${sink.replayed} event(s) replayed from ${sink.spool.directory}` : ""}`,
       {
         component: "audit",
         userAction:
@@ -800,6 +1386,7 @@ export class AuditLog implements AuditEmitter {
   async close(deadlineMs = DEFAULT_CLOSE_DEADLINE_MS): Promise<AuditStatus> {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = undefined;
+    clearInterval(this.#heartbeat);
     if (this.#state !== "disabled" && !this.#closed) {
       this.#closed = true;
       const final = this.#finalFlush();
@@ -811,6 +1398,15 @@ export class AuditLog implements AuditEmitter {
       await Promise.race([final, deadline]);
       clearTimeout(timer);
       this.#abort.abort();
+      // Undelivered events, including any only in memory, stay spooled (up
+      // to the cap) for the next launch to replay.
+      for (const sink of this.#sinks)
+        try {
+          sink.spool?.release(sink.queue);
+        } catch {
+          // A spool left behind is claimed by the next launch; what did not
+          // fit is still counted as pending.
+        }
     }
     this.#closed = true;
     return this.status();
@@ -850,8 +1446,15 @@ export class AuditLog implements AuditEmitter {
     // Deliver only what was queued when the flush started, in bounded
     // batches, removing each batch as soon as it is acknowledged.
     let remaining = sink.queue.length;
+    if (sink.spool && remaining > 0)
+      try {
+        sink.spool.sync(sink.queue);
+      } catch (error) {
+        this.#spoolFailure(sink, error);
+      }
+    let changed = false;
     while (remaining > 0) {
-      const batch = sink.queue.slice(0, Math.min(remaining, BATCH_LIMIT));
+      const batch = sink.queue.slice(0, Math.min(remaining, sink.batchLimit));
       try {
         if (!sink.writer) throw new Error(sink.lastError ?? "sink is not open");
         if (this.#abort.signal.aborted) throw new Error("audit log closed");
@@ -862,9 +1465,52 @@ export class AuditLog implements AuditEmitter {
       } catch (error) {
         sink.lastError = sink.describeError(error);
         if (sink.config.required) {
+          if (sink.replayed > 0 && refused(error)) {
+            // A replayed event the collector will not take (forged, or an
+            // older schema) must not wedge the queue: narrow the batch down
+            // to it, then set it aside once refused alone REPLAY_REFUSALS
+            // times in a row while the collector takes another event.
+            if (batch.length > 1) {
+              sink.batchLimit = Math.ceil(batch.length / 2);
+              continue;
+            }
+            const head = batch[0] as AuditEvent;
+            sink.refusals = sink.refusedId === head.id ? sink.refusals + 1 : 1;
+            sink.refusedId = head.id;
+            if (sink.refusals >= REPLAY_REFUSALS && sink.spool) {
+              // The last event of this flush, alone: a collector that
+              // refuses it too refuses everything (misconfigured, not this
+              // event), and the head stays queued.
+              const probe = sink.queue[remaining - 1] as AuditEvent;
+              if (remaining < 2 || !(await this.#deliverAlone(sink, probe))) {
+                if (sink.state !== "failed") sink.state = "degraded";
+                break;
+              }
+              sink.queue.splice(remaining - 1, 1);
+              if (remaining - 1 < sink.replayed) sink.replayed -= 1;
+              sink.delivered += 1;
+              remaining -= 1;
+              changed = true;
+              try {
+                sink.spool.reject(head);
+              } catch (rejectError) {
+                this.#spoolFailure(sink, rejectError);
+                break;
+              }
+              sink.queue.splice(0, 1);
+              sink.replayed -= 1;
+              sink.rejected += 1;
+              remaining -= 1;
+              sink.refusedId = undefined;
+              sink.refusals = 0;
+              sink.batchLimit = BATCH_LIMIT;
+              changed = true;
+              continue;
+            }
+          }
           // Retain for retry; the queue bound turns sustained failure into `failed`.
           if (sink.state !== "failed") sink.state = "degraded";
-          return;
+          break;
         }
         sink.queue.splice(0, remaining);
         sink.dropped += remaining;
@@ -872,11 +1518,45 @@ export class AuditLog implements AuditEmitter {
         return;
       }
       sink.queue.splice(0, batch.length);
+      sink.replayed = Math.max(0, sink.replayed - batch.length);
       sink.delivered += batch.length;
       remaining -= batch.length;
       sink.state = "ok";
       sink.lastError = undefined;
+      sink.refusedId = undefined;
+      sink.refusals = 0;
+      // Widen again after narrowing down to a refused event.
+      sink.batchLimit = Math.min(BATCH_LIMIT, sink.batchLimit * 2);
+      changed = true;
     }
+    // Once per flush, not per batch: a rewrite costs the whole queue (bounded
+    // by the cap) and two fsyncs.
+    if (sink.spool && changed)
+      try {
+        sink.spool.replace(sink.queue);
+        sink.spoolFailed = false;
+      } catch (error) {
+        this.#spoolFailure(sink, error);
+      }
+  }
+
+  /** Send one event on its own; whether the collector took it. */
+  async #deliverAlone(sink: Sink, event: AuditEvent): Promise<boolean> {
+    try {
+      await sink.writer?.write(
+        { schema: AUDIT_BATCH_SCHEMA, events: [event] },
+        this.#abort.signal,
+      );
+      return sink.writer !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  #spoolFailure(sink: Sink, error: unknown): void {
+    sink.spoolFailed = true;
+    sink.state = "failed";
+    sink.lastError = sink.describeError(error);
   }
 
   #computeState(): AuditLogState {
@@ -947,6 +1627,29 @@ async function openSink(
     } catch (error) {
       throw unavailable(config, sink.describeError(error));
     }
+  if (config.required) {
+    // Only a required sink spools: an optional one drops what it cannot send.
+    const spool = new HttpSpool(
+      options.stateDir,
+      config.id,
+      options.spoolMaxBytes ?? AUDIT_SPOOL_MAX_BYTES,
+    );
+    try {
+      const replayed = spool.open(
+        options.config.capture,
+        options.replaySpool === true,
+      );
+      // One at a time: spreading a large replay passes V8's argument limit.
+      for (const event of replayed) sink.queue.push(event);
+      sink.replayed = replayed.length;
+    } catch (error) {
+      throw unavailable(
+        config,
+        `its spool under ${AUDIT_SPOOL_DIRECTORY} cannot be used: ${sink.describeError(error)}`,
+      );
+    }
+    sink.spool = spool;
+  }
   return sink;
 }
 

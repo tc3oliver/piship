@@ -222,6 +222,8 @@ export class GovernanceSession {
         distribution: options.lock.app.id,
         stateDir: options.stateDir,
         rotation: auditRotation(options.lock),
+        // A session delivers what crashed processes spooled; short commands do not.
+        replaySpool: true,
         fetch: options.fetch,
         // A sink not set to httpTransport: https: plain HTTP to its own
         // origin only.

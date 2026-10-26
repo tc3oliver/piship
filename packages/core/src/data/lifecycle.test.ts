@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AUDIT_ROTATION } from "@piship/audit";
+import { AUDIT_ROTATION, auditSpoolKey } from "@piship/audit";
 import { type DataManifest, parseData } from "@piship/schema";
 import { STATE_DATA_CLASSES } from "../migration.js";
 import {
@@ -103,6 +103,53 @@ describe("retention", () => {
 });
 
 describe("sweepData", () => {
+  it("deletes old spool files only of sinks no longer configured, never a configured sink's", async () => {
+    const configured = auditSpoolKey("siem");
+    const kept = [
+      file(`logs/audit-spool/${configured}/1-a.jsonl`, 200),
+      file(`logs/audit-spool/${configured}/2-b.jsonl.corrupt`, 200),
+    ];
+    const orphaned = [
+      file("logs/audit-spool/0123456789abcdef/3-c.jsonl", 200),
+      file("logs/audit-spool/0123456789abcdef/4-d.jsonl.corrupt", 200),
+    ];
+    const recent = file("logs/audit-spool/0123456789abcdef/5-e.jsonl", 1);
+    const emptied = [
+      file("logs/audit-spool/1111111111111111/6-f.jsonl", 200),
+      file("logs/audit-spool/1111111111111111/6-f.jsonl.rejected", 200),
+      file("logs/audit-spool/1111111111111111/7-g.jsonl.corrupt", 200),
+    ];
+    const sweep = async (spoolSinks?: readonly string[]) => {
+      const { events, record } = recorder();
+      const result = await sweepData({
+        stateDir: state,
+        trigger: "launch",
+        retention: { audit: 180 * DAY },
+        record,
+        now: NOW,
+        ...(spoolSinks ? { spoolSinks } : {}),
+      });
+      return { events, result };
+    };
+    // Without the configured sinks nothing in the spool is swept.
+    expect((await sweep()).result.classes).toEqual([]);
+    const { events, result } = await sweep(["siem"]);
+    for (const path of [...kept, recent]) expect(existsSync(path)).toBe(true);
+    for (const path of [...orphaned, ...emptied])
+      expect(existsSync(path)).toBe(false);
+    // A directory the sweep emptied goes; one still holding a file stays.
+    expect(existsSync(dirname(emptied[0] as string))).toBe(false);
+    expect(existsSync(dirname(recent))).toBe(true);
+    expect(existsSync(dirname(kept[0] as string))).toBe(true);
+    expect(result.classes).toEqual([
+      { class: "audit", removed: 5, held: 0, kept: 0, failed: 0 },
+    ]);
+    expect(events[0]?.detail).toMatchObject({
+      files: 5,
+      spools: "0123456789abcdef:2,1111111111111111:3",
+    });
+  });
+
   it("deletes only rotated audit files past retention, never the live log", async () => {
     const live = file("logs/audit.jsonl", 400);
     const oldRotated = file("logs/audit.jsonl.3", 200);

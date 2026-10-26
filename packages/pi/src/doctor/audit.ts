@@ -2,7 +2,7 @@
 // closed, each sink with its delivery counts, and local metrics. A sink is
 // shown by its host only: the path or query of a sink URL may carry routing
 // secrets.
-import type { AuditStatus } from "@piship/audit";
+import { AUDIT_SPOOL_LEASE_MS, type AuditStatus } from "@piship/audit";
 import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
 import type { LaunchContext } from "../launch/context.js";
 import type { DoctorData } from "./data.js";
@@ -67,7 +67,7 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
       for (const sink of status.sinks) {
         const where =
           targets.find((item) => item.id === sink.id)?.target ?? "unknown";
-        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
+        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.replayed ? `; ${sink.replayed} of them replayed from ${sink.spool}` : ""}${sink.rejected ? `; ${sink.rejected} replayed event(s) the collector refused set aside in ${sink.spool}` : ""}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
         const label = `sink ${sink.id}`;
         if (sink.required && (sink.pending > 0 || sink.dropped > 0))
           out.bad(label, detail);
@@ -79,6 +79,32 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
         out.warn("rejected", `${status.rejected} malformed event(s) rejected`);
     }
     if (closeError) out.bad("session end", closeError);
+    for (const spool of governance.audit.spools ?? []) {
+      const label = `spool ${spool.sink ?? "orphaned"}`;
+      if (spool.quarantined.length)
+        out.bad(
+          label,
+          `corrupt spool set aside in ${spool.directory}: ${spool.quarantined.join(", ")}; launches fail with AUDIT_UNAVAILABLE until it is removed, or repaired and renamed back to .jsonl (one over the cap split into files under it)`,
+        );
+      if (spool.rejected.length)
+        out.warn(
+          label,
+          `replayed events the collector refused set aside in ${spool.directory}: ${spool.rejected.join(", ")}; never sent again; review them, then remove the file`,
+        );
+      if (!spool.files) continue;
+      const held = `${spool.files} file(s), ${spool.bytes} bytes of undelivered events in ${spool.directory}`;
+      if (spool.sink === undefined)
+        out.warn(
+          label,
+          `${held}, of a sink no longer configured: never replayed; the audit retention sweep or an administrator removes them`,
+        );
+      else if (spool.stale)
+        out.warn(
+          label,
+          `${held}; ${spool.stale} not renewed for ${AUDIT_SPOOL_LEASE_MS / 60_000} minutes, replayed by the next launch that reaches the sink`,
+        );
+      else out.info(label, `${held}, held by running sessions`);
+    }
   }
   const denials = Object.values(data.metrics.policyDenials).reduce(
     (sum, count) => sum + count,

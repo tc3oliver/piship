@@ -9,7 +9,7 @@ import {
   sweepData,
   sweepRetention,
 } from "../data/lifecycle.js";
-import { type BrandedContext, recordAudit } from "./context.js";
+import { type BrandedContext, governedLock, recordAudit } from "./context.js";
 import { installedHere, lifecycleNetwork } from "./lifecycle.js";
 
 /**
@@ -49,6 +49,10 @@ export async function sweepDistributionData(
           [{ ...event, user: null, session: null }],
           `The ${event.resource} retention sweep did not run`,
         ),
+      // Only the spools of sinks no longer configured are swept.
+      spoolSinks: (governedLock(ctx)?.governance.manifest.audit.sinks ?? [])
+        .filter((sink) => sink.type === "http" && sink.required)
+        .map((sink) => sink.id),
       ...(options.sessionHeld ? { sessionHeld: options.sessionHeld } : {}),
       ...(options.claimSession ? { claimSession: options.claimSession } : {}),
       ...(options.now === undefined ? {} : { now: options.now }),
