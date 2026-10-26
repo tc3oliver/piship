@@ -669,7 +669,6 @@ describe("the managed variant", () => {
     // Known coding tools avoid duplicate prompts; an unknown tool must
     // still ask. Command and path denies take precedence.
     expect(config.permission["*"]).toBe("ask");
-    expect(config.permission.bash).toBe("allow");
     expect(rules(config, "bash")["*"]).toBe("allow");
     expect(rules(config, "mcp")["*"]).toBe("allow");
     const bash = rules(config, "bash");
