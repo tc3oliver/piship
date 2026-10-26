@@ -1859,7 +1859,7 @@ describe.runIf(process.platform === "win32")(
           'spawn(process.execPath, ["child.cjs"], { detached: true, stdio: "ignore" }).unref();',
           "const timer = setInterval(() => {",
           '  if (existsSync("child-ready")) { clearInterval(timer); process.exit(0); }',
-          "} , 20);",
+          "}, 20);",
           "setTimeout(() => process.exit(2), 10000);",
         ].join("\n"),
       );
