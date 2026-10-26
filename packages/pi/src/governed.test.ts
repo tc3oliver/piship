@@ -1828,6 +1828,54 @@ describe("git.push in the shell gate", () => {
   });
 });
 
+describe.runIf(process.platform === "win32")(
+  "unsandboxed Windows bash containment",
+  () => {
+    it("reclaims a detached child when the foreground shell exits", async () => {
+      const { session, workspace } = await open([], {
+        userRules: [
+          {
+            id: "me.shell",
+            action: "shell.execute",
+            resource: "**",
+            effect: "allow",
+          },
+        ],
+      });
+      expect(session.sandbox.report.level).not.toBe("enforced");
+      writeFileSync(
+        join(workspace, "child.cjs"),
+        [
+          'const fs = require("node:fs");',
+          'fs.writeFileSync("child-ready", "1");',
+          'setTimeout(() => fs.writeFileSync("escaped", "1"), 1200);',
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(workspace, "parent.cjs"),
+        [
+          'const { spawn } = require("node:child_process");',
+          'const { existsSync } = require("node:fs");',
+          'spawn(process.execPath, ["child.cjs"], { detached: true, stdio: "ignore" }).unref();',
+          'const timer = setInterval(() => {',
+          '  if (existsSync("child-ready")) { clearInterval(timer); process.exit(0); }',
+          '}, 20);',
+          'setTimeout(() => process.exit(2), 10000);',
+        ].join("\n"),
+      );
+      const result = await governedBashOperations(session, "bash").exec(
+        `"${process.execPath}" parent.cjs`,
+        workspace,
+        { onData: () => {} },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(workspace, "child-ready"))).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      expect(existsSync(join(workspace, "escaped"))).toBe(false);
+    }, 25000);
+  },
+);
+
 const HUGE =
   process.platform === "win32"
     ? GOVERNED_READ_LIMIT_BYTES + 1
