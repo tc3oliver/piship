@@ -797,7 +797,11 @@ describe("allow for this session", () => {
     await session.decide("filesystem.write", join(workspace, "a.txt"), channel);
     await session.decide("filesystem.write", join(workspace, "b.txt"), channel);
     expect(shown).toHaveLength(1);
-    await session.decide("filesystem.write", join(workspace, ".mcp.json"), channel);
+    await session.decide(
+      "filesystem.write",
+      join(workspace, ".mcp.json"),
+      channel,
+    );
     expect(shown).toHaveLength(2);
     expect(shown[1]?.sessionCovers).toBeUndefined();
   });
