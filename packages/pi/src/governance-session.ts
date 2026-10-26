@@ -992,7 +992,7 @@ export class GovernanceSession {
       this.options.lock.deployment.mode === "managed" &&
       isPathAction(ask.action) &&
       ask.resources.some((resource) =>
-        isProjectConfigPath(realpathNearest(resource)),
+        this.#projectConfig(realpathNearest(resource)),
       )
     )
       return exact;
