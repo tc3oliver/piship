@@ -1342,9 +1342,9 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
           item.body.includes("grant_type=refresh_token"),
         ),
       ).toHaveLength(1);
-      expect(names().filter((name) => name === "identity.refresh")).toHaveLength(
-        1,
-      );
+      expect(
+        names().filter((name) => name === "identity.refresh"),
+      ).toHaveLength(1);
     });
 
     it("renews the sign-in silently and keeps the credential through an identity provider outage", async () => {
