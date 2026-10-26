@@ -145,6 +145,38 @@ describe("decision tables for every action", () => {
       wildcard.evaluate({ action: "git.push", resource: "*" }).ruleId,
     ).toBe("builtin:default");
   });
+  it("never applies the policy default to git.push: it only narrows", () => {
+    const enforcedAsk = engine({
+      policy: makePolicy({
+        default: "deny",
+        enforced: [rule("main.ask", "git.push", "origin/main", "ask")],
+      }),
+    });
+    for (const resource of ["origin/main", "origin/*", "*"]) {
+      expect(
+        enforcedAsk.evaluate({ action: "git.push", resource }),
+      ).toMatchObject({ effect: "ask", ruleId: "main.ask" });
+      // An explicit ask keeps its prompt for an unnamed target too.
+      expect(enforcedAsk.keepsPrompt({ action: "git.push", resource })).toBe(
+        true,
+      );
+    }
+    expect(
+      enforcedAsk.explain({ action: "git.push", resource: "origin/main" })
+        .decision,
+    ).toMatchObject({ effect: "ask", ruleId: "main.ask" });
+    const none = engine({ policy: makePolicy({ default: "deny" }) });
+    const decision = none.evaluate({ action: "git.push", resource: "*" });
+    expect(decision).toMatchObject({
+      effect: "allow",
+      ruleId: "builtin:default",
+      reason:
+        "No git.push rule matched; shell.execute alone decides the command",
+    });
+    expect(
+      none.explain({ action: "git.push", resource: "*" }).decision,
+    ).toEqual(decision);
+  });
   it("uses first match within a layer", () => {
     const decision = engine({
       policy: makePolicy({

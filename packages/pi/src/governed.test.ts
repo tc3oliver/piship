@@ -70,6 +70,7 @@ const POLICY = [
   "  default: deny",
   "  enforced:",
   '    - { id: secrets, action: filesystem.read, resource: "~/.ssh/**", effect: deny, reason: Keys stay private }',
+  '    - { id: prod, action: git.push, resource: "origin/prod", effect: ask }',
   "  defaults:",
   '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
   '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
@@ -1560,6 +1561,34 @@ describe("git.push in the shell gate", () => {
     expect(result.ran).toBe(false);
   });
 
+  it("refuses a shell.execute deny before asking for the push", async () => {
+    const result = await bash(
+      "git push origin release",
+      [
+        {
+          id: "me.no-push",
+          action: "shell.execute",
+          resource: "**git push**",
+          effect: "deny",
+        },
+        ...SHELL,
+        ...PUSH,
+      ],
+      context(true),
+    );
+    expect(result).toMatchObject({ ran: false, prompts: [] });
+    expect(result.outcome).toMatch(/rule me\.no-push/);
+  });
+
+  it("asks for an enforced git.push ask although the policy default is deny", async () => {
+    expect((await bash("git push origin prod", SHELL)).outcome).toMatch(
+      /rule prod.*approval needs an interactive session/,
+    );
+    const approved = await bash("git push origin prod", SHELL, context(true));
+    expect(approved).toMatchObject({ outcome: "ran", ran: true });
+    expect(approved.prompts).toHaveLength(1);
+  });
+
   it("adds no prompt and no default without a git.push rule", async () => {
     // The policy default here is deny; it does not apply to git.push.
     const result = await bash("git push origin main", SHELL, context(true));
@@ -1570,7 +1599,6 @@ describe("git.push in the shell gate", () => {
     for (const command of [
       "sh -c 'git push origin main'",
       "git -c alias.p=push p origin main",
-      "env git push origin main",
       "./push.sh",
     ]) {
       const result = await bash(command, [...SHELL, ...PUSH]);

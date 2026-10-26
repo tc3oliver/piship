@@ -531,14 +531,19 @@ async function gateCommand(
     detail: { commandBytes: Buffer.byteLength(command) },
     content: { command },
   } as const;
-  // `git.push` only narrows: with no rule for a push the command spells out,
-  // `shell.execute` alone decides it, so `policy.default` adds no prompt.
+  // `git.push` only narrows: a push no rule covers is left to
+  // `shell.execute` without an event. A command `shell.execute` denies is
+  // refused there, before any push prompt.
   const pushes = gitPushResources(command).filter(
     (resource) =>
       gov.engine.evaluate({ action: "git.push", resource }).ruleId !==
       BUILTIN_DEFAULT_RULE,
   );
-  if (pushes.length) {
+  if (
+    pushes.length &&
+    gov.engine.evaluate({ action: "shell.execute", resource: command })
+      .effect !== "deny"
+  ) {
     const push = await gov.decide(
       "git.push",
       pushes,

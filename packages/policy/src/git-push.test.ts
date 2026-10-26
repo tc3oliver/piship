@@ -32,7 +32,30 @@ describe("gitPushResources", () => {
     ["git push 'origin' \"main\"", ["origin/main"]],
     ["git status", []],
     ["git log --grep push", []],
-    ["echo git push origin main", []],
+    // git at any word: over-matching only ever adds a deny or ask.
+    ["echo git push origin main", ["origin/main"]],
+    ["env git push origin main", ["origin/main"]],
+    ["command git push origin main", ["origin/main"]],
+    ["sudo git push origin main", ["origin/main"]],
+    ["timeout 9 nohup git push origin main", ["origin/main"]],
+    ["exec git push origin main", ["origin/main"]],
+    ["echo main | xargs git push origin", ["origin/*"]],
+    ["if git push origin main; then echo ok; fi", ["origin/main"]],
+    ["true; then git push origin main; fi", ["origin/main"]],
+    ["for b in a; do git push origin main; done", ["origin/main"]],
+    ["{ git push origin main; }", ["origin/main"]],
+    ["! git push origin main", ["origin/main"]],
+    // A backslash-newline joins the line.
+    ["git \\\npush origin main", ["origin/main"]],
+    ["git push \\\norigin main", ["origin/main"]],
+    // Substitutions run, also inside double quotes.
+    ['x="$(git push origin main)"', ["origin/main"]],
+    ["x=$(git push origin main)", ["origin/main"]],
+    ['echo "`git push origin main`"', ["origin/main"]],
+    ["echo `git push origin main`", ["origin/main"]],
+    // A quoted string is data, not a command.
+    ['echo "git push origin main"', []],
+    ['git commit -m "fix git push"', []],
   ])("%s", (command, expected) => {
     expect(gitPushResources(command)).toEqual(expected);
   });
@@ -44,7 +67,6 @@ describe("gitPushResources", () => {
     "git -c alias.p=push p origin main",
     "gp origin main",
     "$GIT push origin main",
-    "env git push origin main",
     "./deploy.sh",
     "python -c \"import subprocess; subprocess.run(['git', 'push'])\"",
   ])("does not recognize %s", (command) => {

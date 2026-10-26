@@ -542,7 +542,10 @@ export class PolicyEngine {
     const base =
       (this.#userNarrowing ? undefined : userRule) ??
       this.#firstMatch("distribution-default", action, resource);
-    const baseEffect = base?.rule.effect ?? this.#policy.default;
+    // `git.push` only narrows `shell.execute`: with no rule, it allows.
+    const baseEffect =
+      base?.rule.effect ??
+      (action === "git.push" ? "allow" : this.#policy.default);
     const chainedAsks = this.#chainedAsks(action, resource);
     const effect = strictest(
       enforced?.rule.effect,
@@ -570,7 +573,10 @@ export class PolicyEngine {
         ...common,
         effect,
         ruleId: BUILTIN_DEFAULT_RULE,
-        reason: `No rule matched; the policy default is ${effect}`,
+        reason:
+          action === "git.push"
+            ? "No git.push rule matched; shell.execute alone decides the command"
+            : `No rule matched; the policy default is ${effect}`,
         enforcement,
         layer: "builtin",
       };
