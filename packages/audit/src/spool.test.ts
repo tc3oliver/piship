@@ -88,6 +88,7 @@ function open(
     distribution: "acmecode",
     stateDir: temp,
     fetch: target.fetch,
+    replaySpool: true,
     ...options,
   });
 }
@@ -231,7 +232,7 @@ describe("required HTTP sink spool", () => {
       expect(error).toBeInstanceOf(PiShipError);
       expect((error as PiShipError).code).toBe("AUDIT_UNAVAILABLE");
       expect((error as PiShipError).message).toContain(
-        `${dirname(file)} holds a corrupt spool set aside, ${quarantined}`,
+        `${dirname(file)} holds a spool set aside as corrupt or over the cap, ${quarantined}`,
       );
     }
     expect(target.received).toEqual([]);
@@ -522,5 +523,122 @@ describe("required HTTP sink spool", () => {
     });
     expect(existsSync(join(temp, AUDIT_SPOOL_DIRECTORY))).toBe(false);
     await log.close();
+  });
+  it("in a short command, replays nothing and records its own events despite a set-aside spool", async () => {
+    const crashed = await crashWith(["crashed"]);
+    appendFileSync(join(dirname(crashed), "1-a.jsonl.corrupt"), "x\n");
+    const target = collector();
+    const log = await open(target, { replaySpool: false });
+    emit(log, "own");
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual(["own"]);
+    expect(existsSync(crashed)).toBe(true);
+  });
+
+  it("does not count a replayed backlog against maxEvents, so new events are still taken", async () => {
+    await crashWith(["r1", "r2", "r3"]);
+    const target = collector();
+    target.status = 503;
+    const log = await open(target, { config: config(true, 2) });
+    await log.flush();
+    emit(log, "new");
+    expect(log.status().sinks[0]).toMatchObject({ pending: 4, dropped: 0 });
+    expect(() => log.assertAvailable()).not.toThrow();
+    target.status = 200;
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual([
+      "r1",
+      "r2",
+      "r3",
+      "new",
+    ]);
+  });
+
+  it("sets a spool over the cap aside unread and names it in the error", async () => {
+    const file = await crashWith(["x", "y", "z"]);
+    const error = await open(collector(), {
+      spoolMaxBytes: statSync(file).size - 1,
+    }).catch((caught: unknown) => caught);
+    expect((error as PiShipError).code).toBe("AUDIT_UNAVAILABLE");
+    expect((error as PiShipError).message).toContain(
+      `${basename(file)}.corrupt`,
+    );
+    expect(existsSync(`${file}.corrupt`)).toBe(true);
+  });
+
+  it("claims a spool whose mtime is far in the future", async () => {
+    const file = reown(await crashWith(["ahead"]), process.ppid);
+    const ahead = new Date(Date.now() + 10 * 60_000);
+    utimesSync(file, ahead, ahead);
+    const target = collector();
+    const log = await open(target);
+    await log.close();
+    expect(target.received.map((event) => event.resource)).toEqual(["ahead"]);
+  });
+
+  it("skips a spool another process holds open (EBUSY) and claims it later", async () => {
+    const file = await crashWith(["busy"]);
+    vi.mocked(renameSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    });
+    const target = collector();
+    const first = await open(target);
+    await first.close();
+    expect(target.received).toEqual([]);
+    expect(existsSync(file)).toBe(true);
+    const second = await open(target);
+    await second.close();
+    expect(target.received.map((event) => event.resource)).toEqual(["busy"]);
+  });
+
+  it("renews its spool on a heartbeat, writes it again once taken, and stops at close", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const target = collector();
+      const log = await open(target);
+      target.status = 503;
+      emit(log, "beat");
+      const [file] = spoolFiles() as [string];
+      const old = new Date(Date.now() - AUDIT_SPOOL_LEASE_MS);
+      utimesSync(file, old, old);
+      vi.advanceTimersByTime(60_000);
+      expect(statSync(file).mtimeMs).toBeGreaterThan(old.getTime() + 60_000);
+      // Taken by a launch past the lease: the next beat writes it again.
+      const taken = reown(file, process.ppid);
+      vi.advanceTimersByTime(60_000);
+      expect(readFileSync(file, "utf8")).toContain('"beat"');
+      expect(readFileSync(taken, "utf8")).toContain('"beat"');
+      expect(vi.getTimerCount()).toBe(1);
+      await log.close(50);
+      expect(vi.getTimerCount()).toBe(0);
+      rmSync(taken);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("after its spool is taken, writes only its own pending events and never touches the taker's file", async () => {
+    const target = collector();
+    const log = await open(target);
+    target.status = 503;
+    emit(log, "a");
+    emit(log, "b");
+    await log.flush();
+    const [file] = spoolFiles() as [string];
+    const taken = reown(file, process.ppid);
+    const takenContent = readFileSync(taken, "utf8");
+    target.status = 200;
+    await log.flush();
+    expect(target.received.map((event) => event.resource)).toEqual(["a", "b"]);
+    expect(readFileSync(file, "utf8")).toBe("");
+    target.status = 503;
+    emit(log, "c");
+    await log.flush();
+    const own = readFileSync(file, "utf8");
+    expect(own).toContain('"c"');
+    expect(own).not.toContain('"a"');
+    expect(readFileSync(taken, "utf8")).toBe(takenContent);
+    await log.close(50);
+    rmSync(taken);
   });
 });

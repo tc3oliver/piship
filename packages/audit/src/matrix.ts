@@ -58,10 +58,10 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
   },
   {
     condition:
-      "its spool cannot be written at launch, or a replayed spool holds a corrupt line",
+      "its spool cannot be written at launch, or a spool a session would replay is corrupt or over the cap",
     sink: "required",
     behavior:
-      "AuditLog.open throws AUDIT_UNAVAILABLE; a corrupt spool is set aside as <name>.corrupt after its valid lines are replayed, and every launch fails until it is removed",
+      "AuditLog.open throws AUDIT_UNAVAILABLE; the spool is set aside as <name>.corrupt (the valid lines of a corrupt one kept, unsent), and every open with replaySpool fails until it is removed; an open without it records as usual",
     logState: "launch fails",
     governedActions: "fail closed",
   },
