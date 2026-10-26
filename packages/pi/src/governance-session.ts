@@ -60,6 +60,7 @@ import {
   type WorkspaceReport,
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
+import type { TaskRegistry } from "./background-tasks.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
@@ -199,6 +200,8 @@ export class GovernanceSession {
   capabilities: CapabilityState[] = [];
   mcpReports: readonly McpServerReport[] = [];
   mcp: McpGovernor | null = null;
+  /** Background tasks of this session (`task_start`); stopped at close(). */
+  backgroundTasks: TaskRegistry | undefined;
   /** Full shell output of this session; removed at close(). */
   outputStore = new SessionOutputStore();
   #closed = false;
@@ -1444,6 +1447,8 @@ export class GovernanceSession {
         reason: "session.end",
       });
     this.#grants.clear();
+    // Background tasks stop before the sandbox they run in is disposed.
+    await this.backgroundTasks?.closeAll();
     this.emit("session.end");
     let status: AuditStatus | undefined;
     try {

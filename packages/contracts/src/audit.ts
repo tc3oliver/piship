@@ -40,6 +40,9 @@ export const AUDIT_EVENT_TYPES = [
   "session.export",
   "runtime.mutation.reverted",
   "data.swept",
+  "task.start",
+  "task.stop",
+  "task.exit",
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 

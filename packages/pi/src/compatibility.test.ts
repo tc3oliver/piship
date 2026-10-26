@@ -2918,6 +2918,32 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     resumed.agent.dispose();
   });
 
+  it("managed: resolves the background task tools at launch, so a call reaches them", async () => {
+    services.knobs.toolScript = [
+      { name: "task_output", arguments: { id: "never-issued" } },
+    ];
+    const { agent, table, events } = await governed({
+      mode: "managed",
+      rules: [allow("task-tools", "tool.execute", "task_*")],
+    });
+    for (const name of ["task_start", "task_output", "task_stop"]) {
+      expect(table.get(name)).toBe("direct");
+      expect(agent.getActiveToolNames()).toContain(name);
+    }
+    await agent.prompt("run");
+    // The tool ran (and found no such task); it was not refused as a tool
+    // registered after launch.
+    expect(results()[0]).toContain("No background task never-issued");
+    expect(
+      (await events()).some(
+        (event) =>
+          event.event === "tool.denied" &&
+          event.rule === UNRESOLVED_EXPOSURE_RULE,
+      ),
+    ).toBe(false);
+    agent.dispose();
+  });
+
   it("managed: refuses a tool an extension re-registered with a wider exposure after launch", async () => {
     let ran = 0;
     const definition = (exposure: "deferred" | "direct") => ({
