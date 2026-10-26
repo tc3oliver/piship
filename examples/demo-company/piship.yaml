@@ -121,6 +121,11 @@ policy:
   id: acme-engineering
   version: 1
   default: ask
+  # /grant lets a user pre-approve one folder and its plain build and test
+  # commands for a while. The sandbox still limits writes and denies network.
+  taskGrants:
+    mode: session
+    actions: [filesystem.write, shell.execute]
   # Repositories on the (fictional) company Git host that are checked out
   # under the managed source root are company projects; every other
   # workspace is unknown. The origin remote alone is only a claim, so the
