@@ -68,6 +68,8 @@ interface Setup {
   readonly yolo?: boolean;
   /** The workspace's own path below the temporary root. */
   readonly workspaceAt?: readonly string[];
+  /** Run on the workspace before the session opens. */
+  readonly prepare?: (workspace: string) => void;
 }
 
 async function open(setup: Setup = {}) {
@@ -80,6 +82,7 @@ async function open(setup: Setup = {}) {
   const stateDir = join(root, "state");
   for (const path of [dir, join(workspace, "kept"), home])
     mkdirSync(path, { recursive: true });
+  setup.prepare?.(workspace);
   const manifest = join(dir, "piship.yaml");
   writeFileSync(
     manifest,
@@ -540,6 +543,38 @@ describe("a task grant", () => {
         channel,
       ),
     ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+  });
+
+  it("treats the target of a configuration surface's link inside the tree as configuration", async () => {
+    const { session, workspace } = await open({
+      prepare: (workspace) => {
+        mkdirSync(join(workspace, "extensions"));
+        mkdirSync(join(workspace, ".pi"));
+        symlinkSync(
+          join(workspace, "extensions"),
+          join(workspace, ".pi", "extensions"),
+        );
+      },
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "extensions", "x.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+    for (const name of [join("src", "a.ts"), "AGENTS.md"])
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          channel,
+        ),
+      ).toMatchObject({ approval: "grant" });
     expect(shown.count).toBe(1);
   });
 

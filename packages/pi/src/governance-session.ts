@@ -1158,9 +1158,23 @@ export class GovernanceSession {
    * Whether a write to `path` changes project configuration. Only the part
    * below the project root counts, so a project inside a `.claude` or `.pi`
    * directory is not configuration throughout; a path outside it is checked
-   * whole.
+   * whole. A surface that links elsewhere in the tree (`.pi/extensions ->
+   * ../extensions`) makes its target configuration too, as the next start
+   * loads it; prompt text (instructions, Claude rules) stays editable.
    */
   #projectConfig(path: string): boolean {
+    if (
+      this.projectCandidates.some((candidate) => {
+        if (
+          candidate.dimension === "instructions" ||
+          candidate.dimension === "claudeRules"
+        )
+          return false;
+        const below = relative(candidate.resolvedPath, path);
+        return !isAbsolute(below) && below.split(sep)[0] !== "..";
+      })
+    )
+      return true;
     for (const root of new Set([
       this.project.root,
       realpathNearest(this.project.root),
