@@ -143,7 +143,6 @@ export class TaskRegistry {
   #closed = false;
 
   constructor(
-    readonly run: TaskRunner,
     readonly events: TaskEvents,
     readonly limits: TaskLimits = TASK_LIMITS,
   ) {}
@@ -159,18 +158,10 @@ export class TaskRegistry {
    * the refusal) when the registry is closed or as many tasks as it allows
    * are running.
    */
-  start(command: string, timeoutSeconds?: number): string {
+  start(run: TaskRunner, command: string, timeoutSeconds?: number): string {
+    const refusal = this.refusal(command);
+    if (refusal) throw new TaskLimitError(refusal);
     const task = new Task(command, this.limits.bufferBytes);
-    if (this.#closed || this.running >= this.limits.maxTasks) {
-      task.status = "failed";
-      task.stopReason = "limit";
-      this.events.refused(task.event());
-      throw new TaskLimitError(
-        this.#closed
-          ? "The session is closing; no background task can start"
-          : `${this.limits.maxTasks} background tasks are already running; stop one with task_stop first`,
-      );
-    }
     const timeout = Math.min(
       timeoutSeconds ?? this.limits.defaultTimeoutSeconds,
       this.limits.maxTimeoutSeconds,
@@ -179,7 +170,7 @@ export class TaskRegistry {
     this.events.start(task.event());
     task.done = Promise.resolve()
       .then(() =>
-        this.run(command, {
+        run(command, {
           onData: (data) => task.tail.append(data),
           signal: task.controller.signal,
           timeout,
@@ -209,6 +200,21 @@ export class TaskRegistry {
         ),
       );
     return task.id;
+  }
+
+  /**
+   * Why `command` cannot start now (the registry is closed or full), with
+   * the refusal recorded; undefined when it can.
+   */
+  refusal(command: string): string | undefined {
+    if (!this.#closed && this.running < this.limits.maxTasks) return undefined;
+    const task = new Task(command, this.limits.bufferBytes);
+    task.status = "failed";
+    task.stopReason = "limit";
+    this.events.refused(task.event());
+    return this.#closed
+      ? "The session is closing; no background task can start"
+      : `${this.limits.maxTasks} background tasks are already running; stop one with task_stop first`;
   }
 
   /** The task's state and its output since the last read; undefined for an unknown id. */

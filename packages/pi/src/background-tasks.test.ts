@@ -35,11 +35,11 @@ function fake() {
   const record = (kind: string) => (event: TaskEvent) =>
     events.push({ kind, event });
   return {
+    run,
     runs,
     events,
     registry: (limits = TASK_LIMITS) =>
       new TaskRegistry(
-        run,
         {
           start: record("start"),
           exit: record("exit"),
@@ -55,9 +55,9 @@ const tick = () => new Promise((done) => setTimeout(done, 0));
 
 describe("TaskRegistry", () => {
   it("runs a task in the background and reads its output once, in order", async () => {
-    const { runs, events, registry } = fake();
+    const { run, runs, events, registry } = fake();
     const tasks = registry();
-    const id = tasks.start("npm run dev");
+    const id = tasks.start(run, "npm run dev");
     expect(id).toMatch(/^[0-9a-f]{16}$/);
     await tick();
     runs[0]?.print("ready ");
@@ -85,9 +85,9 @@ describe("TaskRegistry", () => {
   });
 
   it("keeps only the newest output and says how much it dropped", async () => {
-    const { runs, registry } = fake();
+    const { run, runs, registry } = fake();
     const tasks = registry({ ...TASK_LIMITS, bufferBytes: 8 });
-    const id = tasks.start("x");
+    const id = tasks.start(run, "x");
     await tick();
     runs[0]?.print("0123456789");
     runs[0]?.print("ab");
@@ -97,9 +97,9 @@ describe("TaskRegistry", () => {
   });
 
   it("stops a task through its signal and records why", async () => {
-    const { runs, events, registry } = fake();
+    const { run, runs, events, registry } = fake();
     const tasks = registry();
-    const id = tasks.start("sleep 100");
+    const id = tasks.start(run, "sleep 100");
     await tick();
     runs[0]?.print("tail");
     expect(await tasks.stop(id)).toMatchObject({
@@ -116,11 +116,11 @@ describe("TaskRegistry", () => {
   });
 
   it("refuses past the running limit, and frees a slot when a task ends", async () => {
-    const { runs, events, registry } = fake();
+    const { run, runs, events, registry } = fake();
     const tasks = registry({ ...TASK_LIMITS, maxTasks: 2 });
-    const first = tasks.start("a");
-    tasks.start("b");
-    expect(() => tasks.start("c")).toThrow(TaskLimitError);
+    const first = tasks.start(run, "a");
+    tasks.start(run, "b");
+    expect(() => tasks.start(run, "c")).toThrow(TaskLimitError);
     expect(events.at(-1)).toMatchObject({
       kind: "refused",
       event: { command: "c", reason: "limit" },
@@ -129,15 +129,15 @@ describe("TaskRegistry", () => {
     runs[0]?.exit(1);
     await tasks.settled(first);
     expect(tasks.read(first)).toMatchObject({ status: "exited", exitCode: 1 });
-    expect(() => tasks.start("c")).not.toThrow();
+    expect(() => tasks.start(run, "c")).not.toThrow();
   });
 
   it("passes the default timeout, caps a longer one, and reports a timeout", async () => {
-    const { runs, registry } = fake();
+    const { run, runs, registry } = fake();
     const tasks = registry();
-    tasks.start("a");
-    tasks.start("b", 10 * 60 * 60);
-    const short = tasks.start("c", 5);
+    tasks.start(run, "a");
+    tasks.start(run, "b", 10 * 60 * 60);
+    const short = tasks.start(run, "c", 5);
     await tick();
     expect(runs.map((run) => run.timeout)).toEqual([
       TASK_LIMITS.defaultTimeoutSeconds,
@@ -150,9 +150,9 @@ describe("TaskRegistry", () => {
   });
 
   it("reports a runner failure as failed, with its message in the output", async () => {
-    const { runs, registry } = fake();
+    const { run, runs, registry } = fake();
     const tasks = registry();
-    const id = tasks.start("a");
+    const id = tasks.start(run, "a");
     await tick();
     runs[0]?.fail("Working directory does not exist: /x");
     await tasks.settled(id);
@@ -163,10 +163,10 @@ describe("TaskRegistry", () => {
   });
 
   it("stops every task on close and refuses new ones", async () => {
-    const { runs, events, registry } = fake();
+    const { run, runs, events, registry } = fake();
     const tasks = registry();
-    tasks.start("a");
-    tasks.start("b");
+    tasks.start(run, "a");
+    tasks.start(run, "b");
     await tick();
     await tasks.closeAll();
     expect(runs.every((run) => run.signal.aborted)).toBe(true);
@@ -176,16 +176,15 @@ describe("TaskRegistry", () => {
         .map((item) => item.event.reason),
     ).toEqual(["close", "close"]);
     expect(tasks.running).toBe(0);
-    expect(() => tasks.start("c")).toThrow(/closing/);
+    expect(() => tasks.start(run, "c")).toThrow(/closing/);
   });
 
   it("does not wait forever for a runner that ignores its abort", async () => {
     const tasks = new TaskRegistry(
-      () => new Promise(() => {}),
       { start() {}, exit() {}, stop() {}, refused() {} },
       { ...TASK_LIMITS, stopWaitMs: 10 },
     );
-    const id = tasks.start("stuck");
+    const id = tasks.start(() => new Promise(() => {}), "stuck");
     expect(await tasks.stop(id)).toMatchObject({ status: "stopped" });
   });
 });

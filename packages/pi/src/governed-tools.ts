@@ -26,6 +26,7 @@ import {
   createWriteToolDefinition,
   DEFAULT_MAX_BYTES,
   type ExtensionContext,
+  type ExtensionToolContext,
   formatSize,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -60,6 +61,7 @@ import type { GovernanceSession } from "./governance-session.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
 import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
+import { taskTools } from "./task-tools.js";
 
 /** True when `path` is `root` or below it. */
 const inside = (root: string, path: string) => isWithin(path, root);
@@ -169,7 +171,7 @@ function approvalOptions(
 
 class BlockedError extends Error {}
 
-function blocked(message: string): BlockedError {
+export function blocked(message: string): BlockedError {
   return new BlockedError(redact(message));
 }
 
@@ -506,7 +508,7 @@ async function openFile(path: string, flags: number): Promise<FileHandle> {
 }
 
 /** Decide a shell command; return a refusal message or undefined when allowed. */
-async function gateCommand(
+export async function gateCommand(
   gov: GovernanceSession,
   command: string,
   source: "bash" | "user-bash",
@@ -596,6 +598,29 @@ function boundedOutput(options: ExecOptions, budget: number, notice: string) {
 }
 
 /**
+ * The environment of a command no sandbox contains. In a managed
+ * distribution it still gets only the approved network settings. Pi passes
+ * the agent's commands an environment; if a Pi version stops doing so, the
+ * process environment is the base, so the agent's command is never left
+ * unrestricted. A personal distribution has no approved settings, and a
+ * user's `!` command carries no environment from Pi: both keep the process
+ * environment.
+ */
+export function uncontainedEnvironment(
+  env: NodeJS.ProcessEnv | undefined,
+  source: "bash" | "user-bash",
+): NodeJS.ProcessEnv {
+  const network = processNetworkEnvironment();
+  // The session's subagent token is for its children, not for a command.
+  const { [SUBAGENT_TOKEN_ENV]: _token, ...inherited } = env ?? process.env;
+  // Always an explicit copy: a command given no environment would inherit
+  // the whole process environment, token included. Only an agent's command
+  // is narrowed to the approved network settings (see above).
+  const narrowed = network && (env || source === "bash");
+  return narrowed ? withApprovedNetwork(inherited, network) : inherited;
+}
+
+/**
  * Shell operations: policy first, then the OS sandbox when it is enforced.
  * Without an enforced sandbox the command runs as Pi would run it, and the
  * decision was control-plane only. Either way the command's output is
@@ -620,24 +645,9 @@ export function governedBashOperations(
         ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
         ...(options.env ? { env: options.env } : {}),
       });
-    // In a managed distribution an uncontained command still gets only the
-    // approved network settings. Pi passes the agent's commands an
-    // environment; if a Pi version stops doing so, the process environment
-    // is the base, so the agent's command is never left unrestricted. A
-    // personal distribution has no approved settings, and a user's `!`
-    // command carries no environment from Pi: both keep the process
-    // environment.
-    const network = processNetworkEnvironment();
-    // The session's subagent token is for its children, not for a command.
-    const { [SUBAGENT_TOKEN_ENV]: _token, ...inherited } =
-      options.env ?? process.env;
-    // Always an explicit copy: a command given no environment would inherit
-    // the whole process environment, token included. Only an agent's command
-    // is narrowed to the approved network settings (see above).
-    const narrowed = network && (options.env || source === "bash");
     return local.exec(command, cwd, {
       ...options,
-      env: narrowed ? withApprovedNetwork(inherited, network) : inherited,
+      env: uncontainedEnvironment(options.env, source),
     });
   };
   return {
@@ -703,6 +713,37 @@ const BASH_UPDATE_THROTTLE_MS = 100;
 const STRUCTURED_OUTPUT_MAX_BYTES = 1024 * 1024;
 
 /**
+ * The command, cwd, and environment Pi's bash tool would spawn. Pi builds
+ * them (PATH and the PI_* session variables) in execute; its own execute is
+ * run once with operations that only capture them: nothing is spawned, and
+ * with no output it opens no file.
+ */
+export async function piBashSpawn(
+  cwd: string,
+  id: string,
+  params: { command: string; timeout?: number },
+  ctx: ExtensionToolContext,
+): Promise<{ command: string; cwd: string; env?: NodeJS.ProcessEnv }> {
+  let spawn: { command: string; cwd: string; env?: NodeJS.ProcessEnv } = {
+    command: params.command,
+    cwd: ctx?.cwd || cwd,
+  };
+  await createBashToolDefinition(cwd, {
+    operations: {
+      exec: async (command, dir, options) => {
+        spawn = {
+          command,
+          cwd: dir,
+          ...(options.env ? { env: options.env } : {}),
+        };
+        return { exitCode: 0 };
+      },
+    },
+  }).execute(id, params, undefined, undefined, ctx);
+  return spawn;
+}
+
+/**
  * The governed `bash` tool: Pi's definition (name, schema, prompt text,
  * renderers) with PiShip's execute. Pi's execute persists the full output to
  * an unbounded, unowned `pi-bash-*.log` whose write stream has no error
@@ -715,26 +756,7 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
   const tool: typeof definition = {
     ...definition,
     async execute(id, params, signal, onUpdate, ctx) {
-      // Pi builds the command, cwd, and environment (PATH and the PI_*
-      // session variables) in execute. Its own execute is run once with
-      // operations that only capture them: nothing is spawned, and with no
-      // output it opens no file.
-      let spawn: { command: string; cwd: string; env?: NodeJS.ProcessEnv } = {
-        command: params.command,
-        cwd: ctx?.cwd || cwd,
-      };
-      await createBashToolDefinition(cwd, {
-        operations: {
-          exec: async (command, dir, options) => {
-            spawn = {
-              command,
-              cwd: dir,
-              ...(options.env ? { env: options.env } : {}),
-            };
-            return { exitCode: 0 };
-          },
-        },
-      }).execute(id, params, undefined, undefined, ctx);
+      const spawn = await piBashSpawn(cwd, id, params, ctx);
       const output = new ShellOutput(gov.outputStore);
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
@@ -1039,6 +1061,8 @@ export function governedTools(
       },
     }) as ToolDefinition,
     governedBashTool(gov, cwd) as ToolDefinition,
+    // A subagent child has no way to stop what it would leave running.
+    ...(gov.options.subagent ? [] : taskTools(gov, cwd)),
     ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
   const session = tools.flatMap((tool) => {
@@ -1060,4 +1084,5 @@ const RESOURCE_TOOLS: ReadonlySet<string> = new Set([
   "write",
   "edit",
   "bash",
+  "task_start",
 ]);

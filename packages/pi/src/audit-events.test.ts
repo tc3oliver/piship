@@ -57,13 +57,7 @@ const OUTSIDE_A_SESSION = [
  * `session.export` stays until an export flow exists: Pi's /share and
  * /export have no seam, and PiShip has no command that exports a session.
  */
-const NOT_YET_EMITTED: readonly AuditEventType[] = [
-  "session.export",
-  // Background tasks: the registry records them; the tools come next.
-  "task.start",
-  "task.stop",
-  "task.exit",
-];
+const NOT_YET_EMITTED: readonly AuditEventType[] = ["session.export"];
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -270,6 +264,8 @@ describe("governed session audit events (real flows)", () => {
       rule("docs-search", "mcp.tool.call", "docs:search"),
       rule("model", "model.select", "unit/allowed"),
       rule("granted", "tool.execute", "granted-tool", "ask"),
+      rule("task-tool", "tool.execute", "task_*"),
+      rule("task-commands", "shell.execute", "sleep *"),
       "resources:",
       "  extensions:",
       "    builtin: [piship-ask-user, piship-workflow]",
@@ -343,6 +339,32 @@ describe("governed session audit events (real flows)", () => {
     expect(search).toBeDefined();
     const result = await search?.call({ query: "query-canary" });
     expect(JSON.stringify(result)).toContain("query-canary");
+    // Background tasks: one that exits, one that is stopped.
+    const taskTool = (name: string) =>
+      governedTools(session, workspace).find(
+        (tool) => tool.name === name,
+      ) as ToolDefinition;
+    await taskTool("task_start").execute(
+      "call_exit",
+      { command: "sleep 0" } as never,
+      undefined,
+      undefined,
+      context(),
+    );
+    const running = await taskTool("task_start").execute(
+      "call_stop",
+      { command: "sleep 30" } as never,
+      undefined,
+      undefined,
+      context(),
+    );
+    await taskTool("task_stop").execute(
+      "call_stop2",
+      { id: (running.details as { id: string }).id } as never,
+      undefined,
+      undefined,
+      context(),
+    );
     // A task grant: created, used, revoked, and one that expires.
     const grant = (id: string, ms: number) => ({
       id,
