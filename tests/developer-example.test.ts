@@ -666,9 +666,10 @@ describe("the managed variant", () => {
     );
     expect(capability?.provider?.package).toBe("pi-permission-system");
     expect(capability?.settings).toEqual({});
-    // The provider does not ask again for routine work already allowed by
-    // PiShip. Its explicit high-risk denies still take precedence.
-    expect(config.permission["*"]).toBe("allow");
+    // Known coding tools avoid duplicate prompts; an unknown tool must
+    // still ask. Command and path denies take precedence.
+    expect(config.permission["*"]).toBe("ask");
+    expect(config.permission.bash).toBe("allow");
     expect(rules(config, "bash")["*"]).toBe("allow");
     expect(rules(config, "mcp")["*"]).toBe("allow");
     const bash = rules(config, "bash");
