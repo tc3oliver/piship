@@ -28,6 +28,7 @@ import {
   type ExtensionContext,
   type ExtensionToolContext,
   formatSize,
+  getShellConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -685,6 +686,8 @@ export function governedBashOperations(
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
         env,
+        // Match Pi's Git Bash/WSL shell, not the native backend's cmd.exe.
+        shell: getShellConfig(),
       });
     return local.exec(command, cwd, { ...options, env });
   };

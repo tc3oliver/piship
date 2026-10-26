@@ -1831,6 +1831,33 @@ describe("git.push in the shell gate", () => {
 describe.runIf(process.platform === "win32")(
   "unsandboxed Windows bash containment",
   () => {
+    it("keeps Pi bash syntax for model and user commands", async () => {
+      const { session, workspace } = await open([], {
+        userRules: [
+          {
+            id: "me.shell",
+            action: "shell.execute",
+            resource: "**",
+            effect: "allow",
+          },
+        ],
+      });
+      for (const source of ["bash", "user-bash"] as const) {
+        let output = "";
+        const result = await governedBashOperations(session, source).exec(
+          "printf 'first\\n'; printf 'second\\n'",
+          workspace,
+          {
+            onData: (chunk) => {
+              output += chunk.toString("utf8");
+            },
+          },
+        );
+        expect(result.exitCode, output).toBe(0);
+        expect(output).toBe("first\nsecond\n");
+      }
+    }, 25000);
+
     it("reclaims a detached child when the foreground shell exits", async () => {
       const { session, workspace } = await open([], {
         userRules: [
