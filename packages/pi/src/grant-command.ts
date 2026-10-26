@@ -9,8 +9,22 @@ import { realpathNearest } from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
 
 const DEFAULT_TTL_MINUTES = 120;
+/**
+ * The programs a grant covers unless `--run` names others: build and test
+ * tools, no interpreter, `npx`, or wrapper.
+ */
+export const DEFAULT_GRANT_COMMANDS = [
+  "git",
+  "npm",
+  "pnpm",
+  "yarn",
+  "pytest",
+  "cargo",
+  "go",
+  "make",
+] as const;
 const USAGE =
-  'Usage: /grant [add] [path] [--for 2h] [--task "label"] | /grant list | /grant revoke <id|all>';
+  'Usage: /grant [add] [path] [--for 2h] [--run npm,pytest | --no-run] [--task "label"] | /grant list | /grant revoke <id|all>';
 
 /** Words of the arguments; `"..."` or `'...'` keeps spaces in one. */
 function words(args: string): string[] {
@@ -37,8 +51,10 @@ function duration(minutes: number): string {
 function describe(grant: TaskGrant): string {
   const scope = [
     ...(grant.scope.paths ?? []).map((path) => `files under ${path}`),
-    ...(grant.scope.tools ?? []).map((tool) => `tool ${tool}`),
-  ].join(", ");
+    ...(grant.scope.commands?.length
+      ? [`commands starting with ${grant.scope.commands.join(", ")}`]
+      : []),
+  ].join("; ");
   return `${scope || "nothing"}, until ${new Date(grant.expiresAt).toLocaleString()}`;
 }
 
@@ -50,9 +66,19 @@ async function add(
   let target: string | undefined;
   let minutes: number | undefined;
   let task = "";
+  let commands: readonly string[] = DEFAULT_GRANT_COMMANDS;
   for (let index = 0; index < rest.length; index++) {
     const word = rest[index] as string;
-    if (word === "--for") {
+    if (word === "--no-run") commands = [];
+    else if (word === "--run") {
+      const list = rest[++index] ?? "";
+      commands =
+        list === "none" ? [] : list.split(",").filter((item) => item !== "");
+      if (!commands.length && list !== "none")
+        throw new Error(
+          `${USAGE} (--run takes a comma-separated list, or none)`,
+        );
+    } else if (word === "--for") {
       minutes = grantMinutes(rest[++index] ?? "");
       if (minutes === undefined)
         throw new Error(`${USAGE} (--for takes 2h, 90m, or 1h30m)`);
@@ -71,6 +97,13 @@ async function add(
       ? gov.project.root
       : resolve(gov.options.cwd, target);
   if (!ctx.hasUI) throw new Error("/grant needs an interactive session");
+  // Shell coverage needs shell.execute among the actions the manifest lets a grant cover.
+  const actions = gov.manifest.policy.taskGrants?.actions;
+  const shellRefused =
+    commands.length > 0 &&
+    actions !== undefined &&
+    !actions.includes("shell.execute");
+  if (shellRefused) commands = [];
   const expiresAt = new Date(Date.now() + minutes * 60_000).toISOString();
   const shown = realpathNearest(root);
   const approved = await gov.serializeDialog(() =>
@@ -80,7 +113,13 @@ async function add(
         ...(task ? [`Task: ${task}`] : []),
         `Approve without a prompt, for ${duration(minutes)} (until ${new Date(expiresAt).toLocaleString()}):`,
         `  reading and writing files under ${shown}`,
-        "Deny rules, rules that always ask, project configuration (.pi, .piship, .claude, .mcp.json), shell commands, and everything outside it still prompt.",
+        ...(commands.length
+          ? [
+              `  shell commands starting with ${commands.join(", ")}, one at a time: a chained, redirected, or substituted command, and git push, still prompt`,
+              "A covered program runs whatever code it is given (an npm script, a Makefile target), so the agent can run any code through it until the grant ends.",
+            ]
+          : []),
+        "Deny rules, rules that always ask, project configuration (.pi, .piship, .claude, .mcp.json), and everything outside this still prompt.",
       ].join("\n"),
     ),
   );
@@ -90,10 +129,16 @@ async function add(
     task,
     createdBy: "user-command",
     expiresAt,
-    scope: { paths: [root] },
+    // The governed file and shell tools, whose tool ask is decided together
+    // with the file or command ask they make (one combined prompt).
+    scope: {
+      paths: [root],
+      tools: [...gov.resourceTools],
+      ...(commands.length ? { commands } : {}),
+    },
     inheritToSubagents: false,
   });
-  return `Task grant ${grant.id}: ${describe(grant)}. /grant revoke ${grant.id} ends it.`;
+  return `Task grant ${grant.id}: ${describe(grant)}. /grant revoke ${grant.id} ends it.${shellRefused ? " Shell commands are not covered: this distribution's policy.taskGrants.actions does not list shell.execute." : ""}`;
 }
 
 /** `/grant`: add (the default), list, or revoke this session's task grants. */

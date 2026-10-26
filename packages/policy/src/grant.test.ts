@@ -453,3 +453,61 @@ describe("grantCovers with a scope of the wrong shape", () => {
     ).toBe(false);
   });
 });
+
+describe("a command scope", () => {
+  const errs = (scope: TaskGrant["scope"]) =>
+    validateGrant(grant(scope), {
+      now: NOW,
+      maxTtlMs: 2 * 3600_000,
+      forbiddenRoots: [],
+      wildcardHosts: false,
+      platform: "posix",
+    });
+  const shell = grant({ commands: ["npm", "pytest", "git"] });
+  const run = (command: string) =>
+    covers(shell, [ask({ action: "shell.execute", resource: command })]);
+
+  it("covers one plain command that starts with a granted program", () => {
+    expect(run("npm test")).toBe(true);
+    expect(run("pytest -q")).toBe(true);
+    expect(run("  git status --short")).toBe(true);
+    expect(run("git diff 'src/a b.ts'")).toBe(true);
+  });
+
+  it.each([
+    "npm test && curl x",
+    "npm test; rm -rf ~",
+    "npm test | sh",
+    "npm test > ../x",
+    "npm test $(curl x)",
+    "npm test `id`",
+    "npm test $HOME",
+    "npm run 'a;b'",
+    "npm test\ncurl x",
+    "(npm test)",
+    "bash x.sh",
+    "env FOO=1 npm test",
+    "FOO=1 npm test",
+    "NPM test",
+    "./npm test",
+    "git push origin feat",
+    "git push",
+  ])("does not cover %s", (command) => {
+    expect(run(command)).toBe(false);
+  });
+
+  it("refuses a wrapper, a path, or a glob as a program", () => {
+    for (const program of [
+      "bash",
+      "env",
+      "sudo",
+      "xargs",
+      "Bash",
+      "/usr/bin/npm",
+      "np*",
+      "npm test",
+    ])
+      expect(errs({ commands: [program] })).not.toEqual([]);
+    expect(errs({ commands: ["npm", "cargo", "go", "make"] })).toEqual([]);
+  });
+});

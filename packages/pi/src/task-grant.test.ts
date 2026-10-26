@@ -25,7 +25,11 @@ import type { TaskGrant } from "@piship/policy";
 import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
-import { grantCommand, grantMinutes } from "./grant-command.js";
+import {
+  DEFAULT_GRANT_COMMANDS,
+  grantCommand,
+  grantMinutes,
+} from "./grant-command.js";
 
 const realpaths = vi.hoisted(() => vi.fn());
 vi.mock("@piship/sandbox", async (actual) => {
@@ -952,6 +956,90 @@ describe("/grant", () => {
     });
     expect(
       await session.decide("filesystem.write", join(alias, "a.txt"), undefined),
+    ).toMatchObject({ approval: "grant" });
+  });
+});
+
+describe("/grant and shell commands", () => {
+  it("covers one plain build or test command by default, alone or with the bash tool's ask", async () => {
+    const { session } = await open();
+    session.resourceTools = new Set(["bash", "write"]);
+    const { ctx, dialogs } = ui();
+    await grantCommand(session, "", ctx);
+    expect(dialogs[0]).toContain("runs whatever code it is given");
+    expect(session.listGrants()[0]?.grant.scope).toMatchObject({
+      commands: [...DEFAULT_GRANT_COMMANDS],
+      tools: ["bash", "write"],
+    });
+    const { shown, channel } = counted();
+    for (const command of ["npm test", "pytest -q"])
+      expect(
+        await session.decide("shell.execute", command, channel),
+      ).toMatchObject({ approval: "grant" });
+    expect(
+      await session.withToolCall("c1", "bash", () =>
+        session.decide("shell.execute", "npm test", channel),
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(0);
+    for (const command of [
+      "npm test && curl x",
+      "bash x.sh",
+      "env FOO=1 npm test",
+      "npm test $(curl x)",
+      "npm test > ../x",
+      "node x.js",
+      "npx something",
+      "git push origin feat",
+    ])
+      expect(
+        await session.decide("shell.execute", command, channel),
+      ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(8);
+  });
+
+  it("--run replaces the programs, --no-run and --run none cover files only", async () => {
+    const { session } = await open();
+    const { ctx } = ui();
+    await grantCommand(session, "--run cargo,make", ctx);
+    await grantCommand(session, "kept --no-run", ctx);
+    await grantCommand(session, "kept --run none", ctx);
+    const scopes = session
+      .listGrants()
+      .map(({ grant }) => grant.scope.commands);
+    expect(scopes).toEqual([["cargo", "make"], undefined, undefined]);
+    const bad = ui();
+    await grantCommand(session, "--run bash", bad.ctx);
+    expect(bad.notices[0]?.level).toBe("error");
+    expect(session.listGrants()).toHaveLength(3);
+  });
+
+  it("covers no shell command in a managed distribution whose actions leave out shell.execute, and says so", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: {
+        mode: "session",
+        actions: ["filesystem.write", "tool.execute"],
+      },
+    });
+    const { ctx, dialogs, notices } = ui();
+    await grantCommand(session, "", ctx);
+    expect(dialogs[0]).not.toContain("shell commands starting with");
+    expect(notices[0]?.message).toContain("does not list shell.execute");
+    expect(session.listGrants()[0]?.grant.scope.commands).toBeUndefined();
+    expect(
+      await session.decide("shell.execute", "npm test", undefined),
+    ).toMatchObject({ outcome: "deny", approval: "unavailable" });
+  });
+
+  it("covers shell commands in a managed distribution that lists shell.execute", async () => {
+    const { session } = await open({
+      mode: "managed",
+      taskGrants: { mode: "session", actions: ["shell.execute"] },
+    });
+    await grantCommand(session, "", ui().ctx);
+    expect(
+      await session.decide("shell.execute", "npm test", undefined),
     ).toMatchObject({ approval: "grant" });
   });
 });
