@@ -74,6 +74,7 @@ import {
   boundedCredentialProvider,
   loadAdapter,
 } from "./adapters.js";
+import { refreshWithRetry } from "./identity-refresh.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
 import { SandboxCredential, type SignedInGuard } from "./sandbox-credential.js";
@@ -1378,7 +1379,10 @@ export class DistributionAccess {
         );
       if (!stored.accessToken?.equals(observed.accessToken)) return stored;
       // A refresh never switches the principal, whatever the provider does.
-      const refreshed = assertSamePrincipal(await refresh(stored), observed);
+      const refreshed = assertSamePrincipal(
+        await refreshWithRetry(() => refresh(stored)),
+        observed,
+      );
       await this.#storeIdentity(refreshed, { replace: true });
       this.#emit("identity.refresh", {
         reason,
