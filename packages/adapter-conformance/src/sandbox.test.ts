@@ -1374,7 +1374,7 @@ describeIsolated(isolator)(
         "ignores a timeout once the command streams output",
         "shared",
         "timeout",
-        /did not settle within 1500 ms after io.signal aborted for a timeout|timed-out command kept running and wrote its marker/,
+        /did not settle within \d+ ms after io\.signal aborted for a timeout|timed-out command kept running and wrote its marker/,
       ],
       [
         "ignores cancellation",
