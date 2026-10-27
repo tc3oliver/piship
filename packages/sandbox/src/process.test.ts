@@ -294,7 +294,10 @@ describe("spawnManaged", () => {
       try {
         let output = "";
         await new Promise<void>((resolve, reject) => {
-          const deadline = setTimeout(() => reject(new Error("owner did not start")), 15_000);
+          const deadline = setTimeout(
+            () => reject(new Error("owner did not start")),
+            15_000,
+          );
           owner.stdout?.on("data", (chunk: Buffer) => {
             output += chunk.toString();
             if (output.includes("ready")) {
