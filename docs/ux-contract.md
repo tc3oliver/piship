@@ -92,6 +92,12 @@ Rows are grouped by the profile that meets them. "Both" means personal and manag
 | `--yolo` is refused unless `policy.userAuto: allowed` | A user opting out of confirmations the administrator wants. Boundary: policy | Auto-approval where the administrator did not allow it | The administrator's opt-in is the only way to get it, and it is one manifest line |
 | An MCP server sends the runtime credential only to the gateway's own origin, runs with an allowlisted environment, and starts only after `mcp.server.start` is allowed | A server that is not the gateway receiving a company credential. Boundary: credential and policy | A credential sent to an arbitrary MCP host | A server on another origin has no claim on a gateway credential |
 
+### Routine-approval threat model
+
+An untrusted repository, dependency, or model output can make a routine-looking command run arbitrary code (for example, an npm script or Makefile target). PiShip authorizes **governed tool calls**, not the behavior of every program they start. A managed distribution can explicitly `allow` routine workspace edits and known build/test calls without dialogs. A remembered managed approval for a shell command, executable tool, or MCP call covers only that exact target; enforced `deny`, `keepsPrompt`, project trust, and the loaded policy are checked on each call. Session approvals are not inherited by subagents, and an unknown push target is never approved as a class.
+
+Outside that policy enforcement plane: Pi extensions and in-process packages run with the Pi process's privileges; shell wrappers, build scripts, and external MCP servers can have side effects the policy matcher cannot inspect. Hostname allowlists are not firewalls, and audit events do not prevent execution. Only an **enforced** local or remote sandbox constrains subprocess filesystem/network effects; a Windows Job Object contains process lifetime, not filesystem or network access. Organizations must enforce these remaining boundaries with OS/network isolation and service-side permissions ([security architecture](security.md#governance)).
+
 ## Maintaining this page
 
 - The rows are derived from [security](security.md), the policy code, and the `init` templates. A restriction found in the code with no row is a defect in this page; a row whose restriction no longer exists is removed with it.
