@@ -678,16 +678,27 @@ describe("a task grant", () => {
   });
 
   it("is not added when the session closes while its event is delivered", async () => {
-    const { session, workspace } = await open();
+    const { session, workspace, events } = await open();
+    const pending = grant({ paths: [workspace] });
     let closing: Promise<unknown> | undefined;
     vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
       closing = session.close();
     });
     await expect(
-      session.addGrant(grant({ paths: [workspace] })),
+      session.addGrant(pending),
     ).rejects.toMatchObject({ code: "POLICY_DENIED" });
     await closing;
     expect(session.listGrants()).toEqual([]);
+    const lifecycle = (await events()).filter((event) =>
+      ["policy.grant_created", "policy.grant_revoked"].includes(event.event),
+    );
+    expect(lifecycle.map((event) => event.event)).toEqual([
+      "policy.grant_created",
+      "policy.grant_revoked",
+    ]);
+    expect(lifecycle[1]).toMatchObject({
+      detail: { grant: pending.id, uses: 0, reason: "session.end" },
+    });
   });
 
   it("takes its monotonic deadline when it takes its wall-clock time, not after the audit flush", async () => {
