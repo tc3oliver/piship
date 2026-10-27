@@ -312,12 +312,18 @@ describe("spawnManaged", () => {
         });
         expect(statSync(heartbeat).size).toBeGreaterThan(0);
         // /PID without /T kills only PiShip, not its supervisor or descendants.
-        const killed = spawnSync("taskkill", ["/F", "/PID", String(owner.pid)], {
-          encoding: "utf8",
-          timeout: 5000,
-        });
+        const killed = spawnSync(
+          "taskkill",
+          ["/F", "/PID", String(owner.pid)],
+          {
+            encoding: "utf8",
+            timeout: 5000,
+          },
+        );
         expect(killed.status, killed.stderr).toBe(0);
-        await new Promise<void>((resolve) => owner.once("close", () => resolve()));
+        await new Promise<void>((resolve) =>
+          owner.once("close", () => resolve()),
+        );
         expect(await heartbeatStopped(heartbeat)).toBe(true);
       } finally {
         if (owner.exitCode === null && owner.pid)
