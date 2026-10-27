@@ -747,6 +747,31 @@ describe("governed built-in tools", () => {
       expect(seen).toHaveLength(1);
     });
 
+    it("does not reuse a managed workspace grant through a directory symlink", async () => {
+      const { session, workspace, root } = await open([], { mode: "managed" });
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret.txt"), "unchanged");
+      symlinkSync(
+        outside,
+        join(workspace, "linked"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      await run(write, { path: "ordinary.txt", content: "allowed" }, ctx);
+      expect(seen).toHaveLength(1);
+
+      await expect(
+        run(write, { path: "linked/secret.txt", content: "escaped" }, ctx),
+      ).rejects.toThrow(/builtin:default/);
+      expect(seen).toHaveLength(1);
+      expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe(
+        "unchanged",
+      );
+    });
+
     it("does not extend a managed workspace grant to project config", async () => {
       const { session, workspace } = await open([], { mode: "managed" });
       const write = tool(governedTools(session, workspace), "write");
