@@ -74,11 +74,162 @@ export function strictest(
   return result;
 }
 
+/** Characters that chain, substitute, redirect, or group POSIX commands. */
+const POSIX_SHELL_METACHARACTERS = /[;&|// The policy engine: layered rule precedence, enforcement planes, and rule
+// list parsing for user, project, and adapter rule files.
+import {
+  normalizePolicyAction,
+  POLICY_ACTIONS,
+  PiShipError,
+  redact,
+  type EnforcementPlane,
+  type PolicyAction,
+  type PolicyDecision,
+  type PolicyEffect,
+  type PolicyLayer,
+  type PolicyRequest,
+} from "@piship/contracts";
+import type { PolicyConfig, PolicyRule } from "@piship/schema";
+import {
+  expandPathTokens,
+  matchAction,
+  matchGlob,
+  normalizePathResource,
+  normalizeTokenContext,
+  type PathTokenContext,
+} from "./glob.js";
+import { seamPlane } from "./seams.js";
+
+/** Which planes an active OS sandbox adapter enforces. */
+export interface PolicyContainment {
+  readonly filesystem: boolean;
+  readonly network: boolean;
+  readonly shell: boolean;
+  /**
+   * Pi runs offline (`PI_OFFLINE=1`, which every managed launch sets), so
+   * Pi's own uploads such as `/bug` are closed. Absent means online.
+   */
+  readonly piOffline?: boolean;
+}
+
+export interface PolicyContext extends PathTokenContext {
+  readonly containment: PolicyContainment;
+}
+
+export const NO_CONTAINMENT: PolicyContainment = {
+  filesystem: false,
+  network: false,
+  shell: false,
+};
+
 /**
- * Characters that chain, substitute, redirect, or group shell commands in
- * POSIX shells and cmd.exe (`^` escapes and `%` expands there).
+ * The plane that enforces `action` under the active containment, from the
+ * runtime seam table (`RUNTIME_SEAMS`). An action with no seam and no
+ * containment carries `audit-only` here; `decisionStatus` reports it as
+ * `unsupported`.
  */
-const SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
+export function enforcementPlane(
+  action: PolicyAction,
+  containment: PolicyContainment,
+  resource?: string,
+): EnforcementPlane {
+  return seamPlane(action, containment, resource) ?? "audit-only";
+}
+
+const STRICTNESS: Readonly<Record<PolicyEffect, number>> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+};
+
+export function strictest(
+  ...effects: readonly (PolicyEffect | undefined)[]
+): PolicyEffect {
+  let result: PolicyEffect = "allow";
+  for (const effect of effects)
+    if (effect && STRICTNESS[effect] > STRICTNESS[result]) result = effect;
+  return result;
+}
+
+<>()\r\n]/g;
+/** cmd.exe also expands `%` and uses `^` to escape the next character. */
+const WINDOWS_SHELL_METACHARACTERS = /[;&|// The policy engine: layered rule precedence, enforcement planes, and rule
+// list parsing for user, project, and adapter rule files.
+import {
+  normalizePolicyAction,
+  POLICY_ACTIONS,
+  PiShipError,
+  redact,
+  type EnforcementPlane,
+  type PolicyAction,
+  type PolicyDecision,
+  type PolicyEffect,
+  type PolicyLayer,
+  type PolicyRequest,
+} from "@piship/contracts";
+import type { PolicyConfig, PolicyRule } from "@piship/schema";
+import {
+  expandPathTokens,
+  matchAction,
+  matchGlob,
+  normalizePathResource,
+  normalizeTokenContext,
+  type PathTokenContext,
+} from "./glob.js";
+import { seamPlane } from "./seams.js";
+
+/** Which planes an active OS sandbox adapter enforces. */
+export interface PolicyContainment {
+  readonly filesystem: boolean;
+  readonly network: boolean;
+  readonly shell: boolean;
+  /**
+   * Pi runs offline (`PI_OFFLINE=1`, which every managed launch sets), so
+   * Pi's own uploads such as `/bug` are closed. Absent means online.
+   */
+  readonly piOffline?: boolean;
+}
+
+export interface PolicyContext extends PathTokenContext {
+  readonly containment: PolicyContainment;
+}
+
+export const NO_CONTAINMENT: PolicyContainment = {
+  filesystem: false,
+  network: false,
+  shell: false,
+};
+
+/**
+ * The plane that enforces `action` under the active containment, from the
+ * runtime seam table (`RUNTIME_SEAMS`). An action with no seam and no
+ * containment carries `audit-only` here; `decisionStatus` reports it as
+ * `unsupported`.
+ */
+export function enforcementPlane(
+  action: PolicyAction,
+  containment: PolicyContainment,
+  resource?: string,
+): EnforcementPlane {
+  return seamPlane(action, containment, resource) ?? "audit-only";
+}
+
+const STRICTNESS: Readonly<Record<PolicyEffect, number>> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+};
+
+export function strictest(
+  ...effects: readonly (PolicyEffect | undefined)[]
+): PolicyEffect {
+  let result: PolicyEffect = "allow";
+  for (const effect of effects)
+    if (effect && STRICTNESS[effect] > STRICTNESS[result]) result = effect;
+  return result;
+}
+
+<>()\r\n^%]/g;
 
 /**
  * True when `command` uses a shell metacharacter that `pattern` does not
@@ -86,9 +237,17 @@ const SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
  * containment, so it must not cover `git status; rm -rf ~`. The bare `**`
  * pattern means every command and is exempt.
  */
-export function chainsBeyondPattern(pattern: string, command: string): boolean {
+export function chainsBeyondPattern(
+  pattern: string,
+  command: string,
+  platform: "posix" | "win32" = process.platform === "win32" ? "win32" : "posix",
+): boolean {
   if (pattern === "**") return false;
-  for (const [char] of command.matchAll(SHELL_METACHARACTERS))
+  const metacharacters =
+    platform === "win32"
+      ? WINDOWS_SHELL_METACHARACTERS
+      : POSIX_SHELL_METACHARACTERS;
+  for (const [char] of command.matchAll(metacharacters))
     if (!pattern.includes(char)) return true;
   return false;
 }
