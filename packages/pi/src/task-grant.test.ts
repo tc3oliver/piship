@@ -787,10 +787,14 @@ describe("a task grant", () => {
   it("rejects inheritable interactive grants and untrusted manifest provenance", async () => {
     const { session, workspace } = await open();
     await expect(
-      session.addGrant(grant({ paths: [workspace] }, { inheritToSubagents: true })),
+      session.addGrant(
+        grant({ paths: [workspace] }, { inheritToSubagents: true }),
+      ),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     await expect(
-      session.addGrant(grant({ paths: [workspace] }, { createdBy: "manifest" })),
+      session.addGrant(
+        grant({ paths: [workspace] }, { createdBy: "manifest" }),
+      ),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(session.listGrants()).toEqual([]);
   });
