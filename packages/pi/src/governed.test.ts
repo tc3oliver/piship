@@ -95,6 +95,8 @@ async function open(
     readonly enforced?: readonly string[];
     /** Test a distribution that explicitly allows routine workspace writes. */
     readonly routineWrites?: boolean;
+    /** Make the test distribution ask before running Bash commands. */
+    readonly shellAsk?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -131,7 +133,11 @@ async function open(
           : [
               options.routineWrites && line.includes("id: write,")
                 ? line.replace("effect: ask", "effect: allow")
-                : line,
+                : options.shellAsk && line.includes("id: shell,")
+                  ? line.replace("effect: deny", "effect: ask")
+                  : options.shellAsk && line.includes("id: no-bash-tool,")
+                    ? line.replace("effect: deny", "effect: allow")
+                    : line,
             ],
       ),
       ...extra,
@@ -791,6 +797,30 @@ describe("governed built-in tools", () => {
       expect(confirmations).toBe(2);
       expect(seen).toHaveLength(0);
       expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
+    });
+
+    it("keeps managed shell session approvals to the exact command", async () => {
+      const { session, workspace } = await open([], {
+        mode: "managed",
+        shellAsk: true,
+      });
+      const bash = tool(governedTools(session, workspace), "bash");
+      const seen: string[][] = [];
+      const first = { command: "echo safe > first.txt" };
+      await run(bash, first, choosing("Allow for this session", seen));
+      expect(readFileSync(join(workspace, "first.txt"), "utf8")).toContain("safe");
+
+      await run(bash, first, choosing("Deny", seen));
+      expect(seen).toHaveLength(1);
+      await expect(
+        run(
+          bash,
+          { command: "echo unsafe > second.txt" },
+          choosing("Deny", seen),
+        ),
+      ).rejects.toThrow(/not allowed/);
+      expect(seen).toHaveLength(2);
+      expect(existsSync(join(workspace, "second.txt"))).toBe(false);
     });
 
     it("does not reuse a managed workspace grant through a directory symlink", async () => {
