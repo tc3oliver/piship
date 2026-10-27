@@ -847,6 +847,12 @@ describe("allow for this session", () => {
     ).toMatchObject({ outcome: "allow", ruleId: "keep-asking" });
     expect(shown).toHaveLength(1);
     expect(shown[0]?.scopes).toBeUndefined();
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "kept", "a.txt"),
+      channel,
+    );
+    expect(shown).toHaveLength(2);
   });
 
   it("remembers only bounded file rules without managed auto-approval", async () => {
