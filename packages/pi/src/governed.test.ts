@@ -93,6 +93,8 @@ async function open(
     readonly mcpClass?: "company" | "user";
     /** More `policy.enforced` rules, as manifest lines. */
     readonly enforced?: readonly string[];
+    /** Test a distribution that explicitly allows routine workspace writes. */
+    readonly routineWrites?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -124,7 +126,13 @@ async function open(
       'runtime: { pi: "1.1.0" }',
       "deployment: { mode: personal }",
       ...POLICY.flatMap((line) =>
-        line === "  enforced:" ? [line, ...(options.enforced ?? [])] : [line],
+        line === "  enforced:"
+          ? [line, ...(options.enforced ?? [])]
+          : [
+              options.routineWrites && line.includes("id: write,")
+                ? line.replace("effect: ask", "effect: allow")
+                : line,
+            ],
       ),
       ...extra,
       "",
@@ -745,6 +753,44 @@ describe("governed built-in tools", () => {
         run(tool(tools, "read"), { path: join(home, ".ssh", "id_rsa") }, ctx),
       ).rejects.toThrow(/rule secrets/);
       expect(seen).toHaveLength(1);
+    });
+
+    it("allows routine managed file writes without prompts but still enforces asks", async () => {
+      const { session, workspace } = await open([], {
+        mode: "managed",
+        routineWrites: true,
+        enforced: [
+          '    - { id: protected-write, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
+        ],
+      });
+      mkdirSync(join(workspace, "kept"));
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      let confirmations = 0;
+      ctx.ui.confirm = async () => {
+        confirmations += 1;
+        return false;
+      };
+
+      for (let i = 0; i < 5; i += 1)
+        await run(write, { path: `routine-${i}.txt`, content: String(i) }, ctx);
+      expect(seen).toHaveLength(0);
+      expect(confirmations).toBe(0);
+      for (let i = 0; i < 5; i += 1)
+        expect(readFileSync(join(workspace, `routine-${i}.txt`), "utf8")).toBe(
+          String(i),
+        );
+      await run(write, { path: "headless.txt", content: "ok" });
+      expect(readFileSync(join(workspace, "headless.txt"), "utf8")).toBe("ok");
+
+      for (let i = 0; i < 2; i += 1)
+        await expect(
+          run(write, { path: "kept/secret.txt", content: "denied" }, ctx),
+        ).rejects.toThrow(/not allowed/);
+      expect(confirmations).toBe(2);
+      expect(seen).toHaveLength(0);
+      expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
     });
 
     it("does not reuse a managed workspace grant through a directory symlink", async () => {
