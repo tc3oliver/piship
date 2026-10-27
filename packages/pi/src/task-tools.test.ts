@@ -223,12 +223,27 @@ describe("task_start decides a command as bash does", () => {
       const { session, call } = await open();
       expect(session.sandbox.report.level).not.toBe("enforced");
       const { ctx, prompts } = context();
-      const result = await call("task_start")(
+      const started = await call("task_start")(
         { command: "echo 'piship-bash-ok'" },
         ctx,
       );
-      expect(text(result)).toContain("piship-bash-ok");
-      expect(text(result)).not.toContain("'piship-bash-ok'");
+      const first = started as {
+        details: { id: string; status: string; exitCode: number | null };
+      };
+      let output = text(started);
+      if (first.details.status === "running") {
+        await session.backgroundTasks!.settled(first.details.id);
+        const finished = await call("task_output")({ id: first.details.id }, ctx);
+        expect((finished as typeof first).details).toMatchObject({
+          status: "exited",
+          exitCode: 0,
+        });
+        output += "\n" + text(finished);
+      } else {
+        expect(first.details).toMatchObject({ status: "exited", exitCode: 0 });
+      }
+      expect(output).toMatch(/\npiship-bash-ok(?:\r?\n|$)/);
+      expect(output).not.toMatch(/\n'piship-bash-ok'(?:\r?\n|$)/);
       expect(prompts.count).toBe(0);
     },
     25_000,
