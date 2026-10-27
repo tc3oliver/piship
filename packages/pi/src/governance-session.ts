@@ -1480,6 +1480,13 @@ export class GovernanceSession {
     this.#closed = true;
     // Every grant ends with the session; each one still held is recorded.
     this.#expireGrants(Date.now());
+    // A grant whose creation is still being flushed must also be closed out.
+    for (const id of this.#pendingGrants)
+      this.#grantEvent("policy.grant_revoked", {
+        grant: id,
+        uses: 0,
+        reason: "session.end",
+      });
     for (const [id, { uses }] of this.#grants)
       this.#grantEvent("policy.grant_revoked", {
         grant: id,
