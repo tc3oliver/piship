@@ -855,6 +855,35 @@ describe("allow for this session", () => {
     expect(shown).toHaveLength(2);
   });
 
+  it("does not reuse a managed workspace session grant across path traversal", async () => {
+    const { session, workspace } = await open({ mode: "managed" });
+    const { shown, channel } = sessionPrompt();
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "safe.txt"),
+        channel,
+      ),
+    ).toMatchObject({ ruleId: "write", remember: "session" });
+    expect(shown).toHaveLength(1);
+
+    // Keep the traversal segments in the request, rather than normalizing
+    // them with path.join before the policy sees them.
+    const escaped = `${workspace}/sub/../../outside.txt`;
+    expect(
+      await session.decide("filesystem.write", escaped, channel),
+    ).toMatchObject({ ruleId: "builtin:default", approval: "approved" });
+    expect(shown).toHaveLength(2);
+    expect(shown[1]?.sessionCovers).toBeUndefined();
+
+    const protectedPath = `${workspace}/sub/../kept/other.txt`;
+    for (let i = 0; i < 2; i += 1)
+      expect(
+        await session.decide("filesystem.write", protectedPath, channel),
+      ).toMatchObject({ ruleId: "keep-asking", approval: "approved" });
+    expect(shown).toHaveLength(4);
+  });
+
   it("remembers only bounded file rules without managed auto-approval", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     const { shown, channel } = sessionPrompt();
