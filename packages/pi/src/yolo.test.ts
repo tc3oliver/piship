@@ -786,6 +786,34 @@ describe("allow for this session", () => {
     },
   );
 
+  it.each([
+    ["shell.execute", "npm run *", "npm run test", "npm run build"],
+    ["tool.execute", "script*", "script_read", "script_exec"],
+    ["mcp.tool.call", "docs:*", "docs:read", "docs:delete"],
+  ] as const)(
+    "keeps managed %s session approvals exact, not prefix-wide",
+    async (action, resource, first, second) => {
+      const { session } = await openWith(
+        { mode: "managed", userAuto: "allowed" },
+        [],
+        [{ id: "bounded", action, resource, effect: "ask" }],
+      );
+      const { shown, channel } = sessionPrompt();
+      expect(await session.decide(action, first, channel)).toMatchObject({
+        ruleId: "bounded",
+        remember: "session",
+      });
+      expect(shown[0]?.sessionCovers).toBeUndefined();
+      expect(await session.decide(action, first, channel)).toMatchObject({
+        approval: "session",
+      });
+      expect(await session.decide(action, second, channel)).toMatchObject({
+        approval: "approved",
+      });
+      expect(shown).toHaveLength(2);
+    },
+  );
+
   it("remembers only bounded file rules without managed auto-approval", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     const { shown, channel } = sessionPrompt();
@@ -854,9 +882,7 @@ describe("allow for this session", () => {
     expect(
       await session.decide("shell.execute", "git status", channel),
     ).toMatchObject({ ruleId: "git", remember: "session" });
-    expect(shown[0]?.sessionCovers).toBe(
-      covers("git *", "git", "shell.execute"),
-    );
+    expect(shown[0]?.sessionCovers).toBeUndefined();
     // The default rule reports the decision; the user's ask keeps its prompt.
     expect(
       await session.decide("shell.execute", "git push", channel),
