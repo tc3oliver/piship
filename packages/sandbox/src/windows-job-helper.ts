@@ -38,7 +38,8 @@ public static class PiShipJobMain {
         start.EnvironmentVariables[entry.Key] = Convert.ToString(entry.Value);
       var args = new System.Collections.Generic.List<string>();
       foreach (object arg in (System.Collections.IEnumerable)request["args"]) args.Add(Convert.ToString(arg));
-      return PiShipJob.Run(start, args.ToArray(), int.Parse(Environment.GetEnvironmentVariable("PISHIP_JOB_PARENT_PID")));
+      return PiShipJob.Run(start, args.ToArray(),
+        int.Parse(Environment.GetEnvironmentVariable("PISHIP_JOB_PARENT_PID")));
     } catch (Exception error) {
       Console.Error.WriteLine("PISHIP_WINDOWS_JOB_ERROR: " + error.Message);
       return 127;
@@ -251,7 +252,12 @@ export function windowsJobHelper(options: HelperOptions): string | undefined {
     const tested = run(
       built,
       [],
-      { SystemRoot: systemRoot, WINDIR: systemRoot, PISHIP_JOB_REQUEST: probe, PISHIP_JOB_PARENT_PID: String(process.pid) },
+      {
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+        PISHIP_JOB_REQUEST: probe,
+        PISHIP_JOB_PARENT_PID: String(process.pid),
+      },
       SELF_TEST_TIMEOUT_MS,
       work,
     );
