@@ -515,7 +515,12 @@ describe("a command scope", () => {
       expect(
         covers(
           shell,
-          [ask({ action: "shell.execute", resource: "git log --format=%H; id" })],
+          [
+            ask({
+              action: "shell.execute",
+              resource: "git log --format=%H; id",
+            }),
+          ],
           platform,
         ),
       ).toBe(false);
