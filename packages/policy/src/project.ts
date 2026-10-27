@@ -1166,7 +1166,6 @@ export function isProjectConfigPath(
   );
 }
 
-
 /**
  * Configuration paths that may become links after project discovery. A task
  * grant checks their live targets before approving a write to an ordinary
