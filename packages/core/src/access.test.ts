@@ -1352,6 +1352,23 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       ).toHaveLength(1);
     });
 
+    it("shares retries across concurrent live-session requests during an IdP outage", async () => {
+      services.knobs.tokenFaults.push({ status: 503 }, { status: 503 });
+      const credentials = await Promise.all([
+        session.requestSecret(),
+        session.requestSecret(),
+        session.requestSecret(),
+      ]);
+      for (const credential of credentials)
+        expect(credential?.reveal()).toBeTruthy();
+      expect(refreshCount()).toBe(3);
+      expect(
+        names().filter((name) => name === "identity.refresh"),
+      ).toHaveLength(1);
+      const audit = JSON.stringify(events);
+      for (const secret of leaks()) expect(audit).not.toContain(secret);
+    });
+
     it("recovers from transient provider failures during a live-session renewal", async () => {
       services.knobs.tokenFaults.push({ status: 503 }, { status: 503 });
       const credential = await session.requestSecret();
