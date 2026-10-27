@@ -808,7 +808,9 @@ describe("governed built-in tools", () => {
       const seen: string[][] = [];
       const first = { command: "echo safe > first.txt" };
       await run(bash, first, choosing("Allow for this session", seen));
-      expect(readFileSync(join(workspace, "first.txt"), "utf8")).toContain("safe");
+      expect(readFileSync(join(workspace, "first.txt"), "utf8")).toContain(
+        "safe",
+      );
 
       await run(bash, first, choosing("Deny", seen));
       expect(seen).toHaveLength(1);
