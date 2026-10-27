@@ -772,6 +772,36 @@ describe("governed built-in tools", () => {
       );
     });
 
+    it.skipIf(process.platform !== "win32")(
+      "does not reuse a managed workspace grant for a differently cased enforced directory",
+      async () => {
+        const { session, workspace } = await open([], {
+          mode: "managed",
+          enforced: [
+            '    - { id: protected-write, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
+          ],
+        });
+        mkdirSync(join(workspace, "kept"));
+        const write = tool(governedTools(session, workspace), "write");
+        const seen: string[][] = [];
+        const ctx = choosing("Allow for this session", seen);
+        let confirmations = 0;
+        ctx.ui.confirm = async () => {
+          confirmations += 1;
+          return false;
+        };
+        await run(write, { path: "ordinary.txt", content: "allowed" }, ctx);
+        expect(seen).toHaveLength(1);
+
+        await expect(
+          run(write, { path: "KEPT/secret.txt", content: "escaped" }, ctx),
+        ).rejects.toThrow(/not allowed/);
+        expect(confirmations).toBe(1);
+        expect(seen).toHaveLength(1);
+        expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
+      },
+    );
+
     it("does not extend a managed workspace grant to project config", async () => {
       const { session, workspace } = await open([], { mode: "managed" });
       const write = tool(governedTools(session, workspace), "write");
