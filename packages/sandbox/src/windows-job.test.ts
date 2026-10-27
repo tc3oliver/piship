@@ -48,6 +48,7 @@ describe("windowsJobCommand", () => {
     const { env } = windowsJobCommand(target, host);
     expect(Object.keys(env).sort()).toEqual([
       "PATH",
+      "PISHIP_JOB_PARENT_PID",
       "PISHIP_JOB_REQUEST",
       "SystemRoot",
       "TEMP",
@@ -56,6 +57,7 @@ describe("windowsJobCommand", () => {
     ]);
     // Windows names match case-insensitively.
     expect(env.PSModuleAnalysisCachePath).toBeUndefined();
+    expect(env.PISHIP_JOB_PARENT_PID).toBe(String(process.pid));
     expect(env.PATH).toBe("C:\\tools\\bin");
     expect(JSON.stringify(env)).not.toContain("fixture-launcher");
     expect(env.ComSpec).toBeUndefined();
