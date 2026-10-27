@@ -322,6 +322,13 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
   const p = flavor(platform);
   const errors: string[] = [];
   const { scope } = grant;
+  // Interactive approvals must never become inheritable task authority.
+  if (grant.createdBy !== "user-command" && grant.createdBy !== "manifest")
+    errors.push("grant source is invalid");
+  if (typeof grant.inheritToSubagents !== "boolean")
+    errors.push("grant inheritance flag must be boolean");
+  else if (grant.inheritToSubagents && grant.createdBy !== "manifest")
+    errors.push("only manifest grants may be inherited by subagents");
   // The shape first: the type is not checked at run time.
   if (typeof grant.id !== "string" || grant.id === "")
     return ["grant id is missing"];

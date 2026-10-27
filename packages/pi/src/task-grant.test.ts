@@ -784,11 +784,24 @@ describe("a task grant", () => {
     expect(grantEvents[2]?.detail).toEqual({ grant: created.id, uses: 1 });
   });
 
-  it("is not seen by a subagent child, even when it asks to be inherited", async () => {
+  it("rejects inheritable interactive grants and untrusted manifest provenance", async () => {
+    const { session, workspace } = await open();
+    await expect(
+      session.addGrant(
+        grant({ paths: [workspace] }, { inheritToSubagents: true }),
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await expect(
+      session.addGrant(
+        grant({ paths: [workspace] }, { createdBy: "manifest" }),
+      ),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(session.listGrants()).toEqual([]);
+  });
+
+  it("never exposes an interactive grant to a subagent child", async () => {
     const { session, workspace, options } = await open();
-    await session.addGrant(
-      grant({ paths: [workspace] }, { inheritToSubagents: true }),
-    );
+    await session.addGrant(grant({ paths: [workspace] }));
     const child = await GovernanceSession.open({
       ...options,
       subagent: { parentSession: session.sessionId },

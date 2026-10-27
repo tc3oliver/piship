@@ -319,6 +319,31 @@ describe("validateGrant", () => {
     expect(errs({ paths: ["/work/proj"], hosts: ["a.com"] })).toEqual([]);
   });
 
+  it("allows inheritance only for manifest-sourced grants", () => {
+    const ordinary = grant({ paths: ["/work/proj"] });
+    expect(
+      validateGrant({ ...ordinary, inheritToSubagents: true }, limits),
+    ).toContain("only manifest grants may be inherited by subagents");
+    expect(
+      validateGrant(
+        { ...ordinary, createdBy: "manifest", inheritToSubagents: true },
+        limits,
+      ),
+    ).toEqual([]);
+    expect(
+      validateGrant(
+        { ...ordinary, createdBy: "untrusted" } as unknown as TaskGrant,
+        limits,
+      ),
+    ).toContain("grant source is invalid");
+    expect(
+      validateGrant(
+        { ...ordinary, inheritToSubagents: "yes" } as unknown as TaskGrant,
+        limits,
+      ),
+    ).toContain("grant inheritance flag must be boolean");
+  });
+
   it.each([
     ["/"],
     ["/home/u"],
