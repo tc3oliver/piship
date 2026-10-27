@@ -50,6 +50,24 @@ describe("identity refresh retry bounds", () => {
     }
   });
 
+  it("stops retrying when a transient outage becomes a principal change", async () => {
+    let calls = 0;
+    const delays: number[] = [];
+    await expect(
+      refreshWithRetry<string>(
+        async () => {
+          if (++calls === 1) throw transient();
+          throw new PiShipError("IDENTITY_REQUIRED", "Principal changed", {
+            retryable: true,
+          });
+        },
+        { sleep: async (ms) => void delays.push(ms), random: () => 0 },
+      ),
+    ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
+    expect(calls).toBe(2);
+    expect(delays).toEqual([100]);
+  });
+
   it("honors a short rate limit and refuses a long retry-after", async () => {
     const delays: number[] = [];
     let calls = 0;
