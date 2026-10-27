@@ -425,10 +425,12 @@ describe("precedence", () => {
         }),
       });
       for (const resource of ["git log --format=%H", "git show HEAD^"])
-        expect(e.evaluate({ action: "shell.execute", resource })).toMatchObject({
-          effect: "allow",
-          ruleId: "git",
-        });
+        expect(e.evaluate({ action: "shell.execute", resource })).toMatchObject(
+          {
+            effect: "allow",
+            ruleId: "git",
+          },
+        );
     }
   });
 
