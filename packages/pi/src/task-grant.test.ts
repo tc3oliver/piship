@@ -675,7 +675,11 @@ describe("a task grant", () => {
     );
     for (const name of ["extensions/after.ts", "claude-target/settings.json"])
       expect(
-        await session.decide("filesystem.write", join(workspace, name), channel),
+        await session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          channel,
+        ),
       ).toMatchObject({ approval: "approved" });
     expect(
       await session.decide(
