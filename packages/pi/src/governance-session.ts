@@ -1222,8 +1222,15 @@ export class GovernanceSession {
           candidate.dimension === "claudeRules"
         )
           return false;
-        const below = relative(candidate.resolvedPath, path);
-        return !isAbsolute(below) && below.split(sep)[0] !== "..";
+        // A configuration symlink can be retargeted after discovery. Keep
+        // its original target protected and check its live target too.
+        const roots = isAbsolute(candidate.path)
+          ? [candidate.resolvedPath, realpathNearest(candidate.path)]
+          : [candidate.resolvedPath];
+        return roots.some((root) => {
+          const below = relative(root, path);
+          return !isAbsolute(below) && below.split(sep)[0] !== "..";
+        });
       })
     )
       return true;
