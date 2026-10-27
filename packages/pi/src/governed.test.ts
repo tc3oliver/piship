@@ -772,6 +772,33 @@ describe("governed built-in tools", () => {
       );
     });
 
+    it("rechecks a managed session grant after a directory becomes a symlink", async () => {
+      const { session, workspace, root } = await open([], { mode: "managed" });
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret.txt"), "unchanged");
+      mkdirSync(join(workspace, "mutable"));
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      const ctx = choosing("Allow for this session", seen);
+      await run(write, { path: "mutable/first.txt", content: "allowed" }, ctx);
+      expect(seen).toHaveLength(1);
+
+      renameSync(join(workspace, "mutable"), join(workspace, "retired"));
+      symlinkSync(
+        outside,
+        join(workspace, "mutable"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await expect(
+        run(write, { path: "mutable/secret.txt", content: "escaped" }, ctx),
+      ).rejects.toThrow(/builtin:default/);
+      expect(seen).toHaveLength(1);
+      expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe(
+        "unchanged",
+      );
+    });
+
     it.skipIf(process.platform !== "win32")(
       "does not reuse a managed workspace grant for a differently cased enforced directory",
       async () => {
