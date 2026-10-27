@@ -96,6 +96,32 @@ describe("identity refresh retry bounds", () => {
     expect(calls).toBe(1);
   });
 
+  it("never retries cancelled, policy-blocked, or non-retryable refreshes", async () => {
+    for (const [code, retryable] of [
+      ["REQUEST_CANCELLED", true],
+      ["NETWORK_DENIED", true],
+      ["TLS_POLICY_VIOLATION", true],
+      ["GATEWAY_UNREACHABLE", false],
+      ["GATEWAY_RATE_LIMITED", false],
+    ] as const) {
+      let calls = 0;
+      await expect(
+        refreshWithRetry<string>(
+          async () => {
+            calls++;
+            throw new PiShipError(code, "Refresh blocked", { retryable });
+          },
+          {
+            sleep: async () => {
+              throw new Error("unexpected retry");
+            },
+          },
+        ),
+      ).rejects.toMatchObject({ code });
+      expect(calls).toBe(1);
+    }
+  });
+
   it("does not retry an unclassified error", async () => {
     let calls = 0;
     await expect(
