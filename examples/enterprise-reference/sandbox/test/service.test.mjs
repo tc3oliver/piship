@@ -1338,7 +1338,7 @@ describe("commands", () => {
     assert.equal(last.mode, "sweep");
   });
 
-  it("starts no command in a sandbox while a cancel is sweeping it", async () => {
+  it("waits for a cancellation sweep before reporting completion or starting another command", async () => {
     service.fault("CANCEL_DELAY", true, "700");
     try {
       const running = await begin("sleep 34");
@@ -1352,6 +1352,23 @@ describe("commands", () => {
       assert.equal(next.out, "after-the-sweep");
       const done = cancels(running.execId, "done")[0];
       assert.ok(done, "the sweep did not finish");
+      const completed = service
+        .logs()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter(
+          (event) =>
+            event.event === "sandbox.exec" &&
+            event.session === id &&
+            event.reason === "disconnected",
+        )
+        .at(-1);
+      assert.ok(completed, "the cancelled command was not reported");
+      assert.ok(
+        Date.parse(completed.time) >= done.t,
+        "the command was reported stopped before its sweep finished",
+      );
       const call = execCalls(service).find((entry) =>
         entry.args.includes("printf after-the-sweep"),
       );

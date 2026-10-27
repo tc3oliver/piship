@@ -728,24 +728,30 @@ export class Sandboxes {
       }),
     };
     exec.spawned.catch(() => undefined);
-    exec.done = new Promise((resolve) => {
+    exec.done = new Promise((resolve, reject) => {
       const finish = (code, signal) => {
         if (exec.finished) return;
         exec.finished = true;
         clearTimeout(timer);
-        session.execs.delete(execId);
-        this.#touch(session);
-        this.#log("sandbox.exec", {
-          session: session.id,
-          duration_ms: this.#now() - started,
-          ...(exec.cancelled ? { reason: exec.reason ?? "cancelled" } : {}),
-          ...(typeof code === "number" ? { exit: code } : {}),
-        });
-        resolve(
-          exec.cancelled
-            ? { exit: null, signal: "SIGKILL", reason: exec.reason }
-            : { exit: code, signal: signal ?? null },
-        );
+        void (async () => {
+          // Killing the docker CLI closes it before the in-container cancel
+          // sweep finishes. Do not report a stopped command until that sweep
+          // has completed; the caller may release its waiting children then.
+          if (exec.cancelling) await exec.cancelling;
+          session.execs.delete(execId);
+          this.#touch(session);
+          this.#log("sandbox.exec", {
+            session: session.id,
+            duration_ms: this.#now() - started,
+            ...(exec.cancelled ? { reason: exec.reason ?? "cancelled" } : {}),
+            ...(typeof code === "number" ? { exit: code } : {}),
+          });
+          resolve(
+            exec.cancelled
+              ? { exit: null, signal: "SIGKILL", reason: exec.reason }
+              : { exit: code, signal: signal ?? null },
+          );
+        })().catch(reject);
       };
       const timer = setTimeout(
         () => void this.cancelExec(exec, "timeout"),
@@ -754,6 +760,7 @@ export class Sandboxes {
       child.once("close", finish);
       child.once("error", () => finish(null, null));
     });
+    exec.done.catch(() => undefined);
     session.execs.set(execId, exec);
     this.#touch(session);
     return exec;
