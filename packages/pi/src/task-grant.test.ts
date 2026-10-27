@@ -645,6 +645,48 @@ describe("a task grant", () => {
     expect(shown.count).toBe(2);
   });
 
+  it("protects targets of configuration links created after discovery", async () => {
+    const { session, workspace } = await open({
+      prepare: (workspace) => {
+        for (const name of ["extensions", "claude-target", ".pi"])
+          mkdirSync(join(workspace, name));
+      },
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "extensions", "before.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    symlinkSync(
+      join(workspace, "extensions"),
+      join(workspace, ".pi", "extensions"),
+      linkType,
+    );
+    symlinkSync(
+      join(workspace, "claude-target"),
+      join(workspace, ".claude"),
+      linkType,
+    );
+    for (const name of ["extensions/after.ts", "claude-target/settings.json"])
+      expect(
+        await session.decide("filesystem.write", join(workspace, name), channel),
+      ).toMatchObject({ approval: "approved" });
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "ordinary.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(2);
+  });
+
   it("never covers a project configuration file, by its own path or a symlink's target", async () => {
     const { session, workspace } = await open();
     const { shown, channel } = counted();
