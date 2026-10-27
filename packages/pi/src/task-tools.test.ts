@@ -233,7 +233,10 @@ describe("task_start decides a command as bash does", () => {
       let output = text(started);
       if (first.details.status === "running") {
         await session.backgroundTasks!.settled(first.details.id);
-        const finished = await call("task_output")({ id: first.details.id }, ctx);
+        const finished = await call("task_output")(
+          { id: first.details.id },
+          ctx,
+        );
         expect((finished as typeof first).details).toMatchObject({
           status: "exited",
           exitCode: 0,
