@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -250,6 +250,79 @@ describe("spawnManaged", () => {
       expect(result.status).toBe(42);
       expect(statSync(heartbeat).size).toBeGreaterThan(0);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "reclaims a live governed tree when its owner is forcibly killed",
+    async () => {
+      const heartbeat = join(dir, "hard-kill-hb");
+      const token = `piship-hard-kill-${Date.now()}`;
+      const modulePath = fileURLToPath(
+        new URL("../dist/index.js", import.meta.url),
+      );
+      const source = `
+        const { existsSync, statSync } = await import("node:fs");
+        const { spawnManaged } = await import(process.argv[1]);
+        spawnManaged({
+          file: process.execPath,
+          args: ["-e", ${JSON.stringify(TREE)}, process.argv[2], process.argv[3]],
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH ?? "" },
+        });
+        const timer = setInterval(() => {
+          if (existsSync(process.argv[2]) && statSync(process.argv[2]).size > 0) {
+            clearInterval(timer);
+            console.log("ready");
+          }
+        }, 50);
+        setTimeout(() => process.exit(43), 10_000);
+      `;
+      const owner = spawn(
+        node,
+        [
+          "--input-type=module",
+          "-e",
+          source,
+          pathToFileURL(modulePath).href,
+          heartbeat,
+          token,
+        ],
+        { cwd: dir, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      try {
+        let output = "";
+        await new Promise<void>((resolve, reject) => {
+          const deadline = setTimeout(() => reject(new Error("owner did not start")), 15_000);
+          owner.stdout?.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+            if (output.includes("ready")) {
+              clearTimeout(deadline);
+              resolve();
+            }
+          });
+          owner.once("exit", (code) => {
+            clearTimeout(deadline);
+            reject(new Error(`owner exited before readiness: ${code}`));
+          });
+        });
+        expect(statSync(heartbeat).size).toBeGreaterThan(0);
+        // /PID without /T kills only PiShip, not its supervisor or descendants.
+        const killed = spawnSync("taskkill", ["/F", "/PID", String(owner.pid)], {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        expect(killed.status, killed.stderr).toBe(0);
+        await new Promise<void>((resolve) => owner.once("close", () => resolve()));
+        expect(await heartbeatStopped(heartbeat)).toBe(true);
+      } finally {
+        if (owner.exitCode === null && owner.pid)
+          spawnSync("taskkill", ["/F", "/T", "/PID", String(owner.pid)], {
+            stdio: "ignore",
+            timeout: 5000,
+          });
+      }
     },
     30_000,
   );
