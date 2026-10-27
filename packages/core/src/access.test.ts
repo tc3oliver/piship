@@ -1368,6 +1368,17 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       for (const secret of leaks()) expect(audit).not.toContain(secret);
     });
 
+    it("keeps rotated refresh tokens out of session state and audit", async () => {
+      const previous = [...services.state.refreshTokens.keys()];
+      await session.requestSecret();
+      const current = [...services.state.refreshTokens.keys()];
+      expect(current).not.toEqual(previous);
+      const secrets = [...new Set([...previous, ...leaks()])];
+      expect(secretScan(join(temp, "state"), secrets)).toEqual([]);
+      const audit = JSON.stringify(events);
+      for (const secret of secrets) expect(audit).not.toContain(secret);
+    });
+
     it("stops live-session renewal after three transient failures without issuing a credential", async () => {
       const issued = services.state.credentialCount;
       services.knobs.tokenFaults.push(
