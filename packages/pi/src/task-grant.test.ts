@@ -684,9 +684,9 @@ describe("a task grant", () => {
     vi.spyOn(session.audit, "flush").mockImplementationOnce(async () => {
       closing = session.close();
     });
-    await expect(
-      session.addGrant(pending),
-    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    await expect(session.addGrant(pending)).rejects.toMatchObject({
+      code: "POLICY_DENIED",
+    });
     await closing;
     expect(session.listGrants()).toEqual([]);
     const lifecycle = (await events()).filter((event) =>
