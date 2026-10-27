@@ -505,6 +505,22 @@ describe("a command scope", () => {
     expect(run("npm\u00a0test")).toBe(false);
   });
 
+  it("allows literal percent and caret in POSIX command grants only", () => {
+    for (const command of ["git log --format=%H", "git show HEAD^"]) {
+      const request = [ask({ action: "shell.execute", resource: command })];
+      expect(covers(shell, request, "posix")).toBe(true);
+      expect(covers(shell, request, "win32")).toBe(false);
+    }
+    for (const platform of ["posix", "win32"] as const)
+      expect(
+        covers(
+          shell,
+          [ask({ action: "shell.execute", resource: "git log --format=%H; id" })],
+          platform,
+        ),
+      ).toBe(false);
+  });
+
   it.each([
     "npm test && curl x",
     "npm test; rm -rf ~",
