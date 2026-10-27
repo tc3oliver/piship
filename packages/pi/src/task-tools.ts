@@ -5,6 +5,7 @@
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
+  getShellConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -140,12 +141,8 @@ export function taskTools(
             `Background tasks run on this machine; the ${gov.sandbox.report.adapter} sandbox backend runs commands elsewhere. Use bash instead.`,
           );
         const enforced = gov.sandbox.report.level === "enforced";
-        // Uncontained, the sandbox runs cmd.exe on Windows while the bash
-        // tool runs Pi's bash, whose syntax the command checks assume.
-        if (!enforced && platform === "win32")
-          throw blocked(
-            "Background tasks need an enforced sandbox on Windows, where an uncontained task would run in cmd.exe rather than the shell the bash tool uses. Use bash instead.",
-          );
+        // Uncontained Windows commands use the same Pi Bash shell as
+        // foreground commands, inside the existing kill-on-close Job Object.
         // Refused before the decision, so a full registry asks nothing.
         const full = tasks.refusal(input.command);
         if (full) throw blocked(`${full}.`);
@@ -173,6 +170,9 @@ export function taskTools(
                     ? { env: spawn.env }
                     : {}
                   : { env: uncontainedEnvironment(spawn.env, "bash") }),
+                ...(!enforced && platform === "win32"
+                  ? { shell: getShellConfig() }
+                  : {}),
               }),
             spawn.command,
             input.timeout,

@@ -23,11 +23,7 @@ import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 import { taskTools } from "./task-tools.js";
 
-/**
- * Whether a task can start on this host. Windows refuses a task without an
- * enforced sandbox (asserted below on every host), and these unit sessions
- * have none there, so the cases that run one are POSIX only.
- */
+/** The generic task tests use POSIX commands; Windows has its own Bash test. */
 const tasksRun = process.platform !== "win32";
 
 const roots: string[] = [];
@@ -221,30 +217,40 @@ describe("task_start decides a command as bash does", () => {
     expect(session.resourceTools.has("task_output")).toBe(false);
   });
 
-  it("is refused on Windows without an enforced sandbox, before any decision", async () => {
-    const { session, workspace } = await open();
-    // As every unit host without a sandbox adapter: nothing contains it.
-    (session as unknown as { sandbox: object }).sandbox = {
-      ...session.sandbox,
-      report: { ...session.sandbox.report, level: "unavailable" },
-    };
-    const start = taskTools(session, workspace, "win32").find(
-      (tool) => tool.name === "task_start",
-    ) as ToolDefinition;
-    const { ctx, prompts } = context(true);
-    expect(
-      await outcome(
-        start.execute(
-          "call-win",
-          { command: "true" } as never,
-          undefined,
-          undefined,
+  it.runIf(process.platform === "win32")(
+    "runs uncontained tasks with Pi Bash quoting, without a separate approval",
+    async () => {
+      const { session, call } = await open();
+      expect(session.sandbox.report.level).not.toBe("enforced");
+      const { ctx, prompts } = context();
+      const started = await call("task_start")(
+        { command: "echo 'piship-bash-ok'" },
+        ctx,
+      );
+      const first = started as {
+        details: { id: string; status: string; exitCode: number | null };
+      };
+      let output = text(started);
+      if (first.details.status === "running") {
+        await session.backgroundTasks!.settled(first.details.id);
+        const finished = await call("task_output")(
+          { id: first.details.id },
           ctx,
-        ),
-      ),
-    ).toContain("Background tasks need an enforced sandbox on Windows");
-    expect(prompts.count).toBe(0);
-  });
+        );
+        expect((finished as typeof first).details).toMatchObject({
+          status: "exited",
+          exitCode: 0,
+        });
+        output += "\n" + text(finished);
+      } else {
+        expect(first.details).toMatchObject({ status: "exited", exitCode: 0 });
+      }
+      expect(output).toMatch(/\npiship-bash-ok(?:\r?\n|$)/);
+      expect(output).not.toMatch(/\n'piship-bash-ok'(?:\r?\n|$)/);
+      expect(prompts.count).toBe(0);
+    },
+    25_000,
+  );
 
   it("is not offered to a subagent child", async () => {
     const { tools } = await open({ subagent: true });

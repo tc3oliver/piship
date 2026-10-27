@@ -18,9 +18,9 @@ import { branded, launcher } from "../helpers/distribution.js";
 
 // Background tasks never outlive the PiShip process that started them: not
 // when the session ends, and not when the process is sent SIGTERM. Each task
-// starts a child of its own, so the whole process tree is checked. POSIX
-// only; Windows refuses background tasks without an enforced sandbox, and
-// the demo has none there.
+// starts a child of its own, so the whole process tree is checked. These
+// cases use POSIX ps, pkill and signals; Windows has separate live Job Object
+// and uncontained Bash tests.
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
 const temporary: string[] = [];
