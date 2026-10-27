@@ -263,10 +263,10 @@ describe("task_start decides a command as bash does", () => {
         join(workspace, "child.cjs"),
         [
           'const { appendFileSync, existsSync } = require("node:fs");',
-          'setInterval(() => {',
+          "setInterval(() => {",
           '  if (existsSync("stop")) return;',
           '  appendFileSync("heartbeat", ".");',
-          '}, 50);',
+          "}, 50);",
         ].join("\n"),
       );
       writeFileSync(
@@ -274,7 +274,7 @@ describe("task_start decides a command as bash does", () => {
         [
           'const { spawn } = require("node:child_process");',
           'spawn(process.execPath, ["child.cjs"], { detached: true, stdio: "ignore" }).unref();',
-          'setInterval(() => {}, 1000);',
+          "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
       const started = await call("task_start")(
