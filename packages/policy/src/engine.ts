@@ -88,7 +88,9 @@ const WINDOWS_SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
 export function chainsBeyondPattern(
   pattern: string,
   command: string,
-  platform: "posix" | "win32" = process.platform === "win32" ? "win32" : "posix",
+  platform: "posix" | "win32" = process.platform === "win32"
+    ? "win32"
+    : "posix",
 ): boolean {
   if (pattern === "**") return false;
   const metacharacters =
