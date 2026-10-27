@@ -51,7 +51,8 @@ public static class PiShipJob {
   static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
     bool inheritHandles, uint flags, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInformation process);
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
-  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForMultipleObjects(uint count, IntPtr[] handles, bool waitAll, uint milliseconds);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
@@ -77,13 +78,19 @@ public static class PiShipJob {
     }
     return result.ToString();
   }
-  public static int Run(ProcessStartInfo start, string[] args) {
+  public static int Run(ProcessStartInfo start, string[] args, int parentPid) {
+    IntPtr parent = IntPtr.Zero;
     IntPtr job = IntPtr.Zero, inputRead = IntPtr.Zero, inputWrite = IntPtr.Zero;
     IntPtr outputRead = IntPtr.Zero, outputWrite = IntPtr.Zero;
     IntPtr errorRead = IntPtr.Zero, errorWrite = IntPtr.Zero;
     IntPtr environment = IntPtr.Zero;
     var process = new ProcessInformation();
     try {
+      // The supervisor is outside the job. Reclaim its children even if the
+      // PiShip process is killed without running Node exit hooks.
+      if (parentPid <= 0) throw new Exception("Missing parent process");
+      parent = OpenProcess(0x00100000, false, (uint)parentPid);
+      if (parent == IntPtr.Zero) throw Failure("OpenProcess(parent)");
       job = CreateJobObject(IntPtr.Zero, null);
       if (job == IntPtr.Zero) throw Failure("CreateJobObject");
       var limits = new Extended();
@@ -131,7 +138,10 @@ public static class PiShipJob {
             var outputTask = Task.Run(() => output.CopyTo(Console.OpenStandardOutput()));
             var errorTask = Task.Run(() => error.CopyTo(Console.OpenStandardError()));
             Task.Run(() => { try { Console.OpenStandardInput().CopyTo(input); input.Close(); } catch {} });
-            if (WaitForSingleObject(process.process, 0xffffffff) != 0) throw Failure("WaitForSingleObject");
+            uint ended = WaitForMultipleObjects(2, new IntPtr[] { process.process, parent }, false, 0xffffffff);
+            // Closing the job handle terminates the entire descendant tree.
+            if (ended == 1) return 1;
+            if (ended != 0) throw Failure("WaitForMultipleObjects");
             uint code;
             if (!GetExitCodeProcess(process.process, out code)) throw Failure("GetExitCodeProcess");
             Close(ref job);
@@ -142,7 +152,7 @@ public static class PiShipJob {
       }
     } finally {
       if (process.process != IntPtr.Zero && job != IntPtr.Zero) TerminateProcess(process.process, 1);
-      Close(ref process.thread); Close(ref process.process); Close(ref job);
+      Close(ref process.thread); Close(ref process.process); Close(ref job); Close(ref parent);
       Close(ref inputRead); Close(ref inputWrite); Close(ref outputRead); Close(ref outputWrite);
       Close(ref errorRead); Close(ref errorWrite);
       if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);

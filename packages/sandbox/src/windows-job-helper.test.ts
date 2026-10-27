@@ -279,6 +279,7 @@ describe("windowsJobSupervisor", () => {
     expect(command.args).toEqual([]);
     expect(Object.keys(command.env).sort()).toEqual([
       "PATH",
+      "PISHIP_JOB_PARENT_PID",
       "PISHIP_JOB_REQUEST",
       "SystemRoot",
       "WINDIR",

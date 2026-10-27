@@ -17,7 +17,7 @@ ${JOB_SOURCE}
   $start.UseShellExecute = $false
   $start.EnvironmentVariables.Clear()
   foreach ($entry in $request.env.PSObject.Properties) { $start.EnvironmentVariables[$entry.Name] = [string]$entry.Value }
-  exit ([PiShipJob]::Run($start, [string[]]$request.args))
+  exit ([PiShipJob]::Run($start, [string[]]$request.args, [int]$env:PISHIP_JOB_PARENT_PID))
 } catch {
   [Console]::Error.WriteLine('PISHIP_WINDOWS_JOB_ERROR: ' + $_.Exception.Message)
   exit 127
@@ -98,6 +98,7 @@ export function windowsJobCommand(
     SystemRoot: root,
     WINDIR: root,
     PISHIP_JOB_REQUEST: request,
+    PISHIP_JOB_PARENT_PID: String(process.pid),
   };
   for (const name of SUPERVISOR_SYSTEM_VARIABLES) {
     const key = Object.keys(host).find(
@@ -138,6 +139,7 @@ export function windowsJobSupervisor(
     SystemRoot: root,
     WINDIR: root,
     PISHIP_JOB_REQUEST: request,
+    PISHIP_JOB_PARENT_PID: String(process.pid),
   };
   if (path !== undefined) env.PATH = path;
   return { file: helper, args: [], env };
