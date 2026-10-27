@@ -978,6 +978,16 @@ export class GovernanceSession {
     const managedWithoutAuto =
       this.options.lock.deployment.mode === "managed" &&
       !this.#userAuto.allowed;
+    // A managed shell or executable-tool prefix is not a safety boundary:
+    // "npm *" and "docs:*" can cover unrelated, higher-risk operations.
+    // Remember only the exact target, even when user auto is permitted.
+    if (
+      this.options.lock.deployment.mode === "managed" &&
+      (ask.action === "shell.execute" ||
+        ask.action === "tool.execute" ||
+        ask.action === "mcp.tool.call")
+    )
+      return exact;
     // Routine file scopes may be remembered in managed mode without granting
     // arbitrary command execution or tool access for the rest of the session.
     if (
