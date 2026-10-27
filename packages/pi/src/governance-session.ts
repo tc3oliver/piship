@@ -1112,6 +1112,13 @@ export class GovernanceSession {
         "Task grants are not available in a managed distribution",
         { component: "policy" },
       );
+    // This entry point is for /grant, not a source of locked manifest authority.
+    if (grant.createdBy !== "user-command")
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "Manifest task grants require locked distribution authority",
+        { component: "policy" },
+      );
     this.#checkGrantSlot(grant.id);
     // Both clocks at one instant: the monotonic deadline is the same lifetime.
     const started = performance.now();
