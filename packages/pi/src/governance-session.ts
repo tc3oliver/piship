@@ -46,6 +46,7 @@ import {
   grantCovers,
   isPathAction,
   isProjectConfigPath,
+  projectConfigLinkSources,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -205,6 +206,7 @@ export class GovernanceSession {
   /** Full shell output of this session; removed at close(). */
   outputStore = new SessionOutputStore();
   #closed = false;
+  readonly #configLinkSources: readonly string[];
   #userAuto: UserAutoStatus;
   /** `--yolo`: approves asks for this session only; stored nowhere. */
   #yolo: boolean;
@@ -220,6 +222,12 @@ export class GovernanceSession {
     readonly sessionId: string,
   ) {
     this.manifest = options.lock.governance.manifest;
+    const discovered = new Set(projectCandidates.map((candidate) => candidate.path));
+    this.#configLinkSources = projectConfigLinkSources(
+      project.root,
+      options.cwd,
+      options.homeDir ?? homedir(),
+    ).filter((path) => !discovered.has(path));
     // Read once: the switch the session starts with is the one it audits.
     this.#userAuto = userAutoStatus(
       options.stateDir,
@@ -1234,6 +1242,14 @@ export class GovernanceSession {
       })
     )
       return true;
+    // Surfaces created after discovery can link to an ordinary workspace
+    // directory. Check their current targets, not only the startup snapshot.
+    for (const source of this.#configLinkSources) {
+      const live = realpathNearest(source);
+      if (relative(source, live) === "") continue;
+      const below = relative(live, path);
+      if (!isAbsolute(below) && below.split(sep)[0] !== "..") return true;
+    }
     for (const root of new Set([
       this.project.root,
       realpathNearest(this.project.root),
