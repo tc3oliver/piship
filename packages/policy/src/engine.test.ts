@@ -11,6 +11,7 @@ import {
 import type { PolicyRule } from "@piship/schema";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+  chainsBeyondPattern,
   NO_CONTAINMENT,
   PolicyEngine,
   enforcementPlane,
@@ -382,7 +383,7 @@ describe("precedence", () => {
     "git (x)",
     "git status\nrm x",
     "git status^&whoami",
-    "git %COMSPEC%",
+    ...(process.platform === "win32" ? ["git %COMSPEC%", "git ^whoami"] : []),
   ])("an allow or ask prefix rule does not cover %j", (command) => {
     const e = engine({
       policy: makePolicy({
@@ -407,6 +408,30 @@ describe("precedence", () => {
       e.evaluate({ action: "shell.execute", resource: "git status" }),
     ).toMatchObject({ effect: "allow" });
   });
+  it("treats percent and caret as shell syntax only on Windows", () => {
+    for (const command of ["git log --format=%H", "git show HEAD^"]) {
+      expect(chainsBeyondPattern("git *", command, "posix")).toBe(false);
+      expect(chainsBeyondPattern("git *", command, "win32")).toBe(true);
+    }
+    for (const platform of ["posix", "win32"] as const)
+      expect(chainsBeyondPattern("git *", "git status; whoami", platform)).toBe(
+        true,
+      );
+    if (process.platform !== "win32") {
+      const e = engine({
+        policy: makePolicy({
+          default: "deny",
+          defaults: [rule("git", "shell.execute", "git *", "allow")],
+        }),
+      });
+      for (const resource of ["git log --format=%H", "git show HEAD^"])
+        expect(e.evaluate({ action: "shell.execute", resource })).toMatchObject({
+          effect: "allow",
+          ruleId: "git",
+        });
+    }
+  });
+
   it("still lets deny rules match chained commands and literal metacharacters", () => {
     const e = engine({
       policy: makePolicy({
