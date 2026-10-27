@@ -1166,6 +1166,33 @@ export function isProjectConfigPath(
   );
 }
 
+
+/**
+ * Configuration paths that may become links after project discovery. A task
+ * grant checks their live targets before approving a write to an ordinary
+ * workspace path. Direct writes to these surfaces are already excluded by
+ * isProjectConfigPath.
+ */
+export function projectConfigLinkSources(
+  root: string,
+  cwd: string,
+  homeDir: string,
+): readonly string[] {
+  const paths = PROJECT_CONFIG_SURFACES.map((parts) =>
+    joinPosix(root, parts.join("/")),
+  );
+  for (const directory of claudeDirectories(root, cwd, homeDir)) {
+    if (directory === root) continue;
+    paths.push(joinPosix(directory, ".claude"));
+    for (const surface of CLAUDE_SURFACES)
+      if (surface.dimension !== "claudeRules")
+        paths.push(joinPosix(directory, surface.relative));
+    for (const file of EXTENSION_FILES)
+      if (!file.atRoot) paths.push(joinPosix(directory, file.relative));
+  }
+  return [...new Set(paths)];
+}
+
 const COMPANY_APPROVED_REASON =
   "company-approved admits only distribution-approved items";
 
