@@ -1368,6 +1368,24 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       for (const secret of leaks()) expect(audit).not.toContain(secret);
     });
 
+    it("stops live-session renewal after three transient failures without issuing a credential", async () => {
+      const issued = services.state.credentialCount;
+      services.knobs.tokenFaults.push(
+        { status: 503 },
+        { status: 503 },
+        { status: 503 },
+        { status: 503 },
+      );
+      offset = 130_000; // The existing credential is expired; no fallback is safe.
+      expect(await failure()).toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: true,
+      });
+      expect(refreshCount()).toBe(3);
+      expect(services.knobs.tokenFaults).toHaveLength(1);
+      expect(services.state.credentialCount).toBe(issued);
+    });
+
     it("renews the sign-in silently and keeps the credential through an identity provider outage", async () => {
       const first = (await session.requestSecret())?.reveal();
       expect(names()).toContain("identity.refresh");
