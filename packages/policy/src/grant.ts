@@ -237,7 +237,7 @@ function askCovered(
         .replace(/^[ \t]+/, "")
         .split(/[ \t]+/);
       return (
-        !chainsBeyondPattern("", ask.resource) &&
+        !chainsBeyondPattern("", ask.resource, platform) &&
         // A program the shell expands (`n?m`, `{git,x}`) is unknown; a
         // globbed git subcommand counts as a push (gitPushResources).
         !/[{}*?[]/.test(program) &&

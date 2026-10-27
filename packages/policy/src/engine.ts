@@ -74,11 +74,10 @@ export function strictest(
   return result;
 }
 
-/**
- * Characters that chain, substitute, redirect, or group shell commands in
- * POSIX shells and cmd.exe (`^` escapes and `%` expands there).
- */
-const SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
+/** Characters that chain, substitute, redirect, or group POSIX commands. */
+const POSIX_SHELL_METACHARACTERS = /[;&|$`<>()\r\n]/g;
+/** cmd.exe also expands `%` and uses `^` to escape the next character. */
+const WINDOWS_SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
 
 /**
  * True when `command` uses a shell metacharacter that `pattern` does not
@@ -86,9 +85,19 @@ const SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
  * containment, so it must not cover `git status; rm -rf ~`. The bare `**`
  * pattern means every command and is exempt.
  */
-export function chainsBeyondPattern(pattern: string, command: string): boolean {
+export function chainsBeyondPattern(
+  pattern: string,
+  command: string,
+  platform: "posix" | "win32" = process.platform === "win32"
+    ? "win32"
+    : "posix",
+): boolean {
   if (pattern === "**") return false;
-  for (const [char] of command.matchAll(SHELL_METACHARACTERS))
+  const metacharacters =
+    platform === "win32"
+      ? WINDOWS_SHELL_METACHARACTERS
+      : POSIX_SHELL_METACHARACTERS;
+  for (const [char] of command.matchAll(metacharacters))
     if (!pattern.includes(char)) return true;
   return false;
 }
