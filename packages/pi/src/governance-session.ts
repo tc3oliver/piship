@@ -222,7 +222,9 @@ export class GovernanceSession {
     readonly sessionId: string,
   ) {
     this.manifest = options.lock.governance.manifest;
-    const discovered = new Set(projectCandidates.map((candidate) => candidate.path));
+    const discovered = new Set(
+      projectCandidates.map((candidate) => candidate.path),
+    );
     this.#configLinkSources = projectConfigLinkSources(
       project.root,
       options.cwd,
