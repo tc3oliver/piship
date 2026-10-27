@@ -2,11 +2,13 @@
 // the same deny, ask, grant, plan mode, and headless refusal, and no prompt
 // of their own. They run until stopped, their timeout, or the session's end.
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -250,6 +252,58 @@ describe("task_start decides a command as bash does", () => {
       expect(prompts.count).toBe(0);
     },
     25_000,
+  );
+
+  it.runIf(process.platform === "win32")(
+    "stops a detached descendant of an uncontained Windows task",
+    async () => {
+      const { session, workspace, call } = await open();
+      expect(session.sandbox.report.level).not.toBe("enforced");
+      writeFileSync(
+        join(workspace, "child.cjs"),
+        [
+          'const { appendFileSync, existsSync } = require("node:fs");',
+          'setInterval(() => {',
+          '  if (existsSync("stop")) return;',
+          '  appendFileSync("heartbeat", ".");',
+          '}, 50);',
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(workspace, "parent.cjs"),
+        [
+          'const { spawn } = require("node:child_process");',
+          'spawn(process.execPath, ["child.cjs"], { detached: true, stdio: "ignore" }).unref();',
+          'setInterval(() => {}, 1000);',
+        ].join("\n"),
+      );
+      const started = await call("task_start")(
+        { command: "node parent.cjs" },
+        context(true).ctx,
+      );
+      const id = (started as { details: { id: string } }).details.id;
+      const heartbeat = join(workspace, "heartbeat");
+      const size = () => (existsSync(heartbeat) ? statSync(heartbeat).size : 0);
+      try {
+        const deadline = Date.now() + 15_000;
+        while (size() === 0 && Date.now() < deadline)
+          await new Promise((done) => setTimeout(done, 100));
+        expect(size()).toBeGreaterThan(0);
+        const stopped = await call("task_stop")({ id }, context().ctx);
+        expect(
+          (stopped as { details: { status: string } }).details.status,
+        ).toBe("stopped");
+        await new Promise((done) => setTimeout(done, 300));
+        const afterStop = size();
+        await new Promise((done) => setTimeout(done, 400));
+        expect(size()).toBe(afterStop);
+      } finally {
+        // If containment fails, let the escaped child stop itself.
+        writeFileSync(join(workspace, "stop"), "");
+        await session.backgroundTasks?.stop(id);
+      }
+    },
+    30_000,
   );
 
   it("is not offered to a subagent child", async () => {
