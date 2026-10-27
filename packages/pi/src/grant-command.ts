@@ -91,6 +91,8 @@ async function add(
   minutes ??= Math.min(DEFAULT_TTL_MINUTES, maxMinutes);
   if (minutes > maxMinutes)
     throw new Error(`A task grant lasts at most ${duration(maxMinutes)} here`);
+  if (target && /^~(?:$|[/\\])/.test(target))
+    throw new Error("/grant does not expand ~; use an absolute path");
   // `.` and no path are the project, not the current directory.
   const root =
     target === undefined || target === "."

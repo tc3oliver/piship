@@ -921,6 +921,20 @@ describe("/grant", () => {
     expect(grantMinutes("0m")).toBeUndefined();
   });
 
+  it("refuses home-relative tilde paths before asking for approval", async () => {
+    const { session } = await open();
+    const { ctx, dialogs, notices } = ui();
+    for (const path of ["~", "~/notes", String.raw`~\notes`])
+      await grantCommand(session, path, ctx);
+    expect(notices).toHaveLength(3);
+    for (const notice of notices) {
+      expect(notice.level).toBe("error");
+      expect(notice.message).toContain("/grant does not expand ~");
+    }
+    expect(dialogs).toEqual([]);
+    expect(session.listGrants()).toEqual([]);
+  });
+
   it("follows policy.taskGrants: mode, maxTtlMinutes, and actions", async () => {
     expect((await open({ mode: "managed" })).session.grantsAllowed).toBe(false);
     expect(
