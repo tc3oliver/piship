@@ -598,6 +598,53 @@ describe("a task grant", () => {
     expect(shown.count).toBe(1);
   });
 
+  it("rechecks a configuration symlink after it is retargeted in-session", async () => {
+    const { session, workspace } = await open({
+      prepare: (workspace) => {
+        for (const name of ["first", "second", ".pi"])
+          mkdirSync(join(workspace, name));
+        symlinkSync(
+          join(workspace, "first"),
+          join(workspace, ".pi", "extensions"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      },
+    });
+    const { shown, channel } = counted();
+    await session.addGrant(grant({ paths: [workspace] }));
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "first", "a.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(1);
+
+    rmSync(join(workspace, ".pi", "extensions"));
+    symlinkSync(
+      join(workspace, "second"),
+      join(workspace, ".pi", "extensions"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "second", "b.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "approved" });
+    expect(shown.count).toBe(2);
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "ordinary.ts"),
+        channel,
+      ),
+    ).toMatchObject({ approval: "grant" });
+    expect(shown.count).toBe(2);
+  });
+
   it("never covers a project configuration file, by its own path or a symlink's target", async () => {
     const { session, workspace } = await open();
     const { shown, channel } = counted();
