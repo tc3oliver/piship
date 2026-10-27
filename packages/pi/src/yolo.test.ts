@@ -814,6 +814,41 @@ describe("allow for this session", () => {
     },
   );
 
+  it("skips five routine managed workspace write prompts but keeps enforced asks", async () => {
+    const { session, workspace } = await openWith(
+      { mode: "managed" },
+      [],
+      [
+        {
+          id: "routine-write",
+          action: "filesystem.write",
+          resource: "workspace/**",
+          effect: "allow",
+        },
+      ],
+    );
+    const { shown, channel } = sessionPrompt();
+    for (let i = 0; i < 5; i += 1)
+      expect(
+        await session.decide(
+          "filesystem.write",
+          join(workspace, `routine-${i}.txt`),
+          channel,
+        ),
+      ).toMatchObject({ outcome: "allow", ruleId: "routine-write" });
+    expect(shown).toHaveLength(0);
+
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "kept", "a.txt"),
+        channel,
+      ),
+    ).toMatchObject({ outcome: "allow", ruleId: "keep-asking" });
+    expect(shown).toHaveLength(1);
+    expect(shown[0]?.scopes).toBeUndefined();
+  });
+
   it("remembers only bounded file rules without managed auto-approval", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     const { shown, channel } = sessionPrompt();
