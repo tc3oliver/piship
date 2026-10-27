@@ -785,14 +785,19 @@ describe("governed built-in tools", () => {
         const write = tool(governedTools(session, workspace), "write");
         const seen: string[][] = [];
         const ctx = choosing("Allow for this session", seen);
+        let confirmations = 0;
+        ctx.ui.confirm = async () => {
+          confirmations += 1;
+          return false;
+        };
         await run(write, { path: "ordinary.txt", content: "allowed" }, ctx);
         expect(seen).toHaveLength(1);
 
         await expect(
           run(write, { path: "KEPT/secret.txt", content: "escaped" }, ctx),
         ).rejects.toThrow(/not allowed/);
-        expect(seen).toHaveLength(2);
-        expect(seen[1]).toEqual(["Allow once", "Deny"]);
+        expect(confirmations).toBe(1);
+        expect(seen).toHaveLength(1);
         expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
       },
     );
