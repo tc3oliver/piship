@@ -211,6 +211,49 @@ describe("spawnManaged", () => {
     },
   );
 
+  it.skipIf(process.platform !== "win32")(
+    "reclaims a live governed tree when its owner exits unsuccessfully",
+    async () => {
+      const heartbeat = join(dir, "failed-exit-hb");
+      const token = `piship-failed-exit-${Date.now()}`;
+      const modulePath = fileURLToPath(
+        new URL("../dist/index.js", import.meta.url),
+      );
+      const source = `
+        const { existsSync, statSync } = await import("node:fs");
+        const { spawnManaged } = await import(process.argv[1]);
+        spawnManaged({
+          file: process.execPath,
+          args: ["-e", ${JSON.stringify(TREE)}, process.argv[2], process.argv[3]],
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH ?? "" },
+        });
+        const deadline = Date.now() + 10_000;
+        setInterval(() => {
+          if (existsSync(process.argv[2]) && statSync(process.argv[2]).size > 0)
+            process.exit(42);
+          if (Date.now() > deadline) process.exit(43);
+        }, 50);
+      `;
+      const result = spawnSync(
+        node,
+        [
+          "--input-type=module",
+          "-e",
+          source,
+          pathToFileURL(modulePath).href,
+          heartbeat,
+          token,
+        ],
+        { cwd: dir, timeout: 20_000 },
+      );
+      expect(result.status).toBe(42);
+      expect(statSync(heartbeat).size).toBeGreaterThan(0);
+      expect(await heartbeatStopped(heartbeat)).toBe(true);
+    },
+    30_000,
+  );
+
   it("passes only the approved environment and strips credentials", async () => {
     let output = "";
     const exit = await spawnManaged({
