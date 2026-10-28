@@ -60,13 +60,16 @@ function fakeRun(options: { compile?: number; exit?: number } = {}): {
   run: RunSync;
   calls: string[];
   cwds: string[];
+  compilerArgs: string[];
 } {
   const calls: string[] = [];
   const cwds: string[] = [];
+  const compilerArgs: string[] = [];
   const run: RunSync = (file, args, _env, _timeout, cwd) => {
     cwds.push(cwd);
     if (file.endsWith("csc.exe")) {
       calls.push("compile");
+      compilerArgs.push(...args);
       const out = args.find((arg) => arg.startsWith("/out:"));
       if (out) writeFileSync(out.slice("/out:".length), "fake-exe-bytes");
       return { status: options.compile ?? 0 };
@@ -74,7 +77,7 @@ function fakeRun(options: { compile?: number; exit?: number } = {}): {
     calls.push("run");
     return { status: options.exit ?? 3 };
   };
-  return { run, calls, cwds };
+  return { run, calls, cwds, compilerArgs };
 }
 
 const target = {
@@ -99,6 +102,13 @@ describe("windowsJobHelper", () => {
       windowsJobHelper({ host, systemRoot: windows, run: second.run }),
     ).toBe(path);
     expect(second.calls).toEqual([]);
+  });
+
+  it("disables the compiler\u0027s implicit csc.rsp configuration", () => {
+    const { run, compilerArgs } = fakeRun();
+    expect(windowsJobHelper({ host, systemRoot: windows, run })).toBeDefined();
+    expect(compilerArgs[0]).toBe("/noconfig");
+    expect(compilerArgs).toContain("/target:exe");
   });
 
   it("runs the compiler and the check in the build directory, not the workspace", () => {

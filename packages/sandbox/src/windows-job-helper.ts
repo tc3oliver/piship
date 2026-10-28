@@ -222,6 +222,7 @@ export function windowsJobHelper(options: HelperOptions): string | undefined {
     const compiled = run(
       csc,
       [
+        "/noconfig",
         "/nologo",
         "/target:exe",
         "/optimize+",
