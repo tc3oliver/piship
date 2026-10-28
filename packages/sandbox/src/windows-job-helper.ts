@@ -226,6 +226,8 @@ export function windowsJobHelper(options: HelperOptions): string | undefined {
         "/nologo",
         "/target:exe",
         "/optimize+",
+        "/r:System.dll",
+        "/r:System.Core.dll",
         "/r:System.Web.Extensions.dll",
         `/out:${built}`,
         source,

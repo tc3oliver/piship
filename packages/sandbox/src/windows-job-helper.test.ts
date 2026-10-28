@@ -109,6 +109,9 @@ describe("windowsJobHelper", () => {
     expect(windowsJobHelper({ host, systemRoot: windows, run })).toBeDefined();
     expect(compilerArgs[0]).toBe("/noconfig");
     expect(compilerArgs).toContain("/target:exe");
+    expect(compilerArgs).toContain("/r:System.dll");
+    expect(compilerArgs).toContain("/r:System.Core.dll");
+    expect(compilerArgs).toContain("/r:System.Web.Extensions.dll");
   });
 
   it("runs the compiler and the check in the build directory, not the workspace", () => {
