@@ -5,10 +5,11 @@ export function requireUnexpiredIdentity<
   T extends { readonly expiresAt?: Date },
 >(session: T, now: number): T {
   if (session.expiresAt && !Number.isFinite(session.expiresAt.getTime()))
-    throw new PiShipError("IDENTITY_INVALID", "Identity refresh returned an invalid expiry", {
-      component: "identity",
-      userAction: "Run login again",
-    });
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      "Identity refresh returned an invalid expiry",
+      { component: "identity", userAction: "Run login again" },
+    );
   if (session.expiresAt && session.expiresAt.getTime() <= now)
     throw new PiShipError(
       "IDENTITY_EXPIRED",
