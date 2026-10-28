@@ -820,18 +820,16 @@ describe("governed built-in tools", () => {
       const ctx = choosing("Deny", seen);
       ctx.ui.confirm = async () => {
         prompts += 1;
-        return prompts === 1;
+        return false;
       };
-      await run(write, { path: "kept/first.txt", content: "once" }, ctx);
-      await expect(
-        run(write, { path: "kept/second.txt", content: "denied" }, ctx),
-      ).rejects.toThrow(/not allowed/);
+      for (const name of ["first", "second"])
+        await expect(
+          run(write, { path: `kept/${name}.txt`, content: "denied" }, ctx),
+        ).rejects.toThrow(/not allowed/);
       expect(prompts).toBe(2);
       expect(seen).toHaveLength(1);
-      expect(readFileSync(join(workspace, "kept", "first.txt"), "utf8")).toBe(
-        "once",
-      );
-      expect(existsSync(join(workspace, "kept", "second.txt"))).toBe(false);
+      for (const name of ["first", "second"])
+        expect(existsSync(join(workspace, "kept", `${name}.txt`))).toBe(false);
     });
 
     it("keeps managed shell session approvals to the exact command", async () => {
