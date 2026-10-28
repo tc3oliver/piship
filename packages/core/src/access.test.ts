@@ -1332,6 +1332,18 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       await session.login({ openUrl: (url) => void services.approve(url) });
     });
 
+    it("does not store a refreshed identity already expired by the session clock", async () => {
+      const identityRefs = store.refs().filter((ref) => ref.includes(":identity#"));
+      const issued = services.state.credentialCount;
+      offset = 31_000; // New 30-second tokens are expired for this session.
+      expect(await failure()).toMatchObject({ code: "IDENTITY_EXPIRED" });
+      expect(store.refs().filter((ref) => ref.includes(":identity#"))).toEqual(
+        identityRefs,
+      );
+      expect(services.state.credentialCount).toBe(issued);
+      expect(names()).not.toContain("identity.refresh");
+    });
+
     it("shares one renewal across concurrent requests in a running session", async () => {
       const [first, second, third] = await Promise.all([
         session.requestSecret(),
