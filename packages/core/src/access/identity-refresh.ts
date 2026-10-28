@@ -1,5 +1,20 @@
 import { PiShipError } from "@piship/contracts";
 
+/** Refuse a known-expired token, including one another process just stored. */
+export function requireUnexpiredIdentity<T extends { readonly expiresAt?: Date }>(
+  session: T,
+  now: number,
+): T {
+  if (session.expiresAt && session.expiresAt.getTime() <= now)
+    throw new PiShipError(
+      "IDENTITY_EXPIRED",
+      "Identity refresh returned an expired session",
+      { component: "identity", userAction: "Run login again" },
+    );
+  return session;
+}
+
+
 const MAX_ATTEMPTS = 3;
 const MAX_RETRY_AFTER_MS = 1_000;
 
