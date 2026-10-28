@@ -114,7 +114,9 @@ export default defineSandboxAdapter((context) => {
 
   /** A successful HTTP response is not proof that cancellation or deletion finished. */
   async function acknowledged(method, path) {
-    const response = await call(method, path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+    const response = await call(method, path, {
+      timeoutMs: DISPOSE_TIMEOUT_MS,
+    });
     if (response.status !== 204)
       throw unavailable("the sandbox service did not confirm cleanup");
   }
@@ -362,9 +364,7 @@ export default defineSandboxAdapter((context) => {
           // Called once and must not throw.
           if (disposed) return;
           disposed = true;
-          await acknowledged("DELETE", path).catch(
-            () => undefined,
-          );
+          await acknowledged("DELETE", path).catch(() => undefined);
         },
       };
     },
