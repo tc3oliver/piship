@@ -247,6 +247,7 @@ type Fault =
   | "claims network denial but connects"
   | "ignores a timeout once the command streams output"
   | "ignores cancellation"
+  | "retires sandbox on cancellation"
   | "starts a timed-out command late and leaves it running"
   | "starts a cancelled command late and leaves it running"
   | "starts a cancelled command after the kit's window and leaves it running"
@@ -555,6 +556,15 @@ function referenceAdapter(options: ReferenceOptions) {
       return finished;
     };
 
+    const retireCancelled = async (session: Session) => {
+      if (session.disposed) return;
+      session.disposed = true;
+      session.stop?.();
+      sessionsById.delete(session.id);
+      if (session.root) rmSync(session.root, { recursive: true, force: true });
+      await call("DELETE", `sessions/${session.id}`);
+    };
+
     const exec = async (
       session: Session,
       request: SandboxExecRequest,
@@ -575,10 +585,19 @@ function referenceAdapter(options: ReferenceOptions) {
         return leaveRunning(session, request, io, late.delayMs);
       if (options.slowStart && writesMarker(request.command))
         await startLate(session, io, LATE_START_MS);
+      const retireOnCancel =
+        fault === "retires sandbox on cancellation" &&
+        writesMarker(request.command, "cancel-");
+      if (retireOnCancel && io.signal.aborted) {
+        await retireCancelled(session);
+        return { exitCode: null };
+      }
       if (fault !== "ignores cancellation" && io.signal.aborted)
         return { exitCode: null };
       if (session.disposed) throw new Error("the sandbox session is closed");
-      return spawnCommand(session, request, io);
+      const result = await spawnCommand(session, request, io);
+      if (retireOnCancel && io.signal.aborted) await retireCancelled(session);
+      return result;
     };
 
     /** Run the command in the isolator; settle with how it ended. */
@@ -1537,6 +1556,14 @@ describeIsolated(isolator)(
     it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
       const report = await run({ variant: "shared", slowStart: true });
       expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
+    it("accepts independently verified sandbox retirement on cancellation", async () => {
+      const report = await run(
+        { variant: "shared", fault: "retires sandbox on cancellation" },
+        { only: ["cancellation"] },
+      );
+      expect(report.results.find((item) => item.behavior === "cancellation")).toMatchObject({ status: "passed" });
     }, 120_000);
 
     it.concurrent('fails only "ignores cancellation" when the event loop stalls as a command starts', async () => {

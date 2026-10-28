@@ -1176,6 +1176,8 @@ class Harness {
     instance: SandboxInstance | undefined,
     relative: string,
   ): Promise<boolean | undefined> {
+    // A shared workspace remains observable after the adapter retires its instance.
+    if (this.observable) return existsSync(join(this.workspace, relative));
     if (instance && !this.disposed(instance)) {
       const out = await this.ok(
         instance,
@@ -1186,7 +1188,6 @@ class Harness {
       if (out.includes("marker-absent")) return false;
       throw new Finding("the marker check printed neither answer");
     }
-    if (this.observable) return existsSync(join(this.workspace, relative));
     return undefined;
   }
 
@@ -1835,6 +1836,7 @@ const checks: Record<SandboxBehavior, Check> = {
   async cancellation(h) {
     await h.capabilities();
     const instance = await h.prepare();
+    const liveAfterPrepare = await h.options.sandboxes?.();
     await h.ok(
       instance,
       `mkdir -p ${quote(h.scratch)}`,
@@ -1861,6 +1863,17 @@ const checks: Record<SandboxBehavior, Check> = {
       if (when === "while it ran") await sleep(RUNNING_MS);
       execution.controller.abort();
       const settled = await settle(() => execution.settled, h.settleMs);
+      // A backend may complete cancellation by deleting its sandbox. Only
+      // independent service counts can establish that it was retired.
+      if (settled.kind === "resolved" && liveAfterPrepare !== undefined) {
+        const liveNow = await h.options.sandboxes?.();
+        if (
+          typeof liveNow === "number" &&
+          Number.isInteger(liveNow) &&
+          liveNow < liveAfterPrepare
+        )
+          retired = true;
+      }
       const released = Date.now();
       if (h.observable) writeFileSync(join(h.workspace, release), "");
       if (settled.kind !== "resolved") {

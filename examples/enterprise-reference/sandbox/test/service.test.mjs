@@ -1848,11 +1848,19 @@ describe("what it logs", () => {
       command: "echo secret",
       env: { A: "b" },
       status: 401,
+      mode: "sweep",
+      success: true,
+      runtimeError: false,
+      timedOut: false,
     });
     const line = JSON.parse(lines[0]);
     assert.equal(line.route, "[REDACTED]");
     assert.equal("command" in line, false);
     assert.equal("env" in line, false);
     assert.equal(line.status, 401);
+    assert.equal(line.mode, "sweep");
+    assert.equal(line.success, true);
+    assert.equal(line.runtimeError, false);
+    assert.equal(line.timedOut, false);
   });
 });
