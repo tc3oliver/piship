@@ -327,7 +327,7 @@ describe("running a command", () => {
       call.url.endsWith("/v1/sandboxes")
         ? json(201, { id: ID })
         : call.method === "DELETE"
-          ? json(204, {})
+          ? new Response(null, { status: 204 })
           : handleExec(call),
     );
     const instance = await made.backend.prepare({ profile: profile() });
