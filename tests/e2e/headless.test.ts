@@ -191,7 +191,7 @@ describe("headless workload distribution (local fixtures)", () => {
     source = source.replace(
       "    actions: [filesystem.write, shell.execute]\n",
       [
-        "    actions: [filesystem.write, shell.execute, mcp.tool.call]",
+        "    actions: [filesystem.write, shell.execute, mcp.tool.call, tool.execute]",
         "    declared:",
         "      - id: ci-fix",
         "        task: CI repair",

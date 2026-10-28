@@ -50,6 +50,43 @@ describe("policy.taskGrants in piship diff", () => {
     expect(changes(undefined, { mode: "off" })).toEqual([]);
   });
 
+  it("reports declared headless authority changes as high risk", () => {
+    const grant = {
+      id: "ci-fix",
+      task: "CI repair",
+      ttlMinutes: 20,
+      scope: { paths: ["src"] },
+      inheritToSubagents: true,
+    };
+    const base = { mode: "session" };
+    expect(changes(base, { ...base, declared: [grant] })).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.declared.ci-fix",
+        kind: "added",
+        risk: "high",
+      }),
+    ]);
+    expect(
+      changes({ ...base, declared: [grant] }, {
+        ...base,
+        declared: [{ ...grant, scope: { paths: ["."] } }],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.declared.ci-fix",
+        kind: "changed",
+        risk: "high",
+      }),
+    ]);
+    expect(changes({ ...base, declared: [grant] }, base)).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.declared.ci-fix",
+        kind: "removed",
+        risk: "medium",
+      }),
+    ]);
+  });
+
   it("rates a higher ttl cap medium and a wildcard host high", () => {
     const base = { mode: "session", maxTtlMinutes: 30 };
     expect(changes(base, { ...base, maxTtlMinutes: 120 })[0]).toMatchObject({

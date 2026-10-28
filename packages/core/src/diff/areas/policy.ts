@@ -103,6 +103,24 @@ export function policy(
     ag?.actions ? [...ag.actions].sort(compare).join(",") : "any",
     ["medium", "Changes which actions a task grant may cover."],
   );
+  // A new or widened locked task grant changes headless authority.
+  const beforeDeclared = new Map(
+    (bg?.declared ?? []).map((entry) => [entry.id, JSON.stringify(entry)]),
+  );
+  const afterDeclared = new Map(
+    (ag?.declared ?? []).map((entry) => [entry.id, JSON.stringify(entry)]),
+  );
+  for (const id of keys(beforeDeclared, afterDeclared))
+    out.scalar(
+      "policy",
+      `policy taskGrants.declared.${id}`,
+      beforeDeclared.get(id),
+      afterDeclared.get(id),
+      (_, after) =>
+        after
+          ? ["high", "Adds or changes headless task authority."]
+          : ["medium", "Removes declared task authority."],
+    );
   out.scalar(
     "policy",
     "policy taskGrants.wildcardHosts",
