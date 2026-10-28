@@ -392,7 +392,7 @@ function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
     "parallel",
   ]);
   for (const [index, command] of (commands ?? []).entries())
-    if (wrappers.has(command.toLowerCase().replace(/\\.(?:exe|cmd|bat)$/, "")))
+    if (wrappers.has(command.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "")))
       fail(
         `${path}.scope.commands[${index}]`,
         "Shell wrappers cannot be granted",

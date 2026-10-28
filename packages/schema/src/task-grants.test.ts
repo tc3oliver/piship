@@ -197,6 +197,14 @@ describe("policy.taskGrants", () => {
         "policy.taskGrants.declared[0].scope.commands[0]",
       ],
       [
+        { ...base, scope: { commands: ["cmd.exe"] } },
+        "policy.taskGrants.declared[0].scope.commands[0]",
+      ],
+      [
+        { ...base, scope: { commands: ["powershell.exe"] } },
+        "policy.taskGrants.declared[0].scope.commands[0]",
+      ],
+      [
         { ...base, scope: { mcp: [{ server: "gh", tools: ["*"] }] } },
         "policy.taskGrants.declared[0].scope.mcp[0].tools[0]",
       ],

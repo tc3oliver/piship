@@ -279,7 +279,7 @@ describe("headless workload distribution (local fixtures)", () => {
     const command = launcher(join(temp, "dist", "acmecode"), "acmecode");
     // No `approve`: nothing in this process acts as a browser.
     const run = (args: string[]): Promise<Result> =>
-      branded(command, args, { cwd: temp, env });
+      branded(command, args, { cwd: temp, env, timeoutMs: 120_000 });
     const smoke = async (args: string[] = []) => {
       const result = await run(["--smoke", ...args]);
       expect(result.status, result.stderr).toBe(0);
@@ -459,6 +459,7 @@ describe("headless workload distribution (local fixtures)", () => {
           PI_CODE_SUBAGENT: marker,
           ...(nonce ? parentEnv : {}),
         },
+        timeoutMs: 120_000,
       });
     const unproven = await child(["Task: canary-task"], "1", false);
     expect(unproven.status).toBe(1);
