@@ -222,9 +222,12 @@ export function windowsJobHelper(options: HelperOptions): string | undefined {
     const compiled = run(
       csc,
       [
+        "/noconfig",
         "/nologo",
         "/target:exe",
         "/optimize+",
+        "/r:System.dll",
+        "/r:System.Core.dll",
         "/r:System.Web.Extensions.dll",
         `/out:${built}`,
         source,
