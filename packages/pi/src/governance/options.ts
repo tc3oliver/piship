@@ -97,11 +97,17 @@ export interface GovernanceOptions {
    * `GovernanceSession.open` refuses it otherwise.
    */
   readonly yolo?: boolean;
+  /** Explicit task identity selected by the invoking user. */
+  readonly taskGrantId?: string;
   /**
    * A pi-code subagent child launch and the session that started it;
    * recorded on `session.start`.
    */
-  readonly subagent?: { readonly parentSession: string };
+  readonly subagent?: {
+    readonly parentSession: string;
+    readonly grant?: import("../launch/subagent-owner.js").SubagentGrantBinding;
+    readonly grantActive?: () => boolean;
+  };
   /**
    * Called when `/auto off` ends `--yolo` for the rest of the session: the
    * permission provider's own auto-approval, switched on with it, goes off
