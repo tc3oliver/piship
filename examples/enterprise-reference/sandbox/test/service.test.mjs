@@ -1326,19 +1326,17 @@ describe("commands", () => {
     try {
       const running = await begin("sleep 36");
       const path = `/v1/sandboxes/${id}/exec/${running.execId}/cancel`;
+      const pid = service.commandPid(running.execId);
+      assert.ok(pid, "the command was never started");
       assert.equal(
         (await service.call(path, { method: "POST", key: "bob" })).status,
         404,
       );
-      assert.equal(
-        (
-          await service.call(
-            `/v1/sandboxes/${id}/exec/${"0".repeat(32)}/cancel`,
-            { method: "POST", key: "alice" },
-          )
-        ).status,
-        404,
+      const unknown = await service.call(
+        `/v1/sandboxes/${id}/exec/${"0".repeat(32)}/cancel`,
+        { method: "POST", key: "alice" },
       );
+      assert.equal(unknown.status, 404);
       const answer = await service.call(path, {
         method: "POST",
         key: "alice",
@@ -1347,7 +1345,7 @@ describe("commands", () => {
       const done = cancels(running.execId, "done")[0];
       assert.ok(done, "cancellation was acknowledged before the sweep");
       assert.ok(Date.now() >= done.t);
-      assert.equal(alive(service.commandPid(running.execId)), false);
+      assert.equal(alive(pid), false);
       assert.equal(service.logs().includes(running.execId), false);
       assert.equal(
         (await service.call(path, { method: "POST", key: "alice" })).status,
