@@ -2,6 +2,9 @@ name: Task Grant Acceptance
 on:
   push:
     branches: [feat/315-manifest-task-grants]
+concurrency:
+  group: task-grant-acceptance-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
