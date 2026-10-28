@@ -799,6 +799,39 @@ describe("governed built-in tools", () => {
       expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
     });
 
+    it("keeps enforced managed asks after a workspace session approval", async () => {
+      const { session, workspace } = await open([], {
+        mode: "managed",
+        enforced: [
+          '    - { id: protected-write, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
+        ],
+      });
+      mkdirSync(join(workspace, "kept"));
+      const write = tool(governedTools(session, workspace), "write");
+      const seen: string[][] = [];
+      await run(
+        write,
+        { path: "ordinary.txt", content: "approved" },
+        choosing("Allow for this session", seen),
+      );
+      expect(seen).toHaveLength(1);
+
+      let prompts = 0;
+      const ctx = choosing("Deny", seen);
+      ctx.ui.confirm = async () => {
+        prompts += 1;
+        return false;
+      };
+      for (const name of ["first", "second"])
+        await expect(
+          run(write, { path: `kept/${name}.txt`, content: "denied" }, ctx),
+        ).rejects.toThrow(/not allowed/);
+      expect(prompts).toBe(2);
+      expect(seen).toHaveLength(1);
+      for (const name of ["first", "second"])
+        expect(existsSync(join(workspace, "kept", `${name}.txt`))).toBe(false);
+    });
+
     it("keeps managed shell session approvals to the exact command", async () => {
       const { session, workspace } = await open([], {
         mode: "managed",
