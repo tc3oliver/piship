@@ -36,7 +36,7 @@ afterEach(async () => {
 type Services = Awaited<ReturnType<typeof startLocalServices>>;
 
 /** The demo in Build mode with its shell `ask` relaxed to `allow`. */
-async function distribution() {
+async function distribution(options: { unsandboxed?: boolean } = {}) {
   const services: Services = await startLocalServices();
   closers.push(() => services.close());
   const temp = realpathSync(mkdtempSync(join(tmpdir(), "piship-tasks-e2e-")));
@@ -62,7 +62,12 @@ async function distribution() {
     source.includes('"**"\n      effect: ask\n    - id: acme.tools')
   )
     throw new Error("demo manifest patch did not apply");
-  writeFileSync(manifest, source);
+  const configured = options.unsandboxed
+    ? source.replace("sandbox:\\n  required: true", "sandbox:\\n  required: false")
+    : source;
+  if (options.unsandboxed && configured === source)
+    throw new Error("demo sandbox patch did not apply");
+  writeFileSync(manifest, configured);
   const home = join(temp, "home");
   mkdirSync(home, { recursive: true });
   const env: NodeJS.ProcessEnv = {
@@ -214,7 +219,9 @@ describe.runIf(process.platform === "win32")(
     it.each(["bash", "task_start"] as const)(
       "reclaims a detached descendant after a forced owner kill (%s)",
       async (tool) => {
-        const { services, command, project, env } = await distribution();
+        const { services, command, project, env } = await distribution({
+          unsandboxed: true,
+        });
         // The .cmd shim starts this same Node entrypoint; killing cmd.exe
         // would not test what happens when the actual PiShip owner dies.
         const entry = command.replace(/\.cmd$/i, "");
