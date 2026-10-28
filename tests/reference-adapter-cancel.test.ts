@@ -27,6 +27,10 @@ describe("reference sandbox cancellation", () => {
   it("waits for server cleanup confirmation after the stream aborts", async () => {
     let acknowledge!: (response: Response) => void;
     let requested!: () => void;
+    let ready!: () => void;
+    const outputReady = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
     const requestedCancel = new Promise<void>((resolve) => {
       requested = resolve;
     });
@@ -39,6 +43,11 @@ describe("reference sandbox cancellation", () => {
       if (path.endsWith("/exec")) {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `${JSON.stringify({ stream: "stdout", data: Buffer.from("ready").toString("base64") })}\n`,
+              ),
+            );
             init?.signal?.addEventListener(
               "abort",
               () => controller.error(new Error("stream aborted")),
@@ -69,15 +78,18 @@ describe("reference sandbox cancellation", () => {
     const controller = new AbortController();
     const execution = instance.exec(
       { command: "sleep 30", cwd: "/workspace", workspacePath: ".", env: {} },
-      { signal: controller.signal, onStdout() {}, onStderr() {} },
+      { signal: controller.signal, onStdout() { ready(); }, onStderr() {} },
     );
-    // Allow exec() to receive the streaming response before aborting.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await outputReady;
     controller.abort(new Error("stopped"));
     await requestedCancel;
     let settled = false;
-    void execution.finally(() => { settled = true; }).catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    void execution
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([]);
     acknowledge(new Response(null, { status: 204 }));
