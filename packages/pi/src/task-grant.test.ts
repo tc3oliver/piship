@@ -1443,7 +1443,11 @@ describe("locked headless task grants", () => {
     const env: NodeJS.ProcessEnv = {};
     publishSubagentOwner(
       parent.stateDir,
-      { session: parent.session.sessionId, workspace: parent.workspace, grant: binding },
+      {
+        session: parent.session.sessionId,
+        workspace: parent.workspace,
+        grant: binding,
+      },
       env,
     );
     const owner = authenticateSubagentChild(parent.stateDir, env);
