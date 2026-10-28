@@ -74,7 +74,7 @@ import {
   boundedCredentialProvider,
   loadAdapter,
 } from "./adapters.js";
-import { refreshWithRetry } from "./identity-refresh.js";
+import { refreshWithRetry, requireUnexpiredIdentity } from "./identity-refresh.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
 import { SandboxCredential, type SignedInGuard } from "./sandbox-credential.js";
@@ -1377,11 +1377,15 @@ export class DistributionAccess {
             userAction: `Run ${this.options.app.command} login, then start ${this.options.app.command} again`,
           },
         );
-      if (!stored.accessToken?.equals(observed.accessToken)) return stored;
+      if (!stored.accessToken?.equals(observed.accessToken))
+        return requireUnexpiredIdentity(stored, this.#now());
       // A refresh never switches the principal, whatever the provider does.
-      const refreshed = assertSamePrincipal(
-        await refreshWithRetry(() => refresh(stored)),
-        observed,
+      const refreshed = requireUnexpiredIdentity(
+        assertSamePrincipal(
+          await refreshWithRetry(() => refresh(stored)),
+          observed,
+        ),
+        this.#now(),
       );
       await this.#storeIdentity(refreshed, { replace: true });
       this.#emit("identity.refresh", {
