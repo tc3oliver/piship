@@ -386,12 +386,19 @@ describe("headless workload distribution (local fixtures)", () => {
     // The record a running session publishes, with the nonce its subagent
     // tool hands its children; the marker alone is not enough.
     const parentEnv: NodeJS.ProcessEnv = {};
-    const lock = JSON.parse(readFileSync(join(directory, "piship.lock"), "utf8"));
-    const recorded = readFileSync(join(acmeState, "logs", "audit.jsonl"), "utf8")
+    const lock = JSON.parse(
+      readFileSync(join(directory, "piship.lock"), "utf8"),
+    );
+    const recorded = readFileSync(
+      join(acmeState, "logs", "audit.jsonl"),
+      "utf8",
+    )
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const principal = recorded.find((event) => event.event === "session.start")?.user;
+    const principal = recorded.find(
+      (event) => event.event === "session.start",
+    )?.user;
     expect(typeof principal).toBe("string");
     const grant = {
       id: "ci-fix",
@@ -446,19 +453,28 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(events.map((event: { type: string }) => event.type)).toEqual(
       expect.arrayContaining(["session", "agent_start", "agent_end"]),
     );
-    const grantAudit = readFileSync(join(acmeState, "logs", "audit.jsonl"), "utf8")
+    const grantAudit = readFileSync(
+      join(acmeState, "logs", "audit.jsonl"),
+      "utf8",
+    )
       .trim()
       .split("\n")
       .map((entry) => JSON.parse(entry));
-    expect(grantAudit.some(
-      (event) => event.event === "policy.grant_created" &&
-        event.detail?.grant === "ci-fix" &&
-        event.detail?.parentSession === "parent-session",
-    )).toBe(true);
-    expect(grantAudit.some(
-      (event) => event.event === "policy.grant_revoked" &&
-        event.detail?.grant === "ci-fix",
-    )).toBe(true);
+    expect(
+      grantAudit.some(
+        (event) =>
+          event.event === "policy.grant_created" &&
+          event.detail?.grant === "ci-fix" &&
+          event.detail?.parentSession === "parent-session",
+      ),
+    ).toBe(true);
+    expect(
+      grantAudit.some(
+        (event) =>
+          event.event === "policy.grant_revoked" &&
+          event.detail?.grant === "ci-fix",
+      ),
+    ).toBe(true);
     const childChat = services.state.requests
       .filter((item: { path: string }) =>
         item.path.endsWith("/chat/completions"),
