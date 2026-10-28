@@ -47,8 +47,8 @@ describe("reference sandbox cancellation", () => {
             start(controller) {
               controller.enqueue(
                 new TextEncoder().encode(
-                '{"stream":"stdout","data":"cmVhZHk="}\\n',
-              ),
+                  '{"stream":"stdout","data":"cmVhZHk="}\n',
+                ),
               );
               init?.signal?.addEventListener(
                 "abort",
