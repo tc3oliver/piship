@@ -289,9 +289,10 @@ export default defineSandboxAdapter((context) => {
         throw unavailable("the sandbox service answered without a sandbox");
       const path = `v1/sandboxes/${created.id}`;
       let disposed = false;
+      let retired = false;
       return {
         async exec(command, io) {
-          if (disposed) throw unavailable("the sandbox was disposed");
+          if (disposed || retired) throw unavailable("the sandbox was disposed");
           if (command.workspacePath === undefined)
             throw unavailable("the command runs outside the workspace");
           // The disconnected stream starts cleanup, but does not prove it
@@ -330,6 +331,7 @@ export default defineSandboxAdapter((context) => {
               } catch {
                 // No confirmation: retire the entire sandbox instead of
                 // allowing another command into an unverified process tree.
+                retired = true;
                 await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS });
                 disposed = true;
               }
