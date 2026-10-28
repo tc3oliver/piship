@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- Identity renewal rejects an invalid declared expiry before storing a refreshed token, instead of allowing an invalid date through the expiry check.
 - Identity renewal now refuses a refreshed token whose declared expiry has already passed, including a token concurrently stored by another process. It fails with `IDENTITY_EXPIRED` instead of persisting or reusing that token; valid sessions and sessions without a declared expiry retain their existing behavior.
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (for example `git log --format=%H` and `git show HEAD^`). Windows still treats both as cmd.exe syntax; chaining, substitution, redirection, and deny rules remain enforced.
 - The governed `write` and `edit` tools refuse an existing file with more than one hard link, since writing it in place would also change the other name (which may lie outside the workspace). Files that are links into a shared store, such as pnpm `node_modules`, are edited through the package manager. The protected `.claude` directory check ignores case on macOS and Windows, as the git control check already did.
