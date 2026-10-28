@@ -1206,7 +1206,11 @@ export class GovernanceSession {
   /** Only the manifest grant selected by the user may pass to children. */
   get manifestGrantBinding(): SubagentGrantBinding | undefined {
     const binding = this.#manifestBinding;
-    if (!binding || !this.#grants.has(binding.id)) return undefined;
+    if (
+      !binding ||
+      this.#grants.get(binding.id)?.grant.createdBy !== "manifest"
+    )
+      return undefined;
     return binding;
   }
 
@@ -1399,6 +1403,7 @@ export class GovernanceSession {
     const entry = this.#grants.get(id);
     if (!entry) return false;
     this.#grants.delete(id);
+    if (this.#manifestBinding?.id === id) this.#manifestBinding = undefined;
     if (entry.grant.createdBy === "manifest" && !this.options.subagent)
       revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
     this.#grantEvent("policy.grant_revoked", { grant: id, uses: entry.uses });
