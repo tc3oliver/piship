@@ -767,6 +767,25 @@ export class Sandboxes {
   }
 
   /**
+   * An authenticated cancellation acknowledgement. A missing or already
+   * finished command is not proof that its descendants were reclaimed.
+   */
+  async cancel(owner, id, execId) {
+    const session = this.#find(owner, id);
+    const exec = session.execs.get(execId);
+    if (!exec)
+      throw new SandboxError(404, "not_found", "There is no such command");
+    const stopped = await this.cancelExec(exec, "requested");
+    await exec.done;
+    if (!stopped)
+      throw new SandboxError(
+        502,
+        "runtime_error",
+        "The container runtime could not confirm command cancellation",
+      );
+  }
+
+  /**
    * Stop a command and everything it started. The docker CLI is killed (it
    * would otherwise leave the command running in the container), then the
    * cancel script runs in the sandbox; see `CANCEL_SCRIPT`. When this is the
@@ -780,7 +799,7 @@ export class Sandboxes {
    */
   cancelExec(exec, reason) {
     if (exec.cancelling) return exec.cancelling;
-    if (exec.finished) return Promise.resolve();
+    if (exec.finished) return Promise.resolve(false);
     const { session } = exec;
     const alone = [...session.execs.values()].every((other) => other === exec);
     const sweep = alone && session.main !== undefined;
@@ -788,7 +807,7 @@ export class Sandboxes {
     exec.reason = reason;
     exec.cancelling = (async () => {
       exec.child.kill("SIGKILL");
-      if (session.closing) return;
+      if (session.closing) return false;
       const result = await this.#docker.run(
         cancelArguments(
           this.#config,
@@ -799,16 +818,18 @@ export class Sandboxes {
         ),
         { timeoutMs: 15_000 },
       );
+      const success = result.code === 0 && !result.error && !result.timedOut;
       // Only outcome metadata: never log the command, its ID, or Docker output.
       this.#log("sandbox.exec.cancel", {
         session: session.id,
         reason,
         mode: sweep ? "sweep" : "marked",
-        success: result.code === 0 && !result.error && !result.timedOut,
+        success,
         ...(result.code === null ? {} : { exit: result.code }),
         ...(result.error ? { runtimeError: true } : {}),
         ...(result.timedOut ? { timedOut: true } : {}),
       });
+      return success;
     })();
     if (sweep) {
       const sweeping = exec.cancelling.finally(() => {
