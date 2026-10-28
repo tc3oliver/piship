@@ -298,14 +298,26 @@ export default defineSandboxAdapter((context) => {
             throw unavailable("the command runs outside the workspace");
           // The disconnected stream starts cleanup, but does not prove it
           // finished. Await the service's authenticated cancellation receipt.
-          const response = await call("POST", `${path}/exec`, {
-            body: {
-              command: command.command,
-              cwd: command.workspacePath,
-              env: command.env,
-            },
-            signal: io.signal,
-          });
+          let response;
+          try {
+            response = await call("POST", `${path}/exec`, {
+              body: {
+                command: command.command,
+                cwd: command.workspacePath,
+                env: command.env,
+              },
+              signal: io.signal,
+            });
+          } catch (error) {
+            if (io.signal.aborted) {
+              // Without response headers there is no command ID. Reclaim
+              // the whole sandbox before settling or allowing another exec.
+              retired = true;
+              await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+              disposed = true;
+            }
+            throw error;
+          }
           const execId = response.headers.get("x-piship-exec-id");
           let cancellation;
           const cancel = () => {

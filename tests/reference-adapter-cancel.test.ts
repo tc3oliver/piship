@@ -113,4 +113,79 @@ describe("reference sandbox cancellation", () => {
       expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
     },
   );
+
+  it("reclaims the sandbox before settling an abort without exec headers", async () => {
+    let started!: () => void;
+    let deleting!: () => void;
+    let finishDelete!: (response: Response) => void;
+    const execStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const deleteStarted = new Promise<void>((resolve) => {
+      deleting = resolve;
+    });
+    const calls: string[] = [];
+    const fetch: ManagedFetch = async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path === "/v1/sandboxes")
+        return new Response(JSON.stringify({ id: sandboxId }), {
+          status: 201,
+        });
+      if (path.endsWith("/exec")) {
+        started();
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("fetch aborted")),
+            { once: true },
+          );
+        });
+      }
+      if (init?.method === "DELETE") {
+        deleting();
+        return new Promise<Response>((resolve) => {
+          finishDelete = resolve;
+        });
+      }
+      throw new Error("unexpected sandbox request");
+    };
+    const backend = await adapter({
+      distributionId: "reference-test",
+      endpoint: "http://127.0.0.1:12345",
+      fetch,
+    });
+    const instance = await backend.prepare({ profile });
+    const controller = new AbortController();
+    const command = {
+      command: "sleep 30",
+      cwd: "/workspace",
+      workspacePath: ".",
+      env: {},
+    };
+    const io = {
+      signal: controller.signal,
+      onStdout() {},
+      onStderr() {},
+    };
+    const execution = instance.exec(command, io);
+    await execStarted;
+    controller.abort(new Error("stopped"));
+    await deleteStarted;
+    let settled = false;
+    void execution
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    await expect(instance.exec(command, io)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
+    finishDelete(new Response(null, { status: 204 }));
+    await expect(execution).rejects.toThrow("stopped");
+    await instance.dispose();
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
+  });
 });
