@@ -157,7 +157,10 @@ export async function launchPiDistribution(
     } else if (args[0] === "--task-grant" && !taskGrantId) {
       taskGrantId = args[1];
       if (!taskGrantId || !/^[A-Za-z0-9_-]{1,64}$/.test(taskGrantId))
-        throw new PiShipError("CONFIG_INVALID", "--task-grant needs a declared grant ID");
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          "--task-grant needs a declared grant ID",
+        );
       args = args.slice(2);
     } else if (args[0] === "--yolo" && !yolo) {
       yolo = true;
@@ -166,10 +169,22 @@ export async function launchPiDistribution(
   }
   const sessionOption = !!requestedModel || newSession || yolo || !!taskGrantId;
   if (taskGrantId && (yolo || !metadata.governance))
-    throw new PiShipError("CONFIG_INVALID", "--task-grant requires governance and cannot be combined with --yolo");
-  if (taskGrantId && args.length > 0 &&
-      !(args.length === 1 && (args[0] === "--smoke" || args[0] === "--smoke-model")))
-    throw new PiShipError("CONFIG_INVALID", "--task-grant applies only to a session");
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--task-grant requires governance and cannot be combined with --yolo",
+    );
+  if (
+    taskGrantId &&
+    args.length > 0 &&
+    !(
+      args.length === 1 &&
+      (args[0] === "--smoke" || args[0] === "--smoke-model")
+    )
+  )
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--task-grant applies only to a session",
+    );
   if (yolo) {
     // It changes how a session decides asks: for a subcommand, --version, or
     // --help it means nothing, and nothing is started or written before that
