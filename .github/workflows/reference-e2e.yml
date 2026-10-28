@@ -8,8 +8,6 @@ name: Reference E2E
 # runners at once, beside the job that checks the stack as a user starts it;
 # the run passes only when all five pass.
 on:
-  push:
-    branches: [feat/332-reference-e2e-reliability]
   schedule:
     - cron: "30 18 * * *"
   workflow_dispatch:
