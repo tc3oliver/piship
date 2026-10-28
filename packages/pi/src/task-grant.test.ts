@@ -26,6 +26,10 @@ import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import {
+  authenticateSubagentChild,
+  publishSubagentOwner,
+} from "./launch/subagent-owner.js";
+import {
   DEFAULT_GRANT_COMMANDS,
   grantCommand,
   grantMinutes,
@@ -77,6 +81,9 @@ interface Setup {
   readonly yolo?: boolean;
   /** The workspace's own path below the temporary root. */
   readonly workspaceAt?: readonly string[];
+  readonly workspaceOverride?: string;
+  readonly taskGrantId?: string;
+  readonly subagent?: Parameters<typeof GovernanceSession.open>[0]["subagent"];
   /** Run on the workspace before the session opens. */
   readonly prepare?: (workspace: string) => void;
   /** `policy.taskGrants`, as a v1alpha5 lock would carry it. */
@@ -88,7 +95,8 @@ async function open(setup: Setup = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-grant-")));
   roots.push(root);
   const dir = join(root, "distribution");
-  const workspace = join(root, ...(setup.workspaceAt ?? ["workspace"]));
+  const workspace = setup.workspaceOverride ??
+    join(root, ...(setup.workspaceAt ?? ["workspace"]));
   const home = join(root, "home");
   const stateDir = join(root, "state");
   for (const path of [dir, join(workspace, "kept"), home])
@@ -113,6 +121,9 @@ async function open(setup: Setup = {}) {
   if (!governance) throw new Error("no governance");
   const lock = {
     ...resolved,
+    ...(setup.taskGrants?.declared
+      ? { manifest: { ...resolved.manifest, sha256: `sha256-${resolved.manifest.sha256}` } }
+      : {}),
     deployment: { ...resolved.deployment, mode: setup.mode ?? "personal" },
     governance: {
       ...governance,
@@ -133,6 +144,8 @@ async function open(setup: Setup = {}) {
     piVersion: PI_VERSION,
     interactive: false,
     ...(setup.yolo ? { yolo: true } : {}),
+    ...(setup.taskGrantId ? { taskGrantId: setup.taskGrantId } : {}),
+    ...(setup.subagent ? { subagent: setup.subagent } : {}),
     fetch: (() => {
       throw new Error("no network in unit tests");
     }) as unknown as ManagedFetch,
@@ -1235,5 +1248,139 @@ describe("/grant while its folder moves", () => {
     expect(notices[0]).toMatchObject({ level: "error" });
     expect(notices[0]?.message).toContain("run /grant again");
     expect(session.listGrants()).toEqual([]);
+  });
+});
+
+const declaredPolicy: TaskGrantsPolicy = {
+  mode: "session",
+  maxTtlMinutes: 30,
+  declared: [
+    {
+      id: "ci-fix",
+      task: "CI repair",
+      ttlMinutes: 20,
+      scope: { paths: ["src"], commands: ["npm"] },
+      inheritToSubagents: true,
+    },
+  ],
+};
+
+describe("locked headless task grants", () => {
+  it("requires an explicit task identity, preserves deny and keepsPrompt", async () => {
+    const unselected = await open({ taskGrants: declaredPolicy });
+    expect(unselected.session.listGrants()).toEqual([]);
+    const { session, workspace, events } = await open({
+      taskGrants: declaredPolicy,
+      taskGrantId: "ci-fix",
+    });
+    expect(
+      await session.decide("filesystem.write", join(workspace, "src", "a.ts")),
+    ).toMatchObject({ outcome: "allow", approval: "grant", grantId: "ci-fix" });
+    for (const path of [
+      join(workspace, "other.ts"),
+      join(workspace, "secret", "a.ts"),
+      join(workspace, "kept", "a.ts"),
+      join(workspace, ".pi", "extensions", "unsafe.ts"),
+    ])
+      expect(
+        await session.decide("filesystem.write", path),
+      ).toMatchObject({ outcome: "deny" });
+    const audit = await events();
+    const created = audit.find((event) => event.event === "policy.grant_created");
+    expect(created?.detail).toMatchObject({
+      grant: "ci-fix",
+      createdBy: "manifest",
+      paths: 1,
+    });
+    expect(JSON.stringify(created)).not.toContain("CI repair");
+    expect(JSON.stringify(created)).not.toContain(workspace);
+    expect(session.revokeGrant("ci-fix")).toBe(true);
+    expect(
+      await session.decide("filesystem.write", join(workspace, "src", "b.ts")),
+    ).toMatchObject({ outcome: "deny" });
+  });
+
+  it("fails closed on an undeclared identity and a symlink escaping the project", async () => {
+    await expect(
+      open({ taskGrants: declaredPolicy, taskGrantId: "not-declared" }),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    await expect(
+      open({
+        taskGrants: declaredPolicy,
+        taskGrantId: "ci-fix",
+        prepare: (workspace) => {
+          const outside = join(workspace, "..", "outside");
+          mkdirSync(outside);
+          symlinkSync(outside, join(workspace, "src"), "dir");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+  });
+
+  it("inherits only an authenticated live manifest grant and revokes in a running child", async () => {
+    const parent = await open({
+      taskGrants: declaredPolicy,
+      taskGrantId: "ci-fix",
+    });
+    const binding = parent.session.manifestGrantBinding;
+    expect(binding).toMatchObject({ id: "ci-fix" });
+    const env: NodeJS.ProcessEnv = {};
+    publishSubagentOwner(parent.stateDir, {
+      session: parent.session.sessionId,
+      workspace: parent.workspace,
+      ...(binding ? { grant: binding } : {}),
+    }, env);
+    const owner = authenticateSubagentChild(parent.stateDir, env);
+    const child = await open({
+      taskGrants: declaredPolicy,
+      workspaceOverride: parent.workspace,
+      subagent: {
+        parentSession: owner.session,
+        grant: owner.grant,
+        grantActive: owner.grantActive,
+      },
+    });
+    const file = join(parent.workspace, "src", "child.ts");
+    expect(await child.session.decide("filesystem.write", file)).toMatchObject({
+      outcome: "allow",
+      approval: "grant",
+    });
+    expect(parent.session.revokeGrant("ci-fix")).toBe(true);
+    expect(await child.session.decide("filesystem.write", file)).toMatchObject({
+      outcome: "deny",
+    });
+    expect(child.session.listGrants()).toEqual([]);
+  });
+
+  it("refuses forged policy bindings and does not inherit interactive approvals", async () => {
+    const parent = await open({
+      taskGrants: declaredPolicy,
+      taskGrantId: "ci-fix",
+    });
+    const binding = parent.session.manifestGrantBinding;
+    if (!binding) throw new Error("missing manifest grant");
+    await expect(
+      open({
+        taskGrants: declaredPolicy,
+        workspaceOverride: parent.workspace,
+        subagent: {
+          parentSession: parent.session.sessionId,
+          grant: { ...binding, policyDigest: "0".repeat(64) },
+          grantActive: () => true,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    const noGrant = await open({
+      taskGrants: declaredPolicy,
+      workspaceOverride: parent.workspace,
+      subagent: { parentSession: parent.session.sessionId },
+    });
+    expect(noGrant.session.listGrants()).toEqual([]);
+    expect(
+      await noGrant.session.decide(
+        "filesystem.write",
+        join(parent.workspace, "src", "child.ts"),
+      ),
+    ).toMatchObject({ outcome: "deny" });
   });
 });
