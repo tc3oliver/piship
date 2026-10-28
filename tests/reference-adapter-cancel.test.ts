@@ -24,7 +24,7 @@ const profile: SandboxProfile = {
 };
 
 describe("reference sandbox cancellation", () => {
-  it.each([204, 502])(
+  it.each([204, 202, 502])(
     "waits for cancellation (HTTP %i), retiring on failed confirmation",
     async (status) => {
       let acknowledge!: (response: Response) => void;
@@ -189,7 +189,9 @@ describe("reference sandbox cancellation", () => {
     expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
   });
 
-  it("refuses reuse when pre-header cancellation cleanup fails", async () => {
+  it.each([202, 502])(
+    "refuses reuse when pre-header cleanup returns HTTP %i",
+    async (status) => {
     let started!: () => void;
     const execStarted = new Promise<void>((resolve) => {
       started = resolve;
@@ -212,7 +214,7 @@ describe("reference sandbox cancellation", () => {
           );
         });
       }
-      if (init?.method === "DELETE") return new Response(null, { status: 502 });
+      if (init?.method === "DELETE") return new Response(null, { status });
       throw new Error("unexpected sandbox request");
     };
     const backend = await adapter({
@@ -245,5 +247,6 @@ describe("reference sandbox cancellation", () => {
     await instance.dispose();
     expect(calls.filter((call) => call.endsWith("/exec"))).toHaveLength(1);
     expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(2);
-  });
+    },
+  );
 });
