@@ -294,8 +294,8 @@ export default defineSandboxAdapter((context) => {
           if (disposed) throw unavailable("the sandbox was disposed");
           if (command.workspacePath === undefined)
             throw unavailable("the command runs outside the workspace");
-          // io.signal is PiShip's timeout and cancellation: the service stops
-          // the command when this connection ends.
+          // The disconnected stream starts cleanup, but does not prove it
+          // finished. Await the service's authenticated cancellation receipt.
           const response = await call("POST", `${path}/exec`, {
             body: {
               command: command.command,
@@ -304,7 +304,37 @@ export default defineSandboxAdapter((context) => {
             },
             signal: io.signal,
           });
-          return forward(response, io);
+          const execId = response.headers.get("x-piship-exec-id");
+          let cancellation;
+          const cancel = () => {
+            cancellation ??= (async () => {
+              if (!/^[0-9a-f]{32}$/.test(execId ?? ""))
+                throw unavailable("the sandbox service did not identify the command");
+              await call("POST", `${path}/exec/${execId}/cancel`, {
+                timeoutMs: DISPOSE_TIMEOUT_MS,
+              });
+            })();
+            // The stream may take time to reject after the abort.
+            cancellation.catch(() => undefined);
+          };
+          io.signal.addEventListener("abort", cancel, { once: true });
+          if (io.signal.aborted) cancel();
+          try {
+            return await forward(response, io);
+          } finally {
+            io.signal.removeEventListener("abort", cancel);
+            if (io.signal.aborted) {
+              if (!cancellation) cancel();
+              try {
+                await cancellation;
+              } catch {
+                // No confirmation: retire the entire sandbox instead of
+                // allowing another command into an unverified process tree.
+                await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+                disposed = true;
+              }
+            }
+          }
         },
         async dispose() {
           // Called once and must not throw.
