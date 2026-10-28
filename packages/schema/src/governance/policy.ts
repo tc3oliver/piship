@@ -346,6 +346,17 @@ function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
       : list(scope.paths, `${path}.scope.paths`, declaredRoot);
   const tools = strings("tools");
   const commands = strings("commands");
+  const wrappers = new Set([
+    "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash",
+    "nu", "fish", "csh", "tcsh", "env", "sudo", "doas", "su",
+    "xargs", "eval", "exec", "nohup", "time", "timeout", "nice",
+    "command", "builtin", "busybox", "pwsh", "powershell", "cmd",
+    "watch", "script", "chroot", "flock", "setsid", "strace",
+    "stdbuf", "unbuffer", "parallel",
+  ]);
+  for (const [index, command] of (commands ?? []).entries())
+    if (wrappers.has(command.toLowerCase().replace(/\\.(?:exe|cmd|bat)$/, "")))
+      fail(`${path}.scope.commands[${index}]`, "Shell wrappers cannot be granted");
   const mcp =
     scope.mcp === undefined
       ? undefined
