@@ -1433,6 +1433,28 @@ describe("locked headless task grants", () => {
       ),
     ).toMatchObject({ outcome: "deny" });
   });
+  it("revokes a published child grant when the parent's monotonic deadline expires", async () => {
+    const parent = await open({
+      taskGrants: declaredPolicy,
+      taskGrantId: "ci-fix",
+    });
+    const binding = parent.session.manifestGrantBinding;
+    if (!binding) throw new Error("missing manifest grant");
+    const env: NodeJS.ProcessEnv = {};
+    publishSubagentOwner(
+      parent.stateDir,
+      { session: parent.session.sessionId, workspace: parent.workspace, grant: binding },
+      env,
+    );
+    const owner = authenticateSubagentChild(parent.stateDir, env);
+    expect(owner.grantActive?.()).toBe(true);
+    const later = performance.now() + 30 * 60_000;
+    vi.spyOn(performance, "now").mockReturnValue(later);
+    expect(parent.session.listGrants()).toEqual([]);
+    expect(parent.session.manifestGrantBinding).toBeUndefined();
+    expect(owner.grantActive?.()).toBe(false);
+  });
+
   it("expires a locked grant without refreshing its lifetime", async () => {
     const { session, workspace } = await open({
       taskGrants: declaredPolicy,

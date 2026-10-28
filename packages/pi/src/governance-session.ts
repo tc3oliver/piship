@@ -1472,6 +1472,11 @@ export class GovernanceSession {
     for (const [id, { grant, deadline, uses }] of this.#grants)
       if (!(now < Date.parse(grant.expiresAt)) || !(elapsed < deadline)) {
         this.#grants.delete(id);
+        if (grant.createdBy === "manifest" && !this.options.subagent) {
+          if (this.#manifestBinding?.id === id)
+            this.#manifestBinding = undefined;
+          revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
+        }
         this.#grantEvent("policy.grant_expired", { grant: id, uses });
       }
   }
