@@ -777,7 +777,9 @@ export class Sandboxes {
       throw new SandboxError(404, "not_found", "There is no such command");
     const stopped = await this.cancelExec(exec, "requested");
     await exec.done;
-    if (!stopped)
+    // A marked-only cancellation cannot reclaim descendants that dropped
+    // the execution ID while another command was running.
+    if (!stopped.success || !stopped.sweep)
       throw new SandboxError(
         502,
         "runtime_error",
@@ -799,7 +801,7 @@ export class Sandboxes {
    */
   cancelExec(exec, reason) {
     if (exec.cancelling) return exec.cancelling;
-    if (exec.finished) return Promise.resolve(false);
+    if (exec.finished) return Promise.resolve({ success: false, sweep: false });
     const { session } = exec;
     const alone = [...session.execs.values()].every((other) => other === exec);
     const sweep = alone && session.main !== undefined;
@@ -807,7 +809,7 @@ export class Sandboxes {
     exec.reason = reason;
     exec.cancelling = (async () => {
       exec.child.kill("SIGKILL");
-      if (session.closing) return false;
+      if (session.closing) return { success: false, sweep };
       const result = await this.#docker.run(
         cancelArguments(
           this.#config,
@@ -829,7 +831,7 @@ export class Sandboxes {
         ...(result.error ? { runtimeError: true } : {}),
         ...(result.timedOut ? { timedOut: true } : {}),
       });
-      return success;
+      return { success, sweep };
     })();
     if (sweep) {
       const sweeping = exec.cancelling.finally(() => {
