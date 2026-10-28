@@ -158,7 +158,7 @@ async function open(setup: Setup = {}) {
     }) as unknown as ManagedFetch,
     resolveTemplate: (_key: string, template: string) => template,
     homeDir: home,
-    user: setup.principal === null ? undefined : (setup.principal ?? "alice"),
+    user: setup.principal === null ? null : (setup.principal ?? "alice"),
   };
   const session = await GovernanceSession.open(options);
   sessions.push(session);
