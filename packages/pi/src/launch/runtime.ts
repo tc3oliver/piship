@@ -525,6 +525,7 @@ function publishChildren(ctx: LaunchContext, gov: GovernanceSession | null) {
     publishSubagentOwner(ctx.stateDir, {
       session: gov?.sessionId ?? "",
       workspace: realpathSync.native(process.cwd()),
+      ...(gov?.manifestGrantBinding ? { grant: gov.manifestGrantBinding } : {}),
     });
   } catch (error) {
     ctx.err(
