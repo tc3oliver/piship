@@ -19,8 +19,8 @@ import {
   type ProjectTrustPolicy,
   PROVIDER_TRUST_CLASSES,
   TASK_GRANT_MODES,
-  type TaskGrantsPolicy,
   type DeclaredTaskGrant,
+  type TaskGrantsPolicy,
   type TrustSetting,
   USER_AUTO_SETTINGS,
 } from "../governance.js";
@@ -289,54 +289,74 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
-/** Workspace-relative roots only: no separators escaping the project or glob expansion. */
+/** Workspace-relative roots only; reject Windows aliases and non-canonical spellings. */
 function declaredRoot(value: unknown, path: string): string {
   const root = plainString(value, path, 512);
+  const segments = root.split("/");
   if (
-    root.startsWith("/") ||
-    root.includes("\\") ||
-    root.includes(":") ||
-    /[*?[{}]/.test(root) ||
-    root.split("/").some((segment) => segment === ".." || segment === "")
+    root !== "." &&
+    (root.startsWith("/") ||
+      root.includes("\\") ||
+      root.includes(":") ||
+      /[*?[{}\0]/.test(root) ||
+      segments.some(
+        (segment) =>
+          !segment ||
+          segment === "." ||
+          segment === ".." ||
+          /[. ]$/.test(segment) ||
+          /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment),
+      ))
   )
-    fail(path, "Expected a workspace-relative path without globs or parent traversal");
+    fail(path, "Expected a canonical workspace-relative path without globs or traversal");
   return root;
+}
+
+function exactGrantName(value: unknown, path: string): string {
+  const name = plainString(value, path, 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(name))
+    fail(path, "Expected an exact name without globs or shell syntax");
+  return name;
 }
 
 function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
   const item = record(value, path, [
-    "id", "task", "ttlMinutes", "scope", "inheritToSubagents",
+    "id",
+    "task",
+    "ttlMinutes",
+    "scope",
+    "inheritToSubagents",
   ]);
   const id = plainString(item.id, `${path}.id`, 64);
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id))
     fail(`${path}.id`, "Expected a plain grant ID");
   const scope = record(item.scope, `${path}.scope`, [
-    "paths", "tools", "commands", "mcp",
+    "paths",
+    "tools",
+    "commands",
+    "mcp",
   ]);
   const strings = (key: "tools" | "commands") =>
-    scope[key] === undefined ? undefined : list(
-      scope[key], `${path}.scope.${key}`,
-      (entry, at) => plainString(entry, at, 128),
-    );
-  const paths = scope.paths === undefined ? undefined : list(
-    scope.paths, `${path}.scope.paths`, declaredRoot,
-  );
+    scope[key] === undefined
+      ? undefined
+      : list(scope[key], `${path}.scope.${key}`, exactGrantName);
+  const paths =
+    scope.paths === undefined
+      ? undefined
+      : list(scope.paths, `${path}.scope.paths`, declaredRoot);
   const tools = strings("tools");
   const commands = strings("commands");
-  const mcp = scope.mcp === undefined ? undefined : list(
-    scope.mcp, `${path}.scope.mcp`, (entry, at) => {
-      const server = record(entry, at, ["server", "tools"]);
-      const name = plainString(server.server, `${at}.server`, 128);
-      if (name.includes(":") || /[*?[{}]/.test(name))
-        fail(`${at}.server`, "Expected an exact MCP server ID");
-      const allowed = list(server.tools, `${at}.tools`,
-        (tool, atTool) => plainString(tool, atTool, 128),
-      );
-      if (!allowed.length || allowed.some((tool) => /[*?[{}]/.test(tool)))
-        fail(`${at}.tools`, "Declare explicit MCP tool names");
-      return { server: name, tools: allowed };
-    },
-  );
+  const mcp =
+    scope.mcp === undefined
+      ? undefined
+      : list(scope.mcp, `${path}.scope.mcp`, (entry, at) => {
+          const server = record(entry, at, ["server", "tools"]);
+          const name = exactGrantName(server.server, `${at}.server`);
+          const allowed = list(server.tools, `${at}.tools`, exactGrantName);
+          if (!allowed.length)
+            fail(`${at}.tools`, "Declare explicit MCP tool names");
+          return { server: name, tools: allowed };
+        });
   if (![paths, tools, commands, mcp].some((entries) => entries?.length))
     fail(`${path}.scope`, "A declared grant needs a non-empty scope");
   return {
@@ -349,7 +369,11 @@ function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
       ...(commands === undefined ? {} : { commands }),
       ...(mcp === undefined ? {} : { mcp }),
     },
-    inheritToSubagents: bool(item.inheritToSubagents, `${path}.inheritToSubagents`, false),
+    inheritToSubagents: bool(
+      item.inheritToSubagents,
+      `${path}.inheritToSubagents`,
+      false,
+    ),
   };
 }
 
@@ -387,23 +411,22 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
   );
   if (declared?.length && mode !== "session")
     fail("policy.taskGrants.mode", "Declared grants require mode session");
-  const cap = grants.maxTtlMinutes === undefined ? 480 : Number(grants.maxTtlMinutes);
+  const cap =
+    grants.maxTtlMinutes === undefined
+      ? 480
+      : positiveInteger(
+          grants.maxTtlMinutes,
+          "policy.taskGrants.maxTtlMinutes",
+          1,
+          24 * 60,
+        );
   for (const [index, entry] of (declared ?? []).entries())
     if (entry.ttlMinutes > cap)
       fail(`policy.taskGrants.declared[${index}].ttlMinutes`, "Grant lifetime exceeds maxTtlMinutes");
   return {
     mode,
     ...(declared === undefined ? {} : { declared }),
-    ...(grants.maxTtlMinutes === undefined
-      ? {}
-      : {
-          maxTtlMinutes: positiveInteger(
-            grants.maxTtlMinutes,
-            "policy.taskGrants.maxTtlMinutes",
-            1,
-            24 * 60,
-          ),
-        }),
+    ...(grants.maxTtlMinutes === undefined ? {} : { maxTtlMinutes: cap }),
     ...(actions === undefined ? {} : { actions }),
     ...(grants.wildcardHosts === undefined
       ? {}
