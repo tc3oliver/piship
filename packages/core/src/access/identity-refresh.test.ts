@@ -169,6 +169,13 @@ describe("identity refresh expiry", () => {
       ).toThrow("Identity refresh returned an expired session");
   });
 
+  it("rejects an invalid expiry before the refreshed token can be stored", () => {
+    const now = Date.now();
+    expect(() =>
+      requireUnexpiredIdentity({ expiresAt: new Date(NaN) }, now),
+    ).toThrow("Identity refresh returned an invalid expiry");
+  });
+
   it("accepts a still-valid session or one without a declared expiry", () => {
     const now = Date.now();
     const valid = { expiresAt: new Date(now + 1) };
