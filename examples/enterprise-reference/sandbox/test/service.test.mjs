@@ -1301,6 +1301,10 @@ describe("commands", () => {
       entry.args.includes(`echo started; ${command}`),
     );
     assert.ok(call, "the command did not start");
+    assert.equal(
+      response.headers.get("x-piship-exec-id"),
+      call.environment.variables.PISHIP_EXEC_ID,
+    );
     return {
       execId: call.environment.variables.PISHIP_EXEC_ID,
       abort: () => controller.abort(),
@@ -1316,6 +1320,43 @@ describe("commands", () => {
           entry.id === execId &&
           entry.phase === phase,
       );
+
+  it("acknowledges an authenticated cancellation only after its sweep", async () => {
+    service.fault("CANCEL_DELAY", true, "700");
+    try {
+      const running = await begin("sleep 36");
+      const path = `/v1/sandboxes/${id}/exec/${running.execId}/cancel`;
+      assert.equal(
+        (await service.call(path, { method: "POST", key: "bob" })).status,
+        404,
+      );
+      assert.equal(
+        (
+          await service.call(
+            `/v1/sandboxes/${id}/exec/${"0".repeat(32)}/cancel`,
+            { method: "POST", key: "alice" },
+          )
+        ).status,
+        404,
+      );
+      const answer = await service.call(path, {
+        method: "POST",
+        key: "alice",
+      });
+      assert.equal(answer.status, 204);
+      const done = cancels(running.execId, "done")[0];
+      assert.ok(done, "cancellation was acknowledged before the sweep");
+      assert.ok(Date.now() >= done.t);
+      assert.equal(alive(service.commandPid(running.execId)), false);
+      assert.equal(service.logs().includes(running.execId), false);
+      assert.equal(
+        (await service.call(path, { method: "POST", key: "alice" })).status,
+        404,
+      );
+    } finally {
+      service.fault("CANCEL_DELAY", false);
+    }
+  });
 
   it("sweeps the sandbox when the only command is cancelled, and marks its own processes when another runs", async () => {
     // Alone: everything but the sandbox's init and its main process, whose ID
