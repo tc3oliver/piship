@@ -955,7 +955,7 @@
     {
       "kind": "adapters",
       "path": "acme-container-sandbox.mjs",
-      "sha256": "91e0631451513e525ae9fab5ca5380c665afb9a6984efd57c3f80aa5a7577b14"
+      "sha256": "3a198b4738871d9b36e38f9f20c3a3c35b42c72ca3000d73ed4712e36c8c9632"
     },
     {
       "kind": "instructions",
@@ -1423,7 +1423,7 @@
     ]
   },
   "digests": {
-    "resources": "sha256-6ca734a0e441dd0aa6e039ec6f9c7776197b434ba067a2d7ef8e2162e724ce24",
+    "resources": "sha256-812525c208520fe2c1fa44effbcc4c2f609dc064c6f67f152a030ca95a1c721a",
     "policy": "sha256-f64239024b79119a5bc1660b88b6bc1a159301e9cf071dc7eef67b89f6a2af5d",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
