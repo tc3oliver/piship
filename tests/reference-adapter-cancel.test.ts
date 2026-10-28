@@ -24,7 +24,9 @@ const profile: SandboxProfile = {
 };
 
 describe("reference sandbox cancellation", () => {
-  it("waits for server cleanup confirmation after the stream aborts", async () => {
+  it.each([204, 502])(
+    "waits for cancellation (HTTP %i), retiring on failed confirmation",
+    async (status) => {
     let acknowledge!: (response: Response) => void;
     let requested!: () => void;
     let ready!: () => void;
@@ -96,9 +98,14 @@ describe("reference sandbox cancellation", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     expect(calls.filter((call) => call.startsWith("DELETE"))).toEqual([]);
-    acknowledge(new Response(null, { status: 204 }));
+    acknowledge(new Response(null, { status }));
     await expect(execution).rejects.toThrow("stopped");
     expect(calls.filter((call) => call.endsWith("/cancel"))).toHaveLength(1);
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(
+      status === 204 ? 0 : 1,
+    );
     await instance.dispose();
-  });
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
+    },
+  );
 });
