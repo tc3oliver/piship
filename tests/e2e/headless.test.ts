@@ -448,7 +448,11 @@ describe("headless workload distribution (local fixtures)", () => {
     };
     publishSubagentOwner(
       acmeState,
-      { session: "parent-session", workspace: realpathSync.native(temp), grant },
+      {
+        session: "parent-session",
+        workspace: realpathSync.native(temp),
+        grant,
+      },
       parentEnv,
     );
     const child = (rest: string[], marker = "1", nonce = true) =>
@@ -495,11 +499,11 @@ describe("headless workload distribution (local fixtures)", () => {
     const childRun = await child(["--no-session", "Task: repair CI"]);
     services.knobs.gatewayMode = "text";
     services.knobs.toolScript = [];
+    expect(childRun.status, childRun.stderr).toBe(0);
     expect(readFileSync(join(temp, "tasks", "ci-result.txt"), "utf8")).toBe(
       "CI ready",
     );
     expect(services.state.toolResults).toHaveLength(4);
-    expect(childRun.status, childRun.stderr).toBe(0);
     const events = childRun.stdout
       .split("\n")
       .filter(Boolean)
