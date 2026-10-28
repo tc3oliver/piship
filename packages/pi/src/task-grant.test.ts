@@ -1274,7 +1274,7 @@ describe("locked headless task grants", () => {
       taskGrantId: "ci-fix",
     });
     expect(
-      await session.decide("filesystem.write", join(workspace, "src", "a.ts")),
+      await session.decide("filesystem.write", join(workspace, "src", "a.ts"), undefined),
     ).toMatchObject({ outcome: "allow", approval: "grant", grantId: "ci-fix" });
     for (const path of [
       join(workspace, "other.ts"),
@@ -1283,7 +1283,7 @@ describe("locked headless task grants", () => {
       join(workspace, ".pi", "extensions", "unsafe.ts"),
     ])
       expect(
-        await session.decide("filesystem.write", path),
+        await session.decide("filesystem.write", path, undefined),
       ).toMatchObject({ outcome: "deny" });
     const audit = await events();
     const created = audit.find((event) => event.event === "policy.grant_created");
@@ -1296,7 +1296,7 @@ describe("locked headless task grants", () => {
     expect(JSON.stringify(created)).not.toContain(workspace);
     expect(session.revokeGrant("ci-fix")).toBe(true);
     expect(
-      await session.decide("filesystem.write", join(workspace, "src", "b.ts")),
+      await session.decide("filesystem.write", join(workspace, "src", "b.ts"), undefined),
     ).toMatchObject({ outcome: "deny" });
   });
 
@@ -1341,12 +1341,12 @@ describe("locked headless task grants", () => {
       },
     });
     const file = join(parent.workspace, "src", "child.ts");
-    expect(await child.session.decide("filesystem.write", file)).toMatchObject({
+    expect(await child.session.decide("filesystem.write", file, undefined)).toMatchObject({
       outcome: "allow",
       approval: "grant",
     });
     expect(parent.session.revokeGrant("ci-fix")).toBe(true);
-    expect(await child.session.decide("filesystem.write", file)).toMatchObject({
+    expect(await child.session.decide("filesystem.write", file, undefined)).toMatchObject({
       outcome: "deny",
     });
     expect(child.session.listGrants()).toEqual([]);
@@ -1380,6 +1380,7 @@ describe("locked headless task grants", () => {
       await noGrant.session.decide(
         "filesystem.write",
         join(parent.workspace, "src", "child.ts"),
+        undefined,
       ),
     ).toMatchObject({ outcome: "deny" });
   });
