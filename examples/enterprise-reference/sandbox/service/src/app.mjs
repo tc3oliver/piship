@@ -24,7 +24,8 @@ const ROUTES = [
   },
   {
     method: "POST",
-    pattern: /^\/v1\/sandboxes\/([A-Za-z0-9_]{1,40})\/exec\/([0-9a-f]{32})\/cancel$/,
+    pattern:
+      /^\/v1\/sandboxes\/([A-Za-z0-9_]{1,40})\/exec\/([0-9a-f]{32})\/cancel$/,
     name: "cancel",
   },
 ];
