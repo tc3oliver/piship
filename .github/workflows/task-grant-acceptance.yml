@@ -41,7 +41,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Headless workload grant E2E
-        run: node node_modules/vitest/vitest.mjs run --config vitest.e2e.config.ts tests/e2e/headless.test.ts
+        run: node node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/e2e/headless.test.ts
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
           PISHIP_REQUIRE_ISOLATOR: ${{ runner.os != 'Windows' && '1' || '0' }}
