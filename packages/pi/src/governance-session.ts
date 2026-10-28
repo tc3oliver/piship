@@ -28,6 +28,7 @@ import {
 } from "@piship/contracts";
 import {
   auditRotation,
+  canonicalJson,
   setUserAuto,
   type UserAutoStatus,
   userAutoDenied,
@@ -1145,6 +1146,9 @@ export class GovernanceSession {
       .update(JSON.stringify(this.manifest.policy))
       .digest("hex");
     const manifestDigest = this.options.lock.manifest.sha256;
+    const lockDigest = `sha256-${createHash("sha256")
+      .update(canonicalJson(this.options.lock))
+      .digest("hex")}`;
     const principal = this.options.user ?? null;
     if (this.options.lock.deployment.mode === "managed" && !principal)
       throw new PiShipError(
@@ -1157,6 +1161,7 @@ export class GovernanceSession {
       (!declared.inheritToSubagents ||
         !parent?.grantActive?.() ||
         inherited.manifestDigest !== manifestDigest ||
+        inherited.lockDigest !== lockDigest ||
         inherited.policyDigest !== policyDigest ||
         inherited.principal !== principal ||
         inherited.projectRoot !== root ||
@@ -1226,6 +1231,7 @@ export class GovernanceSession {
       this.#manifestBinding = {
         id,
         manifestDigest,
+        lockDigest,
         policyDigest,
         principal,
         projectRoot: root,
@@ -1328,6 +1334,9 @@ export class GovernanceSession {
                   .update(JSON.stringify(this.manifest.policy))
                   .digest("hex"),
                 manifestDigest: this.options.lock.manifest.sha256,
+                lockDigest: `sha256-${createHash("sha256")
+                  .update(canonicalJson(this.options.lock))
+                  .digest("hex")}`,
                 ...(this.options.subagent
                   ? { parentSession: this.options.subagent.parentSession }
                   : {}),

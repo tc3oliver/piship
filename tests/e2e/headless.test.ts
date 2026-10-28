@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
+import { canonicalJson } from "@piship/core";
 import { publishSubagentOwner } from "@piship/pi";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
@@ -439,6 +440,9 @@ describe("headless workload distribution (local fixtures)", () => {
     const grant = {
       id: "ci-fix",
       manifestDigest: lock.manifest.sha256,
+      lockDigest: `sha256-${createHash("sha256")
+        .update(canonicalJson(lock))
+        .digest("hex")}`,
       policyDigest: createHash("sha256")
         .update(JSON.stringify(lock.governance.manifest.policy))
         .digest("hex"),

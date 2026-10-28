@@ -63,6 +63,7 @@ const WORKTREE = /^pi-agent-worktree-[A-Za-z0-9_-]+-[0-9a-f]{8}$/;
 export interface SubagentGrantBinding {
   readonly id: string;
   readonly manifestDigest: string;
+  readonly lockDigest: string;
   readonly policyDigest: string;
   readonly principal: string | null;
   readonly projectRoot: string;
@@ -109,6 +110,8 @@ function validBinding(value: unknown): value is SubagentGrantBinding {
     /^[A-Za-z0-9_-]{1,64}$/.test(grant.id) &&
     typeof grant.manifestDigest === "string" &&
     /^sha256-[0-9a-f]{64}$/.test(grant.manifestDigest) &&
+    typeof grant.lockDigest === "string" &&
+    /^sha256-[0-9a-f]{64}$/.test(grant.lockDigest) &&
     typeof grant.policyDigest === "string" &&
     /^[0-9a-f]{64}$/.test(grant.policyDigest) &&
     (grant.principal === null || typeof grant.principal === "string") &&

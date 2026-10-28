@@ -1419,6 +1419,17 @@ describe("locked headless task grants", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    await expect(
+      open({
+        taskGrants: declaredPolicy,
+        workspaceOverride: parent.workspace,
+        subagent: {
+          parentSession: parent.session.sessionId,
+          grant: { ...binding, lockDigest: `sha256-${"0".repeat(64)}` },
+          grantActive: () => true,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
     const noGrant = await open({
       taskGrants: declaredPolicy,
       workspaceOverride: parent.workspace,
