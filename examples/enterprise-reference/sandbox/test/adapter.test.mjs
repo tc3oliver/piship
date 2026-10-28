@@ -431,11 +431,14 @@ describe("running a command", () => {
   });
 
   it("ends with PiShip's cancellation, whatever the connection does", async () => {
-    let pending;
-    const { instance } = await running(
+    let started;
+    const inFlight = new Promise((resolve) => {
+      started = resolve;
+    });
+    const { instance, calls } = await running(
       (call) =>
-        new Promise((resolve, reject) => {
-          pending = { resolve };
+        new Promise((_resolve, reject) => {
+          started();
           call.signal.addEventListener("abort", () =>
             reject(new DOMException("aborted", "AbortError")),
           );
@@ -446,10 +449,10 @@ describe("running a command", () => {
       { command: "sleep 30", cwd: "/w", workspacePath: ".", env: {} },
       sink.io,
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await inFlight;
     sink.controller.abort(new Error("timeout"));
     await assert.rejects(run, (error) => error.message === "timeout");
-    assert.ok(pending);
+    assert.equal(calls.filter((call) => call.method === "DELETE").length, 1);
   });
 
   it("stops asking once it has been disposed, and disposing never throws or repeats", async () => {
