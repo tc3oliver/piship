@@ -143,6 +143,7 @@ export async function launchPiDistribution(
   let requestedModel: string | undefined;
   let newSession = false;
   let yolo = false;
+  let taskGrantId: string | undefined;
   // The session options come first, in any order.
   for (;;) {
     if (args[0] === "--model" && requestedModel === undefined) {
@@ -153,12 +154,37 @@ export async function launchPiDistribution(
     } else if (args[0] === "--new-session" && !newSession) {
       newSession = true;
       args = args.slice(1);
+    } else if (args[0] === "--task-grant" && !taskGrantId) {
+      taskGrantId = args[1];
+      if (!taskGrantId || !/^[A-Za-z0-9_-]{1,64}$/.test(taskGrantId))
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          "--task-grant needs a declared grant ID",
+        );
+      args = args.slice(2);
     } else if (args[0] === "--yolo" && !yolo) {
       yolo = true;
       args = args.slice(1);
     } else break;
   }
-  const sessionOption = !!requestedModel || newSession || yolo;
+  const sessionOption = !!requestedModel || newSession || yolo || !!taskGrantId;
+  if (taskGrantId && (yolo || !metadata.governance))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--task-grant requires governance and cannot be combined with --yolo",
+    );
+  if (
+    taskGrantId &&
+    args.length > 0 &&
+    !(
+      args.length === 1 &&
+      (args[0] === "--smoke" || args[0] === "--smoke-model")
+    )
+  )
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--task-grant applies only to a session",
+    );
   if (yolo) {
     // It changes how a session decides asks: for a subcommand, --version, or
     // --help it means nothing, and nothing is started or written before that
@@ -258,7 +284,16 @@ export async function launchPiDistribution(
       ? { loginInline: (access) => loginInline(ctx, access) }
       : {}),
     ...(yolo ? { yolo: true } : {}),
-    ...(parent ? { subagent: { parentSession: parent.session } } : {}),
+    ...(taskGrantId ? { taskGrantId } : {}),
+    ...(parent
+      ? {
+          subagent: {
+            parentSession: parent.session,
+            ...(parent.grant ? { grant: parent.grant } : {}),
+            ...(parent.grantActive ? { grantActive: parent.grantActive } : {}),
+          },
+        }
+      : {}),
     ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
       ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),
@@ -313,9 +348,9 @@ export async function launchPiDistribution(
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback | uninstall [--purge --yes]\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback | uninstall [--purge --yes]\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
+        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke]${yoloHelp}`
         : "\n\nCommands:\n  doctor [--json] | version | uninstall [--purge --yes]";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,

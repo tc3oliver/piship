@@ -19,6 +19,7 @@ import {
   type ProjectTrustPolicy,
   PROVIDER_TRUST_CLASSES,
   TASK_GRANT_MODES,
+  type DeclaredTaskGrant,
   type TaskGrantsPolicy,
   type TrustSetting,
   USER_AUTO_SETTINGS,
@@ -288,6 +289,145 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
+/** Workspace-relative roots only; reject Windows aliases and non-canonical spellings. */
+function declaredRoot(value: unknown, path: string): string {
+  const root = plainString(value, path, 512);
+  const segments = root.split("/");
+  if (
+    root !== "." &&
+    (root.startsWith("/") ||
+      root.includes("\\") ||
+      root.includes(":") ||
+      /[*?[{}\0]/.test(root) ||
+      /[<>"|]/.test(root) ||
+      [...root].some((char) => char.charCodeAt(0) < 32) ||
+      segments.some(
+        (segment) =>
+          !segment ||
+          segment === "." ||
+          segment === ".." ||
+          /[. ]$/.test(segment) ||
+          /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment),
+      ))
+  )
+    fail(
+      path,
+      "Expected a canonical workspace-relative path without globs or traversal",
+    );
+  return root;
+}
+
+function exactGrantName(value: unknown, path: string): string {
+  const name = plainString(value, path, 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(name))
+    fail(path, "Expected an exact name without globs or shell syntax");
+  return name;
+}
+
+function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
+  const item = record(value, path, [
+    "id",
+    "task",
+    "ttlMinutes",
+    "scope",
+    "inheritToSubagents",
+  ]);
+  const id = plainString(item.id, `${path}.id`, 64);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id))
+    fail(`${path}.id`, "Expected a plain grant ID");
+  const scope = record(item.scope, `${path}.scope`, [
+    "paths",
+    "tools",
+    "commands",
+    "mcp",
+  ]);
+  const strings = (key: "tools" | "commands") =>
+    scope[key] === undefined
+      ? undefined
+      : list(scope[key], `${path}.scope.${key}`, exactGrantName);
+  const paths =
+    scope.paths === undefined
+      ? undefined
+      : list(scope.paths, `${path}.scope.paths`, declaredRoot);
+  const tools = strings("tools");
+  const commands = strings("commands");
+  const wrappers = new Set([
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "mksh",
+    "ash",
+    "yash",
+    "nu",
+    "fish",
+    "csh",
+    "tcsh",
+    "env",
+    "sudo",
+    "doas",
+    "su",
+    "xargs",
+    "eval",
+    "exec",
+    "nohup",
+    "time",
+    "timeout",
+    "nice",
+    "command",
+    "builtin",
+    "busybox",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "watch",
+    "script",
+    "chroot",
+    "flock",
+    "setsid",
+    "strace",
+    "stdbuf",
+    "unbuffer",
+    "parallel",
+  ]);
+  for (const [index, command] of (commands ?? []).entries())
+    if (wrappers.has(command.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "")))
+      fail(
+        `${path}.scope.commands[${index}]`,
+        "Shell wrappers cannot be granted",
+      );
+  const mcp =
+    scope.mcp === undefined
+      ? undefined
+      : list(scope.mcp, `${path}.scope.mcp`, (entry, at) => {
+          const server = record(entry, at, ["server", "tools"]);
+          const name = exactGrantName(server.server, `${at}.server`);
+          const allowed = list(server.tools, `${at}.tools`, exactGrantName);
+          if (!allowed.length)
+            fail(`${at}.tools`, "Declare explicit MCP tool names");
+          return { server: name, tools: allowed };
+        });
+  if (![paths, tools, commands, mcp].some((entries) => entries?.length))
+    fail(`${path}.scope`, "A declared grant needs a non-empty scope");
+  return {
+    id,
+    task: plainString(item.task, `${path}.task`, 128),
+    ttlMinutes: positiveInteger(item.ttlMinutes, `${path}.ttlMinutes`, 1, 1440),
+    scope: {
+      ...(paths === undefined ? {} : { paths }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(commands === undefined ? {} : { commands }),
+      ...(mcp === undefined ? {} : { mcp }),
+    },
+    inheritToSubagents: bool(
+      item.inheritToSubagents,
+      `${path}.inheritToSubagents`,
+      false,
+    ),
+  };
+}
+
 /** `policy.taskGrants` (piship/v1alpha5): the cap a session applies to task grants. */
 function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
   if (value === undefined) return undefined;
@@ -296,6 +436,7 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
     "maxTtlMinutes",
     "actions",
     "wildcardHosts",
+    "declared",
   ]);
   const mode = oneOf(grants.mode, "policy.taskGrants.mode", TASK_GRANT_MODES);
   const actions =
@@ -315,18 +456,36 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
       "policy.taskGrants.actions",
       "Expected at least one action; use mode off to forbid grants, or omit actions for no restriction",
     );
+  const declared =
+    grants.declared === undefined
+      ? undefined
+      : list(
+          grants.declared,
+          "policy.taskGrants.declared",
+          declaredTaskGrant,
+          (entry) => entry.id,
+        );
+  if (declared?.length && mode !== "session")
+    fail("policy.taskGrants.mode", "Declared grants require mode session");
+  const cap =
+    grants.maxTtlMinutes === undefined
+      ? 480
+      : positiveInteger(
+          grants.maxTtlMinutes,
+          "policy.taskGrants.maxTtlMinutes",
+          1,
+          24 * 60,
+        );
+  for (const [index, entry] of (declared ?? []).entries())
+    if (entry.ttlMinutes > cap)
+      fail(
+        `policy.taskGrants.declared[${index}].ttlMinutes`,
+        "Grant lifetime exceeds maxTtlMinutes",
+      );
   return {
     mode,
-    ...(grants.maxTtlMinutes === undefined
-      ? {}
-      : {
-          maxTtlMinutes: positiveInteger(
-            grants.maxTtlMinutes,
-            "policy.taskGrants.maxTtlMinutes",
-            1,
-            24 * 60,
-          ),
-        }),
+    ...(declared === undefined ? {} : { declared }),
+    ...(grants.maxTtlMinutes === undefined ? {} : { maxTtlMinutes: cap }),
     ...(actions === undefined ? {} : { actions }),
     ...(grants.wildcardHosts === undefined
       ? {}

@@ -126,6 +126,119 @@ describe("policy.taskGrants", () => {
     ).toEqual({ mode: "session" });
   });
 
+  it("locks typed, bounded manifest grant declarations", () => {
+    const declared = [
+      {
+        id: "fix-ci",
+        task: "CI repair",
+        ttlMinutes: 30,
+        scope: {
+          paths: [".", "src"],
+          commands: ["npm"],
+          mcp: [{ server: "gh", tools: ["create_pr"] }],
+        },
+        inheritToSubagents: true,
+      },
+    ];
+    expect(
+      parseManifest(
+        withGrants(MANAGED, {
+          mode: "session",
+          maxTtlMinutes: 45,
+          declared,
+        }),
+      ).governance?.policy.taskGrants?.declared,
+    ).toEqual(declared);
+  });
+
+  it("refuses grant declarations that escape workspace, exceed TTL, or lack scope", () => {
+    const base = {
+      id: "ci",
+      task: "test",
+      ttlMinutes: 10,
+      scope: { paths: ["."] },
+      inheritToSubagents: true,
+    };
+    const invalid: [object, string][] = [
+      [
+        { ...base, scope: { paths: ["../secrets"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/./lib"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["C:/Windows"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ['src/bad"name'] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/bad|name"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/bad\\tname"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/CON.txt"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { tools: ["write*"] } },
+        "policy.taskGrants.declared[0].scope.tools[0]",
+      ],
+      [
+        { ...base, scope: { commands: ["bash"] } },
+        "policy.taskGrants.declared[0].scope.commands[0]",
+      ],
+      [
+        { ...base, scope: { commands: ["cmd.exe"] } },
+        "policy.taskGrants.declared[0].scope.commands[0]",
+      ],
+      [
+        { ...base, scope: { commands: ["powershell.exe"] } },
+        "policy.taskGrants.declared[0].scope.commands[0]",
+      ],
+      [
+        { ...base, scope: { mcp: [{ server: "gh", tools: ["*"] }] } },
+        "policy.taskGrants.declared[0].scope.mcp[0].tools[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["/etc"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: [".pi/**"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [{ ...base, ttlMinutes: 50 }, "policy.taskGrants.declared[0].ttlMinutes"],
+      [{ ...base, scope: {} }, "policy.taskGrants.declared[0].scope"],
+    ];
+    for (const [declared, field] of invalid)
+      expect(
+        fieldError(
+          withGrants(MANAGED, {
+            mode: "session",
+            maxTtlMinutes: 45,
+            declared: [declared],
+          }),
+        ),
+      ).toMatchObject({ field });
+    expect(
+      fieldError(
+        withGrants(MANAGED, {
+          mode: "off",
+          declared: [base],
+        }),
+      ),
+    ).toMatchObject({ field: "policy.taskGrants.mode" });
+  });
+
   it("is an unknown field before piship/v1alpha5", () => {
     const v1alpha3 = withGrants(
       MANAGED,

@@ -2,6 +2,7 @@
 // origin, sandbox, policy, resource and provider trust, capability state, and
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
@@ -27,6 +28,7 @@ import {
 } from "@piship/contracts";
 import {
   auditRotation,
+  canonicalJson,
   setUserAuto,
   type UserAutoStatus,
   userAutoDenied,
@@ -62,6 +64,10 @@ import {
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
+import {
+  revokePublishedSubagentGrant,
+  type SubagentGrantBinding,
+} from "./launch/subagent-owner.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
@@ -384,6 +390,7 @@ export class GovernanceSession {
       await startMcp(session, session.#projectServers);
       startupMark("governance_mcp_started");
       await computeCapabilities(session);
+      await session.#activateDeclaredGrant();
       bestEffort(() => metrics.recordStartupLatency(Date.now() - started));
       bestEffort(() => metrics.save());
       return session;
@@ -1115,6 +1122,134 @@ export class GovernanceSession {
     return minutes === undefined ? GRANT_MAX_TTL_MS : minutes * 60_000;
   }
 
+  #manifestBinding: SubagentGrantBinding | undefined;
+  /** Verified lexical workspace spelling, used only for manifest grants. */
+  #manifestPathAlias: { lexical: string; canonical: string } | undefined;
+
+  /** Only a verified task selection can activate a locked declaration. */
+  async #activateDeclaredGrant(): Promise<void> {
+    const parent = this.options.subagent;
+    const inherited = parent?.grant;
+    const id = parent ? inherited?.id : this.options.taskGrantId;
+    if (!id) return;
+    const declared = this.manifest.policy.taskGrants?.declared?.find(
+      (entry) => entry.id === id,
+    );
+    if (!declared || !this.grantsAllowed)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        `Task grant ${id} is not declared or enabled by this locked distribution`,
+        { component: "policy" },
+      );
+    const root = realpathNearest(this.project.root);
+    const policyDigest = createHash("sha256")
+      .update(JSON.stringify(this.manifest.policy))
+      .digest("hex");
+    const manifestDigest = this.options.lock.manifest.sha256;
+    const lockDigest = `sha256-${createHash("sha256")
+      .update(canonicalJson(this.options.lock))
+      .digest("hex")}`;
+    const principal = this.options.user ?? null;
+    if (this.options.lock.deployment.mode === "managed" && !principal)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "A managed task grant requires an authenticated principal",
+        { component: "policy" },
+      );
+    if (
+      inherited &&
+      (!declared.inheritToSubagents ||
+        !parent?.grantActive?.() ||
+        inherited.manifestDigest !== manifestDigest ||
+        inherited.lockDigest !== lockDigest ||
+        inherited.policyDigest !== policyDigest ||
+        inherited.principal !== principal ||
+        inherited.projectRoot !== root ||
+        !(Date.now() < Date.parse(inherited.expiresAt)))
+    )
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "The parent task grant is no longer valid for this principal, project, policy or release",
+        { component: "policy" },
+      );
+    const paths = declared.scope.paths?.map((path) => {
+      const absolute = resolve(root, path);
+      const lexical = relative(root, absolute);
+      const canonical = realpathNearest(absolute);
+      const physical = relative(root, canonical);
+      const inside = (part: string) =>
+        part === "" ||
+        (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
+      if (!inside(lexical) || !inside(physical))
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "A declared task grant path leaves the canonical project root",
+          { component: "policy" },
+        );
+      return absolute;
+    });
+    const expiresAt =
+      inherited?.expiresAt ??
+      new Date(Date.now() + declared.ttlMinutes * 60_000).toISOString();
+    const grant: TaskGrant = {
+      id: declared.id,
+      task: declared.task,
+      createdBy: "manifest",
+      expiresAt,
+      scope: {
+        ...(paths ? { paths } : {}),
+        ...(declared.scope.tools ? { tools: declared.scope.tools } : {}),
+        ...(declared.scope.commands
+          ? { commands: declared.scope.commands }
+          : {}),
+        ...(declared.scope.mcp ? { mcp: declared.scope.mcp } : {}),
+      },
+      inheritToSubagents: declared.inheritToSubagents,
+    };
+    await this.#storeGrant(grant);
+    // Windows may launch from an 8.3 cwd while realpath resolves the long
+    // spelling. Preserve only the project-root prefix, never an inner symlink.
+    // Both spellings must resolve to the same canonical project root.
+    if (process.platform === "win32") {
+      const cwdBelow = relative(root, realpathNearest(this.options.cwd));
+      const inside =
+        cwdBelow === "" ||
+        (cwdBelow !== ".." &&
+          !cwdBelow.startsWith(`..${sep}`) &&
+          !isAbsolute(cwdBelow));
+      if (inside) {
+        const depth = cwdBelow === "" ? 0 : cwdBelow.split(sep).length;
+        const lexical = resolve(this.options.cwd, ...Array(depth).fill(".."));
+        if (
+          relative(root, lexical) !== "" &&
+          relative(root, realpathNearest(lexical)) === ""
+        )
+          this.#manifestPathAlias = { lexical, canonical: root };
+      }
+    }
+    if (!parent && declared.inheritToSubagents)
+      this.#manifestBinding = {
+        id,
+        manifestDigest,
+        lockDigest,
+        policyDigest,
+        principal,
+        projectRoot: root,
+        expiresAt,
+      };
+  }
+
+  /** Only the manifest grant selected by the user may pass to children. */
+  get manifestGrantBinding(): SubagentGrantBinding | undefined {
+    const binding = this.#manifestBinding;
+    if (
+      !binding ||
+      this.#grants.get(binding.id)?.grant.createdBy !== "manifest"
+    )
+      return undefined;
+    return binding;
+  }
+
   /**
    * Add a task grant, with its path roots resolved to their real paths, and
    * return the stored copy, frozen. Throws POLICY_DENIED where grants are
@@ -1126,17 +1261,20 @@ export class GovernanceSession {
    * did not take its `policy.grant_created` event, which leaves it unadded.
    */
   async addGrant(grant: TaskGrant): Promise<TaskGrant> {
-    if (!this.grantsAllowed)
-      throw new PiShipError(
-        "POLICY_DENIED",
-        "Task grants are not available in a managed distribution",
-        { component: "policy" },
-      );
-    // This entry point is for /grant, not a source of locked manifest authority.
     if (grant.createdBy !== "user-command")
       throw new PiShipError(
         "CONFIG_INVALID",
         "Manifest task grants require locked distribution authority",
+        { component: "policy" },
+      );
+    return this.#storeGrant(grant);
+  }
+
+  async #storeGrant(grant: TaskGrant): Promise<TaskGrant> {
+    if (!this.grantsAllowed)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "Task grants are not enabled by this distribution",
         { component: "policy" },
       );
     this.#checkGrantSlot(grant.id);
@@ -1190,6 +1328,20 @@ export class GovernanceSession {
           grant: stored.id,
           createdBy: stored.createdBy,
           expiresAt: stored.expiresAt,
+          ...(stored.createdBy === "manifest"
+            ? {
+                policyDigest: createHash("sha256")
+                  .update(JSON.stringify(this.manifest.policy))
+                  .digest("hex"),
+                manifestDigest: this.options.lock.manifest.sha256,
+                lockDigest: `sha256-${createHash("sha256")
+                  .update(canonicalJson(this.options.lock))
+                  .digest("hex")}`,
+                ...(this.options.subagent
+                  ? { parentSession: this.options.subagent.parentSession }
+                  : {}),
+              }
+            : {}),
           ...grantScopeCounts(stored),
         },
       });
@@ -1290,6 +1442,9 @@ export class GovernanceSession {
     const entry = this.#grants.get(id);
     if (!entry) return false;
     this.#grants.delete(id);
+    if (this.#manifestBinding?.id === id) this.#manifestBinding = undefined;
+    if (entry.grant.createdBy === "manifest" && !this.options.subagent)
+      revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
     this.#grantEvent("policy.grant_revoked", { grant: id, uses: entry.uses });
     return true;
   }
@@ -1317,6 +1472,21 @@ export class GovernanceSession {
     };
   }
 
+  /** Map only a verified Windows project-root alias; keep inner symlink segments. */
+  #manifestAsk(ask: GrantAsk): GrantAsk {
+    const alias = this.#manifestPathAlias;
+    if (!alias || !isPathAction(ask.action) || !ask.resolvedResource)
+      return ask;
+    const below = relative(alias.lexical, ask.resource);
+    if (below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below))
+      return ask;
+    const lexical = resolve(alias.canonical, below);
+    // A moved link or a different physical target must not gain authority.
+    if (relative(realpathNearest(lexical), ask.resolvedResource) !== "")
+      return ask;
+    return { ...ask, resource: lexical };
+  }
+
   /** The first grant, in the order they were added, that covers every ask. */
   #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
     const actions = this.manifest.policy.taskGrants?.actions;
@@ -1328,8 +1498,21 @@ export class GovernanceSession {
       return undefined;
     const now = Date.now();
     this.#expireGrants(now);
-    for (const [id, { grant }] of this.#grants)
-      if (grantCovers(grant, asks, now)) return id;
+    for (const [id, { grant }] of this.#grants) {
+      if (
+        grant.createdBy === "manifest" &&
+        this.options.subagent?.grant?.id === id &&
+        !this.options.subagent.grantActive?.()
+      ) {
+        this.revokeGrant(id);
+        continue;
+      }
+      const scoped =
+        grant.createdBy === "manifest" && this.#manifestPathAlias
+          ? asks.map((ask) => this.#manifestAsk(ask))
+          : asks;
+      if (grantCovers(grant, scoped, now)) return id;
+    }
     return undefined;
   }
 
@@ -1339,6 +1522,15 @@ export class GovernanceSession {
     for (const [id, { grant, deadline, uses }] of this.#grants)
       if (!(now < Date.parse(grant.expiresAt)) || !(elapsed < deadline)) {
         this.#grants.delete(id);
+        if (grant.createdBy === "manifest" && !this.options.subagent) {
+          if (this.#manifestBinding?.id === id)
+            this.#manifestBinding = undefined;
+          revokePublishedSubagentGrant(
+            this.options.stateDir,
+            this.sessionId,
+            id,
+          );
+        }
         this.#grantEvent("policy.grant_expired", { grant: id, uses });
       }
   }
@@ -1512,6 +1704,9 @@ export class GovernanceSession {
         uses: 0,
         reason: "session.end",
       });
+    for (const [id, { grant }] of this.#grants)
+      if (grant.createdBy === "manifest" && !this.options.subagent)
+        revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
     for (const [id, { uses }] of this.#grants)
       this.#grantEvent("policy.grant_revoked", {
         grant: id,
