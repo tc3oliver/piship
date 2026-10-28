@@ -955,7 +955,7 @@
     {
       "kind": "adapters",
       "path": "acme-container-sandbox.mjs",
-      "sha256": "251814437a6ad822189ab875073d851359becd5eebc6c8c0baa06061efae65ff"
+      "sha256": "dcd5a2a6e53e6c2c775894a4175f7a8fcf1be38da7a77f5cd59df9a96ccd564c"
     },
     {
       "kind": "instructions",
