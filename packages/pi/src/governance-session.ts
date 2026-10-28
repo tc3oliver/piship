@@ -1186,7 +1186,9 @@ export class GovernanceSession {
       scope: {
         ...(paths ? { paths } : {}),
         ...(declared.scope.tools ? { tools: declared.scope.tools } : {}),
-        ...(declared.scope.commands ? { commands: declared.scope.commands } : {}),
+        ...(declared.scope.commands
+          ? { commands: declared.scope.commands }
+          : {}),
         ...(declared.scope.mcp ? { mcp: declared.scope.mcp } : {}),
       },
       inheritToSubagents: declared.inheritToSubagents,
