@@ -146,6 +146,7 @@ describe("policy.taskGrants", () => {
       [{ ...base, scope: { paths: ["C:/Windows"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
       [{ ...base, scope: { paths: ["src/CON.txt"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
       [{ ...base, scope: { tools: ["write*"] } }, "policy.taskGrants.declared[0].scope.tools[0]"],
+      [{ ...base, scope: { commands: ["bash"] } }, "policy.taskGrants.declared[0].scope.commands[0]"],
       [{ ...base, scope: { mcp: [{ server: "gh", tools: ["*"] }] } }, "policy.taskGrants.declared[0].scope.mcp[0].tools[0]"],
       [{ ...base, scope: { paths: ["/etc"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
       [{ ...base, scope: { paths: [".pi/**"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
