@@ -1356,6 +1356,23 @@ describe("commands", () => {
     }
   });
 
+  it("does not acknowledge a marked-only cancellation as full reclaim", async () => {
+    const first = await begin("sleep 37");
+    const second = await begin("sleep 38");
+    try {
+      const answer = await service.call(
+        `/v1/sandboxes/${id}/exec/${first.execId}/cancel`,
+        { method: "POST", key: "alice" },
+      );
+      assert.equal(answer.status, 502);
+      assert.equal(cancels(first.execId, "done")[0]?.mode, "marked");
+      assert.ok(alive(service.commandPid(second.execId)));
+    } finally {
+      second.abort();
+      await until(() => cancels(second.execId, "done")[0], "the final sweep");
+    }
+  });
+
   it("sweeps the sandbox when the only command is cancelled, and marks its own processes when another runs", async () => {
     // Alone: everything but the sandbox's init and its main process, whose ID
     // the service found at creation, so a process that dropped the command's
