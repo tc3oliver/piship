@@ -389,7 +389,7 @@ export class GovernanceSession {
       await startMcp(session, session.#projectServers);
       startupMark("governance_mcp_started");
       await computeCapabilities(session);
-      await session.activateDeclaredGrant();
+      await session.#activateDeclaredGrant();
       bestEffort(() => metrics.recordStartupLatency(Date.now() - started));
       bestEffort(() => metrics.save());
       return session;
@@ -1124,7 +1124,7 @@ export class GovernanceSession {
   #manifestBinding: SubagentGrantBinding | undefined;
 
   /** Only a verified task selection can activate a locked declaration. */
-  async activateDeclaredGrant(): Promise<void> {
+  async #activateDeclaredGrant(): Promise<void> {
     const parent = this.options.subagent;
     const inherited = parent?.grant;
     const id = parent ? inherited?.id : this.options.taskGrantId;

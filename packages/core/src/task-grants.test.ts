@@ -67,10 +67,13 @@ describe("policy.taskGrants in piship diff", () => {
       }),
     ]);
     expect(
-      changes({ ...base, declared: [grant] }, {
-        ...base,
-        declared: [{ ...grant, scope: { paths: ["."] } }],
-      }),
+      changes(
+        { ...base, declared: [grant] },
+        {
+          ...base,
+          declared: [{ ...grant, scope: { paths: ["."] } }],
+        },
+      ),
     ).toEqual([
       expect.objectContaining({
         item: "policy taskGrants.declared.ci-fix",
