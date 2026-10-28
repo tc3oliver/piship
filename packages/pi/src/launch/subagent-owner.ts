@@ -236,7 +236,9 @@ export function revokePublishedSubagentGrant(
   for (const path of published) {
     if (dirname(path) !== directory) continue;
     try {
-      const record = parse(readOwnedFile(path, MAX_RECORD_BYTES, { closed: true }));
+      const record = parse(
+        readOwnedFile(path, MAX_RECORD_BYTES, { closed: true }),
+      );
       if (!record || record.session !== session || record.grant?.id !== id)
         continue;
       const { grant: _grant, ...withoutGrant } = record;
