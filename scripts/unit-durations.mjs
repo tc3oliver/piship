@@ -12,13 +12,19 @@ for (const log of process.argv.slice(2)) {
   const text = readFileSync(log, "utf8").replace(/\^\[\[[0-9;]*m/g, "");
   const target = TARGETS.findIndex((name) => text.startsWith(`check (${name}`));
   if (target < 0) throw new Error(`${log} is not a CI check log`);
+  let parsed = 0;
   for (const [, file, value, unit] of text.matchAll(
     / [✓✗×❯↓] (\S+\.test\.ts) .*?\) +([\d.]+)(ms|s)\b/g,
   )) {
     const seconds = Number(value) / (unit === "ms" ? 1000 : 1);
     runs[target].set(file, [...(runs[target].get(file) ?? []), seconds]);
+    parsed += 1;
   }
+  if (parsed === 0) throw new Error(`${log} has no parsed Vitest file durations`);
 }
+for (const [index, durations] of runs.entries())
+  if (durations.size === 0)
+    throw new Error(`No unit durations for ${TARGETS[index]}`);
 const median = (values = [0]) =>
   [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const files = [...new Set(runs.flatMap((run) => [...run.keys()]))].sort();
