@@ -142,6 +142,11 @@ describe("policy.taskGrants", () => {
       scope: { paths: ["."] }, inheritToSubagents: true };
     const invalid: [object, string][] = [
       [{ ...base, scope: { paths: ["../secrets"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
+      [{ ...base, scope: { paths: ["src/./lib"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
+      [{ ...base, scope: { paths: ["C:/Windows"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
+      [{ ...base, scope: { paths: ["src/CON.txt"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
+      [{ ...base, scope: { tools: ["write*"] } }, "policy.taskGrants.declared[0].scope.tools[0]"],
+      [{ ...base, scope: { mcp: [{ server: "gh", tools: ["*"] }] } }, "policy.taskGrants.declared[0].scope.mcp[0].tools[0]"],
       [{ ...base, scope: { paths: ["/etc"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
       [{ ...base, scope: { paths: [".pi/**"] } }, "policy.taskGrants.declared[0].scope.paths[0]"],
       [{ ...base, ttlMinutes: 50 }, "policy.taskGrants.declared[0].ttlMinutes"],
