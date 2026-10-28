@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- Stored identity metadata with a malformed expiry is refused before its token is restored, so an invalid date cannot bypass expiry-triggered renewal.
 - Identity renewal rejects an invalid declared expiry before storing a refreshed token, instead of allowing an invalid date through the expiry check.
 - Identity renewal now refuses a refreshed token whose declared expiry has already passed, including a token concurrently stored by another process. It fails with `IDENTITY_EXPIRED` instead of persisting or reusing that token; valid sessions and sessions without a declared expiry retain their existing behavior.
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (for example `git log --format=%H` and `git show HEAD^`). Windows still treats both as cmd.exe syntax; chaining, substitution, redirection, and deny rules remain enforced.
