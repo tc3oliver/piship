@@ -63,7 +63,10 @@ async function distribution(options: { unsandboxed?: boolean } = {}) {
   )
     throw new Error("demo manifest patch did not apply");
   const configured = options.unsandboxed
-    ? source.replace("sandbox:\n  required: true", "sandbox:\n  required: false")
+    ? source.replace(
+        "sandbox:\n  required: true",
+        "sandbox:\n  required: false",
+      )
     : source;
   if (options.unsandboxed && configured === source)
     throw new Error("demo sandbox patch did not apply");
