@@ -7,6 +7,7 @@ import {
   isWorkloadIdentityProvider,
   normalizedIdentityProvider,
   normalizeIdentitySession,
+  parseIdentityMetadata,
 } from "./index.js";
 
 const TOKEN = "adapter-access-token-000";
@@ -57,6 +58,24 @@ describe("adapter identity sessions", () => {
     ])
       expect(() => normalizeIdentitySession(value)).toThrow(
         expect.objectContaining({ code: "IDENTITY_INVALID" }),
+      );
+  });
+
+  it("refuses malformed stored expiry before restoring an identity", () => {
+    const valid = identityMetadata(
+      {
+        subject: "user-1",
+        issuer: "https://idp.example",
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      },
+      "piship:acme:identity#1",
+    );
+    expect(parseIdentityMetadata(valid)).toEqual(valid);
+    const noExpiry = { ...valid, expiresAt: undefined };
+    expect(parseIdentityMetadata(noExpiry)).toEqual(noExpiry);
+    for (const expiresAt of ["", "not-a-date", null, 0, {}])
+      expect(() => parseIdentityMetadata({ ...valid, expiresAt })).toThrow(
+        expect.objectContaining({ code: "IDENTITY_REQUIRED" }),
       );
   });
 

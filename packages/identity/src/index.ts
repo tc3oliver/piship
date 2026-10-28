@@ -300,7 +300,10 @@ export function parseIdentityMetadata(value: unknown): IdentityMetadata {
     record.schema !== IDENTITY_METADATA_SCHEMA ||
     typeof record.subject !== "string" ||
     typeof record.issuer !== "string" ||
-    typeof record.secretRef !== "string"
+    typeof record.secretRef !== "string" ||
+    (record.expiresAt !== undefined &&
+      (typeof record.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(record.expiresAt))))
   )
     throw new PiShipError(
       "IDENTITY_REQUIRED",
