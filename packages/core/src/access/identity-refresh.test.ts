@@ -1,6 +1,6 @@
 import { PiShipError } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
-import { refreshWithRetry } from "./identity-refresh.js";
+import { refreshWithRetry, requireUnexpiredIdentity } from "./identity-refresh.js";
 
 const transient = () =>
   new PiShipError("GATEWAY_UNREACHABLE", "Identity provider unavailable", {
@@ -154,5 +154,24 @@ describe("identity refresh retry bounds", () => {
       ).rejects.toBeInstanceOf(PiShipError);
       expect(calls).toBe(1);
     }
+  });
+});
+
+
+describe("identity refresh expiry", () => {
+  it("rejects an already-expired refreshed or concurrently stored session", () => {
+    const now = Date.now();
+    for (const expiry of [now - 1, now])
+      expect(() =>
+        requireUnexpiredIdentity({ expiresAt: new Date(expiry) }, now),
+      ).toThrow("Identity refresh returned an expired session");
+  });
+
+  it("accepts a still-valid session or one without a declared expiry", () => {
+    const now = Date.now();
+    const valid = { expiresAt: new Date(now + 1) };
+    const unspecified = {};
+    expect(requireUnexpiredIdentity(valid, now)).toBe(valid);
+    expect(requireUnexpiredIdentity(unspecified, now)).toBe(unspecified);
   });
 });
