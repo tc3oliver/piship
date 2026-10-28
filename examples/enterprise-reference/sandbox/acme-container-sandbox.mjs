@@ -112,6 +112,13 @@ export default defineSandboxAdapter((context) => {
     await refuse(response);
   }
 
+  /** A successful HTTP response is not proof that cancellation or deletion finished. */
+  async function acknowledged(method, path) {
+    const response = await call(method, path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+    if (response.status !== 204)
+      throw unavailable("the sandbox service did not confirm cleanup");
+  }
+
   /** An answer's text, at most `MAX_JSON_BYTES` of it; the rest is dropped. */
   async function boundedText(response) {
     if (!response.body) return "";
@@ -313,7 +320,7 @@ export default defineSandboxAdapter((context) => {
               // Without response headers there is no command ID. Reclaim
               // the whole sandbox before settling or allowing another exec.
               retired = true;
-              await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+              await acknowledged("DELETE", path);
               disposed = true;
             }
             throw error;
@@ -326,9 +333,7 @@ export default defineSandboxAdapter((context) => {
                 throw unavailable(
                   "the sandbox service did not identify the command",
                 );
-              await call("POST", `${path}/exec/${execId}/cancel`, {
-                timeoutMs: DISPOSE_TIMEOUT_MS,
-              });
+              await acknowledged("POST", `${path}/exec/${execId}/cancel`);
             })();
             // The stream may take time to reject after the abort.
             cancellation.catch(() => undefined);
@@ -347,7 +352,7 @@ export default defineSandboxAdapter((context) => {
                 // No confirmation: retire the entire sandbox instead of
                 // allowing another command into an unverified process tree.
                 retired = true;
-                await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS });
+                await acknowledged("DELETE", path);
                 disposed = true;
               }
             }
@@ -357,7 +362,7 @@ export default defineSandboxAdapter((context) => {
           // Called once and must not throw.
           if (disposed) return;
           disposed = true;
-          await call("DELETE", path, { timeoutMs: DISPOSE_TIMEOUT_MS }).catch(
+          await acknowledged("DELETE", path).catch(
             () => undefined,
           );
         },
