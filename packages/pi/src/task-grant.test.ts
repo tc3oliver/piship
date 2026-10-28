@@ -1265,7 +1265,11 @@ const declaredPolicy: TaskGrantsPolicy = {
       id: "ci-fix",
       task: "CI repair",
       ttlMinutes: 20,
-      scope: { paths: ["src"], commands: ["npm"] },
+      scope: {
+        paths: ["src", "kept", "secret", ".pi"],
+        commands: ["npm"],
+        mcp: [{ server: "docs", tools: ["search"] }],
+      },
       inheritToSubagents: true,
     },
   ],
@@ -1286,6 +1290,15 @@ describe("locked headless task grants", () => {
         undefined,
       ),
     ).toMatchObject({ outcome: "allow", approval: "grant", grantId: "ci-fix" });
+    expect(
+      await session.decide("shell.execute", "npm test", undefined),
+    ).toMatchObject({ outcome: "allow", approval: "grant" });
+    expect(
+      await session.decide("mcp.tool.call", "docs:search", undefined),
+    ).toMatchObject({ outcome: "allow", approval: "grant" });
+    expect(
+      await session.decide("mcp.tool.call", "docs:delete", undefined),
+    ).toMatchObject({ outcome: "deny" });
     for (const path of [
       join(workspace, "other.ts"),
       join(workspace, "secret", "a.ts"),
@@ -1302,7 +1315,7 @@ describe("locked headless task grants", () => {
     expect(created?.detail).toMatchObject({
       grant: "ci-fix",
       createdBy: "manifest",
-      paths: 1,
+      paths: 4,
     });
     expect(JSON.stringify(created)).not.toContain("CI repair");
     expect(JSON.stringify(created)).not.toContain(workspace);
@@ -1408,4 +1421,22 @@ describe("locked headless task grants", () => {
       ),
     ).toMatchObject({ outcome: "deny" });
   });
+  it("expires a locked grant without refreshing its lifetime", async () => {
+    const { session, workspace } = await open({
+      taskGrants: declaredPolicy,
+      taskGrantId: "ci-fix",
+    });
+    const expiresAt = session.listGrants()[0]?.grant.expiresAt;
+    if (!expiresAt) throw new Error("missing expiry");
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(expiresAt) + 1);
+    expect(
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "expired.ts"),
+        undefined,
+      ),
+    ).toMatchObject({ outcome: "deny" });
+    expect(session.listGrants()).toEqual([]);
+  });
+
 });

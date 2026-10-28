@@ -102,4 +102,22 @@ describe("policy.taskGrants in reports", () => {
       ),
     ).toBeUndefined();
   });
+  it("reports locked task declarations in doctor inspection", () => {
+    const lock = demoLock({
+      mode: "session",
+      declared: [
+        {
+          id: "ci-fix",
+          task: "CI repair",
+          ttlMinutes: 20,
+          scope: { paths: ["src"] },
+          inheritToSubagents: true,
+        },
+      ],
+    });
+    expect(
+      formatInspection(inspection(lock as never, "/nonexistent-state")),
+    ).toMatch(/grant tasks\s+1 declared/);
+  });
+
 });

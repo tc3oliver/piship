@@ -108,6 +108,14 @@ export function formatInspection(info: Inspection): string {
             ),
           ]
         : []),
+      ...(policy.taskGrants?.declared?.length
+        ? [
+            row(
+              "grant tasks",
+              `${policy.taskGrants.declared.length} declared`,
+            ),
+          ]
+        : []),
       row(
         "sandbox",
         `${sandbox.provider ?? "native"}${sandbox.required ? ", required" : ""}, network ${sandbox.network.mode}`,
