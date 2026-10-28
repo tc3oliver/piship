@@ -583,6 +583,14 @@ describe("headless workload distribution (local fixtures)", () => {
       JSON.parse(readFileSync(join(acmeState, "logs", "metrics.json"), "utf8")),
     ).not.toThrow();
 
+    // Subsequent workload runs may change principal. Do not carry the
+    // previous principal's task grant into their renewal fan-out.
+    publishSubagentOwner(
+      acmeState,
+      { session: "parent-session", workspace: realpathSync(temp) },
+      parentEnv,
+    );
+
     // 3. Managed policy stays enforced: model allowlist and entitlement,
     //    and the network policy for the adapter's own requests.
     const personalModel = await run(["--model", "openai/gpt-4o", "--smoke"]);
