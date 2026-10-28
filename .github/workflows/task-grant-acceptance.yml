@@ -1,7 +1,13 @@
 name: Task Grant Acceptance
 on:
-  push:
-    branches: [feat/315-manifest-task-grants]
+  pull_request:
+    paths:
+      - '.github/workflows/task-grant-acceptance.yml'
+      - 'packages/schema/**'
+      - 'packages/policy/**'
+      - 'packages/pi/**'
+      - 'tests/e2e/headless.test.ts'
+  workflow_dispatch:
 concurrency:
   group: task-grant-acceptance-${{ github.ref }}
   cancel-in-progress: true
