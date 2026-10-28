@@ -71,7 +71,7 @@ describe("reference sandbox cancellation", () => {
         if (init?.method === "DELETE") return new Response(null, { status: 204 });
         throw new Error("unexpected sandbox request");
       };
-      const backend = adapter({
+      const backend = await adapter({
         distributionId: "reference-test",
         endpoint: "http://127.0.0.1:12345",
         fetch,
