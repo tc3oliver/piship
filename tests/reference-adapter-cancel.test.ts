@@ -44,9 +44,7 @@ describe("reference sandbox cancellation", () => {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(
-              new TextEncoder().encode(
-                `${JSON.stringify({ stream: "stdout", data: Buffer.from("ready").toString("base64") })}\n`,
-              ),
+              new TextEncoder().encode('{"stream":"stdout","data":"cmVhZHk="}\\n'),
             );
             init?.signal?.addEventListener(
               "abort",
@@ -78,7 +76,13 @@ describe("reference sandbox cancellation", () => {
     const controller = new AbortController();
     const execution = instance.exec(
       { command: "sleep 30", cwd: "/workspace", workspacePath: ".", env: {} },
-      { signal: controller.signal, onStdout() { ready(); }, onStderr() {} },
+      {
+        signal: controller.signal,
+        onStdout() {
+          ready();
+        },
+        onStderr() {},
+      },
     );
     await outputReady;
     controller.abort(new Error("stopped"));
