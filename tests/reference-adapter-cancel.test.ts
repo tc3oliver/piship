@@ -113,6 +113,7 @@ describe("reference sandbox cancellation", () => {
       expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
     },
   );
+
   it("reclaims the sandbox before settling an abort without exec headers", async () => {
     let started!: () => void;
     let deleting!: () => void;
@@ -162,13 +163,21 @@ describe("reference sandbox cancellation", () => {
       workspacePath: ".",
       env: {},
     };
-    const io = { signal: controller.signal, onStdout() {}, onStderr() {} };
+    const io = {
+      signal: controller.signal,
+      onStdout() {},
+      onStderr() {},
+    };
     const execution = instance.exec(command, io);
     await execStarted;
     controller.abort(new Error("stopped"));
     await deleteStarted;
     let settled = false;
-    void execution.finally(() => { settled = true; }).catch(() => undefined);
+    void execution
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => undefined);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     await expect(instance.exec(command, io)).rejects.toMatchObject({
@@ -179,5 +188,4 @@ describe("reference sandbox cancellation", () => {
     await instance.dispose();
     expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
   });
-
 });
