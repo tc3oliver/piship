@@ -3,7 +3,10 @@
 import { isCredentialName, stripCredentials } from "@piship/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GovernanceSession } from "./governance-session.js";
-import { governedBashOperations, uncontainedEnvironment } from "./governed-tools.js";
+import {
+  governedBashOperations,
+  uncontainedEnvironment,
+} from "./governed-tools.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
 
 describe("the subagent token's name", () => {
