@@ -20,7 +20,8 @@ for (const log of process.argv.slice(2)) {
     runs[target].set(file, [...(runs[target].get(file) ?? []), seconds]);
     parsed += 1;
   }
-  if (parsed === 0) throw new Error(`${log} has no parsed Vitest file durations`);
+  if (parsed === 0)
+    throw new Error(`${log} has no parsed Vitest file durations`);
 }
 for (const [index, durations] of runs.entries())
   if (durations.size === 0)
