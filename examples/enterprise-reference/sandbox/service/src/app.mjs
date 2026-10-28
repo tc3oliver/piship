@@ -22,6 +22,12 @@ const ROUTES = [
     pattern: /^\/v1\/sandboxes\/([A-Za-z0-9_]{1,40})\/exec$/,
     name: "exec",
   },
+  {
+    method: "POST",
+    pattern:
+      /^\/v1\/sandboxes\/([A-Za-z0-9_]{1,40})\/exec\/([0-9a-f]{32})\/cancel$/,
+    name: "cancel",
+  },
 ];
 
 function send(res, status, body, headers = {}) {
@@ -180,6 +186,9 @@ export function createApp({ config, keys, sandboxes, log }) {
         case "delete":
           await sandboxes.remove(owner, id);
           return send(res, 204);
+        case "cancel":
+          await sandboxes.cancel(owner, id, match?.[2] ?? "");
+          return send(res, 204);
         case "exec": {
           const request = parseExec(await readJson(req));
           const exec = await sandboxes.startExec(owner, id, request);
@@ -209,6 +218,7 @@ export function createApp({ config, keys, sandboxes, log }) {
             return;
           }
           res.writeHead(200, {
+            "x-piship-exec-id": exec.id,
             "content-type": "application/x-ndjson; charset=utf-8",
             "cache-control": "no-store",
             "x-content-type-options": "nosniff",
