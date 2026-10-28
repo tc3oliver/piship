@@ -1563,7 +1563,9 @@ describeIsolated(isolator)(
         { variant: "shared", fault: "retires sandbox on cancellation" },
         { only: ["cancellation"] },
       );
-      expect(report.results.find((item) => item.behavior === "cancellation")).toMatchObject({ status: "passed" });
+      expect(
+        report.results.find((item) => item.behavior === "cancellation"),
+      ).toMatchObject({ status: "passed" });
     }, 120_000);
 
     it.concurrent('fails only "ignores cancellation" when the event loop stalls as a command starts', async () => {
