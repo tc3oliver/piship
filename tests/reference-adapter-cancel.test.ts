@@ -188,4 +188,62 @@ describe("reference sandbox cancellation", () => {
     await instance.dispose();
     expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(1);
   });
+
+  it("refuses reuse when pre-header cancellation cleanup fails", async () => {
+    let started!: () => void;
+    const execStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const calls: string[] = [];
+    const fetch: ManagedFetch = async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path === "/v1/sandboxes")
+        return new Response(JSON.stringify({ id: sandboxId }), {
+          status: 201,
+        });
+      if (path.endsWith("/exec")) {
+        started();
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("fetch aborted")),
+            { once: true },
+          );
+        });
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 502 });
+      throw new Error("unexpected sandbox request");
+    };
+    const backend = await adapter({
+      distributionId: "reference-test",
+      endpoint: "http://127.0.0.1:12345",
+      fetch,
+    });
+    const instance = await backend.prepare({ profile });
+    const controller = new AbortController();
+    const command = {
+      command: "sleep 30",
+      cwd: "/workspace",
+      workspacePath: ".",
+      env: {},
+    };
+    const io = {
+      signal: controller.signal,
+      onStdout() {},
+      onStderr() {},
+    };
+    const execution = instance.exec(command, io);
+    await execStarted;
+    controller.abort(new Error("stopped"));
+    await expect(execution).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
+    await expect(instance.exec(command, io)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
+    await instance.dispose();
+    expect(calls.filter((call) => call.endsWith("/exec"))).toHaveLength(1);
+    expect(calls.filter((call) => call.startsWith("DELETE"))).toHaveLength(2);
+  });
 });
