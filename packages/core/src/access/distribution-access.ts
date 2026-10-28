@@ -74,7 +74,10 @@ import {
   boundedCredentialProvider,
   loadAdapter,
 } from "./adapters.js";
-import { refreshWithRetry, requireUnexpiredIdentity } from "./identity-refresh.js";
+import {
+  refreshWithRetry,
+  requireUnexpiredIdentity,
+} from "./identity-refresh.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
 import { SandboxCredential, type SignedInGuard } from "./sandbox-credential.js";
