@@ -20,6 +20,7 @@ import {
   PROVIDER_TRUST_CLASSES,
   TASK_GRANT_MODES,
   type TaskGrantsPolicy,
+  type DeclaredTaskGrant,
   type TrustSetting,
   USER_AUTO_SETTINGS,
 } from "../governance.js";
@@ -288,6 +289,70 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
+/** Workspace-relative roots only: no separators escaping the project or glob expansion. */
+function declaredRoot(value: unknown, path: string): string {
+  const root = plainString(value, path, 512);
+  if (
+    root.startsWith("/") ||
+    root.includes("\\\\") ||
+    root.includes(":") ||
+    /[*?[{}]/.test(root) ||
+    root.split("/").some((segment) => segment === ".." || segment === "")
+  )
+    fail(path, "Expected a workspace-relative path without globs or parent traversal");
+  return root;
+}
+
+function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
+  const item = record(value, path, [
+    "id", "task", "ttlMinutes", "scope", "inheritToSubagents",
+  ]);
+  const id = plainString(item.id, `${path}.id`, 64);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id))
+    fail(`${path}.id`, "Expected a plain grant ID");
+  const scope = record(item.scope, `${path}.scope`, [
+    "paths", "tools", "commands", "mcp",
+  ]);
+  const strings = (key: "tools" | "commands") =>
+    scope[key] === undefined ? undefined : list(
+      scope[key], `${path}.scope.${key}`,
+      (entry, at) => plainString(entry, at, 128),
+    );
+  const paths = scope.paths === undefined ? undefined : list(
+    scope.paths, `${path}.scope.paths`, declaredRoot,
+  );
+  const tools = strings("tools");
+  const commands = strings("commands");
+  const mcp = scope.mcp === undefined ? undefined : list(
+    scope.mcp, `${path}.scope.mcp`, (entry, at) => {
+      const server = record(entry, at, ["server", "tools"]);
+      const name = plainString(server.server, `${at}.server`, 128);
+      if (name.includes(":") || /[*?[{}]/.test(name))
+        fail(`${at}.server`, "Expected an exact MCP server ID");
+      const allowed = list(server.tools, `${at}.tools`,
+        (tool, atTool) => plainString(tool, atTool, 128),
+      );
+      if (!allowed.length || allowed.some((tool) => /[*?[{}]/.test(tool)))
+        fail(`${at}.tools`, "Declare explicit MCP tool names");
+      return { server: name, tools: allowed };
+    },
+  );
+  if (![paths, tools, commands, mcp].some((entries) => entries?.length))
+    fail(`${path}.scope`, "A declared grant needs a non-empty scope");
+  return {
+    id,
+    task: plainString(item.task, `${path}.task`, 128),
+    ttlMinutes: positiveInteger(item.ttlMinutes, `${path}.ttlMinutes`, 1, 1440),
+    scope: {
+      ...(paths === undefined ? {} : { paths }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(commands === undefined ? {} : { commands }),
+      ...(mcp === undefined ? {} : { mcp }),
+    },
+    inheritToSubagents: bool(item.inheritToSubagents, `${path}.inheritToSubagents`, false),
+  };
+}
+
 /** `policy.taskGrants` (piship/v1alpha5): the cap a session applies to task grants. */
 function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
   if (value === undefined) return undefined;
@@ -296,6 +361,7 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
     "maxTtlMinutes",
     "actions",
     "wildcardHosts",
+    "declared",
   ]);
   const mode = oneOf(grants.mode, "policy.taskGrants.mode", TASK_GRANT_MODES);
   const actions =
@@ -315,8 +381,19 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
       "policy.taskGrants.actions",
       "Expected at least one action; use mode off to forbid grants, or omit actions for no restriction",
     );
+  const declared = grants.declared === undefined ? undefined : list(
+    grants.declared, "policy.taskGrants.declared", declaredTaskGrant,
+    (entry) => entry.id,
+  );
+  if (declared?.length && mode !== "session")
+    fail("policy.taskGrants.mode", "Declared grants require mode session");
+  const cap = grants.maxTtlMinutes === undefined ? 480 : Number(grants.maxTtlMinutes);
+  for (const [index, entry] of (declared ?? []).entries())
+    if (entry.ttlMinutes > cap)
+      fail(`policy.taskGrants.declared[${index}].ttlMinutes`, "Grant lifetime exceeds maxTtlMinutes");
   return {
     mode,
+    ...(declared === undefined ? {} : { declared }),
     ...(grants.maxTtlMinutes === undefined
       ? {}
       : {
