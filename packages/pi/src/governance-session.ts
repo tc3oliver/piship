@@ -2,6 +2,7 @@
 // origin, sandbox, policy, resource and provider trust, capability state, and
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
@@ -62,6 +63,10 @@ import {
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
+import {
+  revokePublishedSubagentGrant,
+  type SubagentGrantBinding,
+} from "./launch/subagent-owner.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
@@ -384,6 +389,7 @@ export class GovernanceSession {
       await startMcp(session, session.#projectServers);
       startupMark("governance_mcp_started");
       await computeCapabilities(session);
+      await session.activateDeclaredGrant();
       bestEffort(() => metrics.recordStartupLatency(Date.now() - started));
       bestEffort(() => metrics.save());
       return session;
@@ -1115,6 +1121,95 @@ export class GovernanceSession {
     return minutes === undefined ? GRANT_MAX_TTL_MS : minutes * 60_000;
   }
 
+  #manifestBinding: SubagentGrantBinding | undefined;
+
+  /** Only a verified task selection can activate a locked declaration. */
+  async activateDeclaredGrant(): Promise<void> {
+    const parent = this.options.subagent;
+    const inherited = parent?.grant;
+    const id = parent ? inherited?.id : this.options.taskGrantId;
+    if (!id) return;
+    const declared = this.manifest.policy.taskGrants?.declared?.find(
+      (entry) => entry.id === id,
+    );
+    if (!declared || !this.grantsAllowed)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        `Task grant ${id} is not declared or enabled by this locked distribution`,
+        { component: "policy" },
+      );
+    const root = realpathNearest(this.project.root);
+    const policyDigest = createHash("sha256")
+      .update(JSON.stringify(this.manifest.policy))
+      .digest("hex");
+    const manifestDigest = this.options.lock.manifest.sha256;
+    const principal = this.options.user ?? null;
+    if (
+      inherited &&
+      (!declared.inheritToSubagents ||
+        !parent?.grantActive?.() ||
+        inherited.manifestDigest !== manifestDigest ||
+        inherited.policyDigest !== policyDigest ||
+        inherited.principal !== principal ||
+        inherited.projectRoot !== root ||
+        !(Date.now() < Date.parse(inherited.expiresAt)))
+    )
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "The parent task grant is no longer valid for this principal, project, policy or release",
+        { component: "policy" },
+      );
+    const paths = declared.scope.paths?.map((path) => {
+      const absolute = resolve(root, path);
+      const lexical = relative(root, absolute);
+      const canonical = realpathNearest(absolute);
+      const physical = relative(root, canonical);
+      const inside = (part: string) =>
+        part === "" ||
+        (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
+      if (!inside(lexical) || !inside(physical))
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "A declared task grant path leaves the canonical project root",
+          { component: "policy" },
+        );
+      return absolute;
+    });
+    const expiresAt =
+      inherited?.expiresAt ??
+      new Date(Date.now() + declared.ttlMinutes * 60_000).toISOString();
+    const grant: TaskGrant = {
+      id: declared.id,
+      task: declared.task,
+      createdBy: "manifest",
+      expiresAt,
+      scope: {
+        ...(paths ? { paths } : {}),
+        ...(declared.scope.tools ? { tools: declared.scope.tools } : {}),
+        ...(declared.scope.commands ? { commands: declared.scope.commands } : {}),
+        ...(declared.scope.mcp ? { mcp: declared.scope.mcp } : {}),
+      },
+      inheritToSubagents: declared.inheritToSubagents,
+    };
+    await this.#storeGrant(grant);
+    if (!parent && declared.inheritToSubagents)
+      this.#manifestBinding = {
+        id,
+        manifestDigest,
+        policyDigest,
+        principal,
+        projectRoot: root,
+        expiresAt,
+      };
+  }
+
+  /** Only the manifest grant selected by the user may pass to children. */
+  get manifestGrantBinding(): SubagentGrantBinding | undefined {
+    const binding = this.#manifestBinding;
+    if (!binding || !this.#grants.has(binding.id)) return undefined;
+    return binding;
+  }
+
   /**
    * Add a task grant, with its path roots resolved to their real paths, and
    * return the stored copy, frozen. Throws POLICY_DENIED where grants are
@@ -1126,17 +1221,20 @@ export class GovernanceSession {
    * did not take its `policy.grant_created` event, which leaves it unadded.
    */
   async addGrant(grant: TaskGrant): Promise<TaskGrant> {
-    if (!this.grantsAllowed)
-      throw new PiShipError(
-        "POLICY_DENIED",
-        "Task grants are not available in a managed distribution",
-        { component: "policy" },
-      );
-    // This entry point is for /grant, not a source of locked manifest authority.
     if (grant.createdBy !== "user-command")
       throw new PiShipError(
         "CONFIG_INVALID",
         "Manifest task grants require locked distribution authority",
+        { component: "policy" },
+      );
+    return this.#storeGrant(grant);
+  }
+
+  async #storeGrant(grant: TaskGrant): Promise<TaskGrant> {
+    if (!this.grantsAllowed)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "Task grants are not enabled by this distribution",
         { component: "policy" },
       );
     this.#checkGrantSlot(grant.id);
@@ -1190,6 +1288,17 @@ export class GovernanceSession {
           grant: stored.id,
           createdBy: stored.createdBy,
           expiresAt: stored.expiresAt,
+          ...(stored.createdBy === "manifest"
+            ? {
+                policyDigest: createHash("sha256")
+                  .update(JSON.stringify(this.manifest.policy))
+                  .digest("hex"),
+                manifestDigest: this.options.lock.manifest.sha256,
+                ...(this.options.subagent
+                  ? { parentSession: this.options.subagent.parentSession }
+                  : {}),
+              }
+            : {}),
           ...grantScopeCounts(stored),
         },
       });
@@ -1290,6 +1399,8 @@ export class GovernanceSession {
     const entry = this.#grants.get(id);
     if (!entry) return false;
     this.#grants.delete(id);
+    if (entry.grant.createdBy === "manifest" && !this.options.subagent)
+      revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
     this.#grantEvent("policy.grant_revoked", { grant: id, uses: entry.uses });
     return true;
   }
@@ -1328,8 +1439,17 @@ export class GovernanceSession {
       return undefined;
     const now = Date.now();
     this.#expireGrants(now);
-    for (const [id, { grant }] of this.#grants)
+    for (const [id, { grant }] of this.#grants) {
+      if (
+        grant.createdBy === "manifest" &&
+        this.options.subagent?.grant?.id === id &&
+        !this.options.subagent.grantActive?.()
+      ) {
+        this.revokeGrant(id);
+        continue;
+      }
       if (grantCovers(grant, asks, now)) return id;
+    }
     return undefined;
   }
 
