@@ -789,7 +789,7 @@ export class Sandboxes {
     exec.cancelling = (async () => {
       exec.child.kill("SIGKILL");
       if (session.closing) return;
-      await this.#docker.run(
+      const result = await this.#docker.run(
         cancelArguments(
           this.#config,
           session.name,
@@ -799,6 +799,16 @@ export class Sandboxes {
         ),
         { timeoutMs: 15_000 },
       );
+      // Only outcome metadata: never log the command, its ID, or Docker output.
+      this.#log("sandbox.exec.cancel", {
+        session: session.id,
+        reason,
+        mode: sweep ? "sweep" : "marked",
+        success: result.code === 0 && !result.error && !result.timedOut,
+        ...(result.code === null ? {} : { exit: result.code }),
+        ...(result.error ? { runtimeError: true } : {}),
+        ...(result.timedOut ? { timedOut: true } : {}),
+      });
     })();
     if (sweep) {
       const sweeping = exec.cancelling.finally(() => {

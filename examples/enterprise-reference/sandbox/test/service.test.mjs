@@ -1262,6 +1262,22 @@ describe("commands", () => {
       (await service.exec("alice", id, "printf still-here")).out,
       "still-here",
     );
+    const event = service
+      .logs()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .find(
+        (item) =>
+          item.event === "sandbox.exec.cancel" &&
+          item.session === id &&
+          item.reason === "disconnected",
+      );
+    assert.ok(event, "the cancellation outcome was not recorded");
+    assert.equal(event.mode, "sweep");
+    assert.equal(event.success, true);
+    assert.equal(event.exit, 0);
+    assert.equal(service.logs().includes(cancel.id), false);
   });
 
   /** Start `command` and return how to abort it; resolves once it has begun. */
