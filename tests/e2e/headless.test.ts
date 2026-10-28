@@ -500,9 +500,12 @@ describe("headless workload distribution (local fixtures)", () => {
     services.knobs.gatewayMode = "text";
     services.knobs.toolScript = [];
     expect(childRun.status, childRun.stderr).toBe(0);
-    expect(readFileSync(join(temp, "tasks", "ci-result.txt"), "utf8")).toBe(
-      "CI ready",
-    );
+    const resultFile = join(temp, "tasks", "ci-result.txt");
+    expect(
+      existsSync(resultFile),
+      JSON.stringify({ toolResults: services.state.toolResults }),
+    ).toBe(true);
+    expect(readFileSync(resultFile, "utf8")).toBe("CI ready");
     expect(services.state.toolResults).toHaveLength(4);
     const events = childRun.stdout
       .split("\n")
