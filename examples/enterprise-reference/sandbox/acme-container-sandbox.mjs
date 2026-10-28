@@ -292,7 +292,8 @@ export default defineSandboxAdapter((context) => {
       let retired = false;
       return {
         async exec(command, io) {
-          if (disposed || retired) throw unavailable("the sandbox was disposed");
+          if (disposed || retired)
+            throw unavailable("the sandbox was disposed");
           if (command.workspacePath === undefined)
             throw unavailable("the command runs outside the workspace");
           // The disconnected stream starts cleanup, but does not prove it
@@ -310,7 +311,9 @@ export default defineSandboxAdapter((context) => {
           const cancel = () => {
             cancellation ??= (async () => {
               if (!/^[0-9a-f]{32}$/.test(execId ?? ""))
-                throw unavailable("the sandbox service did not identify the command");
+                throw unavailable(
+                  "the sandbox service did not identify the command",
+                );
               await call("POST", `${path}/exec/${execId}/cancel`, {
                 timeoutMs: DISPOSE_TIMEOUT_MS,
               });
