@@ -83,6 +83,7 @@ interface Setup {
   readonly workspaceAt?: readonly string[];
   readonly workspaceOverride?: string;
   readonly taskGrantId?: string;
+  readonly principal?: string | null;
   readonly subagent?: Parameters<typeof GovernanceSession.open>[0]["subagent"];
   /** Run on the workspace before the session opens. */
   readonly prepare?: (workspace: string) => void;
@@ -157,7 +158,7 @@ async function open(setup: Setup = {}) {
     }) as unknown as ManagedFetch,
     resolveTemplate: (_key: string, template: string) => template,
     homeDir: home,
-    user: "alice",
+    user: setup.principal === null ? undefined : (setup.principal ?? "alice"),
   };
   const session = await GovernanceSession.open(options);
   sessions.push(session);
@@ -1276,6 +1277,17 @@ const declaredPolicy: TaskGrantsPolicy = {
 };
 
 describe("locked headless task grants", () => {
+  it("refuses managed task authority without an authenticated principal", async () => {
+    await expect(
+      open({
+        mode: "managed",
+        principal: null,
+        taskGrants: declaredPolicy,
+        taskGrantId: "ci-fix",
+      }),
+    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+  });
+
   it("requires an explicit task identity, preserves deny and keepsPrompt", async () => {
     const unselected = await open({ taskGrants: declaredPolicy });
     expect(unselected.session.listGrants()).toEqual([]);

@@ -1144,6 +1144,12 @@ export class GovernanceSession {
       .digest("hex");
     const manifestDigest = this.options.lock.manifest.sha256;
     const principal = this.options.user ?? null;
+    if (this.options.lock.deployment.mode === "managed" && !principal)
+      throw new PiShipError(
+        "POLICY_DENIED",
+        "A managed task grant requires an authenticated principal",
+        { component: "policy" },
+      );
     if (
       inherited &&
       (!declared.inheritToSubagents ||
