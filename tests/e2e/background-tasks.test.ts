@@ -288,7 +288,8 @@ describe.runIf(process.platform === "win32")(
             if (owner.exitCode !== null || owner.signalCode !== null)
               return resolve();
             const timer = setTimeout(
-              () => reject(new Error("PiShip owner did not exit after taskkill")),
+              () =>
+                reject(new Error("PiShip owner did not exit after taskkill")),
               10_000,
             );
             owner.once("close", () => {
