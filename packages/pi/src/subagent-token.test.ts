@@ -3,7 +3,7 @@
 import { isCredentialName, stripCredentials } from "@piship/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GovernanceSession } from "./governance-session.js";
-import { governedBashOperations } from "./governed-tools.js";
+import { governedBashOperations, uncontainedEnvironment } from "./governed-tools.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
 
 describe("the subagent token's name", () => {
@@ -13,6 +13,32 @@ describe("the subagent token's name", () => {
       stripCredentials({ PATH: "/bin", [SUBAGENT_TOKEN_ENV]: "secret" }),
     ).toEqual({ PATH: "/bin" });
   });
+});
+
+describe("uncontained command environments", () => {
+  it.each(["bash", "user-bash"] as const)(
+    "strips the subagent token from explicit and inherited %s environments",
+    (source) => {
+      const previous = process.env[SUBAGENT_TOKEN_ENV];
+      try {
+        process.env[SUBAGENT_TOKEN_ENV] = "inherited-canary";
+        const explicit = {
+          PATH: process.env.PATH,
+          [SUBAGENT_TOKEN_ENV]: "explicit-canary",
+        };
+        expect(uncontainedEnvironment(explicit, source)).not.toHaveProperty(
+          SUBAGENT_TOKEN_ENV,
+        );
+        expect(uncontainedEnvironment(undefined, source)).not.toHaveProperty(
+          SUBAGENT_TOKEN_ENV,
+        );
+        expect(explicit[SUBAGENT_TOKEN_ENV]).toBe("explicit-canary");
+      } finally {
+        if (previous === undefined) delete process.env[SUBAGENT_TOKEN_ENV];
+        else process.env[SUBAGENT_TOKEN_ENV] = previous;
+      }
+    },
+  );
 });
 
 describe.skipIf(process.platform === "win32")(
