@@ -41,7 +41,9 @@ describe("reference sandbox cancellation", () => {
         const path = new URL(String(url)).pathname;
         calls.push(`${init?.method ?? "GET"} ${path}`);
         if (path === "/v1/sandboxes")
-          return new Response(JSON.stringify({ id: sandboxId }), { status: 201 });
+          return new Response(JSON.stringify({ id: sandboxId }), {
+            status: 201,
+          });
         if (path.endsWith("/exec")) {
           const stream = new ReadableStream<Uint8Array>({
             start(controller) {
@@ -68,7 +70,8 @@ describe("reference sandbox cancellation", () => {
             acknowledge = resolve;
           });
         }
-        if (init?.method === "DELETE") return new Response(null, { status: 204 });
+        if (init?.method === "DELETE")
+          return new Response(null, { status: 204 });
         throw new Error("unexpected sandbox request");
       };
       const backend = await adapter({
