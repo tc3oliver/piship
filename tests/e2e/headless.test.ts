@@ -443,12 +443,12 @@ describe("headless workload distribution (local fixtures)", () => {
         .update(JSON.stringify(lock.governance.manifest.policy))
         .digest("hex"),
       principal,
-      projectRoot: realpathSync(temp),
+      projectRoot: realpathSync.native(temp),
       expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
     };
     publishSubagentOwner(
       acmeState,
-      { session: "parent-session", workspace: realpathSync(temp), grant },
+      { session: "parent-session", workspace: realpathSync.native(temp), grant },
       parentEnv,
     );
     const child = (rest: string[], marker = "1", nonce = true) =>
@@ -587,7 +587,7 @@ describe("headless workload distribution (local fixtures)", () => {
     // previous principal's task grant into their renewal fan-out.
     publishSubagentOwner(
       acmeState,
-      { session: "parent-session", workspace: realpathSync(temp) },
+      { session: "parent-session", workspace: realpathSync.native(temp) },
       parentEnv,
     );
 
