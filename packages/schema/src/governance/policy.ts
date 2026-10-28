@@ -294,7 +294,7 @@ function declaredRoot(value: unknown, path: string): string {
   const root = plainString(value, path, 512);
   if (
     root.startsWith("/") ||
-    root.includes("\\\\") ||
+    root.includes("\\") ||
     root.includes(":") ||
     /[*?[{}]/.test(root) ||
     root.split("/").some((segment) => segment === ".." || segment === "")
