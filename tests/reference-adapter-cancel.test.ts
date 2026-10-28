@@ -212,8 +212,7 @@ describe("reference sandbox cancellation", () => {
           );
         });
       }
-      if (init?.method === "DELETE")
-        return new Response(null, { status: 502 });
+      if (init?.method === "DELETE") return new Response(null, { status: 502 });
       throw new Error("unexpected sandbox request");
     };
     const backend = await adapter({
