@@ -1632,6 +1632,9 @@ export class GovernanceSession {
         uses: 0,
         reason: "session.end",
       });
+    for (const [id, { grant }] of this.#grants)
+      if (grant.createdBy === "manifest" && !this.options.subagent)
+        revokePublishedSubagentGrant(this.options.stateDir, this.sessionId, id);
     for (const [id, { uses }] of this.#grants)
       this.#grantEvent("policy.grant_revoked", {
         grant: id,
