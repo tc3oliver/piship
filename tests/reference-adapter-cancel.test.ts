@@ -44,7 +44,7 @@ describe("reference sandbox cancellation", () => {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(
-              new TextEncoder().encode('{"stream":"stdout","data":"cmVhZHk="}\\n'),
+              new TextEncoder().encode('{"stream":"stdout","data":"cmVhZHk="}\n'),
             );
             init?.signal?.addEventListener(
               "abort",
