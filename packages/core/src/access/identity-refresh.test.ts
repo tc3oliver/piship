@@ -1,6 +1,9 @@
 import { PiShipError } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
-import { refreshWithRetry, requireUnexpiredIdentity } from "./identity-refresh.js";
+import {
+  refreshWithRetry,
+  requireUnexpiredIdentity,
+} from "./identity-refresh.js";
 
 const transient = () =>
   new PiShipError("GATEWAY_UNREACHABLE", "Identity provider unavailable", {
