@@ -95,7 +95,8 @@ async function open(setup: Setup = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-grant-")));
   roots.push(root);
   const dir = join(root, "distribution");
-  const workspace = setup.workspaceOverride ??
+  const workspace =
+    setup.workspaceOverride ??
     join(root, ...(setup.workspaceAt ?? ["workspace"]));
   const home = join(root, "home");
   const stateDir = join(root, "state");
@@ -122,7 +123,12 @@ async function open(setup: Setup = {}) {
   const lock = {
     ...resolved,
     ...(setup.taskGrants?.declared
-      ? { manifest: { ...resolved.manifest, sha256: `sha256-${resolved.manifest.sha256}` } }
+      ? {
+          manifest: {
+            ...resolved.manifest,
+            sha256: `sha256-${resolved.manifest.sha256}`,
+          },
+        }
       : {}),
     deployment: { ...resolved.deployment, mode: setup.mode ?? "personal" },
     governance: {
@@ -1274,7 +1280,11 @@ describe("locked headless task grants", () => {
       taskGrantId: "ci-fix",
     });
     expect(
-      await session.decide("filesystem.write", join(workspace, "src", "a.ts"), undefined),
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "a.ts"),
+        undefined,
+      ),
     ).toMatchObject({ outcome: "allow", approval: "grant", grantId: "ci-fix" });
     for (const path of [
       join(workspace, "other.ts"),
@@ -1286,7 +1296,9 @@ describe("locked headless task grants", () => {
         await session.decide("filesystem.write", path, undefined),
       ).toMatchObject({ outcome: "deny" });
     const audit = await events();
-    const created = audit.find((event) => event.event === "policy.grant_created");
+    const created = audit.find(
+      (event) => event.event === "policy.grant_created",
+    );
     expect(created?.detail).toMatchObject({
       grant: "ci-fix",
       createdBy: "manifest",
@@ -1296,7 +1308,11 @@ describe("locked headless task grants", () => {
     expect(JSON.stringify(created)).not.toContain(workspace);
     expect(session.revokeGrant("ci-fix")).toBe(true);
     expect(
-      await session.decide("filesystem.write", join(workspace, "src", "b.ts"), undefined),
+      await session.decide(
+        "filesystem.write",
+        join(workspace, "src", "b.ts"),
+        undefined,
+      ),
     ).toMatchObject({ outcome: "deny" });
   });
 
@@ -1325,11 +1341,15 @@ describe("locked headless task grants", () => {
     const binding = parent.session.manifestGrantBinding;
     expect(binding).toMatchObject({ id: "ci-fix" });
     const env: NodeJS.ProcessEnv = {};
-    publishSubagentOwner(parent.stateDir, {
-      session: parent.session.sessionId,
-      workspace: parent.workspace,
-      ...(binding ? { grant: binding } : {}),
-    }, env);
+    publishSubagentOwner(
+      parent.stateDir,
+      {
+        session: parent.session.sessionId,
+        workspace: parent.workspace,
+        ...(binding ? { grant: binding } : {}),
+      },
+      env,
+    );
     const owner = authenticateSubagentChild(parent.stateDir, env);
     const child = await open({
       taskGrants: declaredPolicy,
@@ -1341,12 +1361,16 @@ describe("locked headless task grants", () => {
       },
     });
     const file = join(parent.workspace, "src", "child.ts");
-    expect(await child.session.decide("filesystem.write", file, undefined)).toMatchObject({
+    expect(
+      await child.session.decide("filesystem.write", file, undefined),
+    ).toMatchObject({
       outcome: "allow",
       approval: "grant",
     });
     expect(parent.session.revokeGrant("ci-fix")).toBe(true);
-    expect(await child.session.decide("filesystem.write", file, undefined)).toMatchObject({
+    expect(
+      await child.session.decide("filesystem.write", file, undefined),
+    ).toMatchObject({
       outcome: "deny",
     });
     expect(child.session.listGrants()).toEqual([]);
