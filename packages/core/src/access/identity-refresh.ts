@@ -14,7 +14,6 @@ export function requireUnexpiredIdentity<T extends { readonly expiresAt?: Date }
   return session;
 }
 
-
 const MAX_ATTEMPTS = 3;
 const MAX_RETRY_AFTER_MS = 1_000;
 
