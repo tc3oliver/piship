@@ -299,6 +299,7 @@ function declaredRoot(value: unknown, path: string): string {
       root.includes("\\") ||
       root.includes(":") ||
       /[*?[{}\0]/.test(root) ||
+      /[<>"|\u0000-\u001f]/.test(root) ||
       segments.some(
         (segment) =>
           !segment ||

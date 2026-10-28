@@ -162,7 +162,10 @@ describe("headless workload distribution (local fixtures)", () => {
         "  required: true\n  filesystem:",
         "  required: false\n  filesystem:",
       );
-    source = source.replace("      defaultMode: plan", "      defaultMode: build");
+    source = source.replace(
+      "      defaultMode: plan",
+      "      defaultMode: build",
+    );
     const writeRule = [
       "    - id: acme.workspace.write",
       "      action: filesystem.write",
@@ -177,8 +180,14 @@ describe("headless workload distribution (local fixtures)", () => {
     ].join("\n");
     expect(source).toContain(writeRule);
     expect(source).toContain(mcpRule);
-    source = source.replace(writeRule, writeRule.replace("effect: allow", "effect: ask"));
-    source = source.replace(mcpRule, mcpRule.replace("effect: allow", "effect: ask"));
+    source = source.replace(
+      writeRule,
+      writeRule.replace("effect: allow", "effect: ask"),
+    );
+    source = source.replace(
+      mcpRule,
+      mcpRule.replace("effect: allow", "effect: ask"),
+    );
     source = source.replace(
       "    actions: [filesystem.write, shell.execute]\n",
       [
@@ -473,7 +482,10 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(childModel.stderr).toContain("MODEL_DENIED");
     services.knobs.gatewayMode = "script";
     services.knobs.toolScript = [
-      { name: "write", arguments: { path: "tasks/ci-result.txt", content: "CI ready" } },
+      {
+        name: "write",
+        arguments: { path: "tasks/ci-result.txt", content: "CI ready" },
+      },
       { name: "read", arguments: { path: "tasks/ci-result.txt" } },
       { name: "bash", arguments: { command: "npm test" } },
       { name: "mcp__docs__search", arguments: { query: "release" } },
@@ -482,7 +494,9 @@ describe("headless workload distribution (local fixtures)", () => {
     const childRun = await child(["--no-session", "Task: repair CI"]);
     services.knobs.gatewayMode = "text";
     services.knobs.toolScript = [];
-    expect(readFileSync(join(temp, "tasks", "ci-result.txt"), "utf8")).toBe("CI ready");
+    expect(readFileSync(join(temp, "tasks", "ci-result.txt"), "utf8")).toBe(
+      "CI ready",
+    );
     expect(services.state.toolResults).toHaveLength(4);
     expect(childRun.status, childRun.stderr).toBe(0);
     const events = childRun.stdout
@@ -515,11 +529,14 @@ describe("headless workload distribution (local fixtures)", () => {
       ),
     ).toBe(true);
     for (const action of ["filesystem.write", "shell.execute", "mcp.tool.call"])
-      expect(grantAudit.some(
-        (event) => event.event === "policy.grant_used" &&
-          event.detail?.grant === "ci-fix" &&
-          event.detail?.action === action,
-      )).toBe(true);
+      expect(
+        grantAudit.some(
+          (event) =>
+            event.event === "policy.grant_used" &&
+            event.detail?.grant === "ci-fix" &&
+            event.detail?.action === action,
+        ),
+      ).toBe(true);
     const childChat = services.state.requests
       .filter((item: { path: string }) =>
         item.path.endsWith("/chat/completions"),

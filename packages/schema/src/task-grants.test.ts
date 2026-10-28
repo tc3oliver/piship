@@ -173,6 +173,18 @@ describe("policy.taskGrants", () => {
         "policy.taskGrants.declared[0].scope.paths[0]",
       ],
       [
+        { ...base, scope: { paths: ['src/bad"name'] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/bad|name"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
+        { ...base, scope: { paths: ["src/bad\\tname"] } },
+        "policy.taskGrants.declared[0].scope.paths[0]",
+      ],
+      [
         { ...base, scope: { paths: ["src/CON.txt"] } },
         "policy.taskGrants.declared[0].scope.paths[0]",
       ],

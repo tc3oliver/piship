@@ -1438,5 +1438,4 @@ describe("locked headless task grants", () => {
     ).toMatchObject({ outcome: "deny" });
     expect(session.listGrants()).toEqual([]);
   });
-
 });

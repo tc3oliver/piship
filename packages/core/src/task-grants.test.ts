@@ -119,5 +119,4 @@ describe("policy.taskGrants in reports", () => {
       formatInspection(inspection(lock as never, "/nonexistent-state")),
     ).toMatch(/grant tasks\s+1 declared/);
   });
-
 });
