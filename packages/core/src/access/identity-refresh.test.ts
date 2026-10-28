@@ -157,7 +157,6 @@ describe("identity refresh retry bounds", () => {
   });
 });
 
-
 describe("identity refresh expiry", () => {
   it("rejects an already-expired refreshed or concurrently stored session", () => {
     const now = Date.now();
