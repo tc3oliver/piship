@@ -308,7 +308,10 @@ function declaredRoot(value: unknown, path: string): string {
           /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment),
       ))
   )
-    fail(path, "Expected a canonical workspace-relative path without globs or traversal");
+    fail(
+      path,
+      "Expected a canonical workspace-relative path without globs or traversal",
+    );
   return root;
 }
 
@@ -347,16 +350,51 @@ function declaredTaskGrant(value: unknown, path: string): DeclaredTaskGrant {
   const tools = strings("tools");
   const commands = strings("commands");
   const wrappers = new Set([
-    "sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "yash",
-    "nu", "fish", "csh", "tcsh", "env", "sudo", "doas", "su",
-    "xargs", "eval", "exec", "nohup", "time", "timeout", "nice",
-    "command", "builtin", "busybox", "pwsh", "powershell", "cmd",
-    "watch", "script", "chroot", "flock", "setsid", "strace",
-    "stdbuf", "unbuffer", "parallel",
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "mksh",
+    "ash",
+    "yash",
+    "nu",
+    "fish",
+    "csh",
+    "tcsh",
+    "env",
+    "sudo",
+    "doas",
+    "su",
+    "xargs",
+    "eval",
+    "exec",
+    "nohup",
+    "time",
+    "timeout",
+    "nice",
+    "command",
+    "builtin",
+    "busybox",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "watch",
+    "script",
+    "chroot",
+    "flock",
+    "setsid",
+    "strace",
+    "stdbuf",
+    "unbuffer",
+    "parallel",
   ]);
   for (const [index, command] of (commands ?? []).entries())
     if (wrappers.has(command.toLowerCase().replace(/\\.(?:exe|cmd|bat)$/, "")))
-      fail(`${path}.scope.commands[${index}]`, "Shell wrappers cannot be granted");
+      fail(
+        `${path}.scope.commands[${index}]`,
+        "Shell wrappers cannot be granted",
+      );
   const mcp =
     scope.mcp === undefined
       ? undefined
@@ -416,10 +454,15 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
       "policy.taskGrants.actions",
       "Expected at least one action; use mode off to forbid grants, or omit actions for no restriction",
     );
-  const declared = grants.declared === undefined ? undefined : list(
-    grants.declared, "policy.taskGrants.declared", declaredTaskGrant,
-    (entry) => entry.id,
-  );
+  const declared =
+    grants.declared === undefined
+      ? undefined
+      : list(
+          grants.declared,
+          "policy.taskGrants.declared",
+          declaredTaskGrant,
+          (entry) => entry.id,
+        );
   if (declared?.length && mode !== "session")
     fail("policy.taskGrants.mode", "Declared grants require mode session");
   const cap =
@@ -433,7 +476,10 @@ function parseTaskGrants(value: unknown): TaskGrantsPolicy | undefined {
         );
   for (const [index, entry] of (declared ?? []).entries())
     if (entry.ttlMinutes > cap)
-      fail(`policy.taskGrants.declared[${index}].ttlMinutes`, "Grant lifetime exceeds maxTtlMinutes");
+      fail(
+        `policy.taskGrants.declared[${index}].ttlMinutes`,
+        "Grant lifetime exceeds maxTtlMinutes",
+      );
   return {
     mode,
     ...(declared === undefined ? {} : { declared }),
