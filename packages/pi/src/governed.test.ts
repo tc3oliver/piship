@@ -818,7 +818,10 @@ describe("governed built-in tools", () => {
 
       let prompts = 0;
       const ctx = choosing("Deny", seen);
-      ctx.ui.confirm = async () => ++prompts === 1;
+      ctx.ui.confirm = async () => {
+        prompts += 1;
+        return prompts === 1;
+      };
       await run(write, { path: "kept/first.txt", content: "once" }, ctx);
       await expect(
         run(write, { path: "kept/second.txt", content: "denied" }, ctx),
