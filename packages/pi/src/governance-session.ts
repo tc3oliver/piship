@@ -1122,6 +1122,8 @@ export class GovernanceSession {
   }
 
   #manifestBinding: SubagentGrantBinding | undefined;
+  /** Verified lexical workspace spelling, used only for manifest grants. */
+  #manifestPathAlias: { lexical: string; canonical: string } | undefined;
 
   /** Only a verified task selection can activate a locked declaration. */
   async #activateDeclaredGrant(): Promise<void> {
@@ -1200,6 +1202,26 @@ export class GovernanceSession {
       inheritToSubagents: declared.inheritToSubagents,
     };
     await this.#storeGrant(grant);
+    // Windows may launch from an 8.3 cwd while realpath resolves the long
+    // spelling. Preserve only the project-root prefix, never an inner symlink.
+    // Both spellings must resolve to the same canonical project root.
+    if (process.platform === "win32") {
+      const cwdBelow = relative(root, realpathNearest(this.options.cwd));
+      const inside =
+        cwdBelow === "" ||
+        (cwdBelow !== ".." &&
+          !cwdBelow.startsWith(`..${sep}`) &&
+          !isAbsolute(cwdBelow));
+      if (inside) {
+        const depth = cwdBelow === "" ? 0 : cwdBelow.split(sep).length;
+        const lexical = resolve(this.options.cwd, ...Array(depth).fill(".."));
+        if (
+          relative(root, lexical) !== "" &&
+          relative(root, realpathNearest(lexical)) === ""
+        )
+          this.#manifestPathAlias = { lexical, canonical: root };
+      }
+    }
     if (!parent && declared.inheritToSubagents)
       this.#manifestBinding = {
         id,
@@ -1441,6 +1463,25 @@ export class GovernanceSession {
     };
   }
 
+  /** Map only a verified Windows project-root alias; keep inner symlink segments. */
+  #manifestAsk(ask: GrantAsk): GrantAsk {
+    const alias = this.#manifestPathAlias;
+    if (!alias || !isPathAction(ask.action) || !ask.resolvedResource)
+      return ask;
+    const below = relative(alias.lexical, ask.resource);
+    if (
+      below === ".." ||
+      below.startsWith(`..${sep}`) ||
+      isAbsolute(below)
+    )
+      return ask;
+    const lexical = resolve(alias.canonical, below);
+    // A moved link or a different physical target must not gain authority.
+    if (relative(realpathNearest(lexical), ask.resolvedResource) !== "")
+      return ask;
+    return { ...ask, resource: lexical };
+  }
+
   /** The first grant, in the order they were added, that covers every ask. */
   #coveringGrant(asks: readonly GrantAsk[]): string | undefined {
     const actions = this.manifest.policy.taskGrants?.actions;
@@ -1461,7 +1502,11 @@ export class GovernanceSession {
         this.revokeGrant(id);
         continue;
       }
-      if (grantCovers(grant, asks, now)) return id;
+      const scoped =
+        grant.createdBy === "manifest" && this.#manifestPathAlias
+          ? asks.map((ask) => this.#manifestAsk(ask))
+          : asks;
+      if (grantCovers(grant, scoped, now)) return id;
     }
     return undefined;
   }
