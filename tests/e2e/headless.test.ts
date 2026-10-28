@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -161,7 +162,23 @@ describe("headless workload distribution (local fixtures)", () => {
         "  required: true\n  filesystem:",
         "  required: false\n  filesystem:",
       );
+    source = source.replace(
+      "    actions: [filesystem.write, shell.execute]\n",
+      [
+        "    actions: [filesystem.write, shell.execute]",
+        "    declared:",
+        "      - id: ci-fix",
+        "        task: CI repair",
+        "        ttlMinutes: 20",
+        "        scope:",
+        "          paths: [tasks]",
+        "          commands: [npm]",
+        "        inheritToSubagents: true",
+        "",
+      ].join("\n"),
+    );
     writeFileSync(manifest, source);
+    mkdirSync(join(temp, "tasks"));
 
     const home = join(temp, "home");
     const stateHome = join(temp, "state");
@@ -369,9 +386,26 @@ describe("headless workload distribution (local fixtures)", () => {
     // The record a running session publishes, with the nonce its subagent
     // tool hands its children; the marker alone is not enough.
     const parentEnv: NodeJS.ProcessEnv = {};
+    const lock = JSON.parse(readFileSync(join(directory, "piship.lock"), "utf8"));
+    const recorded = readFileSync(join(acmeState, "logs", "audit.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const principal = recorded.find((event) => event.event === "session.start")?.user;
+    expect(typeof principal).toBe("string");
+    const grant = {
+      id: "ci-fix",
+      manifestDigest: lock.manifest.sha256,
+      policyDigest: createHash("sha256")
+        .update(JSON.stringify(lock.governance.manifest.policy))
+        .digest("hex"),
+      principal,
+      projectRoot: realpathSync(temp),
+      expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+    };
     publishSubagentOwner(
       acmeState,
-      { session: "parent-session", workspace: realpathSync(temp) },
+      { session: "parent-session", workspace: realpathSync(temp), grant },
       parentEnv,
     );
     const child = (rest: string[], marker = "1", nonce = true) =>
@@ -412,6 +446,19 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(events.map((event: { type: string }) => event.type)).toEqual(
       expect.arrayContaining(["session", "agent_start", "agent_end"]),
     );
+    const grantAudit = readFileSync(join(acmeState, "logs", "audit.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((entry) => JSON.parse(entry));
+    expect(grantAudit.some(
+      (event) => event.event === "policy.grant_created" &&
+        event.detail?.grant === "ci-fix" &&
+        event.detail?.parentSession === "parent-session",
+    )).toBe(true);
+    expect(grantAudit.some(
+      (event) => event.event === "policy.grant_revoked" &&
+        event.detail?.grant === "ci-fix",
+    )).toBe(true);
     const childChat = services.state.requests
       .filter((item: { path: string }) =>
         item.path.endsWith("/chat/completions"),
