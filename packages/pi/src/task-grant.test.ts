@@ -1356,8 +1356,8 @@ describe("locked headless task grants", () => {
       workspaceOverride: parent.workspace,
       subagent: {
         parentSession: owner.session,
-        grant: owner.grant,
-        grantActive: owner.grantActive,
+        ...(owner.grant ? { grant: owner.grant } : {}),
+        ...(owner.grantActive ? { grantActive: owner.grantActive } : {}),
       },
     });
     const file = join(parent.workspace, "src", "child.ts");
