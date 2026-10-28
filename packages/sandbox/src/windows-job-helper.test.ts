@@ -104,7 +104,7 @@ describe("windowsJobHelper", () => {
     expect(second.calls).toEqual([]);
   });
 
-  it("disables the compiler\u0027s implicit csc.rsp configuration", () => {
+  it("disables the compiler's implicit csc.rsp configuration", () => {
     const { run, compilerArgs } = fakeRun();
     expect(windowsJobHelper({ host, systemRoot: windows, run })).toBeDefined();
     expect(compilerArgs[0]).toBe("/noconfig");
