@@ -1,9 +1,0 @@
-name: Reference E2E #332 verification
-on:
-  push:
-    branches: [feat/332-reference-e2e-reliability]
-permissions:
-  contents: read
-jobs:
-  reference:
-    uses: ./.github/workflows/reference-e2e.yml
