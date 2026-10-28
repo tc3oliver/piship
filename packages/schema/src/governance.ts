@@ -441,6 +441,23 @@ export type UserAutoSetting = (typeof USER_AUTO_SETTINGS)[number];
 export const TASK_GRANT_MODES = ["off", "session"] as const;
 export type TaskGrantMode = (typeof TASK_GRANT_MODES)[number];
 
+/** Locked grant intent; paths are workspace-relative, never absolute. */
+export interface DeclaredTaskGrant {
+  readonly id: string;
+  readonly task: string;
+  readonly ttlMinutes: number;
+  readonly scope: {
+    readonly paths?: readonly string[];
+    readonly tools?: readonly string[];
+    readonly commands?: readonly string[];
+    readonly mcp?: readonly {
+      readonly server: string;
+      readonly tools: readonly string[];
+    }[];
+  };
+  readonly inheritToSubagents: boolean;
+}
+
 /** `policy.taskGrants`: the cap on task grants a session may offer. */
 export interface TaskGrantsPolicy {
   readonly mode: TaskGrantMode;
@@ -450,6 +467,8 @@ export interface TaskGrantsPolicy {
   readonly actions?: readonly PolicyAction[];
   /** Whether a grant may name a wildcard host; absent means no. */
   readonly wildcardHosts?: boolean;
+  /** Optional locked, workspace-scoped headless task authority. */
+  readonly declared?: readonly DeclaredTaskGrant[];
 }
 
 export interface PolicyConfig {
