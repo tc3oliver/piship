@@ -251,7 +251,12 @@ export function revokePublishedSubagentGrant(
         rmSync(temporary, { force: true });
       }
     } catch {
-      // Child-side live checks still fail closed if the record is unreadable.
+      // A missing record also invalidates every child on its next decision.
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // The record is protected by the private state directory.
+      }
     }
   }
 }
