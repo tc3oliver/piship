@@ -19,6 +19,8 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  writeFileSync,
   rmSync,
   statSync,
   writeSync,
@@ -57,12 +59,23 @@ const PARTIAL_MS = 60_000;
 // directly under the OS temp directory (extensions/subagent/worktree.ts).
 const WORKTREE = /^pi-agent-worktree-[A-Za-z0-9_-]+-[0-9a-f]{8}$/;
 
+/** Locked authority, never an interactive approval or an unverified prompt label. */
+export interface SubagentGrantBinding {
+  readonly id: string;
+  readonly manifestDigest: string;
+  readonly policyDigest: string;
+  readonly principal: string | null;
+  readonly projectRoot: string;
+  readonly expiresAt: string;
+}
+
 /** What a child learns from the session that started it. */
 export interface SubagentParent {
-  /** The parent's session id, as its audit log records it ("" if ungoverned). */
   readonly session: string;
-  /** The real path of the parent's working directory. */
   readonly workspace: string;
+  readonly grant?: SubagentGrantBinding;
+  /** Rechecks the live owner record at every grant use. Never serialized. */
+  readonly grantActive?: () => boolean;
 }
 
 interface OwnerRecord extends SubagentParent {
@@ -88,6 +101,24 @@ const fileName = (nonce: string) =>
 const ours = (uid: number) =>
   process.getuid === undefined || uid === process.getuid();
 
+function validBinding(value: unknown): value is SubagentGrantBinding {
+  if (!value || typeof value !== "object") return false;
+  const grant = value as Record<string, unknown>;
+  return (
+    typeof grant.id === "string" &&
+    /^[A-Za-z0-9_-]{1,64}$/.test(grant.id) &&
+    typeof grant.manifestDigest === "string" &&
+    /^sha256-[0-9a-f]{64}$/.test(grant.manifestDigest) &&
+    typeof grant.policyDigest === "string" &&
+    /^[0-9a-f]{64}$/.test(grant.policyDigest) &&
+    (grant.principal === null || typeof grant.principal === "string") &&
+    typeof grant.projectRoot === "string" &&
+    isAbsolute(grant.projectRoot) &&
+    typeof grant.expiresAt === "string" &&
+    Number.isFinite(Date.parse(grant.expiresAt))
+  );
+}
+
 function parse(text: string): OwnerRecord | undefined {
   try {
     const value = JSON.parse(text) as OwnerRecord;
@@ -98,7 +129,8 @@ function parse(text: string): OwnerRecord | undefined {
       value.pid > 0 &&
       typeof value.host === "string" &&
       typeof value.session === "string" &&
-      typeof value.workspace === "string"
+      typeof value.workspace === "string" &&
+      (value.grant === undefined || validBinding(value.grant))
     )
       return value;
   } catch {
@@ -194,6 +226,36 @@ export function publishSubagentOwner(
   removeAtExit(path);
 }
 
+/** Revocation is visible to already-running children on their next decision. */
+export function revokePublishedSubagentGrant(
+  stateDir: string,
+  session: string,
+  id: string,
+): void {
+  const directory = join(stateDir, SUBAGENT_OWNER_DIRECTORY);
+  for (const path of published) {
+    if (dirname(path) !== directory) continue;
+    try {
+      const record = parse(readOwnedFile(path, MAX_RECORD_BYTES, { closed: true }));
+      if (!record || record.session !== session || record.grant?.id !== id)
+        continue;
+      const { grant: _grant, ...withoutGrant } = record;
+      const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+      try {
+        writeFileSync(temporary, JSON.stringify(withoutGrant), {
+          flag: "wx",
+          mode: 0o600,
+        });
+        renameSync(temporary, path);
+      } finally {
+        rmSync(temporary, { force: true });
+      }
+    } catch {
+      // Child-side live checks still fail closed if the record is unreadable.
+    }
+  }
+}
+
 /**
  * The session that started this child, or a refusal. The token is taken out
  * of the environment first, so nothing the child runs inherits it. The record
@@ -231,7 +293,34 @@ export function authenticateSubagentChild(
     !ownerRuns(record)
   )
     throw unauthenticated();
-  return { session: record.session, workspace: record.workspace };
+  const binding = record.grant;
+  if (!binding) return { session: record.session, workspace: record.workspace };
+  const active = (): boolean => {
+    try {
+      const current = parse(
+        readOwnedFile(join(directory, fileName(nonce)), MAX_RECORD_BYTES, {
+          closed: true,
+        }),
+      );
+      return (
+        !!current &&
+        ownerRuns(current) &&
+        current.session === record.session &&
+        current.workspace === record.workspace &&
+        JSON.stringify(current.grant) === JSON.stringify(binding) &&
+        Date.now() < Date.parse(binding.expiresAt)
+      );
+    } catch {
+      return false;
+    }
+  };
+  if (!active()) throw unauthenticated();
+  return {
+    session: record.session,
+    workspace: record.workspace,
+    grant: binding,
+    grantActive: active,
+  };
 }
 
 /** What a small file git wrote says (bounded, owned by us, never a FIFO). */
