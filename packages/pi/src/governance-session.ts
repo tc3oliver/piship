@@ -1469,11 +1469,7 @@ export class GovernanceSession {
     if (!alias || !isPathAction(ask.action) || !ask.resolvedResource)
       return ask;
     const below = relative(alias.lexical, ask.resource);
-    if (
-      below === ".." ||
-      below.startsWith(`..${sep}`) ||
-      isAbsolute(below)
-    )
+    if (below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below))
       return ask;
     const lexical = resolve(alias.canonical, below);
     // A moved link or a different physical target must not gain authority.
