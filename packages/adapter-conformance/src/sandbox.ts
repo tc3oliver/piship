@@ -1849,7 +1849,13 @@ const checks: Record<SandboxBehavior, Check> = {
     ): Promise<string | undefined> => {
       const release = `${marker}.release`;
       const ready = `${marker}.ready`;
-      const wait = markerWaitScript(release, h.observable, RELEASE_POLLS);
+      // Keep an observable running command alive until the kit can abort it,
+      // even if the host stalls after the readiness file appears.
+      const polls =
+        h.observable && when === "while it ran"
+          ? Math.ceil(h.boundMs / 50)
+          : RELEASE_POLLS;
+      const wait = markerWaitScript(release, h.observable, polls);
       // A silent running command writes a workspace readiness marker.
       // Shared workspaces can observe it without guessing startup latency.
       const command =
