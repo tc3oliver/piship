@@ -258,6 +258,18 @@ function egressLines(data: DoctorData, out: DoctorSection): void {
   // Only a live-probed denial is PiShip's to claim; an attested one is the
   // backend's word, reported as such.
   const verified = denied && denial?.evidence === "verified";
+  // A personal default restricts nothing, so one line says so for every path.
+  if (
+    data.ctx.mode === "personal" &&
+    !data.access?.network.privateOnly &&
+    !denied
+  ) {
+    out.info(
+      "egress",
+      "not enforced by PiShip: Pi, extensions, shell, MCP stdio, Git and npm reach any host; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them",
+    );
+    return;
+  }
   if (data.access?.network.privateOnly)
     out.ok("egress: Pi", "PiShip: private-only, declared hosts");
   else

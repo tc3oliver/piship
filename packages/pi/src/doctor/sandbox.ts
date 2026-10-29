@@ -216,11 +216,12 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
     if (report.level === "enforced") out.ok("containment", containment);
     else if (report.required)
       out.bad("containment", `${containment}: ${report.reason ?? "required"}`);
-    else
-      out.warn(
-        "containment",
-        `${containment}${report.reason ? `: ${report.reason}` : ""}`,
-      );
+    else {
+      const text = `${containment}${report.reason ? `: ${report.reason}` : ""}`;
+      // Off by choice is a note; configured on but not working still warns.
+      if (report.level === "not-required") out.info("containment", text);
+      else out.warn("containment", text);
+    }
     const declared = governance.workspace.declared;
     // A mounted or synced workspace makes host files reachable, through it.
     if (

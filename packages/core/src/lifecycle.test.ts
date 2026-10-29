@@ -952,7 +952,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     // not this distribution's own state.
     marker("other");
     await expect(installDistribution(a.archive)).rejects.toThrow(
-      /State already exists for acmepi but is not marked as this distribution's own; pass --use-existing-state/,
+      /State already exists for acmepi: saved data that this distribution did not create.*run the install again with --use-existing-state/,
     );
     rmSync(join(stateDir(), "state.json"));
     await expect(installDistribution(a.archive)).rejects.toThrow(

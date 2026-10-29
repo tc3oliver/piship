@@ -31,7 +31,7 @@ export function terminalApproval(): ApprovalChannel | undefined {
         rl.question(
           `${detail.title}\n${detail.message}\n${
             detail.offerRemember
-              ? "Allow? [y] this time, [a] always for this project until its files change, [N] no, [never] no, and do not ask again: "
+              ? "Allow? [y] this time only (asked again next launch), [a] always for this project until its files change, [N] no, [never] no, and do not ask again: "
               : "Allow? [y/N] "
           }`,
           done,

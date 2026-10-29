@@ -1461,7 +1461,7 @@ describe("one prompt per governed tool call", () => {
   });
 
   it("says who owns a denial and how to change it, with no workaround for an enforced rule", async () => {
-    const forbidden = /--yolo|\/auto|config\/policy\.json|add a rule/;
+    const forbidden = /--yolo|\/auto|config[\\/]policy\.json|add a rule/;
     for (const mode of ["managed", "personal"] as const) {
       const { session, workspace, home } = await open(AUDIT, { mode });
       const enforced = await call(
@@ -1497,7 +1497,7 @@ describe("one prompt per governed tool call", () => {
       ),
     ).toHaveProperty(
       "blocked",
-      expect.stringMatching(/your own rule me\.read.*config\/policy\.json/),
+      expect.stringMatching(/your own rule me\.read.*config[\\/]policy\.json/),
     );
   });
 

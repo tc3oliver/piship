@@ -1135,7 +1135,11 @@ describe("Network group", () => {
       `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
     );
     expect(lines.findIndex((line) => line.includes("agent commands"))).toBe(
-      lines.findIndex((line) => line.includes("egress: Pi")) - 1,
+      lines.findIndex((line) => line.startsWith(`  - ${"egress".padEnd(20)}`)) -
+        1,
+    );
+    expect(lines).toContain(
+      `  - ${"egress".padEnd(20)} not enforced by PiShip: Pi, extensions, shell, MCP stdio, Git and npm reach any host; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them`,
     );
     expect(lines).toContain(
       `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
@@ -1462,6 +1466,33 @@ describe("Sandbox and Workspace groups", () => {
     );
   });
 
+  it("notes unverified git control only when the sandbox already named the missing files", () => {
+    const local = {
+      declared: "shared",
+      effective: "shared",
+      verification: "not-required",
+      gitControlProtection: "not-verified",
+      complete: true,
+    } as const;
+    const text = "not verified; sandboxed commands may be able to change them";
+    expect(
+      workspaceLines(
+        inspection({
+          workspace: local,
+          warnings: ["git control is not verified: .git/commondir is missing"],
+        }),
+      ).at(-1),
+    ).toBe(`  - ${"git control files".padEnd(20)} ${text}`);
+    expect(
+      workspaceLines(
+        remote({
+          ...snapshot,
+          gitControlProtection: "not-verified",
+        }),
+      ).at(-1),
+    ).toBe(`  ! ${"git control files".padEnd(20)} ${text}`);
+  });
+
   it("never reports a snapshot as a complete workspace", () => {
     expect(workspaceLines(remote(snapshot))).toEqual([
       `  - ${"consistency".padEnd(20)} snapshot`,
@@ -1531,6 +1562,35 @@ describe("Sandbox and Workspace groups", () => {
     ).toEqual([
       `  - ${"consistency".padEnd(20)} none: no sandbox is enforced; commands run on this host's files`,
     ]);
+  });
+});
+
+describe("Sandbox containment severity", () => {
+  const containment = (sandbox: Partial<GovernanceInspection["sandbox"]>) => {
+    const inspected = inspection({ required: false, planes: [], ...sandbox });
+    return group(
+      renderDoctor(
+        doctorData("personal", {
+          governance: governanceData({
+            inspection: inspected,
+            isolation: sandboxIsolation(inspected.sandbox),
+            workspace: workspaceData(inspected),
+          }),
+        }),
+      ).render(),
+      "Sandbox",
+    ).find((line) => line.includes("containment"));
+  };
+
+  it("notes a sandbox that is off by choice and warns when one configured on is not working", () => {
+    expect(containment({ level: "not-required" })).toBe(
+      `  - ${"containment".padEnd(20)} not-required (macos-seatbelt)`,
+    );
+    expect(
+      containment({ level: "unavailable", reason: "bwrap not found" }),
+    ).toBe(
+      `  ! ${"containment".padEnd(20)} unavailable (macos-seatbelt): bwrap not found`,
+    );
   });
 });
 

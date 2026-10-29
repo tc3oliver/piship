@@ -237,8 +237,9 @@ describe("denialHint", () => {
     layer,
     action: "shell.execute" as const,
     ruleId: "r1",
+    effect: "deny" as const,
   });
-  const FORBIDDEN = /--yolo|\/auto|config\/policy\.json|add a rule/;
+  const FORBIDDEN = /--yolo|\/auto|config[\\/]policy\.json|add a rule/;
 
   it("names the owner and the way to change it per layer", () => {
     expect(denialHint(at("user-preference"), "personal")).toMatch(
@@ -266,6 +267,60 @@ describe("denialHint", () => {
 
   it("has nothing to say for the builtin fallback", () => {
     expect(denialHint(at("builtin"), "personal")).toBe("");
+  });
+
+  it("names the absolute policy file for a personal user", () => {
+    const policyFile = "/state/config/policy.json";
+    expect(denialHint(at("builtin"), "personal", { policyFile })).toBe(
+      "Nothing allows this yet; add a rule to /state/config/policy.json (`piship policy explain shell.execute <resource>` shows how it was decided).",
+    );
+    expect(denialHint(at("builtin"), "managed", { policyFile })).toBe("");
+    expect(
+      denialHint(
+        { ...at("builtin"), ruleId: "builtin:unknown-action" },
+        "personal",
+        { policyFile },
+      ),
+    ).toBe("");
+    const windows = "C:\\Users\\me\\state\\config\\policy.json";
+    expect(
+      denialHint(at("distribution-default"), "personal", {
+        policyFile: windows,
+      }),
+    ).toContain(`add a rule to ${windows} to change it`);
+  });
+
+  it("offers /grant only for an interactive ask on a covered action", () => {
+    const where = { policyFile: "/s/policy.json", grants: {} };
+    const ask = { ...at("distribution-default"), effect: "ask" as const };
+    const grant = /Or type `\/grant <folder>`/;
+    expect(denialHint(ask, "personal", where)).toMatch(grant);
+    expect(
+      denialHint({ ...ask, action: "filesystem.write" }, "personal", where),
+    ).toMatch(grant);
+    expect(
+      denialHint(ask, "personal", {
+        ...where,
+        grants: { actions: ["shell.execute"] },
+      }),
+    ).toMatch(grant);
+    for (const other of [
+      { ...ask, effect: "deny" as const },
+      { ...ask, approval: "unavailable" as const },
+      { ...ask, action: "model.select" as const },
+      { ...ask, action: "tool.execute" as const },
+    ])
+      expect(denialHint(other, "personal", where)).not.toMatch(/grant/);
+    expect(
+      denialHint(ask, "personal", {
+        ...where,
+        grants: { actions: ["filesystem.read"] },
+      }),
+    ).not.toMatch(/grant/);
+    expect(
+      denialHint(ask, "personal", { policyFile: "/s/p.json" }),
+    ).not.toMatch(/grant/);
+    expect(denialHint(ask, "managed", where)).not.toMatch(/grant/);
   });
 
   it("is empty after the person refused a prompt", () => {
