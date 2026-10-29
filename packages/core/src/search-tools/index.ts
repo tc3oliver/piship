@@ -13,7 +13,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -37,10 +36,11 @@ import { currentTarget } from "../compatibility.js";
 import type {
   DistributionLock,
   LockedSearchTool,
-  LockedSearchToolTarget,
   LockedSearchTools,
+  LockedSearchToolTarget,
 } from "../lock-schema.js";
 import { gate } from "../release/shared.js";
+import { renameWithRetry } from "../rename-retry.js";
 import {
   SEARCH_TOOL_SPECS,
   type SearchToolAsset,
@@ -280,13 +280,27 @@ export async function probeSearchToolUpstream(
   }
 }
 
-/** Write a cache entry atomically, so a killed download leaves no archive. */
-function store(path: string, content: Buffer): void {
+/**
+ * Write a cache entry atomically, so a killed download leaves no archive. On
+ * Windows a scanner, or a concurrent PiShip storing the same archive, can hold
+ * the target: the rename is retried, and an entry another process already
+ * stored with the same bytes is kept; a different one is never adopted, since
+ * `piship lock` pins whatever the cache holds.
+ */
+export function store(
+  path: string,
+  content: Buffer,
+  rename: (from: string, to: string) => void = renameWithRetry,
+): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${Date.now()}.partial`;
   try {
     writeFileSync(temporary, content, { flag: "wx", mode: 0o644 });
-    renameSync(temporary, path);
+    try {
+      rename(temporary, path);
+    } catch (error) {
+      if (!existsSync(path) || !readFileSync(path).equals(content)) throw error;
+    }
   } finally {
     rmSync(temporary, { force: true });
   }

@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -40,6 +41,7 @@ import {
   searchToolAsset,
   searchToolFileName,
   stageSearchTools,
+  store,
 } from "./index.js";
 
 const roots: string[] = [];
@@ -564,6 +566,36 @@ describe("bundled search tools in the payload", () => {
 });
 
 // ------------------------------------------------------------- downloading
+
+describe("storing a cache entry", () => {
+  const blocked = () => {
+    throw Object.assign(new Error("blocked"), { code: "EPERM" });
+  };
+
+  it("keeps an identical entry another process already stored when the rename stays blocked", () => {
+    const path = join(cache, "fd.zip");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(path, "same");
+    store(path, Buffer.from("same"), blocked);
+    expect(readFileSync(path, "utf8")).toBe("same");
+    expect(readdirSync(cache)).toEqual(["fd.zip"]);
+  });
+
+  it("never adopts a different entry: the rename error stands and no partial file is left", () => {
+    const path = join(cache, "fd.zip");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(path, "planted");
+    expect(() => store(path, Buffer.from("ours"), blocked)).toThrow("blocked");
+    expect(readFileSync(path, "utf8")).toBe("planted");
+    expect(readdirSync(cache)).toEqual(["fd.zip"]);
+  });
+
+  it("still fails, leaving no partial file, when nothing was stored", () => {
+    const path = join(cache, "fd.zip");
+    expect(() => store(path, Buffer.from("ours"), blocked)).toThrow("blocked");
+    expect(readdirSync(cache)).toEqual([]);
+  });
+});
 
 describe("downloading the upstream archives", () => {
   type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
