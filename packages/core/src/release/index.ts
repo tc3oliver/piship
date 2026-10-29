@@ -18,6 +18,8 @@ export {
   readChannel,
   signChannel,
   type ChannelMetadata,
+  type ChannelPack,
+  type ChannelPackRuntime,
   type ChannelRelease,
   type SignChannelOptions,
 } from "./channel.js";

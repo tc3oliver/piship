@@ -10,11 +10,13 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
 import { syncDirectory, temporarySibling } from "@piship/credentials";
 import { RELEASE_CHANNELS, type UpdateTransport } from "@piship/schema";
 import { sha256File } from "../archive.js";
+import type { DistributionLock } from "../lock-schema.js";
 import { channelTrustFromLock } from "../lock.js";
 import {
   buildSignatureEnvelope,
@@ -46,6 +48,30 @@ export interface ChannelRelease {
   readonly lockSha256: string;
 }
 
+/** A runtime archive a pack pins, served from the channel directory. */
+export interface ChannelPackRuntime {
+  readonly archive: string;
+  readonly sha256: string;
+  readonly bytes: number;
+}
+
+/**
+ * A Company Pack: a newer config for an official runtime. It is listed apart
+ * from `releases`, whose entries every client validates by target, so a client
+ * that does not know packs reads the channel and ignores this array.
+ */
+export interface ChannelPack {
+  readonly version: string;
+  readonly archive: string;
+  readonly sha256: string;
+  readonly bytes: number;
+  readonly pi: string;
+  readonly piship: string;
+  readonly lockSha256: string;
+  /** The runtime archive this pack pins for each target it serves. */
+  readonly runtimes: Readonly<Record<string, ChannelPackRuntime>>;
+}
+
 export interface ChannelMetadata {
   readonly schema: typeof CHANNEL_SCHEMA;
   readonly distribution: string;
@@ -54,6 +80,8 @@ export interface ChannelMetadata {
   readonly sequence: number;
   readonly expires: string;
   readonly releases: readonly ChannelRelease[];
+  /** Optional; absent from a channel that serves only per-target releases. */
+  readonly packs?: readonly ChannelPack[];
 }
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -61,6 +89,40 @@ const VERSION =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const TARGET = /^(?:linux|darwin|win32)-(?:x64|arm64)$/;
 const ARCHIVE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$/;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+function validArchiveRef(entry: Record<string, unknown>): boolean {
+  return (
+    typeof entry.archive === "string" &&
+    ARCHIVE.test(entry.archive) &&
+    typeof entry.sha256 === "string" &&
+    SHA256.test(entry.sha256) &&
+    Number.isSafeInteger(entry.bytes) &&
+    (entry.bytes as number) > 0
+  );
+}
+
+function validPack(entry: unknown): boolean {
+  if (!isRecord(entry)) return false;
+  return (
+    typeof entry.version === "string" &&
+    VERSION.test(entry.version) &&
+    validArchiveRef(entry) &&
+    typeof entry.pi === "string" &&
+    VERSION.test(entry.pi) &&
+    typeof entry.piship === "string" &&
+    VERSION.test(entry.piship) &&
+    typeof entry.lockSha256 === "string" &&
+    SHA256.test(entry.lockSha256) &&
+    isRecord(entry.runtimes) &&
+    Object.entries(entry.runtimes).every(
+      ([target, runtime]) =>
+        TARGET.test(target) && isRecord(runtime) && validArchiveRef(runtime),
+    )
+  );
+}
 
 function validChannel(value: unknown): value is ChannelMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -72,7 +134,9 @@ function validChannel(value: unknown): value is ChannelMetadata {
     typeof doc.expires !== "string" ||
     !Number.isSafeInteger(doc.sequence) ||
     (doc.sequence as number) < 1 ||
-    !Array.isArray(doc.releases)
+    !Array.isArray(doc.releases) ||
+    (doc.packs !== undefined &&
+      !(Array.isArray(doc.packs) && doc.packs.every(validPack)))
   )
     return false;
   return doc.releases.every((entry: unknown) => {
@@ -119,6 +183,10 @@ interface SignChannelCommon {
   readonly directory: string;
   readonly channel: string;
   readonly archives: readonly string[];
+  /** Company Pack archives to list in `packs`; their pinned runtime archives are found beside them or in `runtimes`. */
+  readonly packs?: readonly string[];
+  /** Further files or directories to look in for the runtime archives the packs pin. */
+  readonly runtimes?: readonly string[];
   /**
    * Further signers. Their signatures join the first signer's in
    * `signatures`; the first signer's stays the top-level signature that
@@ -251,6 +319,92 @@ async function declaredTrust(
   };
 }
 
+interface ReadPack {
+  readonly archive: string;
+  readonly entry: ChannelPack;
+  readonly lock: DistributionLock;
+  readonly distribution: string;
+  /** Where each pinned runtime archive was found, to be copied beside the channel. */
+  readonly runtimeFiles: readonly string[];
+}
+
+/**
+ * A Company Pack archive read and checked for the channel: it verifies as an
+ * install would, and every runtime archive it pins is found, by name, in the
+ * pack's directory, the channel directory, or `runtimes`, with the pinned
+ * digest and size.
+ */
+async function readPack(
+  archive: string,
+  directory: string,
+  runtimes: readonly string[],
+): Promise<ReadPack> {
+  // Imported here: the install modules import this package's index, which
+  // imports the release modules.
+  const { openPack } = await import("../install/compose.js");
+  const scratch = createTemporaryDirectory(tmpdir(), "verify");
+  try {
+    const opened = await openPack(resolve(archive), scratch.path, undefined);
+    const { metadata } = opened;
+    const lock = JSON.parse(
+      readFileSync(join(opened.directory, "pack", "piship.lock"), "utf8"),
+    ) as DistributionLock;
+    const places = [dirname(resolve(archive)), directory, ...runtimes];
+    const refs: Record<string, ChannelPackRuntime> = {};
+    const runtimeFiles: string[] = [];
+    for (const [target, pinned] of Object.entries(metadata.runtime.archives)) {
+      const found = places
+        .map((place) =>
+          existsSync(place) && statSync(place).isDirectory()
+            ? join(place, pinned.name)
+            : place,
+        )
+        .find((path) => basename(path) === pinned.name && existsSync(path));
+      if (!found)
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          `The pack pins ${pinned.name} for ${target}, which was not found beside the pack, in the channel directory, or in --runtime`,
+          {
+            userAction: `Put ${pinned.name} next to the pack, or pass --runtime <path>`,
+          },
+        );
+      if (
+        (await sha256File(found)) !== pinned.sha256 ||
+        statSync(found).size !== pinned.bytes
+      )
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `${found} is not the ${pinned.name} the pack pins for ${target}`,
+          { userAction: "Use the runtime archive the pack was built with" },
+        );
+      runtimeFiles.push(found);
+      refs[target] = {
+        archive: pinned.name,
+        sha256: pinned.sha256,
+        bytes: pinned.bytes,
+      };
+    }
+    return {
+      archive,
+      lock,
+      distribution: metadata.distribution.id,
+      runtimeFiles,
+      entry: {
+        version: metadata.distribution.version,
+        archive: basename(archive),
+        sha256: await sha256File(archive),
+        bytes: statSync(archive).size,
+        pi: metadata.pi.version,
+        piship: metadata.runtime.pishipVersion,
+        lockSha256: metadata.lockSha256,
+        runtimes: refs,
+      },
+    };
+  } finally {
+    scratch.remove();
+  }
+}
+
 /**
  * Add verified release archives to a channel directory and sign its
  * metadata. Existing entries for other versions or targets are kept once the
@@ -288,18 +442,15 @@ export async function signChannel(
   const now = (options.now ?? (() => new Date()))();
   const directory = resolve(options.directory);
   const verified: { archive: string; release: VerifiedRelease }[] = [];
+  const packs: ReadPack[] = [];
   const declared: DeclaredTrust[] = [];
   try {
-    for (const archive of options.archives) {
-      const release = await verifyRelease(archive);
-      verified.push({ archive, release });
-      for (const key of channelTrustFromLock(release.lock)) accept(key);
-      const trust = await declaredTrust(
-        directory,
-        release.lock,
-        release.metadata.distribution.id,
-        now,
-      );
+    const declare = async (
+      lock: DistributionLock,
+      distribution: string,
+    ): Promise<void> => {
+      for (const key of channelTrustFromLock(lock)) accept(key);
+      const trust = await declaredTrust(directory, lock, distribution, now);
       if (
         trust &&
         !declared.some((item) => canonicalJson(item) === canonicalJson(trust))
@@ -307,6 +458,16 @@ export async function signChannel(
         declared.push(trust);
         for (const key of trust.keys) accept(key);
       }
+    };
+    for (const archive of options.archives) {
+      const release = await verifyRelease(archive);
+      verified.push({ archive, release });
+      await declare(release.lock, release.metadata.distribution.id);
+    }
+    for (const archive of options.packs ?? []) {
+      const pack = await readPack(archive, directory, options.runtimes ?? []);
+      packs.push(pack);
+      await declare(pack.lock, pack.distribution);
     }
     const path = join(directory, `${options.channel}.json`);
     const previous = existsSync(path)
@@ -318,9 +479,14 @@ export async function signChannel(
         item,
       ]),
     );
+    const packEntries = new Map(
+      (previous?.packs ?? []).map((item) => [item.version, item]),
+    );
     let distribution = previous?.distribution;
-    for (const { release } of verified) {
-      const id = release.metadata.distribution.id;
+    for (const id of [
+      ...verified.map(({ release }) => release.metadata.distribution.id),
+      ...packs.map((pack) => pack.distribution),
+    ]) {
       if (distribution && distribution !== id)
         throw new PiShipError(
           "CONFIG_INVALID",
@@ -329,7 +495,11 @@ export async function signChannel(
       distribution = id;
     }
     if (!distribution)
-      throw new PiShipError("CONFIG_INVALID", "No release archives were given");
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "No release or pack archives were given",
+      );
+    for (const pack of packs) packEntries.set(pack.entry.version, pack.entry);
     for (const { archive, release } of verified) {
       const { metadata } = release;
       entries.set(`${metadata.distribution.version} ${metadata.target}`, {
@@ -354,6 +524,13 @@ export async function signChannel(
       releases: [...entries.values()].sort((a, b) =>
         `${a.target} ${a.version}`.localeCompare(`${b.target} ${b.version}`),
       ),
+      ...(packEntries.size
+        ? {
+            packs: [...packEntries.values()].sort((a, b) =>
+              a.version.localeCompare(b.version),
+            ),
+          }
+        : {}),
     };
     if (previous && metadata.sequence <= previous.sequence)
       throw new PiShipError(
@@ -406,6 +583,26 @@ export async function signChannel(
           "INTEGRITY_FAILED",
           `${archive} changed while the channel was being signed`,
         );
+    }
+    for (const pack of packs) {
+      const files = [
+        { path: pack.archive, sha256: pack.entry.sha256 },
+        ...pack.runtimeFiles.map((path) => ({
+          path,
+          sha256: Object.values(pack.entry.runtimes).find(
+            (runtime) => runtime.archive === basename(path),
+          )?.sha256,
+        })),
+      ];
+      for (const { path, sha256 } of files) {
+        const destination = join(directory, basename(path));
+        if (resolve(path) !== destination) copyFileSync(path, destination);
+        if ((await sha256File(destination)) !== sha256)
+          throw new PiShipError(
+            "INTEGRITY_FAILED",
+            `${path} changed while the channel was being signed`,
+          );
+      }
     }
     // Each file is replaced whole, so neither is ever seen truncated. A
     // reader that gets a mismatched pair between the two replacements

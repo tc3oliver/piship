@@ -407,7 +407,7 @@ export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
  */
 export async function downloadArchive(
   source: string,
-  entry: ChannelRelease,
+  entry: Pick<ChannelRelease, "archive" | "sha256" | "bytes">,
   destination: string,
   fetcher: typeof fetch = fetch,
   transport?: UpdateTransport,

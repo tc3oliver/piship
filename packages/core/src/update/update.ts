@@ -48,6 +48,7 @@ import { verifyPayloadContents } from "../payload.js";
 import { openInstallStore } from "../store/policy.js";
 import type { ContentStore } from "../store/store.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
+import { composePack, type ComposedPack } from "../install/compose.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import { raiseThreadpool } from "../threadpool.js";
 import { isUrlSource } from "../release/source.js";
@@ -57,6 +58,7 @@ import {
   payloadStateSchemas,
   readChannel,
   verifyRelease,
+  type ChannelPack,
   type ChannelRelease,
 } from "../release/index.js";
 import {
@@ -282,6 +284,89 @@ function newestFor(
     .sort((a, b) => compareVersions(b.version, a.version))[0];
 }
 
+function newestPackFor(
+  packs: readonly ChannelPack[],
+  target: string,
+): ChannelPack | undefined {
+  return packs
+    .filter((item) => item.runtimes[target] !== undefined)
+    .sort((a, b) => compareVersions(b.version, a.version))[0];
+}
+
+/** A pack offer in the shape of a release entry, whose archive is the pack. */
+function packAsEntry(pack: ChannelPack, target: string): ChannelRelease {
+  return {
+    version: pack.version,
+    target,
+    archive: pack.archive,
+    sha256: pack.sha256,
+    bytes: pack.bytes,
+    pi: pack.pi,
+    piship: pack.piship,
+    lockSha256: pack.lockSha256,
+  };
+}
+
+/**
+ * Compose the offered pack with the runtime it pins. An installed release
+ * built from that same runtime archive supplies its runtime files (checked
+ * against the pinned inventory), so a pack-only change downloads only the
+ * pack; otherwise, or if that copy does not check out, the pinned runtime
+ * archive is downloaded from the channel source.
+ */
+async function composeOffered(input: {
+  readonly pack: ChannelPack;
+  readonly packArchive: string;
+  readonly staging: string;
+  readonly receipt: InstallReceipt;
+  readonly source: string;
+  readonly store: ContentStore | undefined;
+  readonly fetcher: typeof fetch | undefined;
+  readonly transport: UpdatesManifest["transport"];
+  readonly progress: ((step: string) => void) | undefined;
+}): Promise<ComposedPack> {
+  const { pack, receipt, staging } = input;
+  const target = currentTarget();
+  const pinned = pack.runtimes[target] as ChannelPack["runtimes"][string];
+  const holders = [
+    ...receipt.releases.filter((item) => item.version === receipt.active),
+    ...receipt.releases.filter((item) => item.version !== receipt.active),
+  ].filter((item) => item.release?.runtime?.archiveSha256 === pinned.sha256);
+  for (const holder of holders)
+    try {
+      input.progress?.("Reusing the installed runtime");
+      return await composePack(input.packArchive, staging, {
+        expectedSha256: pack.sha256,
+        runtimeFrom: {
+          payload: holder.payload,
+          archiveSha256: pinned.sha256,
+        },
+      });
+    } catch (error) {
+      // That copy is damaged or is not this runtime: start over cleanly.
+      rmSync(join(staging, "payload"), { recursive: true, force: true });
+      rmSync(join(staging, "pack"), { recursive: true, force: true });
+      if (error instanceof PiShipError && error.code !== "INTEGRITY_FAILED")
+        throw error;
+    }
+  input.progress?.(
+    `Downloading the ${pack.version} runtime (${(pinned.bytes / 1_048_576).toFixed(1)} MiB)`,
+  );
+  const runtime = join(staging, pinned.archive);
+  await downloadArchive(
+    input.source,
+    pinned,
+    runtime,
+    input.fetcher,
+    input.transport,
+  );
+  return composePack(input.packArchive, staging, {
+    expectedSha256: pack.sha256,
+    runtime,
+    ...(input.store ? { store: input.store } : {}),
+  });
+}
+
 /**
  * Verified update: channel policy, signed channel metadata, a newer release
  * for this target, archive digest, release verification, launch check,
@@ -418,7 +503,23 @@ async function performUpdate(
         },
         lastCheck: { time: now().toISOString(), channel, result },
       });
-    const entry = newestFor(metadata.releases, currentTarget());
+    const releaseEntry = newestFor(metadata.releases, currentTarget());
+    const packOffer = newestPackFor(metadata.packs ?? [], currentTarget());
+    // The newer of the two; at the same version the kind that is installed.
+    const installedPack =
+      receipt.releases.find((item) => item.version === receipt.active)?.release
+        ?.pack !== undefined;
+    const offered =
+      packOffer &&
+      (!releaseEntry ||
+        compareVersions(packOffer.version, releaseEntry.version) > 0 ||
+        (compareVersions(packOffer.version, releaseEntry.version) === 0 &&
+          installedPack))
+        ? packOffer
+        : undefined;
+    const entry = offered
+      ? packAsEntry(offered, currentTarget())
+      : releaseEntry;
     if (!entry)
       notices.push(
         `Channel ${channel} lists no release for ${currentTarget()}; ask the distribution owner whether this platform is still supported`,
@@ -460,7 +561,11 @@ async function performUpdate(
     if (
       retained?.release !== undefined &&
       present &&
-      retained.release.archiveSha256 === entry.sha256
+      (retained.release.archiveSha256 === entry.sha256 ||
+        (offered !== undefined &&
+          retained.release.pack?.sha256 === entry.sha256 &&
+          retained.release.runtime?.archiveSha256 ===
+            offered.runtimes[currentTarget()]?.sha256))
     )
       try {
         local = retainedCandidate(destination, id, receipt, entry, retained);
@@ -485,7 +590,12 @@ async function performUpdate(
     // (a newer release exists on this channel) does not fetch the archive:
     // the migration preview is the only thing it would add, and `update`
     // runs that check before it switches anything.
-    if (options.check && !reuseRetained && cached === undefined && cacheable) {
+    if (
+      options.check &&
+      !reuseRetained &&
+      cached === undefined &&
+      (cacheable || offered)
+    ) {
       notices.push(
         "The migration check runs when you update; it stops for review before anything is switched",
       );
@@ -568,7 +678,43 @@ async function performUpdate(
       }
       let candidate: Candidate;
       if (local !== undefined) candidate = local;
-      else {
+      else if (offered) {
+        options.progress?.(`Composing the ${entry.version} pack`);
+        written = extracting;
+        store = extracting ? openInstallStore() : undefined;
+        const composed = await composeOffered({
+          pack: offered,
+          packArchive: archive,
+          staging,
+          receipt,
+          source,
+          store,
+          fetcher: options.fetcher,
+          transport,
+          progress: options.progress,
+        });
+        if (extracting) renameWithRetry(composed.payload, destination);
+        lap("update compose pack");
+        const problems = [
+          [composed.lock.app.id, id, "distribution"],
+          [composed.lock.app.command, receipt.app.command, "command"],
+          [composed.lock.app.version, entry.version, "version"],
+          [composed.lock.runtime.version, entry.pi, "Pi version"],
+          [composed.release.lockSha256, entry.lockSha256, "lock"],
+        ].filter(([a, b]) => a !== b);
+        if (problems.length)
+          throw new PiShipError(
+            "INTEGRITY_FAILED",
+            `The ${entry.version} pack does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
+          );
+        candidate = {
+          lock: composed.lock,
+          pi: composed.lock.runtime.version,
+          schemas: payloadStateSchemas(composed.lock),
+          release: composed.release,
+          cleanup: () => {},
+        };
+      } else {
         options.progress?.(`Verifying the ${entry.version} release`);
         // The archive is read once more, and only once: that read extracts the
         // payload into the destination, hashing the archive and every file as
