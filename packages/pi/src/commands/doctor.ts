@@ -29,6 +29,7 @@ import { sandboxGroup } from "../doctor/sandbox.js";
 import { secretStoreGroup } from "../doctor/secret-store.js";
 import { supplyChainGroup } from "../doctor/supply-chain.js";
 import { updateGroup } from "../doctor/update.js";
+import { verificationGroup } from "../doctor/verification.js";
 import { workspaceGroup } from "../doctor/workspace.js";
 import type { LaunchContext } from "../launch/context.js";
 
@@ -53,6 +54,7 @@ export function renderDoctor(data: DoctorData): DoctorReport {
   auditGroup(data, report.section("Audit"));
   networkGroup(data, report.section("Network"));
   releaseGroup(data, report.section("Release"));
+  verificationGroup(data, report);
   updateGroup(data, report.section("Update"));
   return report;
 }

@@ -3,6 +3,7 @@
 // sanitizer, so no group can print a credential, a token, URL credentials,
 // or a URL query, whatever an error message or a configuration value holds.
 import { redact } from "@piship/contracts";
+import type { DoctorVerification } from "@piship/core";
 
 /**
  * The groups in the order doctor prints them. The enterprise diagnostics
@@ -30,6 +31,7 @@ export const DOCTOR_GROUPS = [
   "Audit",
   "Network",
   "Release",
+  "Verification",
   "Update",
 ] as const;
 
@@ -76,11 +78,27 @@ export interface DoctorCheck {
 const STATUS = { ok: "ok", warn: "warn", bad: "fail", info: "info" } as const;
 const MARKS = { ok: "✓", warn: "!", fail: "✗", info: "-" } as const;
 
+function sanitizeState(
+  item: DoctorVerification["runtime"],
+): DoctorVerification["runtime"] {
+  return { state: item.state, detail: sanitizeDoctorText(item.detail) };
+}
+
 export class DoctorReport {
   readonly #groups = new Map<DoctorGroup, DoctorCheck[]>();
   #failed = false;
+  #verification: DoctorVerification | undefined;
 
   constructor(readonly title: string) {}
+
+  /** The three verification states, kept apart in `--json`. */
+  setVerification(verification: DoctorVerification): void {
+    this.#verification = {
+      runtime: sanitizeState(verification.runtime),
+      config: sanitizeState(verification.config),
+      integration: sanitizeState(verification.integration),
+    };
+  }
 
   /** Whether any group reported a failure. */
   get failed(): boolean {
@@ -125,11 +143,13 @@ export class DoctorReport {
   toJSON(): {
     title: string;
     failed: boolean;
+    verification?: DoctorVerification;
     groups: { group: DoctorGroup; checks: DoctorCheck[] }[];
   } {
     return {
       title: sanitizeDoctorText(this.title),
       failed: this.#failed,
+      ...(this.#verification ? { verification: this.#verification } : {}),
       groups: DOCTOR_GROUPS.flatMap((group) => {
         const checks = this.#groups.get(group);
         return checks?.length ? [{ group, checks }] : [];

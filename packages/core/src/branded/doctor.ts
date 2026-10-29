@@ -1,12 +1,13 @@
 // The doctor groups that need no Pi runtime or governed session.
 import { statfsSync } from "node:fs";
-import { LocalMetrics } from "@piship/audit";
+import { LocalMetrics, type MetricsSnapshot } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import {
   abandonedTemporaryCount,
   installHome,
   inspectInstalledLauncher,
+  installedRuntimeMatches,
   lifecycleStatus,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
@@ -46,7 +47,12 @@ function releaseDoctor(
 ): void {
   const here = installedHere(ctx);
   const active = here?.releases.find((item) => item.version === here.active);
-  if (active?.release)
+  if (active?.release?.pack)
+    ok(
+      "release",
+      `company pack ${active.release.pack.version} on runtime PiShip ${active.release.runtime?.pishipVersion ?? active.release.piship} (pack sha256 ${short(active.release.pack.sha256)})`,
+    );
+  else if (active?.release)
     ok(
       "release",
       `verified ${active.release.target} artifact (${active.release.channel})`,
@@ -248,4 +254,126 @@ export function undeclaredGovernanceHosts(
     if (!allowHosts.includes(host)) found.push({ label: target.label, host });
   }
   return found;
+}
+
+export interface DoctorVerificationState {
+  /**
+   * `verified`: checked and good. `failed`: checked and wrong. `local`:
+   * nothing vouches for it beyond this machine's own checks. `not-tested`: no
+   * evidence exists yet. `not-applicable`.
+   */
+  readonly state:
+    | "verified"
+    | "failed"
+    | "local"
+    | "not-tested"
+    | "not-applicable";
+  readonly detail: string;
+}
+
+/** What `doctor` reports under Verification: three states, never merged. */
+export interface DoctorVerification {
+  readonly runtime: DoctorVerificationState;
+  readonly config: DoctorVerificationState;
+  readonly integration: DoctorVerificationState;
+}
+
+const short = (digest: string) =>
+  digest.replace(/^sha256[-:]/, "").slice(0, 12);
+
+/**
+ * The runtime, the company configuration, and the integration on this
+ * machine, each judged from its own evidence. The payload inventory has
+ * already been verified when doctor gets here; integration is live evidence
+ * only, and stays `not-tested` until a login or a model request has happened.
+ */
+export function verificationStates(
+  ctx: BrandedContext,
+  metrics: MetricsSnapshot,
+): DoctorVerification {
+  const here = installedHere(ctx);
+  const active = here?.releases.find((item) => item.version === here.active);
+  const release = active?.release;
+  const command = ctx.metadata.app.command;
+  const pinned = release?.runtime?.inventorySha256;
+  const runtime: DoctorVerificationState = release?.runtime
+    ? pinned === undefined
+      ? {
+          state: "local",
+          detail: `runtime PiShip ${release.runtime.pishipVersion}: installed before the pinned runtime inventory was recorded; reinstall to check it`,
+        }
+      : installedRuntimeMatches(ctx.distributionDir, pinned)
+        ? {
+            state: "verified",
+            detail: `runtime PiShip ${release.runtime.pishipVersion} (archive sha256 ${short(release.runtime.archiveSha256)}), Pi ${release.pi}; installed files match the inventory the pack pins`,
+          }
+        : {
+            state: "failed",
+            detail: `the installed runtime is not the one the pack pins (PiShip ${release.runtime.pishipVersion}); repair with the runtime archive`,
+          }
+    : release
+      ? {
+          state: "verified",
+          detail: `${release.target} release (${release.channel}), PiShip ${release.piship}, Pi ${release.pi}; installed files match the inventory`,
+        }
+      : {
+          state: "local",
+          detail: here
+            ? "installed from a payload directory: a local build, not a qualified runtime"
+            : "running from a build directory: a local build, not a qualified runtime",
+        };
+  const source =
+    release?.via === "channel"
+      ? "accepted from a signed channel entry"
+      : release?.via === "file"
+        ? "installed from a file; the channel signature was not checked"
+        : "how this release was accepted is not recorded";
+  const config: DoctorVerificationState = release?.pack
+    ? {
+        state: "verified",
+        detail: `company pack ${release.pack.version} (sha256 ${short(release.pack.sha256)}), lock ${short(release.lockSha256)}; ${source}`,
+      }
+    : release
+      ? {
+          state: "verified",
+          detail: `${ctx.metadata.app.name} ${active?.version} release, lock ${short(release.lockSha256)}; ${source}`,
+        }
+      : {
+          state: "local",
+          detail: `lock and payload match each other; not release-signed (${ctx.metadata.manifest.schema})`,
+        };
+  const evidence = [
+    (metrics.latency?.["credential.acquire"]?.count ?? 0) > 0
+      ? "a sign-in credential was acquired"
+      : undefined,
+    metrics.gateway?.lastReachableAt
+      ? `the model gateway answered at ${metrics.gateway.lastReachableAt}`
+      : undefined,
+    metrics.modelCatalog?.fetchedAt
+      ? `the model catalog was fetched at ${metrics.modelCatalog.fetchedAt}`
+      : undefined,
+  ].filter((item): item is string => item !== undefined);
+  const access = ctx.metadata.access;
+  const signIn =
+    access?.identity?.mode !== undefined && access.identity.mode !== "none";
+  const companyBacked =
+    signIn ||
+    access?.credential?.provider === "http-broker" ||
+    access?.credential?.provider === "adapter" ||
+    access?.inference?.provider === "openai-compatible";
+  const integration: DoctorVerificationState = !companyBacked
+    ? {
+        state: "not-applicable",
+        detail: "no company sign-in, credential broker or gateway",
+      }
+    : evidence.length
+      ? {
+          state: "verified",
+          detail: `on this machine ${evidence.join("; ")}`,
+        }
+      : {
+          state: "not-tested",
+          detail: `not tested on this machine: run ${signIn ? `${command} login and ` : ""}${command} --smoke-model`,
+        };
+  return { runtime, config, integration };
 }

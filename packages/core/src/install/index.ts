@@ -1,6 +1,6 @@
 // Installed release ownership: the receipt, install, uninstall, purge, and
 // status.
-export { isPack } from "./compose.js";
+export { installedRuntimeMatches, isPack } from "./compose.js";
 export { installDistribution, type InstallChecks } from "./install.js";
 export {
   inspectInstalledLauncher,

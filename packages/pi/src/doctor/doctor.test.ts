@@ -633,6 +633,25 @@ describe("renderDoctor", () => {
     );
   });
 
+  it("keeps runtime, company config, and integration apart", () => {
+    const report = renderDoctor(
+      doctorData("managed", { access: accessData() }),
+    );
+    const json = JSON.parse(JSON.stringify(report));
+    expect(Object.keys(json.verification)).toEqual([
+      "runtime",
+      "config",
+      "integration",
+    ]);
+    // The fixture distribution has no company sign-in.
+    expect(json.verification.integration.state).toBe("not-applicable");
+    expect(group(report.render(), "Verification")).toEqual([
+      expect.stringContaining("runtime"),
+      expect.stringContaining("company config"),
+      expect.stringContaining("integration"),
+    ]);
+  });
+
   it("shows a stored session as working only when activation used it", () => {
     const identity = (overrides: Partial<AccessData>) => {
       const report = renderDoctor(

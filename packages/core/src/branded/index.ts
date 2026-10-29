@@ -11,7 +11,13 @@ export {
 export { runAuto, userAutoDenied, yoloRefusal } from "./auto.js";
 export { runConfig } from "./config.js";
 export { releasesWithoutDataSweep, sweepDistributionData } from "./data.js";
-export { lifecycleDoctor, undeclaredGovernanceHosts } from "./doctor.js";
+export {
+  lifecycleDoctor,
+  undeclaredGovernanceHosts,
+  type DoctorVerification,
+  type DoctorVerificationState,
+  verificationStates,
+} from "./doctor.js";
 export { runRollback, runUpdate } from "./lifecycle.js";
 export {
   inlineLoginOffered,

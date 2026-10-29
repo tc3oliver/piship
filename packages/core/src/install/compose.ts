@@ -130,6 +130,30 @@ function packFile(file: string): boolean {
   );
 }
 
+/** The runtime's own inventory in an installed, composed payload, and the text whose digest a pack pins. */
+export function installedRuntimeInventory(installed: string): {
+  readonly runtime: Record<string, string>;
+  readonly text: string;
+} {
+  const composed = JSON.parse(
+    readFileSync(join(installed, "metadata", "inventory.json"), "utf8"),
+  ) as Record<string, string>;
+  const runtime = Object.fromEntries(
+    Object.entries(composed).filter(([file]) => !packFile(file)),
+  );
+  return { runtime, text: `${JSON.stringify(runtime, null, 2)}\n` };
+}
+
+/** Whether the runtime part of an installed, composed payload is the inventory a pack pinned. */
+export function installedRuntimeMatches(
+  installed: string,
+  pinnedInventorySha256: string,
+): boolean {
+  return (
+    hash(installedRuntimeInventory(installed).text) === pinnedInventorySha256
+  );
+}
+
 /**
  * Copy the runtime files out of an installed, composed payload into `payload`
  * and check them, byte by byte, against the inventory the pack pins for that
@@ -141,13 +165,7 @@ export function copyInstalledRuntime(
   payload: string,
   pinnedInventorySha256: string,
 ): Record<string, string> {
-  const composed = JSON.parse(
-    readFileSync(join(installed, "metadata", "inventory.json"), "utf8"),
-  ) as Record<string, string>;
-  const runtime = Object.fromEntries(
-    Object.entries(composed).filter(([file]) => !packFile(file)),
-  );
-  const text = `${JSON.stringify(runtime, null, 2)}\n`;
+  const { runtime, text } = installedRuntimeInventory(installed);
   if (hash(text) !== pinnedInventorySha256)
     throw new InstalledRuntimeError(
       "the installed runtime is not the one this pack pins",
@@ -458,9 +476,11 @@ export async function composePack(
       piship: composed.runtime.pishipVersion,
       lockSha256: metadata.lockSha256,
       pack: { sha256: pack.sha256, version: composed.app.version },
+      via: "file",
       runtime: {
         archiveSha256,
         pishipVersion: runtimePishipVersion,
+        inventorySha256: pinned.inventorySha256,
       },
     },
   };
