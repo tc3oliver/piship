@@ -8,7 +8,6 @@ import {
   getShellConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { redact } from "@piship/contracts";
 import {
   leadingPartial,
   type TaskEvent,
@@ -64,14 +63,11 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
       recorder?.add(task.id, task.command);
       record("task.start", task, "allowed");
     },
-    exit: (task) => {
-      recorder?.remove(task.id);
-      record("task.exit", task);
-    },
-    stop: (task) => {
-      recorder?.remove(task.id);
-      record("task.stop", task);
-    },
+    exit: (task) => record("task.exit", task),
+    stop: (task) => record("task.stop", task),
+    // Only a settled runner proves the process is gone; a stop that is
+    // still pending keeps the record for doctor.
+    ended: (task) => recorder?.remove(task.id),
     refused: (task) => record("task.start", task, "denied"),
   });
   gov.backgroundTasks = tasks;
@@ -80,14 +76,14 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
 
 function report(task: TaskReport, prefix = ""): string {
   // The model gets Pi's tool output limit of the newest output, on a
-  // character boundary, with credential shapes redacted as MCP output is.
+  // character boundary.
   const all = Buffer.from(task.output);
   const kept =
     all.length > DEFAULT_MAX_BYTES
       ? all.subarray(all.length - DEFAULT_MAX_BYTES)
       : all;
   const shown = kept.subarray(kept === all ? 0 : leadingPartial(kept));
-  const output = redact(shown.toString("utf8"));
+  const output = shown.toString("utf8");
   const dropped = task.dropped + all.length - shown.length;
   return [
     `${prefix}Task ${task.id}: ${task.status}${task.exitCode !== null ? ` (exit code ${task.exitCode})` : ""}`,

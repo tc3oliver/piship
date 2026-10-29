@@ -59,6 +59,8 @@ export interface TaskEvents {
   exit(task: TaskEvent): void;
   stop(task: TaskEvent): void;
   refused(task: TaskEvent): void;
+  /** The runner settled: the task's process is gone. */
+  ended?(task: TaskEvent): void;
 }
 
 /** A task's state and the output it printed since the last read. */
@@ -248,6 +250,7 @@ export class TaskRegistry {
       )
       .then(() => {
         task.ended = true;
+        this.events.ended?.(task.event());
         this.#report(task);
         this.#prune();
       });

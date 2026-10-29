@@ -809,7 +809,7 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
         lastUpdateAt = Date.now();
         const snapshot = output.snapshot();
         onUpdate({
-          content: [{ type: "text", text: redact(snapshot.content || "") }],
+          content: [{ type: "text", text: snapshot.content || "" }],
           details: {
             truncation: snapshot.truncation.truncated
               ? snapshot.truncation
@@ -855,7 +855,7 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
         emptyText = "(no output)",
       ) => {
         const truncation = snapshot.truncation;
-        let text = redact(snapshot.content) || emptyText;
+        let text = snapshot.content || emptyText;
         let details: BashToolDetails | undefined;
         if (truncation.truncated) {
           // Pi's shape: fullOutputPath is present, undefined when not saved.
@@ -930,7 +930,7 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
           STRUCTURED_OUTPUT_MAX_BYTES,
         );
         const structuredContent = {
-          output: redact(fullOutput.content),
+          output: fullOutput.content,
           truncated: fullOutput.truncated,
           ...(fullOutput.truncated && snapshot.fullOutputPath
             ? { full_output_path: snapshot.fullOutputPath }

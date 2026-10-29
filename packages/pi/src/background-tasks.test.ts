@@ -122,6 +122,35 @@ describe("TaskRegistry", () => {
     expect(tasks.read(id)?.output).toBe("\ufffd");
   });
 
+  it("reports a task ended only once its process is gone, not when a stop is requested", async () => {
+    const ended: string[] = [];
+    const runs: { exit: () => void }[] = [];
+    const tasks = new TaskRegistry(
+      {
+        start: () => {},
+        exit: () => {},
+        stop: () => {},
+        refused: () => {},
+        ended: (task) => ended.push(task.id),
+      },
+      { ...TASK_LIMITS, stopWaitMs: 20 },
+    );
+    // A runner that ignores its abort until the test lets it go.
+    const id = tasks.start(
+      (_command, _options) =>
+        new Promise((resolve) => {
+          runs.push({ exit: () => resolve({ exitCode: null }) });
+        }),
+      "stuck",
+    );
+    await tick();
+    await tasks.stop(id);
+    expect(ended).toEqual([]);
+    runs[0]?.exit();
+    await tasks.settled(id);
+    expect(ended).toEqual([id]);
+  });
+
   it("stops a task through its signal and records why", async () => {
     const { run, runs, events, registry } = fake();
     const tasks = registry();
