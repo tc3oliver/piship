@@ -284,7 +284,8 @@ export async function probeSearchToolUpstream(
  * Write a cache entry atomically, so a killed download leaves no archive. On
  * Windows a scanner, or a concurrent PiShip storing the same archive, can hold
  * the target: the rename is retried, and an entry another process already
- * stored is kept, since every reader checks its digest.
+ * stored with the same bytes is kept; a different one is never adopted, since
+ * `piship lock` pins whatever the cache holds.
  */
 export function store(
   path: string,
@@ -298,7 +299,7 @@ export function store(
     try {
       rename(temporary, path);
     } catch (error) {
-      if (!existsSync(path)) throw error;
+      if (!existsSync(path) || !readFileSync(path).equals(content)) throw error;
     }
   } finally {
     rmSync(temporary, { force: true });

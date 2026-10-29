@@ -572,12 +572,21 @@ describe("storing a cache entry", () => {
     throw Object.assign(new Error("blocked"), { code: "EPERM" });
   };
 
-  it("keeps an entry another process already stored when the rename stays blocked", () => {
+  it("keeps an identical entry another process already stored when the rename stays blocked", () => {
     const path = join(cache, "fd.zip");
     mkdirSync(cache, { recursive: true });
-    writeFileSync(path, "theirs");
-    store(path, Buffer.from("ours"), blocked);
-    expect(readFileSync(path, "utf8")).toBe("theirs");
+    writeFileSync(path, "same");
+    store(path, Buffer.from("same"), blocked);
+    expect(readFileSync(path, "utf8")).toBe("same");
+    expect(readdirSync(cache)).toEqual(["fd.zip"]);
+  });
+
+  it("never adopts a different entry: the rename error stands and no partial file is left", () => {
+    const path = join(cache, "fd.zip");
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(path, "planted");
+    expect(() => store(path, Buffer.from("ours"), blocked)).toThrow("blocked");
+    expect(readFileSync(path, "utf8")).toBe("planted");
     expect(readdirSync(cache)).toEqual(["fd.zip"]);
   });
 
