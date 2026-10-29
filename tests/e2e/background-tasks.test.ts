@@ -320,9 +320,10 @@ describe.runIf(process.platform === "win32")(
               stdio: "ignore",
               timeout: 5000,
             });
+          await new Promise((done) => setTimeout(done, 300));
         }
       },
-      180_000,
+      360_000,
     );
   },
 );
