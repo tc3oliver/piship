@@ -126,9 +126,9 @@ The two layers are not redundant. PiShip's rules cover its own governed tools on
 | --- | --- | --- | --- | --- |
 | `company` | `allow` | `allow` | `ask` | `deny` |
 | `external` | `allow` | `allow` | `ask` | `deny` |
-| `unknown` | `allow`, except `claudeAgents` `ask` and `claudeHooks` `deny` | `ask` | `ask` | `deny` |
+| `unknown` | `allow`, except `claudeAgents` and `claudeHooks` `ask` | `ask` | `ask` | `deny` |
 
-`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so its text-only Claude configuration (rules, commands, skills) loads without a question, while agents, `.mcp.json` and extensions still ask and hooks are denied. Because the configuration is admitted as a whole, a project with Claude hooks or settings stays closed. Answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. Nothing loads when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
+`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so its text-only Claude configuration (rules, commands, skills) loads without a question, while agents, hooks, `.mcp.json` and extensions still ask. Because the configuration is admitted as a whole, a project with Claude hooks, agents or a settings file is asked about once, in one question. Answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. Nothing loads when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
 
 ```yaml
 policy:
@@ -144,7 +144,7 @@ policy:
 
 `path` is a glob over the absolute project root and `remote` a glob over the normalized `host/path` of the `origin` remote; a matcher with both needs both. A `remote` alone is a claim, because a checkout declares its own remote. Edit the copy, run `piship lock`, and rebuild. `company` is for your own repositories, `external` for third-party ones you have decided to read.
 
-To close the part that runs commands, set `claudeHooks` to `deny` for `company` and `external` too (or `ask`). The profile admits hooks for `company` and `external` projects because the same files configure Claude Code for them, and hooks run with your privileges. The fixture used by the tests (`tests/fixtures/developer/claude-project`) ships a rule, a scoped rule, a command, a skill, an agent, an import, and a `SessionStart` hook, and the Portable E2E test checks that all of it is loaded for a `company` project and none of it for an `unknown` project in a headless run.
+To close the part that runs commands, set `claudeHooks` to `deny` for all three origins (or `ask` for the first two). The profile admits hooks for `company` and `external` projects because the same files configure Claude Code for them, and hooks run with your privileges. The fixture used by the tests (`tests/fixtures/developer/claude-project`) ships a rule, a scoped rule, a command, a skill, an agent, an import, and a `SessionStart` hook, and the Portable E2E test checks that all of it is loaded for a `company` project and none of it for an `unknown` project in a headless run.
 
 ### Not governed
 

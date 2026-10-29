@@ -574,7 +574,7 @@ describe("project trust in the personal profile", () => {
     ] as const)
       expect(trust?.unknown.dimensions[name], name).toBe("allow");
     expect(trust?.unknown.dimensions.claudeAgents).toBe("ask");
-    expect(trust?.unknown.dimensions.claudeHooks).toBe("deny");
+    expect(trust?.unknown.dimensions.claudeHooks).toBe("ask");
     for (const origin of ["company", "external", "unknown"] as const) {
       expect(trust?.[origin].dimensions.extensions, origin).toBe("ask");
       expect(trust?.[origin].dimensions.hooks, origin).toBe("deny");

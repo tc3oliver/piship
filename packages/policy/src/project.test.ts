@@ -1729,6 +1729,24 @@ describe("discoverProjectResources", () => {
     expect(found[0]).toMatchObject({ origin: "unknown", effect: "ask" });
   });
 
+  it("denies an outside instruction link in managed mode", () => {
+    const outside = dir("outside-managed");
+    write(join(outside, "AGENTS.md"), "x");
+    const root = dir("instr-link-managed");
+    if (
+      !trySymlink(join(outside, "AGENTS.md"), join(root, "AGENTS.md"), "file")
+    )
+      return;
+    const managed = makePolicy({}, "managed");
+    const found = discoverProjectResources(
+      identifyProject(root, managed.projectTrust),
+      managed,
+      { homeDir: home, mode: "managed" },
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ origin: "unknown", effect: "deny" });
+  });
+
   it("denies instruction imports that escape the root", () => {
     const root = dir("imports");
     gitRepo(root, "https://git.acme.example/team/imports");
