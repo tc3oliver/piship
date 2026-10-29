@@ -31,9 +31,7 @@ import { pretranspileClosures } from "../pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
 import { loadEsbuild } from "../pi-packages/module-scan.js";
 import { placeRuntime } from "../build.js";
-import { runtimeCacheFor } from "../runtime-cache.js";
 import { buildInput } from "../runtime-dependencies.js";
-import { runtimeCacheDisabled } from "./build.js";
 import { packageLockFiles, vendorPiPackages } from "../pi-packages/lock.js";
 import { formatChecksums } from "../supply-chain.js";
 import { sweepOutputStaging } from "../temporary-directories.js";
@@ -461,27 +459,27 @@ export async function buildPack(
           if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND")
             throw error;
           // A runtime release carries no esbuild. It comes the way a build
-          // gets it: the build input's npm closure, placed through the same
-          // runtime cache (a miss installs it, which needs the registry, as
-          // vendoring the Pi packages did).
+          // gets it: the build input's locked npm closure, installed without
+          // lifecycle scripts, since this tree is only tooling (esbuild runs
+          // from its platform package) and nothing in it is shipped. It
+          // needs the registry, as vendoring the Pi packages did.
           try {
             const tooling = join(temporary.path, "tooling");
             mkdirSync(tooling);
             placeRuntime(tooling, {
-              cache: runtimeCacheDisabled({})
-                ? undefined
-                : runtimeCacheFor(lock),
+              cache: undefined,
               strip: false,
               leaveWhole: true,
               progress: undefined,
               found: undefined,
               meanwhile: () => {},
               overlap: false,
+              ignoreScripts: true,
             });
             esbuild = loadEsbuild(join(tooling, "package.json"));
           } catch (cause) {
             warnings.push(
-              `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: esbuild could not be installed (${(cause as Error).message.split("\n")[0]}), so the pack carries the TypeScript only. Run piship pack with registry access to include the generated JavaScript`,
+              `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: could not install esbuild: ${(cause as Error).message.split("\n")[0]}. The pack carries the TypeScript only; run piship pack again once esbuild can be installed to include the generated JavaScript`,
             );
           }
         }

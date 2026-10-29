@@ -97,6 +97,7 @@ function installRuntime(
   progress: ((step: string) => void) | undefined,
   framework: boolean,
   meanwhile: { readonly run: () => void; readonly overlap: boolean },
+  ignoreScripts = false,
 ): void {
   const buildInput = authoringBuildInput();
   let phase = process.hrtime.bigint();
@@ -118,10 +119,14 @@ function installRuntime(
   debugTiming("build input copy", phase);
   phase = process.hrtime.bigint();
   progress?.("Installing the runtime packages (npm ci)");
+  const npmArguments = [
+    ...NPM_CI_ARGUMENTS,
+    ...(ignoreScripts ? ["--ignore-scripts"] : []),
+  ];
   const [file, args] =
     process.platform === "win32"
-      ? ["cmd.exe", ["/d", "/s", "/c", `npm ${NPM_CI_ARGUMENTS.join(" ")}`]]
-      : ["npm", [...NPM_CI_ARGUMENTS]];
+      ? ["cmd.exe", ["/d", "/s", "/c", `npm ${npmArguments.join(" ")}`]]
+      : ["npm", npmArguments];
   let install: { status: number | null; output: string };
   let running: ReturnType<typeof startBackgroundProcess> | undefined;
   if (meanwhile.overlap)
@@ -267,6 +272,11 @@ export function placeRuntime(
      */
     readonly meanwhile: () => void;
     readonly overlap: boolean;
+    /**
+     * Install without npm lifecycle scripts, for a tree used only as tooling.
+     * Never with a cache: its entries are for trees installed with them.
+     */
+    readonly ignoreScripts?: boolean;
   },
 ): InstallTree[] {
   const { cache, strip, progress, found } = options;
@@ -315,7 +325,13 @@ export function placeRuntime(
       }
     }
   }
-  installRuntime(stage, progress, cache === undefined, meanwhile);
+  installRuntime(
+    stage,
+    progress,
+    cache === undefined,
+    meanwhile,
+    options.ignoreScripts,
+  );
   phase = process.hrtime.bigint();
   const adopted = cache && adoptInstallTree(cache, stage);
   if (cache && adopted) {
