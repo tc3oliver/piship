@@ -1848,19 +1848,36 @@ const checks: Record<SandboxBehavior, Check> = {
       when: "before it started" | "while it ran",
     ): Promise<string | undefined> => {
       const release = `${marker}.release`;
+      const ready = `${marker}.ready`;
       const wait = markerWaitScript(release, h.observable, RELEASE_POLLS);
-      // The command aborted before it started prints a line as it starts, so
-      // the kit sees a backend that ignored the abort start it late; the one
-      // aborted while it ran stays silent, as a command streaming no output.
+      // A silent running command writes a workspace readiness marker.
+      // Shared workspaces can observe it without guessing startup latency.
       const command =
         when === "before it started"
           ? `echo started; ${wait}; printf late > ${quote(marker)}`
-          : `${wait}; printf late > ${quote(marker)}`;
+          : `printf ready > ${quote(ready)}; ${wait}; printf late > ${quote(marker)}`;
       const execution = h.start(instance, command);
-      // Before it started: while the backend is still setting it up. While
-      // it ran: before it printed anything (a timeout usually hits a command
-      // that is streaming output; the timeout check covers that).
-      if (when === "while it ran") await sleep(RUNNING_MS);
+      if (when === "while it ran") {
+        if (h.observable) {
+          let ended = false;
+          void execution.settled.then(() => {
+            ended = true;
+          });
+          const deadline = Date.now() + h.boundMs;
+          while (!existsSync(join(h.workspace, ready))) {
+            check(!ended, "the silent command ended before it started");
+            check(
+              Date.now() < deadline,
+              `the silent command did not start within ${h.boundMs} ms`,
+            );
+            await sleep(50);
+          }
+          check(!ended, "the silent command ended before cancellation");
+        } else {
+          // Snapshot/remote workspaces cannot expose the readiness file.
+          await sleepResponsive(RUNNING_MS);
+        }
+      }
       execution.controller.abort();
       const settled = await settle(() => execution.settled, h.settleMs);
       // A backend may complete cancellation by deleting its sandbox. Only
