@@ -1567,13 +1567,19 @@ describeIsolated(isolator)(
       expect(statuses(report)).toEqual(expected.shared);
     }, 120_000);
 
-    it.concurrent("waits for silent-command readiness before cancelling on a shared workspace", async () => {
-      const report = await run(
-        { variant: "shared", slowStart: true },
-        { only: ["cancellation"] },
-      );
-      expect(report.results.find((item) => item.behavior === "cancellation")).toMatchObject({ status: "passed" });
-    }, 120_000);
+    it.concurrent(
+      "waits for silent-command readiness before cancelling on a shared workspace",
+      async () => {
+        const report = await run(
+          { variant: "shared", slowStart: true },
+          { only: ["cancellation"] },
+        );
+        expect(
+          report.results.find((item) => item.behavior === "cancellation"),
+        ).toMatchObject({ status: "passed" });
+      },
+      120_000,
+    );
 
     it("accepts independently verified sandbox retirement on cancellation", async () => {
       const report = await run(
