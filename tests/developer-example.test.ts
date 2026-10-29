@@ -776,7 +776,9 @@ describe("the release wiring and the files that name the example", () => {
     expect(workflow).toContain("developer:devcode");
     expect(workflow).toContain("demo:acmecode personal:mypi developer:devcode");
     expect(
-      workflow.match(/distribution: \[acmecode, mypi, devcode\]/g),
+      workflow.match(
+        /distribution: \[acmecode, mypi, devcode(, piship-runtime)?\]/g,
+      ),
     ).toHaveLength(3);
     // The managed variant is validated, never copied into the build.
     expect(workflow).toContain("managed.piship.yaml");

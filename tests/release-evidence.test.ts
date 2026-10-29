@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -83,6 +89,35 @@ describe("the recorded release evidence", () => {
     expect(result.warnings).toEqual([]);
     expect(result.summary.join("\n")).toContain("devcode@1.0.0 linux-x64");
     expect(result.summary.join("\n")).toContain("3 with a recorded checksum");
+  });
+
+  it("checks a runtime release by its runtime.json", () => {
+    const root = release();
+    const {
+      distribution: _distribution,
+      payload: _payload,
+      ...rest
+    } = JSON.parse(readFileSync(join(root, "release.json"), "utf8"));
+    rmSync(join(root, "release.json"));
+    write(root, "runtime.json", {
+      ...rest,
+      pishipVersion: "0.13.0",
+      inventory: { files: 10 },
+    });
+    const result = checkReleaseEvidence(root);
+    expect(result.problems).toEqual([]);
+    expect(result.summary.join("\n")).toContain(
+      "piship-runtime@0.13.0 linux-x64",
+    );
+    write(root, "runtime.json", {
+      ...rest,
+      pishipVersion: "0.13.0",
+      inventory: { files: 10 },
+      qualification: "unqualified-local",
+    });
+    expect(checkReleaseEvidence(root).problems).toEqual([
+      "qualification is unqualified-local, not qualified",
+    ]);
   });
 
   it("names each thing that is missing", () => {

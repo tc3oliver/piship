@@ -216,7 +216,7 @@ describe("release candidate supply-chain evidence", () => {
       "target: [linux-x64, darwin-arm64, win32-x64]",
     );
     expect(job("reproducibility")).toContain(
-      "distribution: [acmecode, mypi, devcode]",
+      "distribution: [acmecode, mypi, devcode, piship-runtime]",
     );
     expect(job("reproducibility")).toContain("reproducibility");
   });
@@ -232,9 +232,21 @@ describe("release candidate supply-chain evidence", () => {
       "scripts/check-release-evidence.mjs",
     ])
       expect(verify, step).toContain(step);
-    expect(verify).toContain("distribution: [acmecode, mypi, devcode]");
+    expect(verify).toContain(
+      "distribution: [acmecode, mypi, devcode, piship-runtime]",
+    );
     expect(verify).toContain("target: [linux-x64, darwin-arm64, win32-x64]");
     expect(job("attest")).toContain("actions/attest-build-provenance");
+  });
+
+  it("builds the runtime release on every target beside the distributions and verifies it as an archive", () => {
+    expect(job("build")).toContain("runtime-release --out");
+    expect(job("build")).toContain("piship-runtime-");
+    // Verified by the separately built CLI, with its metadata and payload tampering named.
+    expect(job("verify")).toContain("Name the runtime archive");
+    expect(job("verify")).toContain("runtime.json");
+    expect(job("verify")).toContain("does not match its inventory");
+    expect(job("attest")).toContain("releases/*.tar.gz");
   });
 
   it("installs every distribution on every target and reports what it costs the machine", () => {

@@ -5,6 +5,7 @@ import { PiShipError } from "@piship/contracts";
 import { sha256File } from "../archive.js";
 import { RELEASE_FILES, REPRODUCIBILITY_SCHEMA } from "./metadata.js";
 import { hash } from "./shared.js";
+import { releaseKind, RUNTIME_FILES, verifyRuntimeRelease } from "./runtime.js";
 import { verifyRelease } from "./verify.js";
 
 export interface ReproducibilityReport {
@@ -22,6 +23,41 @@ export interface ReproducibilityReport {
   readonly note: string;
 }
 
+interface OpenRelease {
+  readonly distribution: string;
+  readonly version: string;
+  readonly target: string;
+  readonly directory: string;
+  readonly payload: string;
+  /** The files beside the payload that are compared as wrapper files. */
+  readonly wrapper: readonly string[];
+  readonly cleanup: () => void;
+}
+
+/** A verified release or runtime release, whichever `input` is. */
+async function open(input: string): Promise<OpenRelease> {
+  const wrapper = (files: readonly string[]) =>
+    files.filter((item) => !item.startsWith("payload/"));
+  if ((await releaseKind(input)) === "runtime") {
+    const { metadata, ...opened } = await verifyRuntimeRelease(input);
+    return {
+      distribution: "piship-runtime",
+      version: metadata.pishipVersion,
+      target: metadata.target,
+      wrapper: wrapper(RUNTIME_FILES),
+      ...opened,
+    };
+  }
+  const { metadata, ...opened } = await verifyRelease(input);
+  return {
+    distribution: metadata.distribution.id,
+    version: metadata.distribution.version,
+    target: metadata.target,
+    wrapper: wrapper(RELEASE_FILES),
+    ...opened,
+  };
+}
+
 /**
  * Compare two releases of the same source, lock, and target. Payload
  * equality is the reproducibility claim; wrapper differences are reported
@@ -31,18 +67,18 @@ export async function compareReleases(
   first: string,
   second: string,
 ): Promise<ReproducibilityReport> {
-  const a = await verifyRelease(first);
+  const a = await open(first);
   try {
-    const b = await verifyRelease(second);
+    const b = await open(second);
     try {
       if (
-        a.metadata.target !== b.metadata.target ||
-        a.metadata.distribution.id !== b.metadata.distribution.id ||
-        a.metadata.distribution.version !== b.metadata.distribution.version
+        a.target !== b.target ||
+        a.distribution !== b.distribution ||
+        a.version !== b.version
       )
         throw new PiShipError(
           "CONFIG_INVALID",
-          `Reproducibility compares one distribution version on one target; got ${a.metadata.distribution.id}@${a.metadata.distribution.version} ${a.metadata.target} and ${b.metadata.distribution.id}@${b.metadata.distribution.version} ${b.metadata.target}`,
+          `Reproducibility compares one distribution version on one target; got ${a.distribution}@${a.version} ${a.target} and ${b.distribution}@${b.version} ${b.target}`,
         );
       const left = JSON.parse(
         readFileSync(join(a.payload, "metadata", "inventory.json"), "utf8"),
@@ -55,9 +91,7 @@ export async function compareReleases(
       ].sort();
       const differences = paths.filter((path) => left[path] !== right[path]);
       const wrapper: Record<string, boolean> = {};
-      for (const file of RELEASE_FILES.filter(
-        (item) => !item.startsWith("payload/"),
-      ))
+      for (const file of a.wrapper)
         wrapper[file] =
           hash(readFileSync(join(a.directory, file))) ===
           hash(readFileSync(join(b.directory, file)));
@@ -68,9 +102,9 @@ export async function compareReleases(
         : null;
       return {
         schema: REPRODUCIBILITY_SCHEMA,
-        distribution: a.metadata.distribution.id,
-        version: a.metadata.distribution.version,
-        target: a.metadata.target,
+        distribution: a.distribution,
+        version: a.version,
+        target: a.target,
         payloadEqual: differences.length === 0,
         payloadFiles: paths.length,
         payloadDifferences: differences.slice(0, 200),
