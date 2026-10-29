@@ -308,8 +308,7 @@ export function grantCommandWords(
 }
 
 /** Redirects that write nowhere a file could be planted: `2>&1`, `> /dev/null`. */
-const BENIGN_REDIRECT = /^&?>>?(?:&\d+|\s*\/dev\/null(?![\w/.-]))/;
-const BENIGN_REDIRECT_WIN32 = /^>>?(?:&\d+|\s*nul(?![\w/.-]))/i;
+const BENIGN_REDIRECT = /&?>>?(?:&\d+|\s*\/dev\/null(?![\w/.-]))/y;
 
 /**
  * The simple commands of a chain (`;`, `&&`, `||`, `|`, newline) as source
@@ -324,7 +323,9 @@ export function chainSegments(
   platform: "posix" | "win32",
 ): string[] | undefined {
   const win = platform === "win32";
-  const benign = win ? BENIGN_REDIRECT_WIN32 : BENIGN_REDIRECT;
+  // Unsandboxed commands run in Git Bash on Windows while the rule text is
+  // judged as cmd.exe: a quote one reads as data the other may not.
+  if (text.length > 4096 || (win && /['"]/.test(text))) return;
   const segments: string[] = [];
   let start = 0;
   let quote: string | undefined;
@@ -345,9 +346,13 @@ export function chainSegments(
     if (char === '"' || (char === "'" && !win)) quote = char;
     else if (char === "\\" && !win) i++;
     else if (char === "\r" || /[$`()<]/.test(char)) return;
+    // A comment runs to the end of the line, quotes or not.
+    else if (char === "#" && (i === 0 || /[\s;&|]/.test(text[i - 1] as string)))
+      return;
     else if (win && (char === "%" || char === "^")) return;
     else if (char === ">" || (char === "&" && text[i + 1] === ">")) {
-      const length = benign.exec(text.slice(i))?.[0].length;
+      BENIGN_REDIRECT.lastIndex = i;
+      const length = BENIGN_REDIRECT.exec(text)?.[0].length;
       if (!length || (win && char === "&")) return;
       i += length - 1;
     } else if (char === "&" || char === "|") {

@@ -21,7 +21,8 @@ import {
   normalizeTokenContext,
   type PathTokenContext,
 } from "./glob.js";
-import { posix, win32 } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { seamPlane } from "./seams.js";
 import { chainSegments } from "./shell-words.js";
 
@@ -108,14 +109,35 @@ export function chainsBeyondPattern(
   return false;
 }
 
-/** Variables that change which program runs or how, so they stay in the text. */
-const UNSAFE_ASSIGNMENT =
-  /^(?:PATH|IFS|ENV|SHELL|PROMPT_COMMAND|NODE_OPTIONS|BASH_ENV|LD_\w*|DYLD_\w*|GIT_\w*)$/;
+/** Variables that only tune output or locale: the only ones a rule may see past. */
+const HARMLESS_ASSIGNMENT =
+  /^(?:CI|NODE_ENV|FORCE_COLOR|NO_COLOR|TERM|TZ|LANG|LC_\w+|DEBUG|RUST_BACKTRACE|RUST_LOG|PYTHONUNBUFFERED|PYTHONDONTWRITEBYTECODE)$/;
 const ASSIGNMENT = /^([A-Za-z_]\w*)=(?:"[^"]*"|'[^']*'|[^\s"'\\]*)\s+(?=\S)/;
+
+/** Whether `target` (relative to `root`) really lands inside `root`, links followed. */
+function insideWorkspace(root: string, target: string): boolean {
+  if (process.env.CDPATH) return false;
+  let path = resolve(root, target);
+  for (;;) {
+    try {
+      const real = realpathSync(path);
+      const base = realpathSync(root);
+      const rel = relative(base, real);
+      return (
+        rel === "" ||
+        (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+      );
+    } catch {
+      const parent = dirname(path);
+      if (parent === path) return false;
+      path = parent;
+    }
+  }
+}
 
 /**
  * The commands a rule judges one by one: a chain's segments with leading
- * `NAME=value` prefixes removed (not variables that redirect execution) and
+ * `NAME=value` prefixes removed (only harmless ones) and
  * a `cd` into the workspace dropped. Undefined when the command is not made
  * of plain commands, so only the whole text is judged.
  */
@@ -130,7 +152,7 @@ function ruleSegments(
   for (let segment of segments) {
     for (;;) {
       const match = platform === "posix" ? ASSIGNMENT.exec(segment) : null;
-      if (!match || UNSAFE_ASSIGNMENT.test(match[1] as string)) break;
+      if (!match || !HARMLESS_ASSIGNMENT.test(match[1] as string)) break;
       segment = segment.slice(match[0].length);
     }
     const cd =
@@ -138,19 +160,8 @@ function ruleSegments(
         segment,
       );
     const target = cd?.[1] ?? cd?.[2] ?? cd?.[3];
-    if (target !== undefined) {
-      const path = platform === "win32" ? win32 : posix;
-      const rel = path.relative(
-        workspaceRoot,
-        path.resolve(workspaceRoot, target),
-      );
-      if (
-        rel !== ".." &&
-        !rel.startsWith(`..${path.sep}`) &&
-        !path.isAbsolute(rel)
-      )
-        continue;
-    }
+    if (target !== undefined && insideWorkspace(workspaceRoot, target))
+      continue;
     kept.push(segment);
   }
   return kept.length ? kept : undefined;
@@ -597,6 +608,14 @@ export class PolicyEngine {
     const decisions = segments.map((segment) =>
       this.#decideOne(action, segment),
     );
+    // An explicit ask of a narrowing layer judges the text as written.
+    if (
+      whole.effect === "ask" &&
+      (whole.layer === "distribution-enforced" ||
+        whole.layer === "team-project" ||
+        (whole.layer === "user-preference" && this.#userNarrowing))
+    )
+      decisions.push(whole);
     const effect = strictest(...decisions.map((entry) => entry.effect));
     const deciding = decisions.find((entry) => entry.effect === effect);
     return { ...(deciding as PolicyDecision), resource };
