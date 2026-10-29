@@ -260,7 +260,7 @@ export function grantCommandWords(
   if (text.length > 4096) return undefined;
   let quote: "'" | '"' | undefined;
   for (let i = 0; i < text.length; i++) {
-    const char = text[i];
+    const char = text[i] as string;
     if (char === "\n" || char === "\r") return undefined;
     if (platform === "win32" && /[%^!]/.test(char)) return undefined;
     if (quote === "'") {
