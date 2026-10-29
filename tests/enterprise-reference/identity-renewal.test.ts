@@ -2,10 +2,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AccessEvent, DistributionAccess } from "@piship/core";
 import { MemorySecretStore } from "@piship/credentials";
 import { type AccessManifest, readManifest } from "@piship/schema";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { authorizeAtKeycloak } from "../../examples/enterprise-reference/tests/support/keycloak.js";
 import { browser } from "../helpers/oidc-attacks.js";
 import { type ReferenceStack, startReferenceStack } from "./stack.js";
@@ -69,14 +69,15 @@ describe("live-session identity renewal (Keycloak and credential broker)", () =>
       expect(first.identity?.subject).toBe(initial.subject);
       expect(first.selectedModel).toBe("acme/coder");
       const firstKey = await distribution.requestSecret();
-      expect(firstKey).not.toBeNull();
-      expect((await stack.chat(firstKey!.reveal())).status).toBe(200);
+      if (!firstKey) throw new Error("The broker did not issue a credential");
+      expect((await stack.chat(firstKey.reveal())).status).toBe(200);
 
       // Advance the session clock into the refresh window without waiting
       // five real minutes. The refresh itself uses the live Keycloak endpoint.
       clock = initial.expiresAt.getTime() - 30_000;
       const renewedKey = await distribution.requestSecret({ force: true });
-      expect(renewedKey).not.toBeNull();
+      if (!renewedKey)
+        throw new Error("The broker did not renew the credential");
       clock = Date.now();
 
       const renewed = await distribution.currentIdentity({ required: true });
@@ -87,16 +88,14 @@ describe("live-session identity renewal (Keycloak and credential broker)", () =>
       expect(renewed.refreshToken.reveal()).not.toBe(
         initial.refreshToken.reveal(),
       );
-      expect(
-        events.filter((event) => event.event === "identity.refresh"),
-      ).toHaveLength(1);
+      expect(events.filter((event) => event.event === "identity.refresh")).toHaveLength(1);
 
       const resumed = await distribution.activate();
       expect(resumed.config.allowedModels).toEqual([
         "acme/coder",
         "acme/general",
       ]);
-      expect((await stack.chat(renewedKey!.reveal())).status).toBe(200);
+      expect((await stack.chat(renewedKey.reveal())).status).toBe(200);
 
       // Both the on-disk state and lifecycle audit contain metadata only.
       const visible =
@@ -126,12 +125,12 @@ describe("live-session identity renewal (Keycloak and credential broker)", () =>
       });
       expect(revoked.status).toBe(200);
       clock = renewed.expiresAt.getTime() - 30_000;
-      const failure = await distribution
-        .requestSecret({ force: true })
-        .then(
-          () => null,
-          (error: unknown) => error,
-        );
+      let failure: unknown;
+      try {
+        await distribution.requestSecret({ force: true });
+      } catch (error) {
+        failure = error;
+      }
       expect(failure).toMatchObject({ code: "IDENTITY_EXPIRED" });
       expect(
         events.filter((event) => event.event === "identity.refresh"),
