@@ -9,6 +9,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  leadingPartial,
   type TaskEvent,
   TaskLimitError,
   TaskRegistry,
@@ -22,6 +23,7 @@ import {
   planRefusal,
   uncontainedEnvironment,
 } from "./governed-tools.js";
+import { TaskRecorder } from "./task-records.js";
 
 /** How long `task_start` waits for the first output before it returns. */
 const FIRST_OUTPUT_MS = 1000;
@@ -51,10 +53,21 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
       },
       content: { command: task.command },
     });
+  const stateDir = gov.options?.stateDir;
+  const recorder =
+    process.platform === "win32" || !stateDir
+      ? undefined
+      : new TaskRecorder(stateDir);
   const tasks = new TaskRegistry({
-    start: (task) => record("task.start", task, "allowed"),
+    start: (task) => {
+      recorder?.add(task.id);
+      record("task.start", task, "allowed");
+    },
     exit: (task) => record("task.exit", task),
     stop: (task) => record("task.stop", task),
+    // Only a settled runner proves the process is gone; a stop that is
+    // still pending keeps the record for doctor.
+    ended: (task) => recorder?.remove(task.id),
     refused: (task) => record("task.start", task, "denied"),
   });
   gov.backgroundTasks = tasks;
@@ -62,15 +75,16 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
 }
 
 function report(task: TaskReport, prefix = ""): string {
-  // The model gets Pi's tool output limit of the newest output.
-  const bytes = Buffer.byteLength(task.output);
-  const output =
-    bytes > DEFAULT_MAX_BYTES
-      ? Buffer.from(task.output)
-          .subarray(bytes - DEFAULT_MAX_BYTES)
-          .toString()
-      : task.output;
-  const dropped = task.dropped + Math.max(0, bytes - DEFAULT_MAX_BYTES);
+  // The model gets Pi's tool output limit of the newest output, on a
+  // character boundary.
+  const all = Buffer.from(task.output);
+  const kept =
+    all.length > DEFAULT_MAX_BYTES
+      ? all.subarray(all.length - DEFAULT_MAX_BYTES)
+      : all;
+  const shown = kept.subarray(kept === all ? 0 : leadingPartial(kept));
+  const output = shown.toString("utf8");
+  const dropped = task.dropped + all.length - shown.length;
   return [
     `${prefix}Task ${task.id}: ${task.status}${task.exitCode !== null ? ` (exit code ${task.exitCode})` : ""}`,
     ...(dropped

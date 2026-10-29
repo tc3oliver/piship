@@ -59,6 +59,8 @@ export interface TaskEvents {
   exit(task: TaskEvent): void;
   stop(task: TaskEvent): void;
   refused(task: TaskEvent): void;
+  /** The runner settled: the task's process is gone. */
+  ended?(task: TaskEvent): void;
 }
 
 /** A task's state and the output it printed since the last read. */
@@ -69,6 +71,29 @@ export interface TaskReport {
   readonly output: string;
   /** Bytes printed since the last read that the buffer no longer holds. */
   readonly dropped: number;
+}
+
+/** Bytes at the start of `bytes` that are the tail of a cut UTF-8 character. */
+export function leadingPartial(bytes: Buffer): number {
+  let count = 0;
+  while (
+    count < 3 &&
+    count < bytes.length &&
+    ((bytes[count] as number) & 0xc0) === 0x80
+  )
+    count++;
+  return count;
+}
+
+/** Bytes at the end of `bytes` that begin a UTF-8 character not yet complete. */
+function trailingPartial(bytes: Buffer): number {
+  for (let back = 1; back <= Math.min(3, bytes.length); back++) {
+    const byte = bytes[bytes.length - back] as number;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return length > back ? back : 0;
+  }
+  return 0;
 }
 
 /** The newest `limit` bytes of a stream, and how many were written in all. */
@@ -98,13 +123,30 @@ class Tail {
     }
   }
 
-  /** Everything written from byte `offset` on that is still held. */
-  since(offset: number): { text: string; dropped: number } {
+  /**
+   * Everything written from byte `offset` on that is still held, whole
+   * characters only: a character cut by the buffer edge is dropped, and one
+   * still arriving is left for the next read (`end` is where this one stops)
+   * unless the stream `final`ly ended.
+   */
+  since(
+    offset: number,
+    final = false,
+  ): { text: string; dropped: number; end: number } {
     const start = this.written - this.#held;
     const skip = Math.max(0, offset - start);
+    let bytes = Buffer.concat(this.#chunks).subarray(skip);
+    let dropped = Math.max(0, start - offset);
+    if (skip === 0 && start > 0) {
+      const cut = leadingPartial(bytes);
+      bytes = bytes.subarray(cut);
+      dropped += cut;
+    }
+    const pending = final ? 0 : trailingPartial(bytes);
     return {
-      text: Buffer.concat(this.#chunks).subarray(skip).toString("utf8"),
-      dropped: Math.max(0, start - offset),
+      text: bytes.subarray(0, bytes.length - pending).toString("utf8"),
+      dropped,
+      end: this.written - pending,
     };
   }
 }
@@ -208,6 +250,7 @@ export class TaskRegistry {
       )
       .then(() => {
         task.ended = true;
+        this.events.ended?.(task.event());
         this.#report(task);
         this.#prune();
       });
@@ -274,8 +317,8 @@ export class TaskRegistry {
   read(id: string): TaskReport | undefined {
     const task = this.#tasks.get(id);
     if (!task) return undefined;
-    const { text, dropped } = task.tail.since(task.read);
-    task.read = task.tail.written;
+    const { text, dropped, end } = task.tail.since(task.read, task.ended);
+    task.read = end;
     if (task.ended) this.#forget(id, "read");
     return {
       id,
