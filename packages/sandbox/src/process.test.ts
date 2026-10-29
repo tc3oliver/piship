@@ -18,6 +18,8 @@ import { parsePs, spawnManaged, trackDescendants } from "./process.js";
 
 const node = process.execPath;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const PROCESS_TIMEOUT_TEST_MS =
+  process.platform === "win32" ? 20_000 : 15_000;
 
 // A child that starts a heartbeat-writing grandchild in its own process group.
 const TREE = `
@@ -98,7 +100,7 @@ describe("spawnManaged", () => {
     expect(exit.cancelled).toBe(false);
     expect(await heartbeatStopped(heartbeat)).toBe(true);
     expect(running(token)).toBe(false);
-  }, process.platform === "win32" ? 20_000 : 15_000);
+  }, PROCESS_TIMEOUT_TEST_MS);
 
   it("cancels through an AbortSignal", async () => {
     const heartbeat = join(dir, "hb");
