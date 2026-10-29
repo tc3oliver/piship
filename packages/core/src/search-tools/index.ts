@@ -383,6 +383,34 @@ export async function downloadSearchToolArchives(
 }
 
 /**
+ * The runtime release: both tools at their catalog default versions for
+ * `target`, downloaded again (a cached file is never pinned unseen) and
+ * pinned exactly as `piship lock` pins a manifest's.
+ */
+export async function lockDefaultSearchTools(
+  target: string,
+  options: SearchToolDownloadOptions = {},
+): Promise<LockedSearchTools> {
+  const policy = lockNetworkPolicy(undefined);
+  const output: Partial<Record<SearchTool, LockedSearchTool>> = {};
+  for (const tool of SEARCH_TOOLS) {
+    const { defaultVersion: version, source } = SEARCH_TOOL_SPECS[tool];
+    const asset = searchToolAsset(tool, version, target);
+    options.progress?.(`Downloading ${asset.name}`);
+    store(
+      cachePath(asset, options.env),
+      await download(asset.url, policy, options),
+    );
+    output[tool] = {
+      version,
+      source,
+      targets: { [target]: lockTarget(tool, version, target, options.env) },
+    };
+  }
+  return output;
+}
+
+/**
  * `piship build` and `piship release`, before the payload is assembled: make
  * sure the cache holds each archive the lock pins for `target`, downloading
  * it again when it is missing or differs from the lock.

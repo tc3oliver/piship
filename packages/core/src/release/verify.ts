@@ -224,7 +224,7 @@ export async function verifyRelease(
 }
 
 /** The archive's digest against the one expected and the sidecar published beside it. */
-function checkArchiveDigest(
+export function checkArchiveDigest(
   path: string,
   actual: string,
   expectedSha256: string | undefined,

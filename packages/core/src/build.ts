@@ -253,7 +253,7 @@ function placeFramework(
  * place. Returns the cache entries the files came from, whose digests a
  * payload inventory can take.
  */
-function placeRuntime(
+export function placeRuntime(
   stage: string,
   options: {
     readonly cache: RuntimeCache | undefined;
