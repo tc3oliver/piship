@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type Credential,
-  type ReferenceStack,
-  type SpendLog,
   errorType,
   poll,
+  type ReferenceStack,
+  type SpendLog,
   startReferenceStack,
   sum,
 } from "./stack.js";

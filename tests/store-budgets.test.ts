@@ -2,16 +2,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  decide,
+  summarize,
+  // @ts-expect-error The benchmark script is plain JavaScript.
+} from "../scripts/benchmark-store.mjs";
+import {
   evaluateInstallMetrics,
   evaluateStoreBudgets,
   readBudgets,
   // @ts-expect-error The budget script is plain JavaScript.
 } from "../scripts/store-budgets.mjs";
-import {
-  decide,
-  summarize,
-  // @ts-expect-error The benchmark script is plain JavaScript.
-} from "../scripts/benchmark-store.mjs";
 
 const scenario = (median: number) => ({ median });
 const report = (scenarios: Record<string, number>, defaultMode = "off") => ({

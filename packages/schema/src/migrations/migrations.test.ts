@@ -2,10 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
+  checkManifestMigration,
   LATEST_SCHEMA,
   MANIFEST_MIGRATIONS,
   type Manifest,
-  checkManifestMigration,
   manifestMigration,
   migrateManifestSource,
   migrationPath,

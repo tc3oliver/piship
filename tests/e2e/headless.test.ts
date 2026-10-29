@@ -16,11 +16,11 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { canonicalJson } from "@piship/core";
+import { publishSubagentOwner } from "@piship/pi";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
-import { canonicalJson } from "@piship/core";
-import { publishSubagentOwner } from "@piship/pi";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
 // Headless and workload path on the local fixtures: the AcmeCode demo with

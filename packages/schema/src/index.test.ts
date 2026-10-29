@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { redact } from "@piship/contracts";
-import { parseDocument } from "yaml";
 import { describe, expect, it } from "vitest";
+import { parseDocument } from "yaml";
 import {
   ManifestError,
   PISHIP_SCHEMA_V1,
@@ -12,6 +12,7 @@ import {
   parseManifestHeader,
   readManifest,
 } from "./index.js";
+
 const valid = {
   schema: PISHIP_SCHEMA_VERSION,
   app: { id: "mypi", name: "My Pi", command: "mypi", version: "0.1.0" },

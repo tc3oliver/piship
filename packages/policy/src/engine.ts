@@ -403,6 +403,8 @@ export interface PolicyExplanation {
   /** The resource as matched (filesystem paths are normalized). */
   readonly resource: string;
   readonly matches: readonly RuleMatch[];
+  /** Rules that match but are off because shell commands are not contained. */
+  readonly inactive: readonly RuleMatch[];
   readonly ignored: readonly (IgnoredRule & { readonly matches: boolean })[];
   readonly diagnostics: readonly PolicyDiagnostic[];
 }
@@ -496,6 +498,9 @@ export class PolicyEngine {
   }
 
   #matches(entry: LayerRule, action: string, resource: string): boolean {
+    // A pack's shell rule stands in for a prompt only where the sandbox
+    // contains the command; without containment the next rule decides.
+    if (entry.rule.contained && !this.context.containment.shell) return false;
     if (!matchAction(entry.rule.action, action)) return false;
     const pattern = isPathAction(action)
       ? entry.pathPattern
@@ -745,11 +750,30 @@ export class PolicyEngine {
     const resource = this.normalizeResource(request);
     const decision = this.#decide(request.action, resource);
     const matches: RuleMatch[] = [];
+    const inactive: RuleMatch[] = [];
     for (const layer of Object.keys(this.#layers) as PolicyLayer[]) {
       // First per source: team and project rules are matched separately.
       const matched = new Set<string>();
       for (const entry of this.#layers[layer]) {
-        if (!this.#matches(entry, request.action, resource)) continue;
+        if (!this.#matches(entry, request.action, resource)) {
+          if (
+            entry.rule.contained &&
+            this.#matches(
+              { ...entry, rule: { ...entry.rule, contained: false } },
+              request.action,
+              resource,
+            )
+          )
+            inactive.push({
+              layer,
+              source: entry.source,
+              ruleId: entry.rule.id,
+              effect: entry.rule.effect,
+              resource: entry.rule.resource,
+              first: false,
+            });
+          continue;
+        }
         const first = !matched.has(entry.source);
         matched.add(entry.source);
         matches.push({
@@ -782,6 +806,7 @@ export class PolicyEngine {
       decision,
       resource,
       matches,
+      inactive,
       ignored,
       diagnostics: this.diagnostics,
     };

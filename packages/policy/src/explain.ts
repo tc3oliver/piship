@@ -89,6 +89,15 @@ export function formatDecision(
         ),
       ),
     );
+  if (explanation.inactive.length > 0)
+    blocks.push(
+      section(
+        "Inactive rules (shell commands are not contained by an enforced sandbox)",
+        ...explanation.inactive.map(
+          (match) => `${match.ruleId} (${match.layer}, ${match.effect})`,
+        ),
+      ),
+    );
   const ignored = explanation.ignored.filter((item) => item.matches);
   if (ignored.length > 0)
     blocks.push(
@@ -133,6 +142,9 @@ export function decisionToJSON(
       first: match.first,
       ...(match.reason ? { reason: redact(match.reason) } : {}),
     })),
+    ...(explanation.inactive.length
+      ? { inactive: explanation.inactive.map((match) => match.ruleId) }
+      : {}),
     ignored: explanation.ignored.map((item) => ({
       source: item.source,
       layer: item.layer,

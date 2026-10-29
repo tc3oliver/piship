@@ -5,8 +5,8 @@ import {
 } from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
-  defaultMcpServerClass,
   DEFAULT_MCP_EXPOSURE,
+  defaultMcpServerClass,
   MCP_HTTP_TRANSPORTS,
   MCP_SERVER_CLASSES,
   type McpConfig,
@@ -14,6 +14,7 @@ import {
   type McpServerConfig,
   type TrustSetting,
 } from "../governance.js";
+import { plainHttpPermitted } from "../http-transport.js";
 import {
   bool,
   conflict,
@@ -32,7 +33,6 @@ import {
   referenceUrl,
   unsafe,
 } from "./fields.js";
-import { plainHttpPermitted } from "../http-transport.js";
 import { TRUST } from "./policy.js";
 import { exposure, exposureRules } from "./runtime.js";
 

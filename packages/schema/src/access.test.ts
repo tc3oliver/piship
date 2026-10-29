@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  PISHIP_SCHEMA_V1ALPHA2,
   launchWarnings,
   migrateManifestSource,
+  PISHIP_SCHEMA_V1ALPHA2,
   parseManifest,
   resolveTemplate,
 } from "./index.js";

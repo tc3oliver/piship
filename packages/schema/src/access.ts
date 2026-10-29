@@ -1,10 +1,10 @@
-import { unknownFieldMessage } from "./suggest.js";
 import {
   HTTP_TRANSPORTS,
   type HttpTransport,
   plainHttpPermitted,
   plainHttpProblem,
 } from "./http-transport.js";
+import { unknownFieldMessage } from "./suggest.js";
 import {
   checkTemplate,
   checkVariableName,

@@ -10,6 +10,8 @@ import { PI_VERSION, requireCurrentLock } from "@piship/core";
 import { type Manifest, readManifest } from "@piship/schema";
 import { describe, expect, it } from "vitest";
 
+import { ROUTINE_CASES } from "./fixtures/routine-cases.js";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const example = join(root, "examples", "developer");
 const personalPath = join(example, "piship.yaml");
@@ -424,6 +426,13 @@ describe("the permission provider", () => {
       "security dump-keychain",
     ])
       expect(decide(bash, command), command).toBe("deny");
+  });
+
+  it("decides the shared routine command table as the table says", () => {
+    const bash = rules(seeded(personal), "bash");
+    for (const { command, developer } of ROUTINE_CASES)
+      if (developer !== undefined)
+        expect(decide(bash, command), command).toBe(developer);
   });
 
   it("allows read-style MCP tools and asks for the rest", () => {

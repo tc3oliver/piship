@@ -169,7 +169,7 @@ describe("browser evidence tiers", () => {
 
   it("keeps live Chrome required by default and excludes it only in qualification", () => {
     expect(portable).toMatch(
-      /skip-browser:\n(?:[^\n]*\n)*?        type: boolean\n        default: false/,
+      /skip-browser:\n(?:[^\n]*\n)*? {8}type: boolean\n {8}default: false/,
     );
     expect(portable).toContain(
       "PISHIP_SKIP_BROWSER: ${{ inputs.skip-browser && '1' || '0' }}",
@@ -181,7 +181,7 @@ describe("browser evidence tiers", () => {
       "if: runner.os == 'Linux' && matrix.shard == 1 && !inputs.skip-browser",
     );
     expect(qualification).toMatch(
-      /portable-e2e:\n    uses: \.\/\.github\/workflows\/portable-e2e.yml\n    with:\n      skip-browser: true/,
+      /portable-e2e:\n {4}uses: \.\/\.github\/workflows\/portable-e2e.yml\n {4}with:\n {6}skip-browser: true/,
     );
     expect(qualification).toContain(
       "needs: [ci, codeql, portable-e2e, reference-e2e]",
@@ -268,7 +268,7 @@ describe("E2E vulnerability preflight", () => {
         expect(text).toMatch(
           new RegExp(`\\n  ${name}:\\n    needs: preflight\\n`),
         );
-      expect(text).toMatch(/\n  report:\n    needs: \[preflight, /);
+      expect(text).toMatch(/\n {2}report:\n {4}needs: \[preflight, /);
     });
   }
 });

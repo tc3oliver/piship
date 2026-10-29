@@ -1,10 +1,10 @@
+import { mkdirSync, readFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
   type Server,
   type ServerResponse,
 } from "node:http";
-import { mkdirSync, readFileSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";

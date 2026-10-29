@@ -4,11 +4,11 @@
 // `http-allowed` says so explicitly, and `https` forces HTTPS-only.
 import { describe, expect, it } from "vitest";
 import {
+  effectiveHttpTransport,
   launchWarnings,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_V1ALPHA6,
-  effectiveHttpTransport,
   parseManifest,
   plainHttpPermitted,
   plainHttpProblem,

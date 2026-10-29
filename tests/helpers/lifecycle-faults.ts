@@ -20,20 +20,20 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, expect } from "vitest";
 import {
-  type CommandResult,
-  EVIDENCED_TARGETS,
-  type UpdateOptions,
   buildRelease,
+  type CommandResult,
   currentTarget,
+  EVIDENCED_TARGETS,
   generateSigningKey,
   installDistribution,
   lockManifest,
   payloadInventory,
   readInstallReceipt,
   signChannel,
+  type UpdateOptions,
 } from "@piship/core";
+import { afterEach, beforeEach, expect } from "vitest";
 import { clearFaults } from "./fs-faults.js";
 import { deadPid, livePid, stopLiveProcesses } from "./processes.js";
 

@@ -3,18 +3,18 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   AccessFieldError,
-  ManifestError,
-  MIGRATED_BOOTSTRAP_EXPIRES,
-  PISHIP_SCHEMA_V1ALPHA4,
-  PISHIP_SCHEMA_V1ALPHA5,
   channelTrustKeys,
   launchWarnings,
+  ManifestError,
+  MIGRATED_BOOTSTRAP_EXPIRES,
   migrateManifestSource,
+  PISHIP_SCHEMA_V1ALPHA4,
+  PISHIP_SCHEMA_V1ALPHA5,
   parseManifest,
   parseUpdateRoot,
   sharedRoleKeyIds,
-  updateRoleKeys,
   type UpdateRoot,
+  updateRoleKeys,
 } from "./index.js";
 
 type Json = Record<string, unknown>;

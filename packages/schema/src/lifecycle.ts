@@ -4,12 +4,12 @@ import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
 import { AccessFieldError, failUnknown } from "./access.js";
 import { PRIVATE_HOSTS, plainHttpPermitted } from "./http-transport.js";
-import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 import {
   checkTemplate,
   hasRuntimeReference,
   referencedVariables,
 } from "./variables.js";
+import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 
 /** Top-level manifest sections added by piship/v1alpha4 (kept by v1alpha5). */
 export const LIFECYCLE_KEYS = ["updates", "release"] as const;

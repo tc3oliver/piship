@@ -22,12 +22,12 @@ import type { ManifestMigration } from "./types.js";
 import { migrateToV1 } from "./v1.js";
 import { migrateToV1alpha6 } from "./v1alpha6.js";
 
+export { MIGRATED_BOOTSTRAP_EXPIRES } from "./legacy.js";
 export type {
   ManifestMigration,
   MigrationContext,
   MigrationStepResult,
 } from "./types.js";
-export { MIGRATED_BOOTSTRAP_EXPIRES } from "./legacy.js";
 
 /** Steps up to v1alpha5 preserve behavior by construction. */
 export const MANIFEST_MIGRATIONS: readonly ManifestMigration[] = [

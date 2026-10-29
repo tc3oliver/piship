@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
 } from "@piship/contracts";
 import { OidcPkceIdentityProvider } from "@piship/identity";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { authorizeAtKeycloak } from "../../examples/enterprise-reference/tests/support/keycloak.js";
 import { ATTACKS, browser, type Follow } from "../helpers/oidc-attacks.js";
 import { type ReferenceStack, request, startReferenceStack } from "./stack.js";

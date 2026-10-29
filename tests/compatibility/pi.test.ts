@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
 import { PI_COMPATIBILITY, PI_VERSION } from "@piship/core";
 import { PI_SIBLING_PINS, PINNED_PI_VERSION } from "@piship/pi";
+import { describe, expect, it } from "vitest";
 
 const repoRoot = new URL("../../", import.meta.url);
 function jsonAt(path: string): unknown {
