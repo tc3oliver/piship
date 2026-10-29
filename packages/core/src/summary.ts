@@ -113,7 +113,7 @@ export function formatInspection(info: Inspection): string {
         : []),
       row(
         "sandbox",
-        `${sandbox.provider ?? "native"}${sandbox.required ? ", required" : ""}, network ${sandbox.network.mode}`,
+        `${sandbox.provider ?? "native"}${sandbox.required ? ", required" : ""}, network ${sandbox.network.mode}${sandbox.network.egress ? " (egress: it)" : ""}`,
       ),
       row("mcp", `${mcp.mode}, ${mcp.servers.length} server(s)`),
       row(

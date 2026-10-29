@@ -192,6 +192,15 @@ function sandboxCredentialLines(
     );
 }
 
+/** Whether the manifest declares `sandbox.network.egress: it`. */
+export function itEgress(data: DoctorData): boolean {
+  return data.governance?.manifest.sandbox?.network.egress === "it";
+}
+
+/** What `sandbox.network.egress: it` says in doctor: a declaration, never a check. */
+const IT_EGRESS_DELEGATED =
+  "egress delegated to IT: declared by the distribution (sandbox.network.egress: it), not verified by PiShip";
+
 /** The network mode, and in deny mode how the denial is known. */
 export function networkText(report: ContainmentReport): string {
   const denial = report.networkDenial;
@@ -231,7 +240,9 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       out.ok("isolation", REMOTE_WORKSPACE_TEXT);
     else if (governance.isolation)
       out.ok("isolation", ISOLATION_TEXT[governance.isolation]);
-    out.ok("network", networkText(report));
+    if (itEgress(data) && report.network === "allow")
+      out.info("network", `allow (${IT_EGRESS_DELEGATED})`);
+    else out.ok("network", networkText(report));
     out.ok(
       "scope",
       "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",

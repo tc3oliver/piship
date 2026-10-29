@@ -516,6 +516,26 @@ describe("diffLocks", () => {
     );
   });
 
+  it("flags a declared IT egress as high and its withdrawal as medium", () => {
+    const declared = clone(base);
+    Object.assign(declared.governance.manifest.sandbox.network, {
+      mode: "allow",
+      egress: "it",
+    });
+    const added = diffLocks(base, declared).changes.find(
+      (change) => change.item === "sandbox network.egress",
+    );
+    expect(added).toMatchObject({ kind: "added", after: "it", risk: "high" });
+    const removed = diffLocks(declared, base).changes.find(
+      (change) => change.item === "sandbox network.egress",
+    );
+    expect(removed).toMatchObject({
+      kind: "removed",
+      before: "it",
+      risk: "medium",
+    });
+  });
+
   it("reports a sandbox backend switch and its user", () => {
     const after = clone(base);
     Object.assign(after.governance.manifest.sandbox, {

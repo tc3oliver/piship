@@ -11,7 +11,7 @@ import {
 import { resolveTemplate } from "@piship/schema";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
-import { networkText } from "./sandbox.js";
+import { itEgress, networkText } from "./sandbox.js";
 
 /**
  * Endpoints that may use plain HTTP (every one not set to
@@ -281,10 +281,13 @@ function egressLines(data: DoctorData, out: DoctorSection): void {
     "egress: extensions",
     "not restricted by PiShip; in-process extensions are not contained",
   );
+  const delegated = itEgress(data) && report?.network === "allow";
   const none = `not enforced by PiShip: no hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them${report?.level === "enforced" ? "" : process.platform === "win32" ? " (Windows has no native sandbox adapter)" : ""}`;
   for (const label of ["shell", "MCP stdio"]) {
     const name = `egress: ${label}`;
-    if (verified && report)
+    if (delegated)
+      out.info(name, "delegated to IT (declared, not verified by PiShip)");
+    else if (verified && report)
       out.ok(name, `PiShip: network ${networkText(report)}`);
     else if (denied && report)
       out.info(name, `not verified: network ${networkText(report)}`);
@@ -296,7 +299,9 @@ function egressLines(data: DoctorData, out: DoctorSection): void {
   );
   out.info(
     "IT egress",
-    "externally attested at most; PiShip does not read endpoint firewall, proxy, DLP or EDR state",
+    delegated
+      ? "declared by the distribution (sandbox.network.egress: it); PiShip reads no firewall, proxy, DLP or EDR state"
+      : "externally attested at most; PiShip does not read endpoint firewall, proxy, DLP or EDR state",
   );
 }
 

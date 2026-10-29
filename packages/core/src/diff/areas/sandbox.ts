@@ -90,6 +90,16 @@ export function sandbox(
         ? ["high", "Sandboxed processes may reach the network."]
         : ["medium", "Sandboxed processes lose network access."],
   );
+  out.scalar(
+    "sandbox",
+    "sandbox network.egress",
+    x?.network?.egress,
+    y?.network?.egress,
+    (_, e) =>
+      e
+        ? ["high", "Declares that IT owns egress; PiShip does not verify it."]
+        : ["medium", "Withdraws the declaration that IT owns egress."],
+  );
   out.set(
     "sandbox",
     "sandbox environment.allow",
