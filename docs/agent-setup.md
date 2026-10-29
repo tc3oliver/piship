@@ -16,16 +16,18 @@ A distribution is either **personal** (one person, no company services) or **man
 
 ## 1. Get PiShip
 
-There are two routes. A company that serves several operating systems takes the **runtime archive** route, because one [Company Pack](release/owner-workflow.md#building-a-company-pack) then serves every platform and needs no clone. The **clone** is for contributors, for a distribution that needs per-target bytes (see step 5), and for anything the runtime archive does not run.
+There are two routes. A company that serves several operating systems uses a [Company Pack](release/owner-workflow.md#building-a-company-pack), which needs the PiShip runtime archive of every target it serves. **Today no PiShip release ships runtime archives**, so every target's runtime has to be built with `piship runtime-release` on a machine of that operating system, from a clone. Once a release ships runtime archives, IT downloads and verifies them instead, and needs no clone and no machine per operating system. The **clone** is also for contributors and for a distribution that needs per-target bytes (see step 5).
 
 ### The runtime archive (no clone)
 
-The official runtime is `piship-runtime-<PiShip version>-<os>-<arch>.tar.gz`: PiShip's CLI, Pi, and the locked npm closure with no distribution in it ([artifact contract](release/artifact-contract.md#runtime-release)). Its `payload/piship.mjs` is the PiShip CLI. The `release-candidate` workflow builds, attests, and verifies one per target (run 40848981331 on `7d1159c7`). **No PiShip release has published a runtime archive yet**, so until one does, build it from a clone (`piship runtime-release`, the second route below) or use [a distribution's pre-release archive](#admin-tooling-without-a-clone), and do not tell the person a runtime download exists.
+The official runtime is `piship-runtime-<PiShip version>-<os>-<arch>.tar.gz`: PiShip's CLI, Pi, and the locked npm closure with no distribution in it ([artifact contract](release/artifact-contract.md#runtime-release)). Its `payload/piship.mjs` is the PiShip CLI. The `release-candidate` workflow builds, attests, and verifies one per target (run 40848981331 on `7d1159c7`). **No PiShip release has published a runtime archive yet.** Until one does, build the runtime of each target with `piship runtime-release` from [a clone](#the-clone) on a machine of that operating system, and do not tell the person a runtime download exists. A distribution's pre-release archive (v0.13.0) is not a substitute for a pack: its CLI has no `pack`.
 
-When a release lists one:
+Prerequisites for either route: Node.js 22.19.0 or newer, and npm 11 or later for `piship lock` when the distribution declares Pi packages.
+
+Once a release lists runtime archives:
 
 1. Download the archive for this machine and its `.sha256`, and for a pack that serves more than one target, the archive for each of those targets.
-2. Verify it: `gh attestation verify <archive> --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`, then extract it into a new, empty directory and run `node <dir>/<archive-name>/payload/piship.mjs verify-release <dir>/<archive-name>` (the `.tar.gz` itself also verifies). Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`.
+2. Verify it: `gh attestation verify <archive> --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`, the attestation proves where the archive came from. Then extract it into a new, empty directory and run `node <dir>/<archive-name>/payload/piship.mjs verify-release <dir>/<archive-name>`, which only detects damage to the archive (it runs the archive's own code, so it does not replace the attestation). Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`.
 3. Use it by path for `init`, `validate`, `lock`, `pack`, `keygen`, `trust-root`, and `sign-channel`. A runtime archive has no esbuild; `piship pack` installs it from the build input's npm lock (needs the registry) only when a Pi package asks for `pretranspile`.
 
 ### The clone
@@ -191,9 +193,9 @@ Fix what `validate` reports and run it again until it says the manifest is valid
 
 Use this when the employees run more than one operating system, or the person wants one artifact to publish. It replaces `piship release` on one machine per operating system. Ask which employee operating systems there are, and whether a Windows enforced sandbox is required: with `sandbox.required: true` Windows is left out of the pack, because PiShip has no Windows sandbox adapter, and the pack records why. Say that to the person plainly; do not change the policy to include Windows.
 
-1. Download or obtain the runtime archive for each target and verify each one (step 1). The pack binds to them exactly: `piship lock` must have been run with the same PiShip version, so a PiShip update means `piship lock` and a new pack.
+1. Obtain the runtime archive for each target (built with `piship runtime-release` on that operating system today, see step 1) and verify each one. The pack binds to them exactly: `piship lock` must have been run with the same PiShip version, so a PiShip update means `piship lock` and a new pack.
 2. `piship pack <directory>/piship.yaml --runtime <archive>... --out <dir>`. It runs the same static gates as `release`, refuses a distribution that needs per-target bytes with `PACK_INELIGIBLE`, and writes `<out>/packs/<id>-<version>-pack.tar.gz`.
-3. If it is refused, tell the person what it says and offer `piship release` on one machine per operating system. That applies to a Pi package with `os`, `cpu`, or `libc` fields, install scripts, or per-target optional dependencies, to a native resource file, and to a `runtime.searchTools` version the runtime does not bundle. Pure-JavaScript Pi packages are allowed. Read [the full list](release/owner-workflow.md#building-a-company-pack).
+3. If it is refused, tell the person what it says and offer `piship release` on one machine per operating system. That applies to a Pi package with `os`, `cpu`, or `libc` fields, install scripts, or per-target optional dependencies, and to a native resource file. Pure-JavaScript Pi packages are allowed. A target whose runtime does not bundle the search tool versions the lock names is left out of the pack and listed under `excluded` in `pack.json`; if every target is left out, `pack` fails with `CONFIG_INVALID` ("no release target can be served"). Read [the full list](release/owner-workflow.md#building-a-company-pack).
 
 The pack is unsigned and is not smoke-tested by `piship pack`; the install runs `version` (and `capabilities --json` when governed) once before it activates anything.
 

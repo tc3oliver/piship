@@ -118,7 +118,7 @@ tell me instead of changing the policy. At the end, report what you checked and
 what you could not.
 ```
 
-What this supports today: the runtime archive and `piship pack` exist on `main` and are exercised in CI ([status](docs/status.md#company-packs-on-main-unreleased)), but **no PiShip release has published a runtime archive yet**. A pack cannot carry a Pi package with `os`/`cpu` fields, install scripts, or native files, and a distribution with `sandbox.required: true` does not serve Windows; both need `piship release` on each operating system instead.
+What this supports today: the runtime archive and `piship pack` exist on `main` and are exercised in CI ([status](docs/status.md#company-packs-on-main-unreleased)), but **no PiShip release has published a runtime archive yet**. Until one does, each target's runtime must be built with `piship runtime-release` on that operating system. Limits, listed in full in [status](docs/status.md#company-packs-on-main-unreleased): a pack cannot carry a Pi package with `os`/`cpu`/`libc` fields, install scripts, or per-target optional dependencies, or a native resource file (use `piship release` on each operating system); `sandbox.required: true` leaves Windows out; and a target whose runtime lacks the locked search tools is left out too.
 
 ## One file
 

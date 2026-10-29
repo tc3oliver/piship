@@ -15,7 +15,7 @@ A new restriction adds its row to the table below in the same change. A restrict
 
 These are the personal profile's requirements, and a change that makes one harder needs the four answers above for the added friction:
 
-- **Easy install.** `install` takes a payload, a release directory, or an archive and needs no enterprise service; it verifies what it extracts and refuses only collisions it did not create.
+- **Easy install.** `install` takes a payload, a release directory, an archive, or a Company Pack with its `--runtime` archive and needs no enterprise service; it verifies what it extracts and refuses only collisions it did not create.
 - **Easy authoring.** `piship init` writes a complete personal distribution that validates, locks, builds, and runs; `piship build`, `release`, `dev`, and `test` do not need a checkout of the PiShip source repository: a bundled PiShip carries its authoring inputs as one compressed snapshot it expands into a cache on first use ([performance](performance.md#what-a-release-does-now)).
 - **Easy auth and model configuration.** A personal distribution delegates credentials and models to Pi (`credential.provider: pi-native`, `inference.provider: pi-native`) with no identity provider, credential broker, or gateway, and the person keeps Pi's own sign-in.
 - **No enterprise infrastructure.** Identity, broker, gateway, audit collector, sandbox, signed update channel, and plain HTTP to internal hosts are all optional in personal mode. A personal manifest is permissive by default (`policy.default: allow`), and the person owns the policy: user rules and `--yolo` relax what the distribution asks.
