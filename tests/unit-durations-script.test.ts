@@ -40,11 +40,7 @@ function runLogs(logs: readonly string[]) {
   }
 }
 
-const sample = (
-  target: string,
-  color: (value: string) => string,
-  ms: number,
-) =>
+const sample = (target: string, color: (value: string) => string, ms: number) =>
   `check (${target}-latest, unit 1/1)\tRun npm test\t2026-10-29T00:00:00Z  ${color("✓")} packages/core/src/sample.test.ts (2 tests) ${color(String(ms))}ms\n`;
 
 const rawAnsi = (value: string) => `\u001b[32m${value}\u001b[39m`;
