@@ -10,6 +10,7 @@ import type { DeploymentMode } from "../access.js";
 import {
   CLAUDE_TRUST_DIMENSIONS,
   type PolicyConfig,
+  type PolicyPack,
   type PolicyRule,
   PROJECT_TRUST_DIMENSIONS,
   type ProjectDimensionEffect,
@@ -38,6 +39,11 @@ import {
   record,
   unsafe,
 } from "./fields.js";
+import {
+  ROUTINE_PACK,
+  ROUTINE_PACK_VERSIONS,
+  routineRules,
+} from "./routine-pack.js";
 
 const EFFECTS: readonly PolicyEffect[] = ["allow", "ask", "deny"];
 export const TRUST: readonly TrustSetting[] = ["allow", "deny"];
@@ -87,6 +93,52 @@ function coversSessionExport(resource: string): boolean {
     const regexp = new RegExp(`^${source}$`, "s");
     return SESSION_EXPORT_RESOURCES.some((name) => regexp.test(name));
   });
+}
+
+function parsePack(entry: unknown, path: string): PolicyPack {
+  const item = record(entry, path, ["pack", "version", "exclude"]);
+  const pack = plainString(item.pack, `${path}.pack`, 128);
+  if (pack !== ROUTINE_PACK)
+    fail(`${path}.pack`, `Expected the built-in pack ${ROUTINE_PACK}`);
+  const version = positiveInteger(
+    item.version,
+    `${path}.version`,
+    1,
+    1_000_000,
+  );
+  if (!(ROUTINE_PACK_VERSIONS as readonly number[]).includes(version))
+    fail(
+      `${path}.version`,
+      `${ROUTINE_PACK} has version ${ROUTINE_PACK_VERSIONS.join(", ")}`,
+    );
+  return {
+    pack,
+    version,
+    exclude: list(item.exclude, `${path}.exclude`, (id, at) =>
+      plainString(id, at, 128),
+    ),
+  };
+}
+
+/**
+ * A pack's rules without the excluded ones. An exclusion is a rule ID or a
+ * dotted prefix of one, with or without the pack's own prefix.
+ */
+function packRules(pack: PolicyPack, path: string): PolicyRule[] {
+  const rules = routineRules(pack.version);
+  const covers = (id: string, exclusion: string) =>
+    [exclusion, `${pack.pack}.${exclusion}`].some(
+      (name) => id === name || id.startsWith(`${name}.`),
+    );
+  for (const [index, id] of pack.exclude.entries())
+    if (!rules.some((rule) => covers(rule.id, id)))
+      fail(
+        `${path}.exclude[${index}]`,
+        `${id} matches no rule of ${pack.pack}@${pack.version}`,
+      );
+  return rules.filter(
+    (rule) => !pack.exclude.some((id) => covers(rule.id, id)),
+  );
 }
 
 function parseRule(entry: unknown, path: string): PolicyRule {
@@ -521,7 +573,7 @@ export function parsePolicy(
   app: { readonly id: string },
   options: {
     readonly userAuto?: boolean;
-    /** piship/v1alpha6 and later: accepts `policy.acknowledgeUnenforced`. */
+    /** piship/v1alpha6 and later: accepts `policy.acknowledgeUnenforced` and `policy.packs`. */
     readonly acknowledgeUnenforced?: boolean;
   } = {},
 ): PolicyConfig {
@@ -536,7 +588,9 @@ export function parsePolicy(
     "enforced",
     "defaults",
     ...(options.userAuto ? ["userAuto", "taskGrants"] : []),
-    ...(options.acknowledgeUnenforced ? ["acknowledgeUnenforced"] : []),
+    ...(options.acknowledgeUnenforced
+      ? ["acknowledgeUnenforced", "packs"]
+      : []),
   ]);
   const userAuto = parseUserAuto(policy.userAuto, mode);
   const taskGrants = parseTaskGrants(policy.taskGrants);
@@ -567,12 +621,30 @@ export function parsePolicy(
     parseRule,
     (rule) => rule.id,
   );
-  const defaults = list(
+  const authored = list(
     policy.defaults,
     "policy.defaults",
     parseRule,
     (rule) => rule.id,
   );
+  const packs = options.acknowledgeUnenforced
+    ? list(policy.packs, "policy.packs", parsePack, (pack) => pack.pack)
+    : [];
+  // The pack follows the author's own defaults: the first match wins, so a
+  // rule the author wrote decides before the pack's.
+  const defaults = [
+    ...authored,
+    ...packs.flatMap((pack, index) => {
+      const rules = packRules(pack, `policy.packs[${index}]`);
+      for (const rule of rules)
+        if (authored.some((other) => other.id === rule.id))
+          conflict(
+            `policy.packs[${index}]`,
+            `Rule ID ${rule.id} is already used in policy.defaults`,
+          );
+      return rules;
+    }),
+  ];
   for (const [index, rule] of defaults.entries())
     if (enforced.some((other) => other.id === rule.id))
       conflict(
@@ -600,6 +672,7 @@ export function parsePolicy(
       : { adapter: modulePath(policy.adapter, "policy.adapter") }),
     ...(userAuto === undefined ? {} : { userAuto }),
     ...(taskGrants === undefined ? {} : { taskGrants }),
+    ...(packs.length ? { packs } : {}),
     ...(options.acknowledgeUnenforced
       ? {
           acknowledgeUnenforced: list(

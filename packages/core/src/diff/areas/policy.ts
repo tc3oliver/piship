@@ -229,6 +229,12 @@ export function policy(
     ],
     ["low", "No longer acknowledges an unenforced rule."],
   );
+  const packs = (policy: typeof bp) =>
+    policy?.packs?.map((item) => `${item.pack}@${item.version}`).join(", ");
+  out.scalar("policy", "policy packs", packs(bp), packs(ap), [
+    "medium",
+    "Adds or changes a built-in rule pack; its rules appear in the rule changes.",
+  ]);
   for (const [field, order] of [
     ["resourceTrust", TRUST_RANK],
     ["providerTrust", TRUST_RANK],

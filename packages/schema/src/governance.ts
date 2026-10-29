@@ -375,6 +375,11 @@ export interface PolicyRule {
   readonly resource: string;
   readonly effect: PolicyEffect;
   readonly reason?: string;
+  /**
+   * Set only by a built-in rule pack: the rule applies only while the
+   * sandbox enforces shell containment. Manifest rules cannot set it.
+   */
+  readonly contained?: boolean;
 }
 
 export type TrustSetting = "allow" | "deny";
@@ -471,6 +476,12 @@ export interface TaskGrantsPolicy {
   readonly declared?: readonly DeclaredTaskGrant[];
 }
 
+export interface PolicyPack {
+  readonly pack: string;
+  readonly version: number;
+  readonly exclude: readonly string[];
+}
+
 export interface PolicyConfig {
   readonly id: string;
   readonly version: number;
@@ -497,6 +508,11 @@ export interface PolicyConfig {
    * names an action PiShip cannot enforce, acknowledged by the owner.
    */
   readonly acknowledgeUnenforced?: readonly string[];
+  /**
+   * piship/v1alpha6: the built-in rule packs this policy opted into. Their
+   * rules are already appended to `defaults`; this records the opt-in.
+   */
+  readonly packs?: readonly PolicyPack[];
   readonly resourceTrust: Readonly<
     Record<Exclude<ResourceTrustClass, "project">, TrustSetting> & {
       readonly project: ProjectResourceTrust;
