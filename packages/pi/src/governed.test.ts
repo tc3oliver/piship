@@ -553,6 +553,30 @@ describe("governed built-in tools", () => {
     ).toBe(false);
   });
 
+  it.runIf(process.platform === "darwin")(
+    "matches a protected directory spelled in another case on the real macOS filesystem",
+    () => {
+      const base = realpathSync.native(
+        mkdtempSync(join(tmpdir(), "piship-case-")),
+      );
+      try {
+        mkdirSync(join(base, ".claude"));
+        writeFileSync(join(base, ".claude", "settings.json"), "{}");
+        const upper = join(base, ".CLAUDE", "settings.json");
+        // Skip a case-sensitive volume, where the premise does not hold.
+        if (!existsSync(upper)) return;
+        expect(realpathSync.native(upper)).toBe(
+          join(base, ".claude", "settings.json"),
+        );
+        expect(
+          isProtectedDirectoryPath([join(base, ".claude")], [upper], true),
+        ).toBe(true);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("refuses to write a file that has another hard link, but not an ordinary or new one", async () => {
     const { session, workspace, home } = await open();
     const write = tool(governedTools(session, workspace), "write");
