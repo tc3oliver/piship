@@ -66,6 +66,93 @@ describe("runtime release", () => {
     expect(own.status, own.stderr).toBe(0);
   }, 900000);
 
+  it("binds a pack of the personal example to the built runtime", async () => {
+    const target = `${process.platform}-${process.arch}`;
+    const archive = join(
+      out,
+      "releases",
+      `piship-runtime-${PISHIP_VERSION}-${target}.tar.gz`,
+    );
+    const manifest = fileURLToPath(
+      new URL("../../examples/personal/piship.yaml", import.meta.url),
+    );
+    const packed = cli("pack", manifest, "--runtime", archive, "--out", out);
+    expect(packed.status, packed.stderr).toBe(0);
+    const runtime = JSON.parse(cli("verify-release", archive, "--json").stdout);
+    const bound = JSON.parse(
+      readFileSync(join(out, "packs", "mypi-1.0.0-pack", "pack.json"), "utf8"),
+    );
+    expect(bound.targets).toEqual([target]);
+    expect(bound.runtime.archives[target]).toMatchObject({
+      sha256: readFileSync(`${archive}.sha256`, "utf8").split(/\s+/)[0],
+      inventorySha256: runtime.inventory.sha256,
+    });
+    expect(runtime.searchTools).toEqual(
+      Object.fromEntries(
+        SEARCH_TOOLS.map((tool) => [
+          tool,
+          SEARCH_TOOL_SPECS[tool].defaultVersion,
+        ]),
+      ),
+    );
+    expect(Object.keys(bound.excluded)).not.toContain(target);
+  }, 900000);
+
+  // Its release targets are linux-x64 and darwin-arm64 only.
+  it.runIf(
+    ["linux-x64", "darwin-arm64"].includes(
+      `${process.platform}-${process.arch}`,
+    ),
+  )(
+    "carries a pure-JavaScript Pi package in a pack",
+    () => {
+      const target = `${process.platform}-${process.arch}`;
+      const archive = join(
+        out,
+        "releases",
+        `piship-runtime-${PISHIP_VERSION}-${target}.tar.gz`,
+      );
+      const manifest = fileURLToPath(
+        new URL(
+          "../../examples/enterprise-reference/piship.yaml",
+          import.meta.url,
+        ),
+      );
+      const packOut = join(out, "reference");
+      const packed = cli(
+        "pack",
+        manifest,
+        "--runtime",
+        archive,
+        "--out",
+        packOut,
+      );
+      expect(packed.status, packed.stderr).toBe(0);
+      const directory = join(packOut, "packs", "acmecode-reference-1.0.0-pack");
+      expect(
+        existsSync(
+          join(directory, "pack", "pi-packages", "pi-platform", "package.json"),
+        ),
+      ).toBe(true);
+      expect(readFileSync(join(directory, "checksums.txt"), "utf8")).toContain(
+        "pack/pi-packages/pi-platform/package.json",
+      );
+      expect(
+        existsSync(
+          join(
+            directory,
+            "pack",
+            "pi-packages",
+            "pi-platform",
+            "node_modules",
+            "ms",
+          ),
+        ),
+      ).toBe(true);
+    },
+    900000,
+  );
+
   it("leaves a distribution release verifying through the same command", async () => {
     const s = await lifecycleScenario("runtime-release");
     const verified = s.cli("verify-release", (await lifecycleReleases()).first);
