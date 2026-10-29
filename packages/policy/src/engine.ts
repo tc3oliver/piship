@@ -608,14 +608,22 @@ export class PolicyEngine {
     const decisions = segments.map((segment) =>
       this.#decideOne(action, segment),
     );
-    // An explicit ask of a narrowing layer judges the text as written.
-    if (
-      whole.effect === "ask" &&
-      (whole.layer === "distribution-enforced" ||
+    // An explicit ask of a narrowing layer judges the text as written. So
+    // does any other ask that no segment matches: it spells a prefix or
+    // chain that was stripped or split (`NODE_ENV=production **`).
+    if (whole.effect === "ask" && whole.layer !== "builtin") {
+      const pattern = this.#layers[whole.layer].find(
+        (entry) => entry.rule.id === whole.ruleId,
+      )?.rule.resource;
+      if (
+        whole.layer === "distribution-enforced" ||
         whole.layer === "team-project" ||
-        (whole.layer === "user-preference" && this.#userNarrowing))
-    )
-      decisions.push(whole);
+        (whole.layer === "user-preference" && this.#userNarrowing) ||
+        (pattern !== undefined &&
+          !segments.some((segment) => matchGlob(pattern, segment)))
+      )
+        decisions.push(whole);
+    }
     const effect = strictest(...decisions.map((entry) => entry.effect));
     const deciding = decisions.find((entry) => entry.effect === effect);
     return { ...(deciding as PolicyDecision), resource };

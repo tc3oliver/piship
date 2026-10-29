@@ -180,15 +180,39 @@ describe.skipIf(process.platform === "win32")(
           enforced: [
             rule("e.prod", "shell.execute", "AWS_PROFILE=prod **", "ask"),
             rule("e.sh", "shell.execute", "**| sh**", "ask"),
+            rule("e.node", "shell.execute", "NODE_ENV=production **", "ask"),
           ],
           defaults: [rule("d.all", "shell.execute", "**", "allow")],
         }),
         context: ctx,
       });
-      for (const resource of ["AWS_PROFILE=prod npm test", "npm test | sh"])
+      for (const resource of [
+        "AWS_PROFILE=prod npm test",
+        "NODE_ENV=production npm test",
+        "npm test | sh",
+      ])
         expect(e.evaluate({ action: "shell.execute", resource }).effect).toBe(
           "ask",
         );
+    });
+
+    it("keeps a default ask written on a stripped prefix, not a catch-all", () => {
+      const e = new PolicyEngine({
+        policy: makePolicy({
+          default: "ask",
+          defaults: [
+            rule("d.prod", "shell.execute", "NODE_ENV=production **", "ask"),
+            rule("d.npm", "shell.execute", "npm test**", "allow"),
+            rule("d.all", "shell.execute", "**", "ask"),
+          ],
+        }),
+        context: ctx,
+      });
+      const run = (resource: string) =>
+        e.evaluate({ action: "shell.execute", resource }).effect;
+      expect(run("NODE_ENV=production npm test")).toBe("ask");
+      expect(run("NODE_ENV=test npm test")).toBe("allow");
+      expect(run("npm test 2>&1 | npm test")).toBe("allow");
     });
 
     describe("cd", () => {
