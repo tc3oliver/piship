@@ -949,7 +949,7 @@ describe.skipIf(process.platform === "win32")(
         ).toEqual([]);
       }, 300_000);
 
-      it("protects existing and missing hooks directories in the working tree", async () => {
+      it("lets a command write hooks directories in the working tree", async () => {
         const project = makeProject(
           service.root,
           "hooks-in-tree",
@@ -963,10 +963,11 @@ describe.skipIf(process.platform === "win32")(
           project,
           "( : > .githooks/planted ) 2>/dev/null && echo planted; ( : >> .githooks/pre-push ) 2>/dev/null && echo appended; echo done",
         );
-        expect(attempt.output).toBe("done\n");
-        expect(existsSync(join(project, ".githooks", "planted"))).toBe(false);
-        // The scripts git runs from the working tree are read-only, and PiShip
-        // does not vouch for them: the commands run, git control is not verified.
+        expect(attempt.output).toBe("planted\nappended\ndone\n");
+        expect(existsSync(join(project, ".githooks", "planted"))).toBe(true);
+        // A hooks directory in the working tree is ordinary project files
+        // (husky's `prepare` regenerates one), and PiShip does not vouch for
+        // it: the commands run, git control is not verified.
         expect(session.sandbox.workspace()).toMatchObject({
           effective: "shared",
           verification: "verified",
