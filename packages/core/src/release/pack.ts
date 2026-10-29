@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
 import {
   readManifest,
@@ -27,7 +27,10 @@ import {
 } from "@piship/schema";
 import { createArchive, extractArchive } from "../archive.js";
 import type { DistributionLock } from "../index.js";
+import { pretranspileClosures } from "../pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
+import { loadEsbuild } from "../pi-packages/module-scan.js";
+import { buildInput } from "../runtime-dependencies.js";
 import { packageLockFiles, vendorPiPackages } from "../pi-packages/lock.js";
 import { formatChecksums } from "../supply-chain.js";
 import { sweepOutputStaging } from "../temporary-directories.js";
@@ -129,6 +132,8 @@ export interface BuiltPack {
   readonly archive: string;
   readonly sha256: string;
   readonly metadata: PackMetadata;
+  /** Things the pack did without, for the command to say. */
+  readonly warnings: readonly string[];
 }
 
 /**
@@ -411,6 +416,7 @@ export async function buildPack(
   );
   try {
     const root = join(temporary.path, name);
+    const warnings: string[] = [];
     const files = [
       "piship.yaml",
       "piship.lock",
@@ -433,12 +439,43 @@ export async function buildPack(
     // The pure-JavaScript Pi package trees, vendored exactly as a release
     // payload has them, so an install needs no registry.
     if (lock.packages?.length) {
-      vendorPiPackages(
+      const vendoredPackages = vendorPiPackages(
         lock,
         readManifest(manifestPath),
         base,
         join(root, "pack"),
       );
+      // The JavaScript `piship build` writes for `pretranspile: true` is
+      // portable, so it is made here once instead of on every machine.
+      const transpiling = vendoredPackages.filter(
+        (item) => item.locked.pretranspile,
+      );
+      let esbuild: ReturnType<typeof loadEsbuild> | undefined;
+      try {
+        if (transpiling.length)
+          esbuild = loadEsbuild(join(buildInput, "package.json"));
+      } catch (error) {
+        // The runtime release does not carry esbuild: its packs then load
+        // the TypeScript as they did before, only slower on a scanned disk.
+        if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND")
+          throw error;
+        warnings.push(
+          `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: esbuild is not available to this PiShip, so the pack carries the TypeScript only. Run piship pack from a PiShip checkout (npm ci) to include the generated JavaScript`,
+        );
+      }
+      if (esbuild)
+        pretranspileClosures(
+          transpiling.map((item) => ({
+            id: item.locked.id,
+            root: item.directory,
+            packagePath: relative(item.directory, item.packageRoot)
+              .split(sep)
+              .join("/"),
+            resources: item.locked.resources,
+            esbuild,
+          })),
+          esbuild,
+        );
       const vendored = join(root, "pack", PI_PACKAGE_VENDOR_DIRECTORY);
       for (const entry of readdirSync(vendored, {
         recursive: true,
@@ -531,7 +568,14 @@ export async function buildPack(
     renameSync(root, directory);
     renameSync(staged, archive);
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
-    return { name, directory, archive, sha256: result.sha256, metadata };
+    return {
+      name,
+      directory,
+      archive,
+      sha256: result.sha256,
+      metadata,
+      warnings,
+    };
   } finally {
     temporary.remove();
   }

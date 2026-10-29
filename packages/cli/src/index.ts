@@ -1152,6 +1152,7 @@ async function runLifecycle(
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
     });
     const { targets, excluded, runtimeSettings } = built.metadata;
+    for (const warning of built.warnings) output.stderr(`Warning: ${warning}`);
     if (runtimeSettings.overridden.length)
       output.stderr(
         `Warning: ${runtimeSettings.overridden.join(" and ")} set to false is ignored; a pack runs on the bundled, stripped runtime.`,
