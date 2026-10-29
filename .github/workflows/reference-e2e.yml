@@ -2,12 +2,17 @@ name: Reference E2E
 # The AcmeCode reference distribution against the live enterprise reference
 # stack (examples/enterprise-reference): Keycloak, the credential broker,
 # LiteLLM, PostgreSQL, and the mock upstream in Docker Compose. Release
-# qualification and nightly evidence, not a pull request gate (see AGENTS.md,
-# CI evidence tiers): every job pulls about 0.85 GB of images, and each test
+# qualification and nightly evidence, plus PRs that change the reference
+# tests or stack. Every job pulls about 0.85 GB of images, and each test
 # file starts the stack once. The test files run in four groups on four
 # runners at once, beside the job that checks the stack as a user starts it;
 # the run passes only when all five pass.
 on:
+  pull_request:
+    paths:
+      - "tests/enterprise-reference/**"
+      - "examples/enterprise-reference/**"
+      - "vitest.reference.config.ts"
   schedule:
     - cron: "30 18 * * *"
   workflow_dispatch:
