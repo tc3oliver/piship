@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { chainSegments } from "./shell-words.js";
 import { NO_CONTAINMENT, PolicyEngine, chainsBeyondPattern } from "./index.js";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
@@ -229,6 +229,7 @@ describe.skipIf(process.platform === "win32")(
         }),
         context: { ...ctx, workspaceRoot: ws },
       });
+      afterEach(() => vi.unstubAllEnvs());
       const run = (resource: string) =>
         e.evaluate({ action: "shell.execute", resource }).effect;
       it("is dropped only when the real target is inside the workspace", () => {
@@ -236,6 +237,10 @@ describe.skipIf(process.platform === "win32")(
         expect(run("cd missing && npm test")).toBe("allow");
         expect(run("cd link && npm test")).toBe("ask");
         expect(run("cd link/x && npm test")).toBe("ask");
+      });
+      it("is kept when CDPATH is set", () => {
+        vi.stubEnv("CDPATH", "/x");
+        expect(run("cd sub && npm test")).toBe("ask");
       });
     });
   },
