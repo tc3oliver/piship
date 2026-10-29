@@ -54,10 +54,11 @@ describe("live-session identity renewal (Keycloak and credential broker)", () =>
     });
 
     try {
-      const signIn = browser(async (url) =>
-        new URL(
-          await authorizeAtKeycloak(url, "alice", stack.password("alice")),
-        ),
+      const signIn = browser(
+        async (url) =>
+          new URL(
+            await authorizeAtKeycloak(url, "alice", stack.password("alice")),
+          ),
       );
       const login = await distribution.login({ openUrl: signIn.openUrl });
       expect(await signIn.finished()).toBeUndefined();
