@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -535,6 +536,89 @@ describe("CLI", () => {
       expect(command("install", join(temp, "dist", "other-agent")).status).toBe(
         0,
       );
+      // The rest of the admin toolchain also runs from the relocated payload.
+      const validated = relocatedBuilder("validate", otherManifest);
+      expect(validated.status, validated.stderr).toBe(0);
+      expect(validated.stdout).toContain("Manifest is valid.");
+      const adminEnv = { ...env, PISHIP_E2E_ADMIN_PASSPHRASE: "e2e-admin-pw" };
+      const admin = (...args: string[]) =>
+        spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
+          cwd: temp,
+          env: adminEnv,
+          encoding: "utf8",
+        });
+      mkdirSync(join(temp, "admin-keys"));
+      const keyFile = join(temp, "admin-keys", "channel.pem");
+      const keygen = admin(
+        "keygen",
+        keyFile,
+        "--id",
+        "channel-a",
+        "--encrypt",
+        "--passphrase-env",
+        "PISHIP_E2E_ADMIN_PASSPHRASE",
+      );
+      expect(keygen.status, keygen.stderr).toBe(0);
+      expect(readFileSync(keyFile, "utf8")).toContain("ENCRYPTED");
+      const publicKey = /Public key: (\S+)/.exec(keygen.stdout)?.[1] as string;
+      const rootKeygen = admin(
+        "keygen",
+        join(temp, "admin-keys", "root.pem"),
+        "--id",
+        "root-a",
+      );
+      expect(rootKeygen.status, rootKeygen.stderr).toBe(0);
+      const rootKey = /Public key: (\S+)/.exec(
+        rootKeygen.stdout,
+      )?.[1] as string;
+      const trustRoot = admin(
+        "trust-root",
+        "init",
+        "--key",
+        `root-a=${rootKey}`,
+        "--key",
+        `channel-a=${publicKey}`,
+        "--root-keys",
+        "root-a",
+        "--channel-keys",
+        "channel-a",
+        "--expires-days",
+        "365",
+      );
+      expect(trustRoot.status, trustRoot.stderr).toBe(0);
+      expect(trustRoot.stdout).toContain("bootstrap:");
+      const releaseOut = join(temp, "admin-release");
+      const release = admin("release", otherManifest, "--out", releaseOut);
+      expect(release.status, release.stderr).toBe(0);
+      const releases = join(releaseOut, "releases");
+      const archive = join(
+        releases,
+        readdirSync(releases).find((name) => name.endsWith(".tar.gz")) ?? "",
+      );
+      expect(existsSync(archive)).toBe(true);
+      const verifiedRelease = admin("verify-release", archive);
+      expect(verifiedRelease.status, verifiedRelease.stderr).toBe(0);
+      expect(verifiedRelease.stdout).toContain("other-agent");
+      const channelDir = join(temp, "admin-channel");
+      const signed = admin(
+        "sign-channel",
+        channelDir,
+        archive,
+        "--channel",
+        "stable",
+        "--key",
+        keyFile,
+        "--key-id",
+        "channel-a",
+        "--passphrase-env",
+        "PISHIP_E2E_ADMIN_PASSPHRASE",
+      );
+      expect(signed.status, signed.stderr).toBe(0);
+      expect(readdirSync(channelDir).length).toBeGreaterThan(0);
+      for (const result of [keygen, trustRoot, release, signed])
+        expect(`${result.stdout}${result.stderr}`).not.toContain(
+          "e2e-admin-pw",
+        );
     }
     const otherLauncher = join(
       temp,
