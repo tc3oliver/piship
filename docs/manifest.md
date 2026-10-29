@@ -376,7 +376,7 @@ The provider takes its class and its review evidence from the package, so a cert
 
 #### TypeScript packages: `pretranspile`
 
-A package published as TypeScript source, whose files import each other as `./x.js` while only `x.ts` exists, makes Pi's loader try about eleven file names for every such import, and each extension loads through its own loader, so a package with many extensions repeats the work for each one: about 98,000 failed file lookups per start for pi-code 1.4.2 (41,000 with `JITI_EXTENSIONS` narrowed to `[".js",".ts"]`), which an antivirus scanner on Windows makes slow. `pretranspile: true` on the package entry has `piship build` and `piship release` write each TypeScript module that the package's extensions import as JavaScript beside it (`internal/values.ts` gets `internal/values.js`), so the import names a file that exists.
+A package published as TypeScript source, whose files import each other as `./x.js` while only `x.ts` exists, makes Pi's loader try about eleven file names for every such import, and each extension loads through its own loader, so a package with many extensions repeats the work for each one: about 98,000 failed file lookups per start for pi-code 1.4.2 (41,000 with `JITI_EXTENSIONS` narrowed to `[".js",".ts"]`), which an antivirus scanner on Windows makes slow. `pretranspile: true` on the package entry has `piship build`, `piship release`, and `piship pack` (once, into the pack, and covered by its checksums) write each TypeScript module that the package's extensions import as JavaScript beside it (`internal/values.ts` gets `internal/values.js`), so the import names a file that exists.
 
 ```yaml
 resources:

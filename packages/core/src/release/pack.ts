@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
 import {
   readManifest,
@@ -27,7 +27,10 @@ import {
 } from "@piship/schema";
 import { createArchive, extractArchive } from "../archive.js";
 import type { DistributionLock } from "../index.js";
+import { pretranspileClosures } from "../pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
+import { loadEsbuild } from "../pi-packages/module-scan.js";
+import { buildInput } from "../runtime-dependencies.js";
 import { packageLockFiles, vendorPiPackages } from "../pi-packages/lock.js";
 import { formatChecksums } from "../supply-chain.js";
 import { sweepOutputStaging } from "../temporary-directories.js";
@@ -433,12 +436,32 @@ export async function buildPack(
     // The pure-JavaScript Pi package trees, vendored exactly as a release
     // payload has them, so an install needs no registry.
     if (lock.packages?.length) {
-      vendorPiPackages(
+      const vendoredPackages = vendorPiPackages(
         lock,
         readManifest(manifestPath),
         base,
         join(root, "pack"),
       );
+      // The JavaScript `piship build` writes for `pretranspile: true` is
+      // portable, so it is made here once instead of on every machine.
+      const transpiling = vendoredPackages.filter(
+        (item) => item.locked.pretranspile,
+      );
+      if (transpiling.length) {
+        const esbuild = loadEsbuild(join(buildInput, "package.json"));
+        pretranspileClosures(
+          transpiling.map((item) => ({
+            id: item.locked.id,
+            root: item.directory,
+            packagePath: relative(item.directory, item.packageRoot)
+              .split(sep)
+              .join("/"),
+            resources: item.locked.resources,
+            esbuild,
+          })),
+          esbuild,
+        );
+      }
       const vendored = join(root, "pack", PI_PACKAGE_VENDOR_DIRECTORY);
       for (const entry of readdirSync(vendored, {
         recursive: true,
