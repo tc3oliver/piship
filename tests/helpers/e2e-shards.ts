@@ -97,6 +97,9 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   },
   "personal-local-model": { seconds: { linux: 22, darwin: 31, win32: 63 } },
   // Estimated from one darwin run (lock, build, install, launch); no fixtures.
+  // Builds a runtime release (cached npm closure) and installs a pack of the
+  // personal example from it into a throwaway home; no fixtures.
+  "pack-install": { seconds: { linux: 120, darwin: 90, win32: 250 } },
   "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
   // Estimated from one warm darwin run (10 s of tests): a cold runtime build
   // installs the npm closure and downloads fd and rg; the demo release is the

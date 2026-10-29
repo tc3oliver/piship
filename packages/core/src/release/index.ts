@@ -39,6 +39,7 @@ export {
   piCompatibility,
   piCompatibilitySurfaces,
   releaseName,
+  sandboxGate,
   virtualRouteProblems,
 } from "./gates.js";
 export {

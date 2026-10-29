@@ -153,9 +153,9 @@ const lifecycleCommands: Record<
 > = {
   install: {
     usage:
-      "install <artifact|release-dir|archive> [--sha256 <hex>] [--expect-key sha256:<fingerprint>]... [--use-existing-state] [--replace]",
+      "install <artifact|release-dir|archive|pack> [--runtime <runtime-archive>] [--sha256 <hex>] [--expect-key sha256:<fingerprint>]... [--use-existing-state] [--replace]",
     positional: [1, 1],
-    values: ["--sha256"],
+    values: ["--sha256", "--runtime"],
     flags: ["--use-existing-state", "--replace"],
     repeated: ["--expect-key"],
   },
@@ -213,9 +213,10 @@ const lifecycleCommands: Record<
     flags: [],
   },
   repair: {
-    usage: "repair <id> <archive|release-dir|payload>",
+    usage:
+      "repair <id> <archive|release-dir|payload|pack> [--runtime <runtime-archive>]",
     positional: [2, 2],
-    values: [],
+    values: ["--runtime"],
     flags: [],
   },
   "migrate-check": {
@@ -1085,6 +1086,7 @@ async function runLifecycle(
           ? { expectedKeys: repeated["--expect-key"] }
           : {}),
         ...(flags.has("--replace") ? { replace: true } : {}),
+        ...(options["--runtime"] ? { runtime: options["--runtime"] } : {}),
       },
     );
     output.stdout(
@@ -1241,7 +1243,9 @@ async function runLifecycle(
   } else if (command === "repair") {
     // Runs here, not through the installed release: the payload it restores
     // may be the active one, which refuses to run.
-    const result = await repairDistribution(first, second);
+    const result = await repairDistribution(first, second, {
+      ...(options["--runtime"] ? { runtime: options["--runtime"] } : {}),
+    });
     output.stdout(
       result.status === "intact"
         ? `${result.id} ${result.version} is intact; nothing to repair`

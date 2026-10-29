@@ -77,6 +77,7 @@ describe("where the file store is used", () => {
     expect(users.map((file) => file.replaceAll("\\", "/")).sort()).toEqual(
       [
         "packages/core/src/index.ts",
+        "packages/core/src/install/compose.ts",
         "packages/core/src/install/install.ts",
         "packages/core/src/install/index.ts",
         "packages/core/src/release/verify.ts",

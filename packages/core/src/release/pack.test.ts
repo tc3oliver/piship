@@ -11,6 +11,7 @@ import { gzipSync } from "node:zlib";
 import { SEARCH_TOOLS } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createArchive, extractArchive } from "../archive.js";
+import { composePack } from "../install/compose.js";
 import { lockManifest, requireCurrentLock } from "../index.js";
 import {
   SEARCH_TOOL_SPECS,
@@ -352,6 +353,22 @@ describe("piship pack", () => {
       "INTEGRITY_FAILED",
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "is not installable on a target the pack excluded, and says why",
+    async () => {
+      const { path } = project();
+      const built = await pack(path, {
+        runtimes: [await runtime(path, "win32-x64")],
+        outputRoot: temp(),
+      });
+      const error = await rejection(composePack(built.archive, temp()));
+      expect(error.code).toBe("CONFIG_INVALID");
+      expect(error.message).toMatch(
+        /is not available for .*no runtime archive/,
+      );
+    },
+  );
 
   it("refuses a runtime given as a folder", async () => {
     const error = await rejection(readRuntimeArchive(temp()));

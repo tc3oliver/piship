@@ -2,6 +2,7 @@
 // per-target bytes, bound to the exact official runtime archives it runs on.
 // Composition with a runtime happens at install; a pack never holds one.
 import {
+  chmodSync,
   closeSync,
   copyFileSync,
   existsSync,
@@ -223,6 +224,76 @@ export function packageClosureProblems(
   return problems;
 }
 
+/**
+ * Run by both install scripts before anything from the runtime archive is
+ * executed: finds the archive this pack pins for this machine, checks its
+ * SHA-256, and prints its path.
+ */
+const FIND_RUNTIME = `import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+const here = resolve(process.argv[2]);
+const pack = JSON.parse(readFileSync(join(here, "pack.json"), "utf8"));
+const target = process.platform + "-" + process.arch;
+const pinned = pack.runtime.archives[target];
+if (!pinned) {
+  console.error(pack.distribution.name + " " + pack.distribution.version + " is not available for " + target + ": " + (pack.excluded[target] || "its pack serves " + pack.targets.join(", ")));
+  process.exit(1);
+}
+const found = [process.env.PISHIP_RUNTIME_ARCHIVE, join(here, pinned.name), join(dirname(here), pinned.name)].find((path) => path && existsSync(path));
+if (!found) {
+  console.error("Put " + pinned.name + " next to this pack, or set PISHIP_RUNTIME_ARCHIVE to its path.");
+  process.exit(1);
+}
+const digest = createHash("sha256").update(readFileSync(found)).digest("hex");
+if (digest !== pinned.sha256) {
+  console.error(found + " is " + digest + ", but this pack pins " + pinned.sha256 + ". Obtain the runtime archive again from the publisher.");
+  process.exit(1);
+}
+console.log(found);
+`;
+
+function installScripts(): { sh: string; ps1: string } {
+  return {
+    sh: `#!/bin/sh
+# Installs this Company Pack for the current user on the runtime archive it
+# pins. The archive's SHA-256 is checked before any of its code runs.
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+command -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/find-runtime.mjs" <<'PISHIP_FIND_RUNTIME'
+${FIND_RUNTIME}PISHIP_FIND_RUNTIME
+archive=$(node "$tmp/find-runtime.mjs" "$here")
+root=$(basename "$archive" .tar.gz)
+tar -xzf "$archive" -C "$tmp"
+PISHIP_RUNTIME_ARCHIVE="$archive" node "$tmp/$root/payload/piship.mjs" install "$here" --runtime "$archive" "$@"
+`,
+    ps1: `# Installs this Company Pack for the current user on the runtime archive it
+# pins. The archive's SHA-256 is checked before any of its code runs.
+$ErrorActionPreference = 'Stop'
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error 'Node.js 22.19.0 or newer is required. Install Node separately.'; exit 1 }
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $tmp | Out-Null
+try {
+  @'
+${FIND_RUNTIME}'@ | Set-Content -Encoding utf8 (Join-Path $tmp 'find-runtime.mjs')
+  $archive = node (Join-Path $tmp 'find-runtime.mjs') $here
+  if ($LASTEXITCODE -ne 0) { exit 1 }
+  $root = [System.IO.Path]::GetFileName($archive) -replace '\\.tar\\.gz$', ''
+  tar -xzf $archive -C $tmp
+  if ($LASTEXITCODE -ne 0) { exit 1 }
+  node (Join-Path $tmp "$root\\payload\\piship.mjs") install $here --runtime $archive @args
+  exit $LASTEXITCODE
+} finally {
+  Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
+`,
+  };
+}
+
 /** Every reason this distribution cannot be a pack; empty when eligible. */
 function ineligibility(lock: DistributionLock, base: string): string[] {
   const reasons: string[] = [];
@@ -433,15 +504,24 @@ export async function buildPack(
       excluded,
     };
     writeJson(join(root, "pack.json"), metadata);
+    const scripts = installScripts();
+    writeFileSync(join(root, "install.sh"), scripts.sh);
+    if (process.platform !== "win32")
+      chmodSync(join(root, "install.sh"), 0o755);
+    writeFileSync(join(root, "install.ps1"), scripts.ps1);
     writeFileSync(
       join(root, "checksums.txt"),
       formatChecksums(root, [
         "pack.json",
+        "install.sh",
+        "install.ps1",
         ...files.map((file) => `pack/${file.replaceAll("\\", "/")}`),
       ]),
     );
     const staged = join(temporary.path, `${name}.tar.gz`);
-    const result = await createArchive(root, name, staged);
+    const result = await createArchive(root, name, staged, {
+      executable: (path) => path === "install.sh",
+    });
     const directory = join(outputRoot, name);
     const archive = join(outputRoot, `${name}.tar.gz`);
     rmSync(directory, { recursive: true, force: true });

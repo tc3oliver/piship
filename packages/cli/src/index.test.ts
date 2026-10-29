@@ -159,7 +159,8 @@ describe("repair", () => {
   it("needs the distribution and the trusted source", async () => {
     expect(await repair([ID])).toEqual({
       status: 2,
-      stderr: "Usage: piship repair <id> <archive|release-dir|payload>",
+      stderr:
+        "Usage: piship repair <id> <archive|release-dir|payload|pack> [--runtime <runtime-archive>]",
     });
   });
 });
@@ -608,7 +609,7 @@ describe("help", () => {
 
   it.each([
     ["validate", "validate <manifest>"],
-    ["install", "install <artifact|release-dir|archive>"],
+    ["install", "install <artifact|release-dir|archive|pack>"],
     ["doctor", "doctor <artifact|id>"],
     ["config", "config explain <manifest|artifact|id>"],
     ["update", "update <id>"],
