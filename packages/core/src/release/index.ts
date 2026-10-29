@@ -6,6 +6,16 @@ export {
   runPayloadCommand,
 } from "./build.js";
 export {
+  buildPack,
+  PACK_SCHEMA,
+  readRuntimeArchive,
+  RUNTIME_SCHEMA,
+  type BuiltPack,
+  type PackMetadata,
+  type PackOptions,
+  type PackRuntime,
+} from "./pack.js";
+export {
   readChannel,
   signChannel,
   type ChannelMetadata,

@@ -31,6 +31,7 @@ export const PISHIP_ERROR_CODES = [
   "LOCK_INVALID",
   "INTEGRITY_FAILED",
   "UPDATE_FAILED",
+  "PACK_INELIGIBLE",
   "ROLLBACK_FAILED",
 ] as const;
 export type PiShipErrorCode = (typeof PISHIP_ERROR_CODES)[number];

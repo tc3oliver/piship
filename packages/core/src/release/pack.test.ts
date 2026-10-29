@@ -1,0 +1,334 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createArchive, extractArchive } from "../archive.js";
+import { lockManifest, requireCurrentLock } from "../index.js";
+import { generateSigningKey } from "../signing.js";
+import {
+  buildPack,
+  packageClosureProblems,
+  readRuntimeArchive,
+} from "./pack.js";
+
+const KEY = generateSigningKey("test-pack");
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
+});
+
+function temp(): string {
+  const dir = mkdtempSync(join(tmpdir(), "piship-pack-"));
+  roots.push(dir);
+  return dir;
+}
+
+function manifest(extra = "", release = ""): string {
+  return `schema: piship/v1alpha6
+app:
+  id: acmepi
+  name: AcmePi
+  command: acmepi
+  version: 1.0.0
+runtime:
+  pi: "1.1.0"
+deployment:
+  mode: personal
+variables:
+  - ACMEPI_UPDATE_SOURCE
+resources:
+  instructions:
+    user: [./resources/AGENTS.md]
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: \${ACMEPI_UPDATE_SOURCE}
+  rollback: true
+  trust:
+    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [${KEY.id}], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+release:
+${release}  vulnerabilities:
+    failOn: high
+${extra}`;
+}
+
+function project(
+  extra?: string,
+  release?: string,
+  agents: string | Buffer = "# AcmePi\n",
+) {
+  const dir = temp();
+  mkdirSync(join(dir, "resources"));
+  writeFileSync(join(dir, "resources", "AGENTS.md"), agents);
+  const path = join(dir, "piship.yaml");
+  writeFileSync(path, manifest(extra, release));
+  lockManifest(path);
+  return { dir, path };
+}
+
+/** A runtime archive as `piship-runtime/v1` describes it. */
+async function runtime(
+  path: string,
+  target: string,
+  change: Record<string, unknown> = {},
+): Promise<string> {
+  const lock = requireCurrentLock(path);
+  const root = `piship-runtime-${lock.runtime.pishipVersion}-${target}`;
+  const source = temp();
+  mkdirSync(join(source, root), { recursive: true });
+  writeFileSync(
+    join(source, root, "runtime.json"),
+    JSON.stringify({
+      schema: "piship-runtime/v1",
+      pishipVersion: lock.runtime.pishipVersion,
+      npmLockSha256: lock.runtime.npmLockSha256,
+      target,
+      pi: { package: lock.runtime.package, version: lock.runtime.version },
+      inventory: { sha256: "a".repeat(64), files: 3 },
+      ...change,
+    }),
+  );
+  const out = join(temp(), `${root}.tar.gz`);
+  const archive = await createArchive(join(source, root), root, out);
+  writeFileSync(`${out}.sha256`, `${archive.sha256}  ${root}.tar.gz\n`);
+  return out;
+}
+
+const all = (path: string) =>
+  Promise.all(
+    ["linux-x64", "darwin-arm64", "win32-x64"].map((t) => runtime(path, t)),
+  );
+
+async function rejection(promise: Promise<unknown>) {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error & { code?: string };
+  }
+  throw new Error("expected a rejection");
+}
+
+describe("piship pack", () => {
+  it("builds a pack bound to the exact runtime archives", async () => {
+    const { path } = project();
+    const runtimes = await all(path);
+    const out = temp();
+    const built = await buildPack(path, { runtimes, outputRoot: out });
+    const lock = requireCurrentLock(path);
+    expect(built.metadata.schema).toBe("piship-pack/v1");
+    expect(built.metadata.targets).toEqual(lock.release?.targets);
+    expect(built.metadata.excluded).toEqual({});
+    expect(built.metadata.runtime.npmLockSha256).toBe(
+      lock.runtime.npmLockSha256,
+    );
+    expect(Object.keys(built.metadata.runtime.archives)).toHaveLength(3);
+    const read = await readRuntimeArchive(runtimes[0] as string);
+    expect(built.metadata.runtime.archives[read.target]?.sha256).toBe(
+      read.sha256,
+    );
+    const unpacked = join(temp(), "x");
+    await extractArchive(built.archive, unpacked, { expectedRoot: built.name });
+    expect(
+      readFileSync(join(unpacked, built.name, "pack", "piship.lock")),
+    ).toEqual(readFileSync(join(path, "..", "piship.lock")));
+    expect(
+      readFileSync(join(unpacked, built.name, "checksums.txt"), "utf8"),
+    ).toContain("pack/resources/AGENTS.md");
+  });
+
+  it("is deterministic", async () => {
+    const { path } = project();
+    const runtimes = await all(path);
+    const first = await buildPack(path, { runtimes, outputRoot: temp() });
+    const second = await buildPack(path, { runtimes, outputRoot: temp() });
+    expect(second.sha256).toBe(first.sha256);
+  });
+
+  it("drops win32 when a sandbox is required, with the sandbox gate text", async () => {
+    const { path } = project("sandbox:\n  required: true\n");
+    const built = await buildPack(path, {
+      runtimes: await all(path),
+      outputRoot: temp(),
+    });
+    expect(built.metadata.targets).not.toContain("win32-x64");
+    expect(built.metadata.excluded["win32-x64"]).toMatch(
+      /Release gate sandbox: the distribution requires an OS sandbox and PiShip has no sandbox adapter for win32-x64/,
+    );
+  });
+
+  it("records a target without a runtime archive as excluded", async () => {
+    const { path } = project();
+    const built = await buildPack(path, {
+      runtimes: [await runtime(path, "linux-x64")],
+      outputRoot: temp(),
+    });
+    expect(built.metadata.targets).toEqual(["linux-x64"]);
+    expect(built.metadata.excluded["darwin-arm64"]).toMatch(/no runtime/);
+  });
+
+  it("allows release.bundle and release.strip false: the runtime is always bundled and stripped", async () => {
+    const { path } = project(undefined, "  bundle: false\n  strip: false\n");
+    const built = await buildPack(path, {
+      runtimes: await all(path),
+      outputRoot: temp(),
+    });
+    expect(built.metadata.targets).toHaveLength(3);
+    expect(built.metadata.runtimeSettings).toEqual({
+      bundle: true,
+      strip: true,
+      overridden: ["release.bundle", "release.strip"],
+    });
+  });
+
+  it("detects a package closure that is not pure JavaScript", () => {
+    const lockfile = (packages: Record<string, unknown>) =>
+      JSON.stringify({ lockfileVersion: 3, packages });
+    expect(
+      packageClosureProblems(
+        lockfile({ "": {}, "node_modules/a": { version: "1.0.0" } }),
+      ),
+    ).toEqual([]);
+    expect(
+      packageClosureProblems(
+        lockfile({ "node_modules/b": { hasInstallScript: true } }),
+      ),
+    ).toEqual([
+      "node_modules/b runs install scripts, which are not allowed in a pack",
+    ]);
+    expect(
+      packageClosureProblems(
+        lockfile({ "node_modules/c": { hasInstallScript: false } }),
+      ),
+    ).toEqual([]);
+    for (const field of ["os", "cpu", "libc"])
+      expect(
+        packageClosureProblems(
+          lockfile({ "node_modules/d": { [field]: ["x"] } }),
+        ),
+      ).toEqual([`node_modules/d is bound to a platform (${field})`]);
+    expect(
+      packageClosureProblems(lockfile({}), { "linux-x64": ["x"] }),
+    ).toEqual(["it has per-target optional dependencies"]);
+  });
+
+  it("refuses a native resource file and points to per-target releases", async () => {
+    const elf = Buffer.concat([
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+      Buffer.alloc(64),
+    ]);
+    const { path } = project(undefined, undefined, elf);
+    const error = await rejection(
+      buildPack(path, { runtimes: await all(path), outputRoot: temp() }),
+    );
+    expect(error.code).toBe("PACK_INELIGIBLE");
+    expect(error.message).toMatch(/resources\/AGENTS\.md is a native artifact/);
+    expect((error as { userAction?: string }).userAction).toMatch(
+      /piship release/,
+    );
+  });
+
+  it("tells a Java class file from a fat Mach-O binary", async () => {
+    const header = (second: number) => {
+      const bytes = Buffer.alloc(64);
+      bytes.writeUInt32BE(0xcafebabe, 0);
+      bytes.writeUInt32BE(second, 4);
+      return bytes;
+    };
+    const klass = project(undefined, undefined, header(65));
+    expect(
+      (
+        await buildPack(klass.path, {
+          runtimes: await all(klass.path),
+          outputRoot: temp(),
+        })
+      ).metadata.targets,
+    ).toHaveLength(3);
+    const fat = project(undefined, undefined, header(2));
+    const error = await rejection(
+      buildPack(fat.path, {
+        runtimes: await all(fat.path),
+        outputRoot: temp(),
+      }),
+    );
+    expect(error.code).toBe("PACK_INELIGIBLE");
+  });
+
+  it("refuses a runtime bound to another npm lock or PiShip version", async () => {
+    const { path } = project();
+    for (const change of [
+      { npmLockSha256: "b".repeat(64) },
+      { pishipVersion: "0.0.1" },
+      { pi: { package: "x", version: "0.0.1" } },
+    ]) {
+      const error = await rejection(
+        buildPack(path, {
+          runtimes: [await runtime(path, "linux-x64", change)],
+          outputRoot: temp(),
+        }),
+      );
+      expect(error.code).toBe("LOCK_INVALID");
+      expect(error.message).toMatch(/Release gate runtime/);
+    }
+  });
+
+  it("refuses a runtime for a target outside release.targets and duplicates", async () => {
+    const { path } = project();
+    const odd = await rejection(
+      buildPack(path, {
+        runtimes: [await runtime(path, "linux-arm64")],
+        outputRoot: temp(),
+      }),
+    );
+    expect(odd.message).toMatch(/not in release\.targets/);
+    const twice = await rejection(
+      buildPack(path, {
+        runtimes: [
+          await runtime(path, "linux-x64"),
+          await runtime(path, "linux-x64"),
+        ],
+        outputRoot: temp(),
+      }),
+    );
+    expect(twice.message).toMatch(/two runtime archives/);
+  });
+
+  it("refuses a stale lock before looking at any runtime", async () => {
+    const { dir, path } = project();
+    const runtimes = await all(path);
+    writeFileSync(join(dir, "resources", "AGENTS.md"), "# edited\n");
+    const error = await rejection(
+      buildPack(path, { runtimes, outputRoot: temp() }),
+    );
+    expect(error.code).toBe("LOCK_INVALID");
+  });
+
+  it("rejects a tampered runtime archive", async () => {
+    const { path } = project();
+    const archive = await runtime(path, "linux-x64");
+    writeFileSync(`${archive}.sha256`, `${"0".repeat(64)}  x.tar.gz\n`);
+    const error = await rejection(
+      buildPack(path, { runtimes: [archive], outputRoot: temp() }),
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    const corrupt = join(temp(), "piship-runtime-1-linux-x64.tar.gz");
+    writeFileSync(corrupt, "not an archive");
+    expect((await rejection(readRuntimeArchive(corrupt))).code).toBe(
+      "INTEGRITY_FAILED",
+    );
+  });
+});

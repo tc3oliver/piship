@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   binHome,
   buildDistribution,
+  buildPack,
   buildRelease,
   buildRuntimeRelease,
   releaseKind,
@@ -112,6 +113,7 @@ const summaries = {
   "runtime-release":
     "Build the distribution-independent PiShip runtime release",
   "verify-release": "Verify a release or runtime release archive or directory",
+  pack: "Build a cross-platform Company Pack bound to official runtime archives",
   diff: "Compare two locks, payloads, releases, or installs",
   update: "Update an installed distribution",
   rollback: "Return an installed distribution to its previous release",
@@ -169,6 +171,14 @@ const lifecycleCommands: Record<
     positional: [0, 0],
     values: ["--out"],
     flags: ["--rebuild", "--reclaim-staging"],
+  },
+  pack: {
+    usage:
+      "pack <manifest> --runtime <runtime-archive>... [--out <dir>] [--reclaim-staging]",
+    positional: [1, 1],
+    values: ["--out"],
+    flags: ["--reclaim-staging"],
+    repeated: ["--runtime"],
   },
   "verify-release": {
     usage: "verify-release <archive|release-dir> [--sha256 <hex>] [--json]",
@@ -1128,6 +1138,31 @@ async function runLifecycle(
     } finally {
       verified.cleanup();
     }
+  } else if (command === "pack") {
+    if (!repeated["--runtime"]?.length) {
+      output.stderr(`Usage: piship ${lifecycleCommands.pack?.usage}`);
+      return 2;
+    }
+    const built = await buildPack(first, {
+      runtimes: repeated["--runtime"],
+      ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
+      reclaimStaging: flags.has("--reclaim-staging"),
+      abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+    });
+    const { targets, excluded, runtimeSettings } = built.metadata;
+    if (runtimeSettings.overridden.length)
+      output.stderr(
+        `Warning: ${runtimeSettings.overridden.join(" and ")} set to false is ignored; a pack runs on the bundled, stripped runtime.`,
+      );
+    output.stdout(
+      `Built Company Pack ${built.name}\n  archive   ${built.archive}\n  sha256    ${built.sha256}\n  targets   ${targets.join(", ")}${Object.entries(
+        excluded,
+      )
+        .map(([target, reason]) => `\n  excluded  ${target}: ${reason}`)
+        .join(
+          "",
+        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.`,
+    );
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
       ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),

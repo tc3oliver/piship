@@ -242,16 +242,8 @@ function checkUpdateTrust(lock: DistributionLock): void {
     );
 }
 
-/**
- * Static release gates, checked before anything is assembled. The policy gate
- * also refuses a managed POLICY_UNENFORCEABLE rule. Each failure
- * names its gate: lock, schema, trust, target, pi, source, install-script,
- * policy, certification, or sandbox.
- */
-export function checkReleaseInputs(
-  manifestPath: string,
-  target = currentTarget(),
-): DistributionLock {
+/** The `lock`, `schema`, and `trust` gates: a current production lock. */
+export function requireReleaseLock(manifestPath: string): DistributionLock {
   let lock: DistributionLock;
   try {
     lock = requireCurrentLock(manifestPath);
@@ -278,33 +270,21 @@ export function checkReleaseInputs(
       "Run piship migrate --write, review updates.trust.bootstrap, and lock again",
     );
   checkUpdateTrust(lock);
-  const release: ReleaseManifest = lock.release;
-  if (!release.targets.includes(target as never))
-    throw gate(
-      "CONFIG_INVALID",
-      "target",
-      `${target} is not in release.targets (${release.targets.join(", ")})`,
-    );
-  if (!EVIDENCED_TARGETS.includes(target))
-    throw gate(
-      "CONFIG_INVALID",
-      "target",
-      `${target} has no installed lifecycle evidence in this PiShip version (supported: ${EVIDENCED_TARGETS.join(", ")})`,
-    );
-  if (target !== currentTarget())
-    throw gate(
-      "CONFIG_INVALID",
-      "target",
-      `releases are built on their target; this machine is ${currentTarget()}`,
-    );
+  return lock;
+}
+
+/** The `pi` gate: the locked Pi version is in the compatibility matrix. */
+export function checkPiGate(lock: DistributionLock): void {
   if (piCompatibility(lock) === "unsupported")
     throw gate(
       "CONFIG_INVALID",
       "pi",
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
-  checkPackageSources(lock);
-  checkLockedPiPackages(lock, manifestPath);
+}
+
+/** The `policy`, `models`, and `certification` gates over the lock. */
+export function checkPolicyGates(lock: DistributionLock): void {
   const conflicts = policyConflicts(lock);
   if (conflicts.length)
     throw gate("POLICY_DENIED", "policy", conflicts.join("; "));
@@ -344,18 +324,66 @@ export function checkReleaseInputs(
         "certification",
         `${item.kind} ${item.path} is certified without certification evidence`,
       );
-  // Only the native backend depends on the target's OS sandbox.
+}
+
+/**
+ * The `sandbox` gate for one target: only the native backend depends on the
+ * target's OS sandbox. Undefined when the target is fine.
+ */
+export function sandboxGate(
+  lock: DistributionLock,
+  target: string,
+): PiShipError | undefined {
   const sandbox = lock.governance?.manifest.sandbox;
   if (
     sandbox?.required &&
     sandbox.provider === undefined &&
     !["linux", "darwin"].includes(target.split("-")[0] ?? "")
   )
-    throw gate(
+    return gate(
       "SANDBOX_UNAVAILABLE",
       "sandbox",
       `the distribution requires an OS sandbox and PiShip has no sandbox adapter for ${target}`,
       "Remove the target from release.targets or make the sandbox optional after a security review",
     );
+  return undefined;
+}
+
+/**
+ * Static release gates, checked before anything is assembled. The policy gate
+ * also refuses a managed POLICY_UNENFORCEABLE rule. Each failure
+ * names its gate: lock, schema, trust, target, pi, source, install-script,
+ * policy, certification, or sandbox.
+ */
+export function checkReleaseInputs(
+  manifestPath: string,
+  target = currentTarget(),
+): DistributionLock {
+  const lock = requireReleaseLock(manifestPath);
+  const release: ReleaseManifest = lock.release as ReleaseManifest;
+  if (!release.targets.includes(target as never))
+    throw gate(
+      "CONFIG_INVALID",
+      "target",
+      `${target} is not in release.targets (${release.targets.join(", ")})`,
+    );
+  if (!EVIDENCED_TARGETS.includes(target))
+    throw gate(
+      "CONFIG_INVALID",
+      "target",
+      `${target} has no installed lifecycle evidence in this PiShip version (supported: ${EVIDENCED_TARGETS.join(", ")})`,
+    );
+  if (target !== currentTarget())
+    throw gate(
+      "CONFIG_INVALID",
+      "target",
+      `releases are built on their target; this machine is ${currentTarget()}`,
+    );
+  checkPiGate(lock);
+  checkPackageSources(lock);
+  checkLockedPiPackages(lock, manifestPath);
+  checkPolicyGates(lock);
+  const sandbox = sandboxGate(lock, target);
+  if (sandbox) throw sandbox;
   return lock;
 }
