@@ -243,7 +243,11 @@ describe("release candidate supply-chain evidence", () => {
     expect(job("build")).toContain("runtime-release --out");
     expect(job("build")).toContain("piship-runtime-");
     // Verified by the separately built CLI, with its metadata and payload tampering named.
-    expect(job("verify")).toContain("Name the runtime archive");
+    for (const name of ["reproducibility", "verify"])
+      expect(job(name), name).toContain(
+        'ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"',
+      );
+    expect(job("verify")).toContain('node "$PISHIP_CLI" verify-release');
     expect(job("verify")).toContain("runtime.json");
     expect(job("verify")).toContain("does not match its inventory");
     expect(job("attest")).toContain("releases/*.tar.gz");

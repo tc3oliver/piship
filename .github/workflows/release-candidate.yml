@@ -210,7 +210,8 @@ jobs:
       # this job has no checkout to read: take it from the archive.
       - name: Name the runtime archive
         if: matrix.distribution == 'piship-runtime'
-        run: echo "NAME=$(basename "$(ls "$RUNNER_TEMP"/first/piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
+        working-directory: ${{ runner.temp }}/first
+        run: echo "NAME=$(basename "$(ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
       - name: Compare the two builds
         run: |
           mkdir -p "$RUNNER_TEMP/report"
@@ -309,7 +310,8 @@ jobs:
       # this job has no checkout to read: take it from the archive.
       - name: Name the runtime archive
         if: matrix.distribution == 'piship-runtime'
-        run: echo "NAME=$(basename "$(ls "$RUNNER_TEMP"/candidate/piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
+        working-directory: ${{ runner.temp }}/candidate
+        run: echo "NAME=$(basename "$(ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
       - name: Verify the release
         working-directory: ${{ runner.temp }}/candidate
         run: |
