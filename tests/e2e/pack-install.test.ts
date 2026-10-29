@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PISHIP_VERSION } from "@piship/core";
+import { branded } from "../helpers/distribution.js";
 import { afterAll, describe, expect, it } from "vitest";
 
 const bin = fileURLToPath(
@@ -79,10 +80,11 @@ describe("install from a pack", () => {
     expect(existsSync(command)).toBe(false);
   });
 
-  it("installs, starts, records the pack and runtime, and repairs", () => {
+  it("installs, starts, records the pack and runtime, and repairs", async () => {
     const installed = cli("install", pack, "--runtime", runtime);
     expect(installed.status, installed.stderr).toBe(0);
-    const version = spawnSync(command, ["version"], { encoding: "utf8", env });
+    const version = await branded(command, ["version"], { cwd: root, env });
+    expect(version.status, version.stderr).toBe(0);
     expect(version.stdout).toContain("MyPi 1.0.0");
     const receipt = JSON.parse(
       readFileSync(join(root, "install", "receipts", "mypi.json"), "utf8"),
@@ -104,7 +106,7 @@ describe("install from a pack", () => {
 
   it.runIf(process.platform !== "win32")(
     "installs through the pack's own install.sh, which checks the runtime digest first",
-    () => {
+    async () => {
       expect(cli("uninstall", "mypi").status).toBe(0);
       const unpacked = join(root, "unpacked");
       mkdirSync(unpacked);
@@ -124,9 +126,9 @@ describe("install from a pack", () => {
         env,
       });
       expect(installed.status, installed.stderr).toBe(0);
-      expect(
-        spawnSync(command, ["version"], { encoding: "utf8", env }).stdout,
-      ).toContain("MyPi 1.0.0");
+      const version = await branded(command, ["version"], { cwd: root, env });
+      expect(version.status, version.stderr).toBe(0);
+      expect(version.stdout).toContain("MyPi 1.0.0");
     },
     300000,
   );
