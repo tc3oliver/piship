@@ -779,6 +779,19 @@ export class GovernanceSession {
       // approved gets its own key. The stored auto mode, the usual one,
       // leaves none.
       ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
+      // Why a dialog was shown: a rule that keeps its prompt, or no allow
+      // rule, session answer or task grant covered it. A reason only.
+      ...(prompted
+        ? {
+            promptReason: asks.some((ask) =>
+              ask.resources.some((item) =>
+                this.engine.keepsPrompt({ action: ask.action, resource: item }),
+              ),
+            )
+              ? "keeps-prompt"
+              : "not-covered",
+          }
+        : {}),
     };
     // Each decision of a combined prompt keeps its own event and rule; the
     // answer is recorded on the ones that asked. A resource that was allowed
