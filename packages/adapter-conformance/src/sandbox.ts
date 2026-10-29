@@ -1869,12 +1869,13 @@ const checks: Record<SandboxBehavior, Check> = {
           void execution.settled.then(() => {
             ended = true;
           });
-          const deadline = Date.now() + h.boundMs;
+          const readinessMs = Math.min(h.boundMs, 10_000);
+          const deadline = Date.now() + readinessMs;
           while (!existsSync(join(h.workspace, ready))) {
-            check(!ended, "the silent command ended before it started");
+            check(!ended, "the silent command ended before readiness");
             check(
               Date.now() < deadline,
-              `the silent command did not start within ${h.boundMs} ms`,
+              `the silent command readiness marker was not observable within ${readinessMs} ms`,
             );
             await sleep(50);
           }
