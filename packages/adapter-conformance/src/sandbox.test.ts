@@ -247,6 +247,7 @@ type Fault =
   | "claims network denial but connects"
   | "ignores a timeout once the command streams output"
   | "ignores cancellation"
+  | "ignores cancellation while running"
   | "retires sandbox on cancellation"
   | "starts a timed-out command late and leaves it running"
   | "starts a cancelled command late and leaves it running"
@@ -643,8 +644,10 @@ function referenceAdapter(options: ReferenceOptions) {
         const onAbort = () => {
           // Seeded defect: the abort reaches only the start of the stream.
           if (
-            fault === "ignores a timeout once the command streams output" &&
-            streaming
+            (fault === "ignores a timeout once the command streams output" &&
+              streaming) ||
+            (fault === "ignores cancellation while running" &&
+              writesMarker(request.command, "cancel-running"))
           )
             return;
           kill();
@@ -1402,6 +1405,12 @@ describeIsolated(isolator)(
         /cancelled before it started ran on and wrote its marker/,
       ],
       [
+        "ignores cancellation while running",
+        "shared",
+        "cancellation",
+        /cancelled while it ran ran on and wrote its marker/,
+      ],
+      [
         "starts a timed-out command late and leaves it running",
         "shared",
         "timeout",
@@ -1556,6 +1565,14 @@ describeIsolated(isolator)(
     it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
       const report = await run({ variant: "shared", slowStart: true });
       expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
+    it.concurrent("waits for silent-command readiness before cancelling on a shared workspace", async () => {
+      const report = await run(
+        { variant: "shared", slowStart: true },
+        { only: ["cancellation"] },
+      );
+      expect(report.results.find((item) => item.behavior === "cancellation")).toMatchObject({ status: "passed" });
     }, 120_000);
 
     it("accepts independently verified sandbox retirement on cancellation", async () => {
