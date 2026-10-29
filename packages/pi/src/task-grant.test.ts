@@ -737,6 +737,9 @@ describe("a task grant", () => {
       [".mcp.json"],
       [".claude", "settings.json"],
       ["sub", ".claude", "hooks", "h.sh"],
+      // A sibling folder outside the launch directory chain.
+      ["sibling", ".mcp.json"],
+      ["sibling", ".pi", "settings.json"],
     ];
     for (const parts of surfaces)
       expect(
