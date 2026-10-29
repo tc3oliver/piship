@@ -209,6 +209,6 @@ describe("piship.routine@1", () => {
   });
 });
 
-const RULE_COUNT = 205;
+const RULE_COUNT = 207;
 const DIGEST =
-  "452ba8eb0adc9f9cf8f0a79b2440be44a3405ddf0d04f6eeb68dfbba3c1a6cfa";
+  "d8578a1f88f698315b7f89ba60e2b08d0ff6888d79deacafdad9e05503c33629";

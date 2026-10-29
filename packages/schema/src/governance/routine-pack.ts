@@ -104,13 +104,16 @@ const OPEN: readonly Entry[] = [
 /** Shell rules: active only when the sandbox contains shell commands. */
 const CONTAINED: readonly Entry[] = [
   // A shell command naming a dotenv file asks, as the read tool does. The
-  // examples come first and must end the command, so `cat .env.example .env`
-  // still asks. Only an explicit name is seen: a recursive search can still
-  // read a dotenv file, and the sandbox is the boundary there.
+  // examples are allowed only as the whole command `cat <example>`: a pattern
+  // like `**.env.example` would allow any program that ends in that name.
+  // Only an explicit name is seen: a recursive search can still read a dotenv
+  // file, and the sandbox is the boundary there.
   ...[
-    ["example", "**.env.example", "allow"],
-    ["sample", "**.env.sample", "allow"],
-    ["template", "**.env.template", "allow"],
+    ["example", "cat .env.example", "allow"],
+    ["sample", "cat .env.sample", "allow"],
+    ["template", "cat .env.template", "allow"],
+    ["after-tab", "**\t.env**", "ask"],
+    ["after-equals", "**=.env**", "ask"],
     ["after-space", "** .env**", "ask"],
     ["after-slash", "**/.env**", "ask"],
     ["after-colon", "**:.env**", "ask"],
