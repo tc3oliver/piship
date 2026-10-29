@@ -30,7 +30,10 @@ import type { DistributionLock } from "../index.js";
 import { pretranspileClosures } from "../pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
 import { loadEsbuild } from "../pi-packages/module-scan.js";
+import { placeRuntime } from "../build.js";
+import { runtimeCacheFor } from "../runtime-cache.js";
 import { buildInput } from "../runtime-dependencies.js";
+import { runtimeCacheDisabled } from "./build.js";
 import { packageLockFiles, vendorPiPackages } from "../pi-packages/lock.js";
 import { formatChecksums } from "../supply-chain.js";
 import { sweepOutputStaging } from "../temporary-directories.js";
@@ -451,18 +454,37 @@ export async function buildPack(
         (item) => item.locked.pretranspile,
       );
       let esbuild: ReturnType<typeof loadEsbuild> | undefined;
-      try {
-        if (transpiling.length)
+      if (transpiling.length)
+        try {
           esbuild = loadEsbuild(join(buildInput, "package.json"));
-      } catch (error) {
-        // The runtime release does not carry esbuild: its packs then load
-        // the TypeScript as they did before, only slower on a scanned disk.
-        if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND")
-          throw error;
-        warnings.push(
-          `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: esbuild is not available to this PiShip, so the pack carries the TypeScript only. Run piship pack from a PiShip checkout (npm ci) to include the generated JavaScript`,
-        );
-      }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND")
+            throw error;
+          // A runtime release carries no esbuild. It comes the way a build
+          // gets it: the build input's npm closure, placed through the same
+          // runtime cache (a miss installs it, which needs the registry, as
+          // vendoring the Pi packages did).
+          try {
+            const tooling = join(temporary.path, "tooling");
+            mkdirSync(tooling);
+            placeRuntime(tooling, {
+              cache: runtimeCacheDisabled({})
+                ? undefined
+                : runtimeCacheFor(lock),
+              strip: false,
+              leaveWhole: true,
+              progress: undefined,
+              found: undefined,
+              meanwhile: () => {},
+              overlap: false,
+            });
+            esbuild = loadEsbuild(join(tooling, "package.json"));
+          } catch (cause) {
+            warnings.push(
+              `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: esbuild could not be installed (${(cause as Error).message.split("\n")[0]}), so the pack carries the TypeScript only. Run piship pack with registry access to include the generated JavaScript`,
+            );
+          }
+        }
       if (esbuild)
         pretranspileClosures(
           transpiling.map((item) => ({
