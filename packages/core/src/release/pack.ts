@@ -278,8 +278,10 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error 'Node.j
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
-  @'
-${FIND_RUNTIME}'@ | Set-Content -Encoding utf8 (Join-Path $tmp 'find-runtime.mjs')
+  $find = @'
+${FIND_RUNTIME}'@
+  # WriteAllText writes no byte order mark, which Node would read as source.
+  [System.IO.File]::WriteAllText((Join-Path $tmp 'find-runtime.mjs'), $find)
   $archive = node (Join-Path $tmp 'find-runtime.mjs') $here
   if ($LASTEXITCODE -ne 0) { exit 1 }
   $root = [System.IO.Path]::GetFileName($archive) -replace '\\.tar\\.gz$', ''

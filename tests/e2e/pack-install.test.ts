@@ -132,4 +132,55 @@ describe("install from a pack", () => {
     },
     300000,
   );
+
+  it.runIf(process.platform === "win32")(
+    "installs through the pack's own install.ps1, which checks the runtime digest first",
+    async () => {
+      expect(cli("uninstall", "mypi").status).toBe(0);
+      const unpacked = join(root, "unpacked-ps1");
+      mkdirSync(unpacked);
+      expect(spawnSync("tar", ["-xzf", pack, "-C", unpacked]).status).toBe(0);
+      const folder = join(unpacked, "mypi-1.0.0-pack");
+      const script = join(folder, "install.ps1");
+      const tampered = spawnSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          script,
+          "--use-existing-state",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...env, PISHIP_RUNTIME_ARCHIVE: join(root, "copy.tar.gz") },
+        },
+      );
+      expect(tampered.status).not.toBe(0);
+      expect(tampered.stderr).toContain("pins");
+      expect(existsSync(command)).toBe(false);
+      copyFileSync(runtime, join(unpacked, basename(runtime)));
+      const installed = spawnSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          script,
+          "--use-existing-state",
+        ],
+        {
+          encoding: "utf8",
+          env,
+        },
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const version = await branded(command, ["version"], { cwd: root, env });
+      expect(version.status, version.stderr).toBe(0);
+      expect(version.stdout).toContain("MyPi 1.0.0");
+    },
+    300000,
+  );
 });
