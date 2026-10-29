@@ -112,6 +112,7 @@ export {
 export {
   describeWorkspace,
   type GitControlProtectionState,
+  gitControlUnproven,
   type Propagation,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,

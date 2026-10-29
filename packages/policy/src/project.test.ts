@@ -33,6 +33,7 @@ import {
   projectGitControlFiles,
   projectGitControlLinks,
   projectGitControlUnverified,
+  projectWorkingTreeHooksPaths,
   readProjectRestrictions,
 } from "./project.js";
 import { defaultProjectTrust } from "./trust.js";
@@ -552,6 +553,44 @@ describe("core.hooksPath", () => {
     );
     // The config that names it is protected too, so it cannot be repointed.
     expect(projectGitControlFiles(root)).toContain(`${base(root)}/config`);
+  });
+
+  it("leaves a working-tree directory writable for the sandbox, and keeps .git, the config that names it, and an outside directory protected", () => {
+    const outside = dir("shared-hooks-sandbox");
+    const root = repoWithHooksPath(".husky/_");
+    write(
+      join(root, ".git", "config"),
+      `[core]\n\thooksPath = .husky/_\n\thooksPath = ${posix(outside)}\n`,
+    );
+    const sandbox = projectGitControlDirectories(root, { scope: "sandbox" });
+    expect(sandbox).not.toContain(posix(join(root, ".husky", "_")));
+    expect(sandbox).toContain(posix(outside));
+    expect(sandbox).toEqual(
+      expect.arrayContaining(
+        ["hooks", "info", "modules", "worktrees"].map(
+          (name) => `${base(root)}/${name}`,
+        ),
+      ),
+    );
+    expect(projectGitControlFiles(root, { scope: "sandbox" })).toContain(
+      `${base(root)}/config`,
+    );
+    // The file tools keep refusing it.
+    expect(projectGitControlDirectories(root)).toContain(
+      posix(join(root, ".husky", "_")),
+    );
+  });
+
+  it("keeps a hooks directory inside .git protected for the sandbox, and lists only working-tree ones as left out", () => {
+    const inGit = repoWithHooksPath(".git/hooks-local");
+    expect(projectGitControlDirectories(inGit, { scope: "sandbox" })).toContain(
+      posix(join(inGit, ".git", "hooks-local")),
+    );
+    expect(projectWorkingTreeHooksPaths(inGit)).toEqual([]);
+    const inTree = repoWithHooksPath(".husky/_");
+    expect(projectWorkingTreeHooksPaths(inTree)).toEqual([
+      posix(join(inTree, ".husky", "_")),
+    ]);
   });
 
   it("protects an absolute directory, one outside the project, and one under the home directory", () => {

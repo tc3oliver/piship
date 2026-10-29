@@ -768,6 +768,7 @@ function gitConfigScan(
 function hooksPathTargets(
   root: string,
   gitDir: string | undefined,
+  workingTree = true,
 ): { readonly named: string; readonly directory: string }[] {
   const project = real(root);
   const targets: { named: string; directory: string }[] = [];
@@ -779,16 +780,51 @@ function hooksPathTargets(
         ? value
         : resolve(root, value);
     const directory = real(named);
-    if (!isWithin(directory, project)) targets.push({ named, directory });
+    if (isWithin(directory, project)) continue;
+    if (workingTree || !inWorkingTree(directory, project, root, gitDir))
+      targets.push({ named, directory });
   }
   return targets;
+}
+
+/**
+ * Whether a hooks directory lies in the working tree: inside the project, but
+ * not inside `.git`, the git directory a `.git` file points to, or the common
+ * directory (`.git/hooks-local` is git's own and stays protected).
+ */
+function inWorkingTree(
+  directory: string,
+  project: string,
+  root: string,
+  gitDir: string | undefined,
+): boolean {
+  if (!isWithin(project, directory)) return false;
+  const gitDirs = [join(root, ".git")];
+  if (gitDir) gitDirs.push(gitDir, commonDirectory(gitDir));
+  return !gitDirs.some((dir) => isWithin(real(dir), directory));
+}
+
+/**
+ * The `core.hooksPath` directories in the working tree that `scope: "sandbox"`
+ * leaves writable (husky's `.husky/_`). Git runs hooks from them outside the
+ * sandbox, so a caller reports git control as not verified while any exists.
+ */
+export function projectWorkingTreeHooksPaths(root: string): string[] {
+  const gitDir = gitDirectory(root);
+  const project = real(root);
+  return hooksPathTargets(root, gitDir)
+    .map(({ directory }) => directory)
+    .filter((directory) => inWorkingTree(directory, project, root, gitDir));
 }
 
 function hooksPathDirectories(
   root: string,
   gitDir: string | undefined,
+  workingTree: boolean,
 ): string[] {
-  return hooksPathTargets(root, gitDir).map(({ directory }) => directory);
+  return hooksPathTargets(root, gitDir, workingTree).map(
+    ({ directory }) => directory,
+  );
 }
 
 /**
@@ -803,10 +839,17 @@ function hooksPathDirectories(
  * of the `.git` directory, of the git directory a `.git` file points to, and
  * of the shared directory a worktree names. Also the directory
  * `core.hooksPath` names in those configs, which may lie in the working tree
- * (husky's `.husky/_`).
+ * (husky's `.husky/_`); with `scope: "sandbox"` a directory in the working
+ * tree (not one inside `.git`) is left out, since a `prepare` script that
+ * regenerates it must be able to write it, and the hook scripts it calls are
+ * ordinary project files the sandbox can write anyway. PiShip's own file
+ * tools keep refusing it; `projectWorkingTreeHooksPaths` lists what is left out.
  * Paths are normalized (symlink-resolved, POSIX separators).
  */
-export function projectGitControlDirectories(root: string): string[] {
+export function projectGitControlDirectories(
+  root: string,
+  options: { readonly scope?: "project" | "sandbox" } = {},
+): string[] {
   const bases = [join(root, ".git")];
   const gitDir = gitDirectory(root);
   if (gitDir) bases.push(gitDir, commonDirectory(gitDir));
@@ -814,7 +857,7 @@ export function projectGitControlDirectories(root: string): string[] {
     ...bases.flatMap((base) =>
       GIT_CONTROL_TREES.map((name) => real(join(base, name))),
     ),
-    ...hooksPathDirectories(root, gitDir),
+    ...hooksPathDirectories(root, gitDir, options.scope !== "sandbox"),
   ];
   return [...new Set(directories)];
 }
@@ -831,7 +874,10 @@ export function projectGitControlDirectories(root: string): string[] {
  * sandbox keeps the links that lie in a path it may write and reports git
  * control `not-verified` for them. Paths are absolute with POSIX separators.
  */
-export function projectGitControlLinks(root: string): string[] {
+export function projectGitControlLinks(
+  root: string,
+  options: { readonly scope?: "project" | "sandbox" } = {},
+): string[] {
   const dotGit = join(root, ".git");
   const gitDir = gitDirectory(root);
   const bases = [dotGit];
@@ -850,7 +896,9 @@ export function projectGitControlLinks(root: string): string[] {
     for (const name of GIT_CONTROL_TREES) named.push(join(base, name));
   named.push(
     ...gitConfigScan(root, gitDir).tried,
-    ...hooksPathTargets(root, gitDir).map((target) => target.named),
+    ...hooksPathTargets(root, gitDir, options.scope !== "sandbox").map(
+      (target) => target.named,
+    ),
   );
   const links = new Set<string>();
   const checked = new Map<string, boolean>();

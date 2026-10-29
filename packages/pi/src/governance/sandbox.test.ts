@@ -11,6 +11,7 @@ import { join } from "node:path";
 import {
   type ContainmentReport,
   E2bCompatibleBackend,
+  gitControlUnproven,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
@@ -591,6 +592,65 @@ describe("a linked git config file or hooks directory", () => {
       }
     },
   );
+});
+
+describe("a core.hooksPath directory", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function repo(hooksPath: string) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-git-hooks-")));
+    const workspace = join(root, "ws");
+    mkdirSync(join(workspace, ".git"), { recursive: true });
+    mkdirSync(join(root, "home"));
+    vi.stubEnv("HOME", join(root, "home"));
+    vi.stubEnv("USERPROFILE", join(root, "home"));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    for (const name of [
+      "XDG_CONFIG_HOME",
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_COUNT",
+    ])
+      vi.stubEnv(name, undefined);
+    writeFileSync(
+      join(workspace, ".git", "config"),
+      `[core]\n\thooksPath = ${hooksPath}\n`,
+    );
+    return { root, workspace };
+  }
+  const posix = (path: string) => path.split("\\").join("/");
+
+  it("in the working tree is writable for the sandbox, which reports git control as not verified", () => {
+    const { root, workspace } = repo(".husky/_");
+    try {
+      const protection = gitProtection(workspace);
+      expect(protection.directories).not.toContain(
+        posix(join(workspace, ".husky", "_")),
+      );
+      expect(protection.directories).toContain(
+        posix(join(workspace, ".git", "hooks")),
+      );
+      expect(protection.files).toContain(
+        posix(join(workspace, ".git", "config")),
+      );
+      expect(protection.unverified).toContain("working tree");
+      expect(gitControlUnproven(workspace, protection, "local")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("inside .git stays protected and verified", () => {
+    const { root, workspace } = repo(".git/hooks-local");
+    try {
+      const protection = gitProtection(workspace);
+      expect(protection.directories).toContain(
+        posix(join(workspace, ".git", "hooks-local")),
+      );
+      expect(protection.unverified).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the user's git config outside the project", () => {

@@ -273,13 +273,11 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       const result = await run(
         sandbox,
         [
-          `for dir in "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$GOCACHE"; do`,
+          `for dir in "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$GOCACHE" "$CARGO_HOME"; do`,
           `mkdir -p "$dir" && echo ok > "$dir/probe" || echo "failed $dir"; done`,
-          `echo "cargo=\${CARGO_HOME-unset}"`,
         ].join("\n"),
       );
       expect(result.output).not.toContain("failed");
-      expect(result.output).toContain("cargo=unset");
       expect(
         readFileSync(
           join(sandbox.profile.tmpDir, "cache", "npm", "probe"),
@@ -458,6 +456,29 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         await box.dispose();
         rmSync(link, { force: true });
         rmSync(join(ws, "shared"), { recursive: true, force: true });
+      }
+    });
+
+    it("leaves CARGO_HOME alone where the sandbox may write ~/.cargo", async () => {
+      const cargo: SandboxPolicy = {
+        ...config,
+        environment: { allow: [...config.environment.allow, "CARGO_HOME"] },
+        filesystem: {
+          ...config.filesystem,
+          write: { allow: ["workspace", "tmp", "~/.cargo"] },
+        },
+      };
+      const box = await activateSandbox(cargo, {
+        workspace: ws,
+        homeDir: home,
+        env: { PATH: process.env.PATH ?? "", HOME: home },
+      });
+      try {
+        expect(
+          (await run(box, 'echo "cargo=${CARGO_HOME-unset}"')).output,
+        ).toBe("cargo=unset\n");
+      } finally {
+        await box.dispose();
       }
     });
 

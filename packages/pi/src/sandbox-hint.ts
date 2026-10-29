@@ -26,7 +26,8 @@ export interface SandboxHintContext {
   readonly profile: Pick<
     SandboxProfile,
     "readDeny" | "writeAllow" | "network" | "workspace"
-  >;
+  > &
+    Partial<Pick<SandboxProfile, "writeProtect">>;
   /** Who can change the manifest: `managed` names the distribution owner. */
   readonly mode: "managed" | "personal";
 }
@@ -99,6 +100,14 @@ export class SandboxFailureScanner {
       // A file the launching user cannot read is an ordinary permission
       // error on a read, not a sandbox decision.
       if (existsSync(path) && !readable(path)) continue;
+      const { files = [], directories = [] } = profile.writeProtect ?? {};
+      if (
+        files.includes(path) ||
+        directories.some((protectedDirectory) =>
+          isWithin(path, protectedDirectory),
+        )
+      )
+        return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees); git runs it outside the sandbox. Run this command outside the sandbox.]`;
       if (!profile.writeAllow.some((allowed) => isWithin(path, allowed)))
         return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")}]`;
     }
