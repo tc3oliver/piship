@@ -88,7 +88,9 @@ describe("live-session identity renewal (Keycloak and credential broker)", () =>
       expect(renewed.refreshToken.reveal()).not.toBe(
         initial.refreshToken.reveal(),
       );
-      expect(events.filter((event) => event.event === "identity.refresh")).toHaveLength(1);
+      expect(
+        events.filter((event) => event.event === "identity.refresh"),
+      ).toHaveLength(1);
 
       const resumed = await distribution.activate();
       expect(resumed.config.allowedModels).toEqual([
