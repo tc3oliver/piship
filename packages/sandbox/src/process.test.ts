@@ -75,31 +75,35 @@ describe("spawnManaged", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("kills the whole process tree on timeout", async () => {
-    const heartbeat = join(dir, "hb");
-    const token = `piship-tree-${Date.now()}`;
-    let output = "";
-    const child = spawnManaged({
-      file: node,
-      args: ["-e", TREE, heartbeat, token],
-      cwd: dir,
-      env: { PATH: process.env.PATH ?? "" },
-      // The Windows helper and child can take over 5 s to start on a busy
-      // runner. Keep the readiness assertion and the actual timeout/tree
-      // reclaim checks; allow a separate startup budget on Windows.
-      timeoutMs: process.platform === "win32" ? 10_000 : 5000,
-      graceMs: 300,
-      onStdout: (chunk) => {
-        output += chunk.toString();
-      },
-    });
-    const exit = await child.exited;
-    expect(output).toContain("started");
-    expect(exit.timedOut).toBe(true);
-    expect(exit.cancelled).toBe(false);
-    expect(await heartbeatStopped(heartbeat)).toBe(true);
-    expect(running(token)).toBe(false);
-  }, PROCESS_TIMEOUT_TEST_MS);
+  it(
+    "kills the whole process tree on timeout",
+    async () => {
+      const heartbeat = join(dir, "hb");
+      const token = `piship-tree-${Date.now()}`;
+      let output = "";
+      const child = spawnManaged({
+        file: node,
+        args: ["-e", TREE, heartbeat, token],
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "" },
+        // The Windows helper and child can take over 5 s to start on a busy
+        // runner. Keep the readiness assertion and the actual timeout/tree
+        // reclaim checks; allow a separate startup budget on Windows.
+        timeoutMs: process.platform === "win32" ? 10_000 : 5000,
+        graceMs: 300,
+        onStdout: (chunk) => {
+          output += chunk.toString();
+        },
+      });
+      const exit = await child.exited;
+      expect(output).toContain("started");
+      expect(exit.timedOut).toBe(true);
+      expect(exit.cancelled).toBe(false);
+      expect(await heartbeatStopped(heartbeat)).toBe(true);
+      expect(running(token)).toBe(false);
+    },
+    PROCESS_TIMEOUT_TEST_MS,
+  );
 
   it("cancels through an AbortSignal", async () => {
     const heartbeat = join(dir, "hb");
