@@ -306,3 +306,63 @@ export function grantCommandWords(
     return undefined;
   return parsed.commands[0];
 }
+
+/** Redirects that write nowhere a file could be planted: `2>&1`, `> /dev/null`. */
+const BENIGN_REDIRECT = /&?>>?(?:&\d+|\s*\/dev\/null(?![\w/.-]))/y;
+
+/**
+ * The simple commands of a chain (`;`, `&&`, `||`, `|`, newline) as source
+ * text with quotes kept, split outside quotes. Undefined when anything but
+ * plain commands remains: a substitution, backtick, variable in double
+ * quotes, grouping, background `&`, heredoc or other redirect, an unclosed
+ * quote, or on Windows `%` and `^`. Each segment is then one program with
+ * data arguments, so a rule can judge it alone.
+ */
+export function chainSegments(
+  text: string,
+  platform: "posix" | "win32",
+): string[] | undefined {
+  const win = platform === "win32";
+  // Unsandboxed commands run in Git Bash on Windows while the rule text is
+  // judged as cmd.exe: a quote one reads as data the other may not.
+  if (text.length > 4096 || (win && /['"]/.test(text))) return;
+  const segments: string[] = [];
+  let start = 0;
+  let quote: string | undefined;
+  const cut = (end: number, skip: number) => {
+    const segment = text.slice(start, end).trim();
+    if (segment) segments.push(segment);
+    start = end + skip;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i] as string;
+    if (quote) {
+      if (char === quote) quote = undefined;
+      else if (quote === '"' && (char === "$" || char === "`")) return;
+      else if (win && char === "%") return;
+      else if (quote === '"' && !win && char === "\\") i++;
+      continue;
+    }
+    if (char === '"' || (char === "'" && !win)) quote = char;
+    else if (char === "\\" && !win) i++;
+    else if (char === "\r" || /[$`()<]/.test(char)) return;
+    // A comment runs to the end of the line, quotes or not.
+    else if (char === "#" && (i === 0 || /[\s;&|]/.test(text[i - 1] as string)))
+      return;
+    else if (win && (char === "%" || char === "^")) return;
+    else if (char === ">" || (char === "&" && text[i + 1] === ">")) {
+      BENIGN_REDIRECT.lastIndex = i;
+      const length = BENIGN_REDIRECT.exec(text)?.[0].length;
+      if (!length || (win && char === "&")) return;
+      i += length - 1;
+    } else if (char === "&" || char === "|") {
+      // `&&` and `||` split; a lone `&` backgrounds, and `|&` is rejected via it.
+      if (char === "&" && text[i + 1] !== "&") return;
+      cut(i, text[i + 1] === char ? 2 : 1);
+      if (text[i + 1] === char) i++;
+    } else if (char === ";" || char === "\n") cut(i, 1);
+  }
+  if (quote) return;
+  cut(text.length, 0);
+  return segments;
+}

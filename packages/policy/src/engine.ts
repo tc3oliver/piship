@@ -21,7 +21,10 @@ import {
   normalizeTokenContext,
   type PathTokenContext,
 } from "./glob.js";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { seamPlane } from "./seams.js";
+import { chainSegments } from "./shell-words.js";
 
 /** Which planes an active OS sandbox adapter enforces. */
 export interface PolicyContainment {
@@ -74,6 +77,8 @@ export function strictest(
   return result;
 }
 
+const PLATFORM = process.platform === "win32" ? "win32" : "posix";
+
 /** Characters that chain, substitute, redirect, or group POSIX commands. */
 const POSIX_SHELL_METACHARACTERS = /[;&|$`<>()\r\n]/g;
 /** cmd.exe also expands `%` and uses `^` to escape the next character. */
@@ -93,6 +98,8 @@ export function chainsBeyondPattern(
     : "posix",
 ): boolean {
   if (pattern === "**") return false;
+  // Quoted metacharacters and `2>&1` are data: one plain command is no chain.
+  if (chainSegments(command, platform)?.length === 1) return false;
   const metacharacters =
     platform === "win32"
       ? WINDOWS_SHELL_METACHARACTERS
@@ -100,6 +107,64 @@ export function chainsBeyondPattern(
   for (const [char] of command.matchAll(metacharacters))
     if (!pattern.includes(char)) return true;
   return false;
+}
+
+/** Variables that only tune output or locale: the only ones a rule may see past. */
+const HARMLESS_ASSIGNMENT =
+  /^(?:CI|NODE_ENV|FORCE_COLOR|NO_COLOR|TERM|TZ|LANG|LC_\w+|DEBUG|RUST_BACKTRACE|RUST_LOG|PYTHONUNBUFFERED|PYTHONDONTWRITEBYTECODE)$/;
+const ASSIGNMENT = /^([A-Za-z_]\w*)=(?:"[^"]*"|'[^']*'|[^\s"'\\]*)\s+(?=\S)/;
+
+/** Whether `target` (relative to `root`) really lands inside `root`, links followed. */
+function insideWorkspace(root: string, target: string): boolean {
+  if (process.env.CDPATH) return false;
+  let path = resolve(root, target);
+  for (;;) {
+    try {
+      const real = realpathSync(path);
+      const base = realpathSync(root);
+      const rel = relative(base, real);
+      return (
+        rel === "" ||
+        (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+      );
+    } catch {
+      const parent = dirname(path);
+      if (parent === path) return false;
+      path = parent;
+    }
+  }
+}
+
+/**
+ * The commands a rule judges one by one: a chain's segments with leading
+ * `NAME=value` prefixes removed (only harmless ones) and
+ * a `cd` into the workspace dropped. Undefined when the command is not made
+ * of plain commands, so only the whole text is judged.
+ */
+function ruleSegments(
+  command: string,
+  workspaceRoot: string,
+  platform: "posix" | "win32",
+): string[] | undefined {
+  const segments = chainSegments(command, platform);
+  if (!segments) return undefined;
+  const kept: string[] = [];
+  for (let segment of segments) {
+    for (;;) {
+      const match = platform === "posix" ? ASSIGNMENT.exec(segment) : null;
+      if (!match || !HARMLESS_ASSIGNMENT.test(match[1] as string)) break;
+      segment = segment.slice(match[0].length);
+    }
+    const cd =
+      /^cd\s+(?:"([^"$`\\]+)"|'([^']+)'|([^\s"'$`\\~*?[{-][^\s"'$`\\*?[{]*))$/.exec(
+        segment,
+      );
+    const target = cd?.[1] ?? cd?.[2] ?? cd?.[3];
+    if (target !== undefined && insideWorkspace(workspaceRoot, target))
+      continue;
+    kept.push(segment);
+  }
+  return kept.length ? kept : undefined;
 }
 
 /**
@@ -515,7 +580,56 @@ export class PolicyEngine {
     return this.#decide(request.action, resource);
   }
 
+  /** The plain commands of a shell chain when each can be judged alone. */
+  #segments(action: string, resource: string): string[] | undefined {
+    if (action !== "shell.execute") return undefined;
+    const segments = ruleSegments(
+      resource,
+      this.context.workspaceRoot,
+      PLATFORM,
+    );
+    return segments?.length === 1 && segments[0] === resource
+      ? undefined
+      : segments;
+  }
+
+  /**
+   * A chain no single allow rule covers is decided per command and takes
+   * the strictest result, so `npm test 2>&1 | tail` needs a rule for `tail`
+   * too and `echo x; rm -rf /` still reaches the `rm` rules.
+   */
   #decide(action: PolicyAction, resource: string): PolicyDecision {
+    const whole = this.#decideOne(action, resource);
+    if (whole.effect === "deny") return whole;
+    if (whole.effect === "allow" && whole.ruleId !== BUILTIN_DEFAULT_RULE)
+      return whole;
+    const segments = this.#segments(action, resource);
+    if (!segments) return whole;
+    const decisions = segments.map((segment) =>
+      this.#decideOne(action, segment),
+    );
+    // An explicit ask of a narrowing layer judges the text as written. So
+    // does any other ask that no segment matches: it spells a prefix or
+    // chain that was stripped or split (`NODE_ENV=production **`).
+    if (whole.effect === "ask" && whole.layer !== "builtin") {
+      const pattern = this.#layers[whole.layer].find(
+        (entry) => entry.rule.id === whole.ruleId,
+      )?.rule.resource;
+      if (
+        whole.layer === "distribution-enforced" ||
+        whole.layer === "team-project" ||
+        (whole.layer === "user-preference" && this.#userNarrowing) ||
+        (pattern !== undefined &&
+          !segments.some((segment) => matchGlob(pattern, segment)))
+      )
+        decisions.push(whole);
+    }
+    const effect = strictest(...decisions.map((entry) => entry.effect));
+    const deciding = decisions.find((entry) => entry.effect === effect);
+    return { ...(deciding as PolicyDecision), resource };
+  }
+
+  #decideOne(action: PolicyAction, resource: string): PolicyDecision {
     const common = {
       policyId: this.id,
       action,
@@ -609,6 +723,13 @@ export class PolicyEngine {
   keepsPrompt(request: PolicyRequest): boolean {
     const resource = this.normalizeResource(request);
     const { action } = request;
+    const segments = this.#segments(action, resource);
+    if (
+      segments?.some((segment) =>
+        this.keepsPrompt({ ...request, resource: segment }),
+      )
+    )
+      return true;
     return [
       this.#firstMatch("distribution-enforced", action, resource),
       this.#firstMatch("team-project", action, resource, "team"),

@@ -1,6 +1,6 @@
 import { posix, win32 } from "node:path";
 import { gitPushResources } from "./git-push.js";
-import { grantCommandWords } from "./shell-words.js";
+import { chainSegments, grantCommandWords } from "./shell-words.js";
 
 /**
  * A task grant turns an `ask` into `allow` strictly inside its scope. This
@@ -231,15 +231,26 @@ function askCovered(
     case "tool.execute":
       return list(scope.tools).includes(ask.resource);
     case "shell.execute": {
-      // Only one literal command; quoted metacharacters are data, while
+      // Plain commands only, chained or not: every one must start with a
+      // granted program. Quoted metacharacters are data, while
       // substitutions, redirects, wrappers and ambiguous syntax fail closed.
-      const words = grantCommandWords(ask.resource, platform);
-      const program = words?.[0] ?? "";
+      const parts =
+        ask.resource.length > 4096 || /[\n\r]/.test(ask.resource)
+          ? undefined
+          : chainSegments(ask.resource, platform);
+      const programs = parts?.map(
+        (part) => grantCommandWords(part, platform)?.[0],
+      );
       return (
-        words !== undefined &&
-        !/[{}*?[]/.test(program) &&
-        gitPushResources(ask.resource).length === 0 &&
-        list(scope.commands).includes(program)
+        programs !== undefined &&
+        programs.length > 0 &&
+        programs.every(
+          (program) =>
+            program !== undefined &&
+            !/[{}*?[]/.test(program) &&
+            list(scope.commands).includes(program),
+        ) &&
+        gitPushResources(ask.resource).length === 0
       );
     }
     case "mcp.tool.call":

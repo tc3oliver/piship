@@ -319,14 +319,14 @@ describe.runIf(tasksRun)("a background task", () => {
     const { call, events } = await open();
     const { ctx } = context();
     const started = await call("task_start")(
-      { command: "echo ready && sleep 30" },
+      { command: "echo ready && sleep 30 && true" },
       ctx,
     ).catch((error: Error) => error.message);
-    // `&&` chains past the echo rule: headless, it is refused.
+    // `true` has no allow rule, so the chain asks: headless, it is refused.
     expect(started).toContain("approval needs an interactive");
     const interactive = context(true).ctx;
     const first = await call("task_start")(
-      { command: "echo ready && sleep 30" },
+      { command: "echo ready && sleep 30 && true" },
       interactive,
     );
     expect(text(first)).toMatch(/^Started\. Task [0-9a-f]{16}: running\nready/);

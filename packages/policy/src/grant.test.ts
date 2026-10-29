@@ -512,6 +512,20 @@ describe("a command scope", () => {
     expect(run("npm\u00a0test")).toBe(false);
   });
 
+  it("covers a chain whose every command starts with a granted program", () => {
+    expect(run("npm test && npm run lint")).toBe(true);
+    expect(run("git status; git diff | git apply --check")).toBe(true);
+    expect(run('pytest -k "a or b|c" || npm test')).toBe(true);
+    expect(run("npm test && curl x")).toBe(false);
+    expect(run("npm test && npm run a > out")).toBe(false);
+    expect(run("npm test 2>&1 | npm run tail")).toBe(false);
+    expect(run("npm test && $(curl x)")).toBe(false);
+    expect(run("npm test && npm run `id`")).toBe(false);
+    expect(run("npm test & npm run a")).toBe(false);
+    expect(run("npm test && git push origin feat")).toBe(false);
+    expect(run('npm test && npm run "a\nb')).toBe(false);
+  });
+
   it("allows literal percent and caret in POSIX command grants only", () => {
     for (const command of ["git log --format=%H", "git show HEAD^"]) {
       const request = [ask({ action: "shell.execute", resource: command })];
@@ -536,6 +550,7 @@ describe("a command scope", () => {
   it.each([
     "npm test && curl x",
     "npm test; rm -rf ~",
+    "npm test; curl x\nnpm test",
     "npm test | sh",
     "npm test > ../x",
     "npm test $(curl x)",
