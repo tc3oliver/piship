@@ -263,10 +263,15 @@ export function grantCommandWords(
     const char = text[i];
     if (platform === "win32" && /[%^!]/.test(char)) return undefined;
     if (quote === "'") {
-      if (char === "'") quote = undefined;
-      // cmd.exe does not treat single quotes as quoting.
-      else if (platform === "win32" && /[;&|$\x60<>()\\\r\n]/.test(char))
+      if (char === "'") {
+        quote = undefined;
+      } else if (
+        platform === "win32" &&
+        /[;&|$\x60<>()\\\r\n]/.test(char)
+      ) {
+        // cmd.exe does not treat single quotes as quoting.
         return undefined;
+      }
       continue;
     }
     if (quote === '"') {
@@ -290,12 +295,16 @@ export function grantCommandWords(
     }
     // No chaining, redirects, substitutions, grouping or escapes.
     if (/[;&|$\x60<>()\\\r\n]/.test(char)) return undefined;
+    // Bash splits only on ASCII spaces/tabs here. The git-push scanner's
+    // broader Unicode whitespace parsing must not grant a different program.
+    if (/\s/.test(char) && char !== " " && char !== "\t")
+      return undefined;
     if (char !== "\t" && /[\u0000-\u001f\u007f]/.test(char))
       return undefined;
   }
   if (quote !== undefined) return undefined;
   const parsed = simpleCommands(text);
-  return !parsed.overflow && !parsed.unterminated && parsed.commands.length === 1
-    ? parsed.commands[0]
-    : undefined;
+  if (parsed.overflow || parsed.unterminated || parsed.commands.length !== 1)
+    return undefined;
+  return parsed.commands[0];
 }
