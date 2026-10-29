@@ -498,6 +498,13 @@ describe("a command scope", () => {
     expect(run("  git status --short")).toBe(true);
     expect(run("git diff 'src/a b.ts'")).toBe(true);
     expect(run("npm\ttest")).toBe(true);
+    expect(run('npm run "a;b"')).toBe(true);
+    expect(run("npm run 'a;b'")).toBe(true);
+    expect(run('pytest -k "a or b|c"')).toBe(true);
+    expect(run('npm run "a;b" && curl x')).toBe(false);
+    expect(run('npm run "a;b" > output')).toBe(false);
+    expect(run('npm run "$HOME"')).toBe(false);
+    expect(run('npm run "unterminated')).toBe(false);
     // Arguments may be globs; only the program must be spelled out.
     expect(run("pytest tests/test_*.py")).toBe(true);
     expect(run("pytest *")).toBe(true);
@@ -534,7 +541,6 @@ describe("a command scope", () => {
     "npm test $(curl x)",
     "npm test `id`",
     "npm test $HOME",
-    "npm run 'a;b'",
     "npm test\ncurl x",
     "(npm test)",
     "bash x.sh",

@@ -1,6 +1,6 @@
 import { posix, win32 } from "node:path";
-import { chainsBeyondPattern } from "./engine.js";
 import { gitPushResources } from "./git-push.js";
+import { grantCommandWords } from "./shell-words.js";
 
 /**
  * A task grant turns an `ask` into `allow` strictly inside its scope. This
@@ -231,15 +231,12 @@ function askCovered(
     case "tool.execute":
       return list(scope.tools).includes(ask.resource);
     case "shell.execute": {
-      // One plain command: no chaining, redirect, substitution, variable,
-      // or grouping, not even quoted, and never a git push.
-      const [program = ""] = ask.resource
-        .replace(/^[ \t]+/, "")
-        .split(/[ \t]+/);
+      // Only one literal command; quoted metacharacters are data, while
+      // substitutions, redirects, wrappers and ambiguous syntax fail closed.
+      const words = grantCommandWords(ask.resource, platform);
+      const program = words?.[0] ?? "";
       return (
-        !chainsBeyondPattern("", ask.resource, platform) &&
-        // A program the shell expands (`n?m`, `{git,x}`) is unknown; a
-        // globbed git subcommand counts as a push (gitPushResources).
+        words !== undefined &&
         !/[{}*?[]/.test(program) &&
         gitPushResources(ask.resource).length === 0 &&
         list(scope.commands).includes(program)
