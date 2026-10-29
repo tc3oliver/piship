@@ -49,6 +49,7 @@ import {
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
+import { type OrphanedTask, takeOrphanedTasks } from "../task-records.js";
 import { type AuditSinkTarget, auditSinkTargets } from "./audit.js";
 import {
   type SandboxCredentialData,
@@ -336,6 +337,8 @@ export interface DoctorData {
   readonly governance?: GovernanceData;
   /** Local metrics after every check ran. */
   readonly metrics: MetricsSnapshot;
+  /** Tasks recorded by a PiShip process that is gone; each is reported once. */
+  readonly orphanedTasks?: readonly OrphanedTask[];
 }
 
 /**
@@ -767,5 +770,6 @@ export async function collectDoctorData(
     ...(access ? { access } : {}),
     ...(governance ? { governance } : {}),
     metrics: LocalMetrics.load(ctx.stateDir).snapshot(),
+    orphanedTasks: takeOrphanedTasks(ctx.stateDir),
   };
 }

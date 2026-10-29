@@ -1749,6 +1749,17 @@ describe("Audit group", () => {
       expect(group(output, name).length).toBeGreaterThan(0);
   });
 
+  it("warns about background tasks a killed PiShip process left behind", () => {
+    const report = renderDoctor({
+      ...doctorData("managed", { governance: governanceData({}) }),
+      orphanedTasks: [{ id: "abc", command: "sleep 99", owner: 4242 }],
+    });
+    expect(report.failed).toBe(false);
+    expect(group(report.render(), "Sandbox")).toContain(
+      `  ! ${"task abc".padEnd(20)} started by PiShip process 4242, which is gone (killed without cleanup); it may still run: \`sleep 99\`. Find it with ps and stop it; this is reported once`,
+    );
+  });
+
   it("reports orphaned, stale, and set-aside audit spools", () => {
     const report = renderDoctor(
       doctorData("managed", {

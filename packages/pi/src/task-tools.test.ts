@@ -314,6 +314,19 @@ describe("task_start decides a command as bash does", () => {
 });
 
 describe.runIf(tasksRun)("a background task", () => {
+  it("redacts credential shapes in what the model reads", async () => {
+    const { call } = await open();
+    const interactive = context(true).ctx;
+    const first = await call("task_start")(
+      { command: "echo 'Authorization: Bearer abcdefghijklmnop' && sleep 30" },
+      interactive,
+    );
+    expect(text(first)).toContain("[REDACTED]");
+    expect(text(first)).not.toContain("abcdefghijklmnop");
+    const id = (first as { details: { id: string } }).details.id;
+    await call("task_stop")({ id }, interactive);
+  });
+
   it("returns at once with its first output, reads new output, and stops", async () => {
     const { call, events } = await open();
     const { ctx } = context();

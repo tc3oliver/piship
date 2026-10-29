@@ -203,6 +203,11 @@ function networkText(report: ContainmentReport): string {
 export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
   const inspection = governance?.inspection;
+  for (const task of data.orphanedTasks ?? [])
+    out.warn(
+      `task ${task.id}`,
+      `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run: \`${task.command}\`. Find it with ps and stop it; this is reported once`,
+    );
   if (!governance) return;
   if (inspection) {
     const report = inspection.sandbox;

@@ -677,6 +677,35 @@ describe("governed built-in tools", () => {
     expect(audit).not.toContain("command-canary");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "redacts credential shapes in what the model reads from bash",
+    async () => {
+      const { session, workspace } = await open([], {
+        userRules: [
+          {
+            id: "me.echo",
+            action: "shell.execute",
+            resource: "echo *",
+            effect: "allow",
+          },
+        ],
+      });
+      const result = await run(
+        tool(governedTools(session, workspace), "bash"),
+        { command: "echo Bearer abcdefghijklmnop" },
+        context(true),
+      );
+      expect(text(result)).toContain("[REDACTED]");
+      expect(text(result)).not.toContain("abcdefghijklmnop");
+      expect(
+        JSON.stringify(
+          (result as { structuredContent?: unknown }).structuredContent,
+        ),
+      ).not.toContain("abcdefghijklmnop");
+      await session.close();
+    },
+  );
+
   it("resolves ask through the session UI and denies it headless", async () => {
     const { session, workspace } = await open();
     const write = tool(governedTools(session, workspace), "write");

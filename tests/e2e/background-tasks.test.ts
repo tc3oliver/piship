@@ -164,50 +164,57 @@ describe.skipIf(process.platform === "win32")(
       expect(await until(() => sleeping(seconds) === 0, 5000)).toBe(true);
     }, 300000);
 
-    it("stops every task when the PiShip process is sent SIGTERM", async () => {
-      const { services, command, project, env, audit } = await distribution();
-      const seconds = marker();
-      const hold = marker();
-      services.knobs.gatewayMode = "script";
-      services.knobs.toolScript = [
-        {
-          name: "task_start",
-          arguments: {
-            command: `sleep ${seconds} & sleep ${seconds}; wait`,
+    it.each([
+      ["SIGTERM", 143],
+      ["SIGINT", 130],
+    ] as const)(
+      "stops every task when the PiShip process is sent %s",
+      async (signal, code) => {
+        const { services, command, project, env, audit } = await distribution();
+        const seconds = marker();
+        const hold = marker();
+        services.knobs.gatewayMode = "script";
+        services.knobs.toolScript = [
+          {
+            name: "task_start",
+            arguments: {
+              command: `sleep ${seconds} & sleep ${seconds}; wait`,
+            },
           },
-        },
-        // Holds the session open while the test signals the process.
-        { name: "bash", arguments: { command: `sleep ${hold}` } },
-      ];
-      services.state.toolResults = [];
-      const child = spawn(command, ["--smoke-model"], {
-        cwd: project,
-        env,
-        stdio: "ignore",
-      });
-      const exited = new Promise((done) => child.on("exit", done));
-      closers.push(() => {
-        child.kill("SIGKILL");
-      });
-      expect(
-        await until(
-          () => sleeping(seconds) === 2 && sleeping(hold) === 1,
-          60_000,
-        ),
-      ).toBe(true);
-      child.kill("SIGTERM");
-      expect(await exited).toBe(143);
-      expect(
-        await until(
-          () => sleeping(seconds) === 0 && sleeping(hold) === 0,
-          5000,
-        ),
-      ).toBe(true);
-      // The session ended first, so the stop was recorded.
-      expect(
-        audit().find((event) => event.event === "task.stop")?.detail,
-      ).toMatchObject({ reason: "close" });
-    }, 300000);
+          // Holds the session open while the test signals the process.
+          { name: "bash", arguments: { command: `sleep ${hold}` } },
+        ];
+        services.state.toolResults = [];
+        const child = spawn(command, ["--smoke-model"], {
+          cwd: project,
+          env,
+          stdio: "ignore",
+        });
+        const exited = new Promise((done) => child.on("exit", done));
+        closers.push(() => {
+          child.kill("SIGKILL");
+        });
+        expect(
+          await until(
+            () => sleeping(seconds) === 2 && sleeping(hold) === 1,
+            60_000,
+          ),
+        ).toBe(true);
+        child.kill(signal);
+        expect(await exited).toBe(code);
+        expect(
+          await until(
+            () => sleeping(seconds) === 0 && sleeping(hold) === 0,
+            5000,
+          ),
+        ).toBe(true);
+        // The session ended first, so the stop was recorded.
+        expect(
+          audit().find((event) => event.event === "task.stop")?.detail,
+        ).toMatchObject({ reason: "close" });
+      },
+      300000,
+    );
   },
 );
 

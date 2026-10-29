@@ -13,6 +13,7 @@ function fake() {
     command: string;
     timeout: number;
     print: (text: string) => void;
+    write: (data: Buffer) => void;
     exit: (code: number | null) => void;
     fail: (message: string) => void;
     signal: AbortSignal;
@@ -26,6 +27,7 @@ function fake() {
         command,
         timeout: options.timeout,
         print: (text) => options.onData(Buffer.from(text)),
+        write: (data) => options.onData(data),
         exit: (code) => resolve({ exitCode: code }),
         fail: (message) => reject(new Error(message)),
         signal: options.signal,
@@ -94,6 +96,30 @@ describe("TaskRegistry", () => {
     expect(tasks.read(id)).toMatchObject({ output: "456789ab", dropped: 4 });
     runs[0]?.print("c".repeat(20));
     expect(tasks.read(id)).toMatchObject({ output: "cccccccc", dropped: 12 });
+  });
+
+  it("never splits a multi-byte character at a read or buffer edge", async () => {
+    const { run, runs, registry } = fake();
+    const tasks = registry({ ...TASK_LIMITS, bufferBytes: 8 });
+    const id = tasks.start(run, "x");
+    await tick();
+    const euro = Buffer.from("€"); // e2 82 ac
+    // A read boundary inside a character waits for the rest of it.
+    runs[0]?.write(Buffer.concat([Buffer.from("a"), euro.subarray(0, 2)]));
+    expect(tasks.read(id)).toMatchObject({ output: "a", dropped: 0 });
+    runs[0]?.write(euro.subarray(2));
+    expect(tasks.read(id)).toMatchObject({ output: "€", dropped: 0 });
+    // The buffer edge cuts the next character: its tail is dropped, not U+FFFD.
+    runs[0]?.write(Buffer.from("€€€"));
+    const report = tasks.read(id);
+    expect(report?.output).toBe("€€");
+    expect(report?.dropped).toBe(3);
+    // A stream that ends mid-character shows what it has.
+    runs[0]?.write(euro.subarray(0, 1));
+    expect(tasks.read(id)?.output).toBe("");
+    runs[0]?.exit(0);
+    await tasks.settled(id);
+    expect(tasks.read(id)?.output).toBe("\ufffd");
   });
 
   it("stops a task through its signal and records why", async () => {
