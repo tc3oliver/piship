@@ -17,8 +17,8 @@ export function verificationGroup(
     ["integration", states.integration],
   ] as const) {
     const line =
-      item.state === "local"
-        ? out.warn
+      item.state === "failed"
+        ? out.bad
         : item.state === "verified"
           ? out.ok
           : out.info;

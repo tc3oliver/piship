@@ -290,7 +290,10 @@ export async function installDistribution(
       payload = verified.payload;
       lock = verified.lock;
       boundInventory = verified.metadata.payload.inventorySha256;
-      info = releaseInfo(verified.metadata, verified.archiveSha256);
+      info = {
+        ...releaseInfo(verified.metadata, verified.archiveSha256),
+        via: "file",
+      };
       lap("install verify release");
     } else {
       lock = verifyPayloadContents(source, {

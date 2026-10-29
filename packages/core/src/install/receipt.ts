@@ -54,11 +54,19 @@ export interface InstalledRelease {
     readonly piship: string;
     readonly lockSha256: string;
     readonly archiveSha256?: string;
+    /**
+     * How the release was accepted: `channel` (a signed channel entry) or
+     * `file` (a release or pack the person pointed at). Absent in receipts
+     * written before this field; an older reader ignores it.
+     */
+    readonly via?: "channel" | "file";
     /** A release composed from a Company Pack and a runtime archive has no archive digest of its own. */
     readonly pack?: { readonly sha256: string; readonly version: string };
     readonly runtime?: {
       readonly archiveSha256: string;
       readonly pishipVersion: string;
+      /** The runtime-only inventory digest the pack pinned (absent in earlier receipts). */
+      readonly inventorySha256?: string;
     };
   };
 }

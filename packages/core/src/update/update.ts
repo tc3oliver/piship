@@ -756,7 +756,7 @@ async function performUpdate(
           lock: composed.lock,
           pi: composed.lock.runtime.version,
           schemas: payloadStateSchemas(composed.lock),
-          release: composed.release,
+          release: { ...composed.release, via: "channel" },
           cleanup: () => {},
         };
       } else {
@@ -800,7 +800,7 @@ async function performUpdate(
           lock: verified.lock,
           pi: target.pi.version,
           schemas: target.stateSchemas,
-          release: releaseInfo(target, entry.sha256),
+          release: { ...releaseInfo(target, entry.sha256), via: "channel" },
           cleanup: verified.cleanup,
         };
       }
