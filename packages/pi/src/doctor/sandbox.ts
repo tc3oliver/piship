@@ -193,7 +193,7 @@ function sandboxCredentialLines(
 }
 
 /** The network mode, and in deny mode how the denial is known. */
-function networkText(report: ContainmentReport): string {
+export function networkText(report: ContainmentReport): string {
   const denial = report.networkDenial;
   if (!denial) return report.network;
   if (denial.evidence === "verified") return `${report.network} (verified)`;

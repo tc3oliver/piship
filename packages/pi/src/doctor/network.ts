@@ -11,6 +11,7 @@ import {
 import { resolveTemplate } from "@piship/schema";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
+import { networkText } from "./sandbox.js";
 
 /**
  * Endpoints that may use plain HTTP (every one not set to
@@ -143,7 +144,7 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
   }
 }
 
-export function networkGroup(data: DoctorData, out: DoctorSection): void {
+function networkLines(data: DoctorData, out: DoctorSection): void {
   plainHttpGroup(data, out);
   const access = data.access;
   if (!access) {
@@ -240,4 +241,54 @@ export function networkGroup(data: DoctorData, out: DoctorSection): void {
       `withheld ${name}`,
       "not passed to child processes: not approved by the network policy",
     );
+}
+
+/**
+ * Who limits where each kind of process can connect. PiShip restricts only
+ * what it can show: the private-only policy for Pi's own HTTP requests, and
+ * the sandbox's network denial for tool subprocesses and MCP stdio servers.
+ * Everything else is IT's firewall, proxy, DLP and EDR, which PiShip does not
+ * read or verify, so it is reported as not enforced by PiShip.
+ */
+function egressLines(data: DoctorData, out: DoctorSection): void {
+  const report = data.governance?.inspection?.sandbox;
+  const denial =
+    report?.level === "enforced" ? report.networkDenial : undefined;
+  const denied = report?.level === "enforced" && report.network === "deny";
+  // Only a live-probed denial is PiShip's to claim; an attested one is the
+  // backend's word, reported as such.
+  const verified = denied && denial?.evidence === "verified";
+  if (data.access?.network.privateOnly)
+    out.ok("egress: Pi", "PiShip: private-only, declared hosts");
+  else
+    out.info(
+      "egress: Pi",
+      "not restricted by PiShip (network.privateOnly is off)",
+    );
+  out.info(
+    "egress: extensions",
+    "not restricted by PiShip; in-process extensions are not contained",
+  );
+  const none = `not enforced by PiShip: no hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them${report?.level === "enforced" ? "" : process.platform === "win32" ? " (Windows has no native sandbox adapter)" : ""}`;
+  for (const label of ["shell", "MCP stdio"]) {
+    const name = `egress: ${label}`;
+    if (verified && report)
+      out.ok(name, `PiShip: network ${networkText(report)}`);
+    else if (denied && report)
+      out.info(name, `not verified: network ${networkText(report)}`);
+    else out.info(name, none);
+  }
+  out.info(
+    "egress: Git, npm",
+    "run as shell children or in the Pi process; covered as above, not separately",
+  );
+  out.info(
+    "IT egress",
+    "externally attested at most; PiShip does not read endpoint firewall, proxy, DLP or EDR state",
+  );
+}
+
+export function networkGroup(data: DoctorData, out: DoctorSection): void {
+  networkLines(data, out);
+  egressLines(data, out);
 }

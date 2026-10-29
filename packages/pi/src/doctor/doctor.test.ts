@@ -846,7 +846,7 @@ describe("Network group", () => {
       }),
     ).render();
     const lines = group(output, "Network");
-    expect(lines).toEqual([
+    expect(lines.slice(0, 8)).toEqual([
       `  ✓ ${"TLS verification".padEnd(20)} on`,
       `  ✓ ${"outbound".padEnd(20)} private-only: declared hosts only (gateway.acme.example); public fallback denied`,
       `  ✓ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128)`,
@@ -855,6 +855,16 @@ describe("Network group", () => {
       `  ✓ ${"agent commands".padEnd(20)} approved network variables only: HTTPS_PROXY, https_proxy, NO_PROXY, no_proxy`,
       `  ! ${"withheld NODE_EXTRA_CA_CERTS".padEnd(20)} not passed to child processes: network.tls.additionalCA lists several bundles and a child accepts one file`,
       `  - ${"withheld SSL_CERT_FILE".padEnd(20)} not passed to child processes: not approved by the network policy`,
+    ]);
+    expect(
+      lines.slice(8).map((line) => line.trim().split(/\s{2,}/)[0]),
+    ).toEqual([
+      "✓ egress: Pi",
+      "- egress: extensions",
+      "- egress: shell",
+      "- egress: MCP stdio",
+      "- egress: Git, npm",
+      "- IT egress",
     ]);
     // NO_PROXY is reported as set, never by value.
     expect(output).not.toContain("acme.internal");
@@ -1124,7 +1134,10 @@ describe("Network group", () => {
     expect(lines).toContain(
       `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
     );
-    expect(lines.at(-1)).toBe(
+    expect(lines.findIndex((line) => line.includes("agent commands"))).toBe(
+      lines.findIndex((line) => line.includes("egress: Pi")) - 1,
+    );
+    expect(lines).toContain(
       `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
     );
     expect(lines.join("\n")).not.toContain("withheld");
@@ -1210,6 +1223,95 @@ describe("Sandbox and Workspace groups", () => {
     expect(sandbox).toContain(
       `  - ${"summary".padEnd(20)} enforced by macos-seatbelt (required)`,
     );
+  });
+
+  it("separates what PiShip restricts from IT-owned egress it cannot verify", () => {
+    const run = (
+      mode: "managed" | "personal",
+      governance: GovernanceData | undefined,
+    ) => {
+      const report = renderDoctor(
+        doctorData(mode, {
+          access: accessData(),
+          ...(governance ? { governance } : {}),
+        }),
+      );
+      return {
+        failed: report.failed,
+        lines: group(report.render(), "Network").filter((line) =>
+          /egress/.test(line),
+        ),
+      };
+    };
+    const withSandbox = (inspected: GovernanceInspection) =>
+      governanceData({
+        inspection: inspected,
+        isolation: sandboxIsolation(inspected.sandbox),
+        workspace: workspaceData(inspected),
+      });
+    const none =
+      "not enforced by PiShip: no hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them";
+    const shell = (mark: string, text: string) =>
+      `  ${mark} ${"egress: shell".padEnd(20)} ${text}`;
+    // No sandbox: IT-owned egress is a note and does not fail the report.
+    const bare = run("managed", undefined);
+    expect(bare.failed).toBe(false);
+    expect(bare.lines).toContain(
+      `  ✓ ${"egress: Pi".padEnd(20)} PiShip: private-only, declared hosts`,
+    );
+    expect(bare.lines.some((line) => line.startsWith(shell("-", none)))).toBe(
+      true,
+    );
+    expect(bare.lines.join("\n")).toContain("PiShip does not read endpoint");
+    expect(bare.lines.join("\n")).not.toContain("!");
+    // A verified network-deny sandbox is the PiShip restriction.
+    const verified = run(
+      "managed",
+      withSandbox(
+        inspection({ networkDenial: { evidence: "verified", probe: false } }),
+      ),
+    );
+    expect(verified.lines).toContain(
+      shell("✓", "PiShip: network deny (verified)"),
+    );
+    // An attested denial is the backend's word: reported, not verified.
+    const attested = run(
+      "managed",
+      withSandbox(
+        inspection({
+          verification: "backend-attested",
+          isolation: "remote",
+          networkDenial: {
+            evidence: "attested",
+            probe: false,
+            reason: "the backend declares no network probe to check it with",
+          },
+        }),
+      ),
+    );
+    expect(attested.lines).toContain(
+      shell(
+        "-",
+        "not verified: network deny (attested by the backend, not verified: the backend declares no network probe to check it with)",
+      ),
+    );
+    // A sandbox that allows the network is a deliberate choice (it contains
+    // the filesystem), so egress stays a note; a required sandbox that is not
+    // enforced is already a failed containment line in the Sandbox group.
+    const allowed = run(
+      "managed",
+      withSandbox(inspection({ network: "allow" })),
+    );
+    expect(allowed.failed).toBe(false);
+    expect(
+      allowed.lines.some((line) => line.startsWith(shell("-", none))),
+    ).toBe(true);
+    // Personal mode is information.
+    expect(
+      run("personal", undefined).lines.some((line) =>
+        line.startsWith(shell("-", none)),
+      ),
+    ).toBe(true);
   });
 
   it("shows how network denial is known", () => {
