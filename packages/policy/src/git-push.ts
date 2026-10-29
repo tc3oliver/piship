@@ -1,5 +1,10 @@
 import { simpleCommands } from "./shell-words.js";
 
+/** More resources than this collapse to one unnamed target. */
+const MAX_RESOURCES = 64;
+/** More git options than this before the subcommand count as a push to `*`. */
+const MAX_GIT_OPTIONS = 64;
+
 // Git options before the subcommand that take the next word as a value.
 const GIT_VALUE_OPTIONS = new Set([
   "-C",
