@@ -633,7 +633,11 @@ describe("a core.hooksPath directory", () => {
         posix(join(workspace, ".git", "config")),
       );
       expect(protection.unverified).toContain("working tree");
-      expect(gitControlUnproven(workspace, protection, "local")).toBe(true);
+      expect(
+        gitControlUnproven(workspace, protection, "local", {
+          guardsMissingFiles: true,
+        }),
+      ).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
