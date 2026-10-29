@@ -183,7 +183,7 @@ describe("piship.routine@1", () => {
         {
           defaults: [
             {
-              id: "x",
+              id: "fa6b8adad69ce31377ad3e4b38b65e8fac7c4582fb14fd47c54f1e8d8a89981e",
               action: "shell.execute",
               resource: "a",
               effect: "allow",
@@ -199,6 +199,6 @@ describe("piship.routine@1", () => {
   });
 });
 
-const RULE_COUNT = 199;
+const RULE_COUNT = 196;
 const DIGEST =
-  "dd16c33c15bc7f27143fe497906ba0c784aa9fcf7e9d29b139bc5419fdc869e7";
+  "fa6b8adad69ce31377ad3e4b38b65e8fac7c4582fb14fd47c54f1e8d8a89981e";

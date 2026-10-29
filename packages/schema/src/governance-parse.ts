@@ -3,7 +3,6 @@
 // validated strictly; unknown and secret-looking fields are rejected. Each
 // section's parser lives in ./governance/; this module composes them.
 import { AccessFieldError, type DeploymentMode } from "./access.js";
-import type { GovernanceManifest } from "./governance.js";
 import { parseAudit } from "./governance/audit.js";
 import { parseCapabilities } from "./governance/capabilities.js";
 import { parseMcp } from "./governance/mcp.js";
@@ -11,6 +10,7 @@ import { parsePackageTrust } from "./governance/packages.js";
 import { parsePolicy } from "./governance/policy.js";
 import { parseGovernanceResources } from "./governance/resources.js";
 import { parseSandbox } from "./governance/sandbox.js";
+import type { GovernanceManifest } from "./governance.js";
 import { referencedVariables } from "./variables.js";
 
 export { parseAudit } from "./governance/audit.js";
@@ -20,13 +20,13 @@ export {
 } from "./governance/capabilities.js";
 export { parseMcp } from "./governance/mcp.js";
 export { parsePackages, parsePackageTrust } from "./governance/packages.js";
+export { defaultProjectDimensions, parsePolicy } from "./governance/policy.js";
+export { parseGovernanceResources } from "./governance/resources.js";
 export {
   parseCacheWarming,
   parseRuntimeTools,
   parseSearchTools,
 } from "./governance/runtime.js";
-export { defaultProjectDimensions, parsePolicy } from "./governance/policy.js";
-export { parseGovernanceResources } from "./governance/resources.js";
 export {
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,

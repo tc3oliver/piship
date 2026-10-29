@@ -5,17 +5,17 @@ import {
   DEFAULT_PACKAGE_SOURCES,
   DEFAULT_RELEASE_TARGETS,
   LATEST_SCHEMA,
+  launchWarnings,
   ManifestError,
+  migrateManifestSource,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
+  parseManifest,
+  parseManifestHeader,
   RELEASE_CHANNELS,
   RELEASE_TARGETS,
   SUPPORTED_SCHEMAS,
-  launchWarnings,
-  migrateManifestSource,
-  parseManifest,
-  parseManifestHeader,
 } from "./index.js";
 
 type Json = Record<string, unknown>;

@@ -1,4 +1,6 @@
 // Trust-classed resources: resources.<kind>.{builtin,certified,company,user}.
+
+import { checkUrl } from "../access.js";
 import {
   BUILTIN_EXTENSIONS,
   type BuiltinExtension,
@@ -10,8 +12,6 @@ import {
   RESOURCE_KINDS,
   type ResourceKind,
 } from "../governance.js";
-import { checkUrl } from "../access.js";
-import { parsePackages } from "./packages.js";
 import {
   conflict,
   exactPiVersion,
@@ -26,6 +26,7 @@ import {
   relativePath,
   semver,
 } from "./fields.js";
+import { parsePackages } from "./packages.js";
 
 export const CERTIFIED_FIELDS = [
   "source",

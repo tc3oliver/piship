@@ -103,14 +103,7 @@ const OPEN: readonly Entry[] = [
 
 /** Shell rules: active only when the sandbox contains shell commands. */
 const CONTAINED: readonly Entry[] = [
-  ...shell(
-    "search",
-    "ask",
-    "rg**--pre**",
-    "fd** -x**",
-    "fd** -X**",
-    "fd**--exec**",
-  ),
+  ...shell("search", "ask", "rg**--pre**", "rg**--hostname-bin**"),
   ...shell(
     "search",
     "allow",
@@ -124,7 +117,7 @@ const CONTAINED: readonly Entry[] = [
     "wc+",
     "tree+",
     "diff+",
-    "fd+",
+    "fd",
   ),
   ...shell(
     "git.read",
