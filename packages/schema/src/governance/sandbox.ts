@@ -293,7 +293,22 @@ export function parseSandbox(
     if (network[key] !== undefined) fail(`sandbox.network.${key}`, hostnames);
   const networkSection = optionalRecord(sandbox.network, "sandbox.network", [
     "mode",
+    ...(v6 ? ["egress"] : []),
   ]);
+  const egress =
+    networkSection.egress === undefined
+      ? undefined
+      : oneOf(networkSection.egress, "sandbox.network.egress", ["it"] as const);
+  if (egress && !required)
+    conflict(
+      "sandbox.network.egress",
+      "egress applies only to a required sandbox (sandbox.required: true)",
+    );
+  if (egress && networkSection.mode === "deny")
+    conflict(
+      "sandbox.network.egress",
+      "egress: it delegates egress to IT and cannot be combined with mode: deny",
+    );
   const environment = optionalRecord(
     sandbox.environment,
     "sandbox.environment",
@@ -321,8 +336,9 @@ export function parseSandbox(
         networkSection.mode,
         "sandbox.network.mode",
         ["deny", "allow"] as const,
-        required ? "deny" : "allow",
+        required && !egress ? "deny" : "allow",
       ),
+      ...(egress ? { egress } : {}),
     },
     environment: {
       allow:

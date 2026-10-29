@@ -1318,6 +1318,48 @@ describe("Sandbox and Workspace groups", () => {
     ).toBe(true);
   });
 
+  it("reports IT egress as declared, never as a green check", () => {
+    const manifest = {
+      ...governanceData().manifest,
+      sandbox: { network: { mode: "allow", egress: "it" } },
+    } as unknown as GovernanceData["manifest"];
+    const inspected = inspection({ network: "allow" });
+    const output = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({
+          manifest,
+          inspection: inspected,
+          isolation: sandboxIsolation(inspected.sandbox),
+          workspace: workspaceData(inspected),
+        }),
+      }),
+    );
+    expect(output.failed).toBe(false);
+    const sandbox = group(output.render(), "Sandbox");
+    expect(sandbox).toContain(
+      `  - ${"network".padEnd(20)} allow (egress delegated to IT: declared by the distribution (sandbox.network.egress: it), not verified by PiShip)`,
+    );
+    const network = group(output.render(), "Network");
+    for (const label of ["shell", "MCP stdio"])
+      expect(network).toContain(
+        `  - ${`egress: ${label}`.padEnd(20)} delegated to IT (declared, not verified by PiShip)`,
+      );
+    expect(
+      network.some(
+        (line) =>
+          line.includes("IT egress") &&
+          line.includes("declared by the distribution") &&
+          line.includes("reads no firewall, proxy, DLP or EDR state"),
+      ),
+    ).toBe(true);
+    expect(
+      [...sandbox, ...network].filter((line) =>
+        /^ {2}✓ (network|egress: (shell|MCP stdio)|IT egress)/.test(line),
+      ),
+    ).toEqual([]);
+  });
+
   it("shows how network denial is known", () => {
     const networkLine = (inspected: GovernanceInspection) =>
       group(

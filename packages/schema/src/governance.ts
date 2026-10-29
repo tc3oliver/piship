@@ -646,7 +646,15 @@ export interface SandboxConfig {
     readonly write: { readonly allow: readonly string[] };
   };
   /** Enforced at the OS boundary; hostname allowlists are not claimed. */
-  readonly network: { readonly mode: "deny" | "allow" };
+  readonly network: {
+    readonly mode: "deny" | "allow";
+    /**
+     * piship/v1alpha6: `it` declares that IT's firewall, proxy, DLP or EDR
+     * owns egress, so a required sandbox defaults to `allow`. PiShip reads
+     * none of that state; the declaration is not verified.
+     */
+    readonly egress?: "it";
+  };
   /** Environment variable names passed into sandboxed processes. */
   readonly environment: { readonly allow: readonly string[] };
 }

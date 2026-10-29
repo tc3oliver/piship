@@ -155,7 +155,12 @@ function governanceRows(
         ]
       : []),
     ...(sandbox.user ? [row("sandbox.user", sandbox.user)] : []),
-    row("sandbox.network", sandbox.network.mode),
+    row(
+      "sandbox.network",
+      sandbox.network.egress
+        ? `${sandbox.network.mode} (egress: ${sandbox.network.egress})`
+        : sandbox.network.mode,
+    ),
     row(
       "audit.sinks",
       audit.enabled
