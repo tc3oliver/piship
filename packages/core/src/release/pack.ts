@@ -132,6 +132,8 @@ export interface BuiltPack {
   readonly archive: string;
   readonly sha256: string;
   readonly metadata: PackMetadata;
+  /** Things the pack did without, for the command to say. */
+  readonly warnings: readonly string[];
 }
 
 /**
@@ -414,6 +416,7 @@ export async function buildPack(
   );
   try {
     const root = join(temporary.path, name);
+    const warnings: string[] = [];
     const files = [
       "piship.yaml",
       "piship.lock",
@@ -447,8 +450,20 @@ export async function buildPack(
       const transpiling = vendoredPackages.filter(
         (item) => item.locked.pretranspile,
       );
-      if (transpiling.length) {
-        const esbuild = loadEsbuild(join(buildInput, "package.json"));
+      let esbuild: ReturnType<typeof loadEsbuild> | undefined;
+      try {
+        if (transpiling.length)
+          esbuild = loadEsbuild(join(buildInput, "package.json"));
+      } catch (error) {
+        // The runtime release does not carry esbuild: its packs then load
+        // the TypeScript as they did before, only slower on a scanned disk.
+        if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND")
+          throw error;
+        warnings.push(
+          `pretranspile of ${transpiling.map((item) => item.locked.id).join(", ")} was skipped: esbuild is not available to this PiShip, so the pack carries the TypeScript only. Run piship pack from a PiShip checkout (npm ci) to include the generated JavaScript`,
+        );
+      }
+      if (esbuild)
         pretranspileClosures(
           transpiling.map((item) => ({
             id: item.locked.id,
@@ -461,7 +476,6 @@ export async function buildPack(
           })),
           esbuild,
         );
-      }
       const vendored = join(root, "pack", PI_PACKAGE_VENDOR_DIRECTORY);
       for (const entry of readdirSync(vendored, {
         recursive: true,
@@ -554,7 +568,14 @@ export async function buildPack(
     renameSync(root, directory);
     renameSync(staged, archive);
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
-    return { name, directory, archive, sha256: result.sha256, metadata };
+    return {
+      name,
+      directory,
+      archive,
+      sha256: result.sha256,
+      metadata,
+      warnings,
+    };
   } finally {
     temporary.remove();
   }

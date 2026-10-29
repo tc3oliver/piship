@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { SEARCH_TOOLS } from "@piship/schema";
 import { PI_VERSION, PISHIP_VERSION, SEARCH_TOOL_SPECS } from "@piship/core";
 import { afterAll, describe, expect, it } from "vitest";
+import { pretranspileProject } from "../helpers/pretranspile-project.js";
 import { lifecycleReleases, lifecycleScenario } from "../helpers/lifecycle.js";
 
 const bin = fileURLToPath(
@@ -97,6 +98,49 @@ describe("runtime release", () => {
     );
     expect(Object.keys(bound.excluded)).not.toContain(target);
   }, 900000);
+
+  // The admin path without a clone: the runtime does not carry esbuild, so a
+  // pretranspile package is packed as TypeScript with a warning, not refused.
+  it("packs a pretranspile package with the runtime's own piship.mjs, saying it skipped the JavaScript", () => {
+    const target = `${process.platform}-${process.arch}`;
+    const directory = join(
+      out,
+      "releases",
+      `piship-runtime-${PISHIP_VERSION}-${target}`,
+    );
+    const manifest = pretranspileProject(join(out, "pretranspile"));
+    const own = (...args: string[]) =>
+      spawnSync(
+        process.execPath,
+        [join(directory, "payload", "piship.mjs"), ...args],
+        { encoding: "utf8", env },
+      );
+    const locked = own("lock", manifest);
+    expect(locked.status, locked.stderr).toBe(0);
+    const packed = own(
+      "pack",
+      manifest,
+      "--runtime",
+      `${directory}.tar.gz`,
+      "--out",
+      join(out, "relocated"),
+    );
+    expect(packed.status, packed.stderr).toBe(0);
+    expect(packed.stderr).toContain("pretranspile of ts was skipped");
+    const lib = join(
+      out,
+      "relocated",
+      "packs",
+      "mypi-1.0.0-pack",
+      "pack",
+      "pi-packages",
+      "ts",
+      "package",
+      "lib",
+    );
+    expect(existsSync(join(lib, "values.ts"))).toBe(true);
+    expect(existsSync(join(lib, "values.js"))).toBe(false);
+  }, 300000);
 
   // Its release targets are linux-x64 and darwin-arm64 only.
   it.runIf(

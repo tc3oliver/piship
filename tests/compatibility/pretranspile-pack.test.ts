@@ -12,9 +12,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { pretranspileProject } from "../helpers/pretranspile-project.js";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "ptp-"));
@@ -23,55 +24,10 @@ const core = pathToFileURL(
 ).href;
 const manifest = join(root, "source", "piship.yaml");
 
-function put(files: Record<string, string>): void {
-  for (const [path, content] of Object.entries(files)) {
-    const target = join(root, "source", path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, content);
-  }
-}
-
 let directory: string;
+let digests: string[];
 beforeAll(() => {
-  cpSync(join(repository, "examples", "personal"), join(root, "source"), {
-    recursive: true,
-  });
-  // No network and no warm download cache: the search tools are left out.
-  writeFileSync(
-    manifest,
-    readFileSync(manifest, "utf8")
-      .replace(
-        /^ {2}# fd and rg ship[^\n]*\n[^\n]*\n {2}searchTools:\n {4}mode: bundled\n/m,
-        "",
-      )
-      .replace(
-        /^resources:\n/m,
-        `resources:
-  packages:
-    - id: ts
-      source: local
-      path: ./packages/ts
-      class: user
-      pretranspile: true
-`,
-      )
-      .replace(
-        /^policy:\n/m,
-        "packageTrust:\n  local: { paths: [./packages] }\n\npolicy:\n",
-      ),
-  );
-  put({
-    "packages/ts/package.json": JSON.stringify({
-      name: "ts",
-      version: "1.0.0",
-      type: "module",
-      pi: { extensions: ["./extensions"] },
-    }),
-    "packages/ts/extensions/main.ts": `import { value } from "../lib/values.js";
-export default () => value;
-`,
-    "packages/ts/lib/values.ts": "export const value: number = 2;\n",
-  });
+  pretranspileProject(join(root, "source"));
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.PISHIP_BUILD_INPUT;
   // The runtime archive is described, not built: the pack only reads it.
@@ -79,19 +35,23 @@ export default () => value;
 lockManifest(${JSON.stringify(manifest)});
 const lock = requireCurrentLock(${JSON.stringify(manifest)});
 const target = currentTarget();
-const built = await buildPack(${JSON.stringify(manifest)}, {
-  outputRoot: ${JSON.stringify(join(root, "out"))},
+const build = (out) => buildPack(${JSON.stringify(manifest)}, {
+  outputRoot: out,
   runtimes: ["runtime"],
   readRuntime: async () => ({ name: "runtime.tar.gz", target, sha256: "a".repeat(64), bytes: 1, pishipVersion: lock.runtime.pishipVersion, piVersion: lock.runtime.version, npmLockSha256: lock.runtime.npmLockSha256, inventorySha256: "b".repeat(64), searchTools: {} }),
 });
-console.log(built.directory);`;
+const first = await build(${JSON.stringify(join(root, "out"))});
+const second = await build(${JSON.stringify(join(root, "again"))});
+console.log(JSON.stringify([first.directory, first.sha256, second.sha256]));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
     { cwd: repository, encoding: "utf8", env, timeout: 120_000 },
   );
   expect(result.status, result.stderr).toBe(0);
-  directory = result.stdout.trim();
+  const [found, ...sums] = JSON.parse(result.stdout) as string[];
+  directory = found as string;
+  digests = sums;
 }, 180_000);
 afterAll(() => rmSync(root, { recursive: true, force: true }), 120_000);
 
@@ -106,6 +66,11 @@ describe("pretranspile in a pack", () => {
     expect(
       existsSync(join(directory, "pack/pi-packages/ts/package/lib/values.ts")),
     ).toBe(true);
+  });
+
+  it("builds the same archive twice", () => {
+    expect(digests[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(digests[1]).toBe(digests[0]);
   });
 
   it("covers it in the checksums", () => {
