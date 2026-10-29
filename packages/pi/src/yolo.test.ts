@@ -855,25 +855,49 @@ describe("allow for this session", () => {
     expect(shown).toHaveLength(2);
   });
 
-  it("audits why a prompt was retained or skipped, never the target", async () => {
+  it("audits why a dialog was shown, never the target, and nothing without one", async () => {
     const { session, workspace, events } = await open({ mode: "managed" });
     const { channel } = sessionPrompt();
-    const write = (name: string) =>
-      session.decide("filesystem.write", join(workspace, name), channel, {
-        allowed: "tool.allowed",
-        denied: "tool.denied",
-      });
+    const write = (name: string, headless = false) =>
+      session.decide(
+        "filesystem.write",
+        join(workspace, name),
+        headless ? undefined : channel,
+        {
+          allowed: "tool.allowed",
+          denied: "tool.denied",
+        },
+      );
     await write("a.txt");
     await write("b.txt");
     await write(join("kept", "a.txt"));
+    await write(join("kept", "c.txt"), true);
     await session.close();
-    const detail = events()
+    const all = events();
+    const detail = all
       .filter((event) => event.event === "tool.allowed")
       .map((event) => event.detail);
-    expect(detail[0]).toMatchObject({ promptReason: "rule-grant-first-use" });
+    expect(detail[0]).toMatchObject({ promptReason: "not-covered" });
     expect(detail[1]).toMatchObject({ approval: "session" });
     expect(detail[1]).not.toHaveProperty("promptReason");
-    expect(detail[2]).toMatchObject({ promptReason: "rule-keeps-prompt" });
+    expect(detail[2]).toMatchObject({ promptReason: "keeps-prompt" });
+    const headless = all.filter((event) => event.event === "tool.denied");
+    expect(headless).toHaveLength(1);
+    expect(headless[0]?.detail).not.toHaveProperty("promptReason");
+  });
+
+  it("audits keeps-prompt for a personal user's own rule that keeps its prompt", async () => {
+    const { session, workspace, events } = await open({ mode: "personal" });
+    await session.decide(
+      "filesystem.write",
+      join(workspace, "kept", "a.txt"),
+      sessionPrompt().channel,
+      { allowed: "tool.allowed", denied: "tool.denied" },
+    );
+    await session.close();
+    expect(
+      events().find((event) => event.event === "tool.allowed")?.detail,
+    ).toMatchObject({ promptReason: "keeps-prompt" });
   });
 
   it("does not reuse a managed workspace session grant across path traversal", async () => {

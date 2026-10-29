@@ -779,21 +779,17 @@ export class GovernanceSession {
       // approved gets its own key. The stored auto mode, the usual one,
       // leaves none.
       ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
-      // Why this ask was not skipped: a rule that keeps its prompt, a grant
-      // limited to the exact target, or the first use of a rule grant.
-      // A reason only, never a target.
-      ...(decision.effect === "ask" &&
-      resolved.approval !== "auto" &&
-      resolved.approval !== "session" &&
-      resolved.approval !== "grant"
+      // Why a dialog was shown: a rule that keeps its prompt, or no allow
+      // rule, session answer or task grant covered it. A reason only.
+      ...(prompted
         ? {
-            promptReason: !asks.every((ask) =>
-              this.#offersSession(ask.action, ask.resources),
+            promptReason: asks.some((ask) =>
+              ask.resources.some((item) =>
+                this.engine.keepsPrompt({ action: ask.action, resource: item }),
+              ),
             )
-              ? "rule-keeps-prompt"
-              : grants.some((grant) => grant.rule)
-                ? "rule-grant-first-use"
-                : "exact-target-only",
+              ? "keeps-prompt"
+              : "not-covered",
           }
         : {}),
     };
