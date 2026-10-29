@@ -28,7 +28,7 @@ const context = (shell: boolean): PolicyContext => ({
   workspaceRoot: join(base, "work"),
   homeDir: join(base, "home"),
   tmpDir: join(base, "tmp"),
-  containment: { ...NO_CONTAINMENT, shell },
+  containment: { ...NO_CONTAINMENT, shell, filesystem: shell },
 });
 
 function managed(extra: Record<string, unknown> = {}): PolicyConfig {
@@ -44,6 +44,11 @@ const engine = (policy: PolicyConfig, shell = true) =>
   new PolicyEngine({ policy, context: context(shell) });
 
 describe("piship.routine@1", () => {
+  it("gives every rule its own ID", () => {
+    const ids = managed().defaults.map((rule) => rule.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("is frozen", () => {
     const rules = managed().defaults;
     // Changing the pack needs routine@2, not an edit of this digest.
@@ -84,6 +89,40 @@ describe("piship.routine@1", () => {
         action: "filesystem.write",
         resource: join(base, "work", "a.ts"),
       }).effect,
+    ).toBe("allow");
+  });
+
+  it("allows the session tmp only under an enforced sandbox", () => {
+    const tmp = join(base, "tmp", "scratch.txt");
+    for (const action of ["filesystem.read", "filesystem.write"] as const) {
+      expect(engine(managed()).evaluate({ action, resource: tmp }).effect).toBe(
+        "allow",
+      );
+      // Without a sandbox tmp is the whole system temp directory.
+      expect(
+        engine(managed(), false).evaluate({ action, resource: tmp }).effect,
+      ).toBe("ask");
+    }
+  });
+
+  it("keeps tmp closed when only shell commands are contained", () => {
+    // A remote sandbox backend can contain commands without containing the
+    // local filesystem, where tmp is still the system temp directory.
+    const remote = new PolicyEngine({
+      policy: managed(),
+      context: {
+        ...context(true),
+        containment: { ...NO_CONTAINMENT, shell: true, filesystem: false },
+      },
+    });
+    expect(
+      remote.evaluate({
+        action: "filesystem.write",
+        resource: join(base, "tmp", "scratch.txt"),
+      }).effect,
+    ).toBe("ask");
+    expect(
+      remote.evaluate({ action: "shell.execute", resource: "npm test" }).effect,
     ).toBe("allow");
   });
 
@@ -211,4 +250,4 @@ describe("piship.routine@1", () => {
 
 const RULE_COUNT = 207;
 const DIGEST =
-  "d8578a1f88f698315b7f89ba60e2b08d0ff6888d79deacafdad9e05503c33629";
+  "aac42141aec3205665a60890e272504009c9cc3055e443d1775bf153e475c9f9";

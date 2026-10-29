@@ -1,16 +1,19 @@
 // The policy engine: layered rule precedence, enforcement planes, and rule
 // list parsing for user, project, and adapter rule files.
+
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
-  normalizePolicyAction,
-  POLICY_ACTIONS,
-  PiShipError,
-  redact,
   type EnforcementPlane,
+  normalizePolicyAction,
+  PiShipError,
+  POLICY_ACTIONS,
   type PolicyAction,
   type PolicyDecision,
   type PolicyEffect,
   type PolicyLayer,
   type PolicyRequest,
+  redact,
 } from "@piship/contracts";
 import type { PolicyConfig, PolicyRule } from "@piship/schema";
 import {
@@ -21,8 +24,6 @@ import {
   normalizeTokenContext,
   type PathTokenContext,
 } from "./glob.js";
-import { realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { seamPlane } from "./seams.js";
 import { chainSegments } from "./shell-words.js";
 
@@ -403,7 +404,7 @@ export interface PolicyExplanation {
   /** The resource as matched (filesystem paths are normalized). */
   readonly resource: string;
   readonly matches: readonly RuleMatch[];
-  /** Rules that match but are off because shell commands are not contained. */
+  /** Rules that match but are off because the sandbox does not contain them. */
   readonly inactive: readonly RuleMatch[];
   readonly ignored: readonly (IgnoredRule & { readonly matches: boolean })[];
   readonly diagnostics: readonly PolicyDiagnostic[];
@@ -498,9 +499,15 @@ export class PolicyEngine {
   }
 
   #matches(entry: LayerRule, action: string, resource: string): boolean {
-    // A pack's shell rule stands in for a prompt only where the sandbox
-    // contains the command; without containment the next rule decides.
-    if (entry.rule.contained && !this.context.containment.shell) return false;
+    // A pack's contained rule stands in for a prompt only where the sandbox
+    // contains the command or the path; without it the next rule decides.
+    if (
+      entry.rule.contained &&
+      !(isPathAction(action)
+        ? this.context.containment.filesystem
+        : this.context.containment.shell)
+    )
+      return false;
     if (!matchAction(entry.rule.action, action)) return false;
     const pattern = isPathAction(action)
       ? entry.pathPattern

@@ -53,6 +53,12 @@ const V1ALPHA5_DEMO = readFileSync(
 )
   .replace("schema: piship/v1", "schema: piship/v1alpha5")
   .replace("action: model.select", "action: model.use")
+  // v1alpha5 has no rule packs: restore the hand-written shell rule they replace.
+  .replace(/  # Routine work[\s\S]*?version: 1\n/, "")
+  .replace(
+    "    - id: acme.tools\n",
+    '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask\n    - id: acme.tools\n',
+  )
   .replace(
     `        search: direct
         get_document: direct

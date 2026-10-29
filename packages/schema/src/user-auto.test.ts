@@ -64,6 +64,7 @@ describe("policy.userAuto", () => {
   it("is an unknown field before piship/v1alpha5", () => {
     const v1alpha3 = withUserAuto(MANAGED, "allowed", "piship/v1alpha3");
     for (const key of ["updates", "release"]) delete v1alpha3[key];
+    delete (v1alpha3.policy as Json).packs;
     expect(fieldError(v1alpha3)).toMatchObject({
       field: "policy.userAuto",
       message: expect.stringContaining("Unknown field"),

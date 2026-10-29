@@ -54,12 +54,12 @@ async function distribution(options: { unsandboxed?: boolean } = {}) {
     .replace("127.0.0.1:8765", "127.0.0.1")
     .replace("defaultMode: plan", "defaultMode: build")
     .replace(
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
+      "    - id: acme.models\n",
+      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n    - id: acme.models\n',
     );
   if (
     !source.includes("defaultMode: build") ||
-    source.includes('"**"\n      effect: ask\n    - id: acme.tools')
+    !source.includes("    - id: acme.shell\n")
   )
     throw new Error("demo manifest patch did not apply");
   const configured = options.unsandboxed

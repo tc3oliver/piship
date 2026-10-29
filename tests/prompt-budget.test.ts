@@ -21,7 +21,7 @@ const context: PolicyContext = {
   workspaceRoot: join(base, "work"),
   homeDir: join(base, "home"),
   tmpDir: join(base, "tmp"),
-  containment: { ...NO_CONTAINMENT, shell: true },
+  containment: { ...NO_CONTAINMENT, shell: true, filesystem: true },
 };
 const inWorkspace = (path: string) => join(context.workspaceRoot, path);
 

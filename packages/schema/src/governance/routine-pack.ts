@@ -19,6 +19,8 @@ type Entry = readonly [
 
 const slug = (text: string) =>
   text
+    // `.env` and `.env.*` must not share an ID.
+    .replace(/\.\*/g, "-any")
     .replace(/[^a-z0-9]+/gi, "-")
     .replace(/^-|-$/g, "")
     .toLowerCase();
@@ -97,12 +99,18 @@ const OPEN: readonly Entry[] = [
     "workspace/**/.vscode/**",
     "workspace/**/.husky/**",
   ),
-  ...paths("fs", "filesystem.read", "allow", "workspace/**", "tmp/**"),
-  ...paths("fs", "filesystem.write", "allow", "workspace/**", "tmp/**"),
+  ...paths("fs", "filesystem.read", "allow", "workspace/**"),
+  ...paths("fs", "filesystem.write", "allow", "workspace/**"),
 ];
 
-/** Shell rules: active only when the sandbox contains shell commands. */
+/**
+ * Active only under an enforced sandbox: its shell rules need it to contain
+ * commands, and `tmp` is the session's private directory only then (without a
+ * sandbox it is the whole system temp directory).
+ */
 const CONTAINED: readonly Entry[] = [
+  ...paths("fs", "filesystem.read", "allow", "tmp/**"),
+  ...paths("fs", "filesystem.write", "allow", "tmp/**"),
   // A shell command naming a dotenv file asks, as the read tool does. The
   // examples are allowed only as the whole command `cat <example>`: a pattern
   // like `**.env.example` would allow any program that ends in that name.

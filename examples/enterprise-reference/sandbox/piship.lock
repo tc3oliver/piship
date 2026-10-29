@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-759a896dad739608ba860aa6267344a9cd38cc48d77112ba3a05ba0297b9354a"
+    "sha256": "sha256-da389f9b7d5c21fff2343278d6970fd59a3e393540243e6f7ff7792de0704aec"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1216,28 +1216,1645 @@
             "effect": "allow"
           },
           {
-            "id": "acme.workspace.read",
-            "action": "filesystem.read",
-            "resource": "workspace/**",
-            "effect": "allow"
-          },
-          {
-            "id": "acme.workspace.write",
-            "action": "filesystem.write",
-            "resource": "workspace/**",
-            "effect": "allow"
-          },
-          {
-            "id": "acme.shell",
-            "action": "shell.execute",
-            "resource": "**",
-            "effect": "ask"
-          },
-          {
             "id": "acme.tools",
             "action": "tool.execute",
             "resource": "*",
             "effect": "allow"
+          },
+          {
+            "id": "piship.routine.tools.read",
+            "action": "tool.execute",
+            "resource": "read",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.write",
+            "action": "tool.execute",
+            "resource": "write",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.edit",
+            "action": "tool.execute",
+            "resource": "edit",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.bash",
+            "action": "tool.execute",
+            "resource": "bash",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.task_start",
+            "action": "tool.execute",
+            "resource": "task_start",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.task_output",
+            "action": "tool.execute",
+            "resource": "task_output",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.task_stop",
+            "action": "tool.execute",
+            "resource": "task_stop",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.tools.ask_user",
+            "action": "tool.execute",
+            "resource": "ask_user",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine tools work"
+          },
+          {
+            "id": "piship.routine.fs.secrets.read-workspace-env-example",
+            "action": "filesystem.read",
+            "resource": "workspace/**/.env.example",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.secrets.read-workspace-env-sample",
+            "action": "filesystem.read",
+            "resource": "workspace/**/.env.sample",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.secrets.read-workspace-env-template",
+            "action": "filesystem.read",
+            "resource": "workspace/**/.env.template",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.secrets.read-workspace-env",
+            "action": "filesystem.read",
+            "resource": "workspace/**/.env",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.secrets.read-workspace-env-any",
+            "action": "filesystem.read",
+            "resource": "workspace/**/.env.*",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-envrc",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.envrc",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-claude",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.claude/**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-pi",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.pi/**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-mcp-json",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.mcp.json",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-vscode",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.vscode/**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.exec-config.write-workspace-husky",
+            "action": "filesystem.write",
+            "resource": "workspace/**/.husky/**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.read-workspace",
+            "action": "filesystem.read",
+            "resource": "workspace/**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.write-workspace",
+            "action": "filesystem.write",
+            "resource": "workspace/**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work"
+          },
+          {
+            "id": "piship.routine.fs.read-tmp",
+            "action": "filesystem.read",
+            "resource": "tmp/**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.write-tmp",
+            "action": "filesystem.write",
+            "resource": "tmp/**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-example",
+            "action": "shell.execute",
+            "resource": "cat .env.example",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-sample",
+            "action": "shell.execute",
+            "resource": "cat .env.sample",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-template",
+            "action": "shell.execute",
+            "resource": "cat .env.template",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-tab",
+            "action": "shell.execute",
+            "resource": "**\t.env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-equals",
+            "action": "shell.execute",
+            "resource": "**=.env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-space",
+            "action": "shell.execute",
+            "resource": "** .env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-slash",
+            "action": "shell.execute",
+            "resource": "**/.env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-colon",
+            "action": "shell.execute",
+            "resource": "**:.env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-quote",
+            "action": "shell.execute",
+            "resource": "**'.env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.fs.secrets.shell-after-double-quote",
+            "action": "shell.execute",
+            "resource": "**\".env**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.rg-pre",
+            "action": "shell.execute",
+            "resource": "rg**--pre**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.rg-hostname-bin",
+            "action": "shell.execute",
+            "resource": "rg**--hostname-bin**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.rg",
+            "action": "shell.execute",
+            "resource": "rg",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.rg.args",
+            "action": "shell.execute",
+            "resource": "rg **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.grep",
+            "action": "shell.execute",
+            "resource": "grep",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.grep.args",
+            "action": "shell.execute",
+            "resource": "grep **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.ls",
+            "action": "shell.execute",
+            "resource": "ls",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.ls.args",
+            "action": "shell.execute",
+            "resource": "ls **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.pwd",
+            "action": "shell.execute",
+            "resource": "pwd",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.pwd.args",
+            "action": "shell.execute",
+            "resource": "pwd **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.cat",
+            "action": "shell.execute",
+            "resource": "cat",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.cat.args",
+            "action": "shell.execute",
+            "resource": "cat **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.head",
+            "action": "shell.execute",
+            "resource": "head",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.head.args",
+            "action": "shell.execute",
+            "resource": "head **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.tail",
+            "action": "shell.execute",
+            "resource": "tail",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.tail.args",
+            "action": "shell.execute",
+            "resource": "tail **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.wc",
+            "action": "shell.execute",
+            "resource": "wc",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.wc.args",
+            "action": "shell.execute",
+            "resource": "wc **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.tree",
+            "action": "shell.execute",
+            "resource": "tree",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.tree.args",
+            "action": "shell.execute",
+            "resource": "tree **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.diff",
+            "action": "shell.execute",
+            "resource": "diff",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.diff.args",
+            "action": "shell.execute",
+            "resource": "diff **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.search.fd",
+            "action": "shell.execute",
+            "resource": "fd",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine search work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-status",
+            "action": "shell.execute",
+            "resource": "git status",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-status.args",
+            "action": "shell.execute",
+            "resource": "git status **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-diff",
+            "action": "shell.execute",
+            "resource": "git diff",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-diff.args",
+            "action": "shell.execute",
+            "resource": "git diff **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-log",
+            "action": "shell.execute",
+            "resource": "git log",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-log.args",
+            "action": "shell.execute",
+            "resource": "git log **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-show",
+            "action": "shell.execute",
+            "resource": "git show",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-show.args",
+            "action": "shell.execute",
+            "resource": "git show **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-blame",
+            "action": "shell.execute",
+            "resource": "git blame",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-blame.args",
+            "action": "shell.execute",
+            "resource": "git blame **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-rev-parse",
+            "action": "shell.execute",
+            "resource": "git rev-parse",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-rev-parse.args",
+            "action": "shell.execute",
+            "resource": "git rev-parse **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-ls-files",
+            "action": "shell.execute",
+            "resource": "git ls-files",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-ls-files.args",
+            "action": "shell.execute",
+            "resource": "git ls-files **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-merge-base",
+            "action": "shell.execute",
+            "resource": "git merge-base",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-merge-base.args",
+            "action": "shell.execute",
+            "resource": "git merge-base **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-describe",
+            "action": "shell.execute",
+            "resource": "git describe",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-describe.args",
+            "action": "shell.execute",
+            "resource": "git describe **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-branch",
+            "action": "shell.execute",
+            "resource": "git branch",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-branch-show-current",
+            "action": "shell.execute",
+            "resource": "git branch --show-current",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-branch-list",
+            "action": "shell.execute",
+            "resource": "git branch --list",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-branch-list.args",
+            "action": "shell.execute",
+            "resource": "git branch --list **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-remote-v",
+            "action": "shell.execute",
+            "resource": "git remote -v",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-stash-list",
+            "action": "shell.execute",
+            "resource": "git stash list",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-stash-list.args",
+            "action": "shell.execute",
+            "resource": "git stash list **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-stash-show",
+            "action": "shell.execute",
+            "resource": "git stash show",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.read.git-stash-show.args",
+            "action": "shell.execute",
+            "resource": "git stash show **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-switch-discard-changes",
+            "action": "shell.execute",
+            "resource": "git switch**--discard-changes**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-switch-f",
+            "action": "shell.execute",
+            "resource": "git switch** -f**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-switch-force",
+            "action": "shell.execute",
+            "resource": "git switch**--force**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-checkout-f",
+            "action": "shell.execute",
+            "resource": "git checkout** -f**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-checkout-force",
+            "action": "shell.execute",
+            "resource": "git checkout**--force**",
+            "effect": "ask",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-add",
+            "action": "shell.execute",
+            "resource": "git add",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-add.args",
+            "action": "shell.execute",
+            "resource": "git add **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-commit",
+            "action": "shell.execute",
+            "resource": "git commit",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-commit.args",
+            "action": "shell.execute",
+            "resource": "git commit **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-switch-c",
+            "action": "shell.execute",
+            "resource": "git switch -c**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-checkout-b",
+            "action": "shell.execute",
+            "resource": "git checkout -b**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-stash",
+            "action": "shell.execute",
+            "resource": "git stash",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-stash-push",
+            "action": "shell.execute",
+            "resource": "git stash push",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.git.local.git-stash-push.args",
+            "action": "shell.execute",
+            "resource": "git stash push **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine git work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-test",
+            "action": "shell.execute",
+            "resource": "npm test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-test.args",
+            "action": "shell.execute",
+            "resource": "npm test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-ci",
+            "action": "shell.execute",
+            "resource": "npm ci",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-ci.args",
+            "action": "shell.execute",
+            "resource": "npm ci **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-install",
+            "action": "shell.execute",
+            "resource": "npm install",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-test",
+            "action": "shell.execute",
+            "resource": "npm run test**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-test",
+            "action": "shell.execute",
+            "resource": "pnpm run test**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-test",
+            "action": "shell.execute",
+            "resource": "yarn run test**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-build",
+            "action": "shell.execute",
+            "resource": "npm run build**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-build",
+            "action": "shell.execute",
+            "resource": "pnpm run build**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-build",
+            "action": "shell.execute",
+            "resource": "yarn run build**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-lint",
+            "action": "shell.execute",
+            "resource": "npm run lint**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-lint",
+            "action": "shell.execute",
+            "resource": "pnpm run lint**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-lint",
+            "action": "shell.execute",
+            "resource": "yarn run lint**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-typecheck",
+            "action": "shell.execute",
+            "resource": "npm run typecheck**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-typecheck",
+            "action": "shell.execute",
+            "resource": "pnpm run typecheck**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-typecheck",
+            "action": "shell.execute",
+            "resource": "yarn run typecheck**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-check",
+            "action": "shell.execute",
+            "resource": "npm run check**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-check",
+            "action": "shell.execute",
+            "resource": "pnpm run check**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-check",
+            "action": "shell.execute",
+            "resource": "yarn run check**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npm-run-format",
+            "action": "shell.execute",
+            "resource": "npm run format**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-run-format",
+            "action": "shell.execute",
+            "resource": "pnpm run format**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-run-format",
+            "action": "shell.execute",
+            "resource": "yarn run format**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-test",
+            "action": "shell.execute",
+            "resource": "pnpm test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-test.args",
+            "action": "shell.execute",
+            "resource": "pnpm test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-install",
+            "action": "shell.execute",
+            "resource": "pnpm install",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-install-frozen-lockfile",
+            "action": "shell.execute",
+            "resource": "pnpm install --frozen-lockfile",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-install-frozen-lockfile.args",
+            "action": "shell.execute",
+            "resource": "pnpm install --frozen-lockfile **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-test",
+            "action": "shell.execute",
+            "resource": "yarn test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-test.args",
+            "action": "shell.execute",
+            "resource": "yarn test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-install",
+            "action": "shell.execute",
+            "resource": "yarn install",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-install-frozen-lockfile",
+            "action": "shell.execute",
+            "resource": "yarn install --frozen-lockfile",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.yarn-install-frozen-lockfile.args",
+            "action": "shell.execute",
+            "resource": "yarn install --frozen-lockfile **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-tsc",
+            "action": "shell.execute",
+            "resource": "npx tsc",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-tsc.args",
+            "action": "shell.execute",
+            "resource": "npx tsc **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-tsc",
+            "action": "shell.execute",
+            "resource": "pnpm exec tsc",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-tsc.args",
+            "action": "shell.execute",
+            "resource": "pnpm exec tsc **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-vitest",
+            "action": "shell.execute",
+            "resource": "npx vitest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-vitest.args",
+            "action": "shell.execute",
+            "resource": "npx vitest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-vitest",
+            "action": "shell.execute",
+            "resource": "pnpm exec vitest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-vitest.args",
+            "action": "shell.execute",
+            "resource": "pnpm exec vitest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-eslint",
+            "action": "shell.execute",
+            "resource": "npx eslint",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-eslint.args",
+            "action": "shell.execute",
+            "resource": "npx eslint **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-eslint",
+            "action": "shell.execute",
+            "resource": "pnpm exec eslint",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-eslint.args",
+            "action": "shell.execute",
+            "resource": "pnpm exec eslint **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-prettier",
+            "action": "shell.execute",
+            "resource": "npx prettier",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-prettier.args",
+            "action": "shell.execute",
+            "resource": "npx prettier **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-prettier",
+            "action": "shell.execute",
+            "resource": "pnpm exec prettier",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-prettier.args",
+            "action": "shell.execute",
+            "resource": "pnpm exec prettier **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-jest",
+            "action": "shell.execute",
+            "resource": "npx jest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.npx-jest.args",
+            "action": "shell.execute",
+            "resource": "npx jest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-jest",
+            "action": "shell.execute",
+            "resource": "pnpm exec jest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.node.pnpm-exec-jest.args",
+            "action": "shell.execute",
+            "resource": "pnpm exec jest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine node work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.pytest",
+            "action": "shell.execute",
+            "resource": "pytest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.pytest.args",
+            "action": "shell.execute",
+            "resource": "pytest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.python-m-pytest",
+            "action": "shell.execute",
+            "resource": "python -m pytest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.python-m-pytest.args",
+            "action": "shell.execute",
+            "resource": "python -m pytest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.python3-m-pytest",
+            "action": "shell.execute",
+            "resource": "python3 -m pytest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.python3-m-pytest.args",
+            "action": "shell.execute",
+            "resource": "python3 -m pytest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.uv-run-pytest",
+            "action": "shell.execute",
+            "resource": "uv run pytest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.uv-run-pytest.args",
+            "action": "shell.execute",
+            "resource": "uv run pytest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.ruff-check",
+            "action": "shell.execute",
+            "resource": "ruff check",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.ruff-check.args",
+            "action": "shell.execute",
+            "resource": "ruff check **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.ruff-format",
+            "action": "shell.execute",
+            "resource": "ruff format",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.ruff-format.args",
+            "action": "shell.execute",
+            "resource": "ruff format **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.mypy",
+            "action": "shell.execute",
+            "resource": "mypy",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.mypy.args",
+            "action": "shell.execute",
+            "resource": "mypy **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.pyright",
+            "action": "shell.execute",
+            "resource": "pyright",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.pyright.args",
+            "action": "shell.execute",
+            "resource": "pyright **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.uv-sync",
+            "action": "shell.execute",
+            "resource": "uv sync",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.uv-sync.args",
+            "action": "shell.execute",
+            "resource": "uv sync **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.poetry-install",
+            "action": "shell.execute",
+            "resource": "poetry install",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.poetry-install.args",
+            "action": "shell.execute",
+            "resource": "poetry install **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.poetry-run-pytest",
+            "action": "shell.execute",
+            "resource": "poetry run pytest",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.python.poetry-run-pytest.args",
+            "action": "shell.execute",
+            "resource": "poetry run pytest **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine python work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-test",
+            "action": "shell.execute",
+            "resource": "go test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-test.args",
+            "action": "shell.execute",
+            "resource": "go test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-build",
+            "action": "shell.execute",
+            "resource": "go build",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-build.args",
+            "action": "shell.execute",
+            "resource": "go build **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-vet",
+            "action": "shell.execute",
+            "resource": "go vet",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-vet.args",
+            "action": "shell.execute",
+            "resource": "go vet **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.gofmt",
+            "action": "shell.execute",
+            "resource": "gofmt",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.gofmt.args",
+            "action": "shell.execute",
+            "resource": "gofmt **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-mod-download",
+            "action": "shell.execute",
+            "resource": "go mod download",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.go.go-mod-download.args",
+            "action": "shell.execute",
+            "resource": "go mod download **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine go work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-test",
+            "action": "shell.execute",
+            "resource": "cargo test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-test.args",
+            "action": "shell.execute",
+            "resource": "cargo test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-build",
+            "action": "shell.execute",
+            "resource": "cargo build",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-build.args",
+            "action": "shell.execute",
+            "resource": "cargo build **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-check",
+            "action": "shell.execute",
+            "resource": "cargo check",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-check.args",
+            "action": "shell.execute",
+            "resource": "cargo check **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-clippy",
+            "action": "shell.execute",
+            "resource": "cargo clippy",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-clippy.args",
+            "action": "shell.execute",
+            "resource": "cargo clippy **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-fmt",
+            "action": "shell.execute",
+            "resource": "cargo fmt",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-fmt.args",
+            "action": "shell.execute",
+            "resource": "cargo fmt **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-fetch",
+            "action": "shell.execute",
+            "resource": "cargo fetch",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.rust.cargo-fetch.args",
+            "action": "shell.execute",
+            "resource": "cargo fetch **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine rust work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make",
+            "action": "shell.execute",
+            "resource": "make",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-test",
+            "action": "shell.execute",
+            "resource": "make test",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-test.args",
+            "action": "shell.execute",
+            "resource": "make test **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-build",
+            "action": "shell.execute",
+            "resource": "make build",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-build.args",
+            "action": "shell.execute",
+            "resource": "make build **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-lint",
+            "action": "shell.execute",
+            "resource": "make lint",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-lint.args",
+            "action": "shell.execute",
+            "resource": "make lint **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-check",
+            "action": "shell.execute",
+            "resource": "make check",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-check.args",
+            "action": "shell.execute",
+            "resource": "make check **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-fmt",
+            "action": "shell.execute",
+            "resource": "make fmt",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-fmt.args",
+            "action": "shell.execute",
+            "resource": "make fmt **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-all",
+            "action": "shell.execute",
+            "resource": "make all",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
+          },
+          {
+            "id": "piship.routine.make.make-all.args",
+            "action": "shell.execute",
+            "resource": "make all **",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine make work",
+            "contained": true
           }
         ],
         "taskGrants": {
@@ -1247,6 +2864,13 @@
             "shell.execute"
           ]
         },
+        "packs": [
+          {
+            "pack": "piship.routine",
+            "version": 1,
+            "exclude": []
+          }
+        ],
         "acknowledgeUnenforced": [],
         "resourceTrust": {
           "upstream": "allow",
@@ -1424,7 +3048,7 @@
   },
   "digests": {
     "resources": "sha256-812525c208520fe2c1fa44effbcc4c2f609dc064c6f67f152a030ca95a1c721a",
-    "policy": "sha256-efd1521a46002a88a604eb16c6b7105d95bebae783b192015883c673fe645be4",
+    "policy": "sha256-71f5102bed07d85ab54de2acf0cf3f74ec328b6cbf13f581dd39bace7e70a9db",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
     "sandbox": "sha256-07750fd7b86a9767b567a9380fd0af05e0f43a284093783a7e8e2baf39c7d02f",

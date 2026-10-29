@@ -178,8 +178,8 @@ function build(services: Services, auditUrl: string) {
       `    - id: local\n      type: file\n      required: false\n    - id: company\n      type: http\n      url: \${ACMECODE_AUDIT_URL}\n      required: true`,
     )
     .replace(
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
+      "    - id: acme.models\n",
+      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n    - id: acme.models\n',
     );
   for (const marker of ["type: http", "defaultMode: build", "effect: allow"])
     if (!source.includes(marker)) throw new Error(`patch failed: ${marker}`);

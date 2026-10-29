@@ -179,11 +179,11 @@ describe("headless workload distribution (local fixtures)", () => {
       '      resource: "docs:*"',
       "      effect: allow",
     ].join("\n");
-    expect(source).toContain(writeRule);
     expect(source).toContain(mcpRule);
+    // The routine pack allows workspace writes; an authored rule comes first.
     source = source.replace(
-      writeRule,
-      writeRule.replace("effect: allow", "effect: ask"),
+      "    - id: acme.models\n",
+      `${writeRule.replace("effect: allow", "effect: ask")}\n    - id: acme.models\n`,
     );
     source = source.replace(
       mcpRule,
@@ -213,7 +213,7 @@ describe("headless workload distribution (local fixtures)", () => {
       join(temp, "package.json"),
       JSON.stringify({
         private: true,
-        scripts: { test: "node -e \"console.log('ci-ok')\"" },
+        scripts: { start: "node -e \"console.log('ci-ok')\"" },
       }),
     );
 
@@ -496,7 +496,8 @@ describe("headless workload distribution (local fixtures)", () => {
         arguments: { path: "tasks/ci-result.txt", content: "CI ready" },
       },
       { name: "read", arguments: { path: "tasks/ci-result.txt" } },
-      { name: "bash", arguments: { command: "npm test" } },
+      // `npm test` runs under the routine pack; `start` asks, so the grant is used.
+      { name: "bash", arguments: { command: "npm run start" } },
       { name: "mcp__docs__search", arguments: { query: "release" } },
     ];
     services.state.toolResults = [];

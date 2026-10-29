@@ -3,8 +3,8 @@
 import {
   type PolicyDecision,
   type PolicyEffect,
-  redact,
   type ResolvedDecision,
+  redact,
 } from "@piship/contracts";
 import {
   BUILTIN_UNKNOWN_ACTION_RULE,
@@ -92,7 +92,7 @@ export function formatDecision(
   if (explanation.inactive.length > 0)
     blocks.push(
       section(
-        "Inactive rules (shell commands are not contained by an enforced sandbox)",
+        "Inactive rules (no enforced sandbox contains them)",
         ...explanation.inactive.map(
           (match) => `${match.ruleId} (${match.layer}, ${match.effect})`,
         ),
