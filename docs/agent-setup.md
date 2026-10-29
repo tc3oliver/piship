@@ -27,11 +27,11 @@ It needs Node.js 22.19.0 or newer (`node --version`), and npm 11 or later (`npm 
 
 ### Admin tooling without a clone
 
-If the person does not want a clone, use the PiShip CLI that every release archive carries. This is the only part of step 1 that replaces the clone; the rest of this page is unchanged.
+If the person does not want a clone, use the PiShip CLI that every release archive carries. This is the only part of step 1 that replaces the clone; the rest of this page is unchanged except the upgrade in step 9.
 
 1. Download the archive for this machine from a [GitHub pre-release](https://github.com/tc3oliver/piship/releases), with its `.sha256`. The name is `<distribution>-<version>-<os>-<arch>.tar.gz`, and the version is that distribution's (for example `devcode-1.0.0-linux-x64.tar.gz`), not PiShip's. Any distribution's archive carries the same tooling; `devcode` is a neutral choice. Targets are `linux-x64`, `darwin-arm64`, and `win32-x64`; on any other machine use the clone above.
 2. Check where it came from, which is the trust step: `gh attestation verify <archive> --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`, and compare its digest with the `.sha256` file.
-3. Extract it into a new, empty directory. Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`. `piship verify-release <dir>/<archive-name>` checks the archive's structure and recorded digests; it runs the archive's own code, so it does not replace step 2.
+3. Extract it into a new, empty directory; `<archive-name>` is the archive's name without `.tar.gz`, which is its top-level folder. Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`. `piship verify-release <dir>/<archive-name>` checks the archive's structure and recorded digests; it runs the archive's own code, so it does not replace step 2.
 4. Use it by path for `init`, `validate`, `lock`, `build`, `test`, `release`, `keygen`, `trust-root`, `sign-channel`, and `verify-release`.
 
 **Never run the archive's `install.sh` or `install.ps1` for this.** They install that archive's own distribution (for example `devcode`), not the admin tooling.
@@ -227,7 +227,7 @@ Tell the person, briefly:
 
 When the person already has a distribution built with an earlier PiShip and wants the new one, update PiShip first, then the distribution. Nothing here changes an installed machine until it installs the rebuilt release.
 
-1. Update the PiShip checkout to the release they want and rebuild it: `cd ~/src/piship && git fetch --tags && git checkout <tag> && npm ci && npm run build`.
+1. Update the PiShip checkout to the release they want and rebuild it: `cd ~/src/piship && git fetch --tags && git checkout <tag> && npm ci && npm run build`. Without a clone, download and verify the newer release archive as in step 1 and use its `payload/piship.mjs`.
 2. In the distribution repository, keep the current lock for comparison: `cp piship.lock previous.lock` (the name must end in `.lock`).
 3. Remove `runtime.pi` from the manifest so the build uses the Pi the new PiShip pins, or, if it must state one, set it to that pin: `1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0 and v0.12.0, and `1.1.0` for v0.13.0 and on `main`. A v0.8 distribution pins `1.0.0`, and `validate`, `lock`, and `build` refuse it with `Pi 1.0.0 is not available in this PiShip build`. Also add the new Pi version to the `pi` list of each `certified` resource's evidence (`resources.<kind>.certified[].pi`) once the person has reviewed it against that Pi. A certified resource whose evidence does not list the running Pi is not loaded (`certified for Pi 1.0.0; running Pi 1.1.0`), and nothing fails at `validate` or `build`.
 4. Run `piship migrate piship.yaml --check`. It writes nothing, prints every change, and answers `migratable` (exit 0), `requires review` (exit 1: one change alters an effective decision, or a value needs the person), or `cannot migrate` (exit 3); for a v0.8 manifest it always does, because the cache-warming change is always reported. Show the person each reported change and ask how to keep it. From v0.8 to v0.10 there are up to three ([migration guide](manifest.md#migrating-from-v1alpha5-to-v1alpha6)): prompt cache warming is `off` unless `runtime.cacheWarming.mode: streaming` is set, an MCP server whose new class `policy.resourceTrust` does not allow no longer starts, and a build is bundled and stripped unless `release.bundle` and `release.strip` are `false`.
