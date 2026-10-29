@@ -297,7 +297,8 @@ export function grantCommandWords(
     // Bash splits only on ASCII spaces/tabs here. The git-push scanner's
     // broader Unicode whitespace parsing must not grant a different program.
     if (/\s/.test(char) && char !== " " && char !== "\t") return undefined;
-    if (char !== "\t" && /[\u0000-\u001f\u007f]/.test(char)) return undefined;
+    const code = char.charCodeAt(0);
+    if (char !== "\t" && (code < 32 || code === 127)) return undefined;
   }
   if (quote !== undefined) return undefined;
   const parsed = simpleCommands(text);
