@@ -134,7 +134,7 @@ describe("update from a signed channel that carries packs", () => {
     runtimeB = await deriveRuntime(runtimeA);
     const keygen = ok("keygen", key, "--id", "pack-e2e");
     const publicKey = /Public key: (\S+)/.exec(keygen.stdout)?.[1] as string;
-    for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
+    for (const version of ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]) {
       prepare(version, publicKey);
       ok("lock", manifests[version] as string);
     }
@@ -142,6 +142,7 @@ describe("update from a signed channel that carries packs", () => {
       ["1.0.0", runtimeA],
       ["1.1.0", runtimeA],
       ["1.2.0", runtimeB],
+      ["1.3.0", runtimeA],
     ] as const)
       ok(
         "pack",
@@ -212,6 +213,50 @@ describe("update from a signed channel that carries packs", () => {
     ok("rollback", "mypi");
     expect(await launched()).toBe("1.1.0");
     expect(existsSync(join(receipt().payload, "runtime-b.txt"))).toBe(false);
+  }, 600000);
+
+  it("refuses a damaged installed runtime when the channel cannot replace it, and downloads the pinned one when it can", async () => {
+    // Active is 1.1.0 on runtime A; damage a file of that runtime in place.
+    const installed = receipt().payload;
+    const damaged = join(installed, "piship.mjs");
+    const original = readFileSync(damaged);
+    writeFileSync(damaged, Buffer.concat([original, Buffer.from("// x\n")]));
+    sign(source, 3, pack("1.3.0"), "--runtime", runtimeA);
+    rmSync(join(source, basename(runtimeA)));
+    const refused = cli("update", "mypi");
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("The installed runtime is damaged");
+    expect(refused.stderr).toContain(
+      "do not match their inventory (piship.mjs)",
+    );
+    expect(refused.stderr).toContain(basename(runtimeA));
+    expect(refused.stderr).toContain("nothing was changed");
+    expect(receipt().active).toBe("1.1.0");
+    expect(existsSync(join(root, "install", "apps", "mypi", "1.3.0"))).toBe(
+      false,
+    );
+    // With the runtime archive beside the channel, the same damage is
+    // replaced by a download, and the new release is whole.
+    cpSync(runtimeA, join(source, basename(runtimeA)));
+    ok("update", "mypi");
+    expect(await launched()).toBe("1.3.0");
+    expect(readFileSync(join(receipt().payload, "piship.mjs"))).toEqual(
+      original,
+    );
+    expect(receipt().releases[0].release.runtime.archiveSha256).toBe(
+      sha(runtimeA),
+    );
+  }, 600000);
+
+  it("refuses a pack older than the installed release as a downgrade", () => {
+    const older = join(root, "older");
+    sign(older, 10, pack("1.1.0"), "--runtime", runtimeA);
+    source = older;
+    const refused = cli("update", "mypi");
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("older than the active 1.3.0");
+    expect(refused.stderr).toContain("downgrades are refused");
+    expect(receipt().active).toBe("1.3.0");
   }, 600000);
 
   it("serves a mixed channel, and rolls a pack install back to a per-target release", async () => {

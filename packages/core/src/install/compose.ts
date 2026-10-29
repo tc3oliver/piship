@@ -82,6 +82,8 @@ export interface ComposedPack {
   readonly payload: string;
   readonly lock: DistributionLock;
   readonly release: NonNullable<InstalledRelease["release"]>;
+  /** The pack's recorded Pi compatibility status. */
+  readonly compatibility: string;
 }
 
 export interface ComposeOptions {
@@ -431,6 +433,7 @@ export async function composePack(
   return {
     payload,
     lock: composed,
+    compatibility: metadata.pi.compatibility,
     release: {
       target,
       channel: composed.updates?.channel ?? "stable",

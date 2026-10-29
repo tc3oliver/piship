@@ -284,6 +284,20 @@ function newestFor(
     .sort((a, b) => compareVersions(b.version, a.version))[0];
 }
 
+/** An update never activates a release or pack that records its Pi version as unsupported. */
+export function assertSupportedPi(
+  kind: "release" | "pack",
+  version: string,
+  pi: string,
+  compatibility: string,
+): void {
+  if (compatibility === "unsupported")
+    throw new PiShipError(
+      "UPDATE_FAILED",
+      `The ${version} ${kind} runs Pi ${pi}, which it records as unsupported`,
+    );
+}
+
 function newestPackFor(
   packs: readonly ChannelPack[],
   target: string,
@@ -332,6 +346,7 @@ async function composeOffered(input: {
     ...receipt.releases.filter((item) => item.version === receipt.active),
     ...receipt.releases.filter((item) => item.version !== receipt.active),
   ].filter((item) => item.release?.runtime?.archiveSha256 === pinned.sha256);
+  let damaged: string | undefined;
   for (const holder of holders)
     try {
       input.progress?.("Reusing the installed runtime");
@@ -346,20 +361,36 @@ async function composeOffered(input: {
       // That copy is damaged or is not this runtime: start over cleanly.
       rmSync(join(staging, "payload"), { recursive: true, force: true });
       rmSync(join(staging, "pack"), { recursive: true, force: true });
-      if (error instanceof PiShipError && error.code !== "INTEGRITY_FAILED")
+      if (!(error instanceof PiShipError) || error.code !== "INTEGRITY_FAILED")
         throw error;
+      damaged = error.message;
+      input.progress?.(
+        `The installed runtime does not match what the pack pins (${error.message}); downloading it`,
+      );
     }
   input.progress?.(
     `Downloading the ${pack.version} runtime (${(pinned.bytes / 1_048_576).toFixed(1)} MiB)`,
   );
   const runtime = join(staging, pinned.archive);
-  await downloadArchive(
-    input.source,
-    pinned,
-    runtime,
-    input.fetcher,
-    input.transport,
-  );
+  try {
+    await downloadArchive(
+      input.source,
+      pinned,
+      runtime,
+      input.fetcher,
+      input.transport,
+    );
+  } catch (error) {
+    if (damaged === undefined) throw error;
+    throw new PiShipError(
+      "UPDATE_FAILED",
+      `The installed runtime is damaged (${damaged}) and the runtime ${pinned.archive} that the ${pack.version} pack pins could not be fetched from the update source: ${(error as Error).message}`,
+      {
+        component: "update",
+        userAction: `Ask the distribution owner to publish ${pinned.archive} beside the channel, or reinstall from the pack and runtime archives; nothing was changed`,
+      },
+    );
+  }
   return composePack(input.packArchive, staging, {
     expectedSha256: pack.sha256,
     runtime,
@@ -693,6 +724,12 @@ async function performUpdate(
           transport,
           progress: options.progress,
         });
+        assertSupportedPi(
+          "pack",
+          entry.version,
+          entry.pi,
+          composed.compatibility,
+        );
         if (extracting) renameWithRetry(composed.payload, destination);
         lap("update compose pack");
         const problems = [
@@ -745,11 +782,12 @@ async function performUpdate(
             "INTEGRITY_FAILED",
             `The ${entry.version} release does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
           );
-        if (target.pi.compatibility === "unsupported")
-          throw new PiShipError(
-            "UPDATE_FAILED",
-            `The ${entry.version} release runs Pi ${target.pi.version}, which it records as unsupported`,
-          );
+        assertSupportedPi(
+          "release",
+          entry.version,
+          target.pi.version,
+          target.pi.compatibility,
+        );
         candidate = {
           lock: verified.lock,
           pi: target.pi.version,

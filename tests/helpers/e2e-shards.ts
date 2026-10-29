@@ -101,7 +101,7 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   // personal example from it into a throwaway home; no fixtures.
   // Estimated, not yet measured: a runtime release, a derived runtime, three
   // locks and packs, a per-target release, and a dozen installs and launches.
-  "pack-update": { seconds: { linux: 400, darwin: 300, win32: 700 } },
+  "pack-update": { seconds: { linux: 480, darwin: 360, win32: 800 } },
   "pack-install": { seconds: { linux: 120, darwin: 90, win32: 250 } },
   "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
   // Estimated from background-tasks (one demo build and launch); skipped on
