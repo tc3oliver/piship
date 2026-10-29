@@ -239,7 +239,7 @@ describe("denialHint", () => {
     ruleId: "r1",
     effect: "deny" as const,
   });
-  const FORBIDDEN = /--yolo|\/auto|config\/policy\.json|add a rule/;
+  const FORBIDDEN = /--yolo|\/auto|config[\\/]policy\.json|add a rule/;
 
   it("names the owner and the way to change it per layer", () => {
     expect(denialHint(at("user-preference"), "personal")).toMatch(
