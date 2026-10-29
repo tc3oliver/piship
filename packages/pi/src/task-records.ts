@@ -89,6 +89,15 @@ export class TaskRecorder {
   }
 }
 
+function otherSchema(text: string): boolean {
+  try {
+    const schema = (JSON.parse(text) as { schema?: unknown } | null)?.schema;
+    return typeof schema === "string" && schema !== SCHEMA;
+  } catch {
+    return false;
+  }
+}
+
 function parse(text: string): TaskRecord | undefined {
   try {
     const record = JSON.parse(text) as TaskRecord;
@@ -131,9 +140,11 @@ export function takeOrphanedTasks(stateDir: string): OrphanedTask[] {
         continue;
       }
       if (!name.endsWith(".json")) continue;
-      const record = parse(readFileSync(path, "utf8"));
+      const text = readFileSync(path, "utf8");
+      const record = parse(text);
       if (!record) {
-        rmSync(path, { force: true });
+        // Another schema version may be a newer PiShip's live record.
+        if (!otherSchema(text)) rmSync(path, { force: true });
         continue;
       }
       if (

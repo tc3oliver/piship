@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -61,7 +62,24 @@ describe("task records", () => {
     const dir = state();
     new TaskRecorder(dir).add("a");
     expect(takeOrphanedTasks(dir)).toEqual([]);
-    expect(files(dir)).toHaveLength(1);
+    const [name] = files(dir);
+    const saved = JSON.parse(
+      readFileSync(join(root(dir), name as string), "utf8"),
+    );
+    expect(saved.tasks).toEqual(["a"]);
+    expect(saved.pid).toBe(process.pid);
+    expect(saved).not.toHaveProperty("command");
+  });
+
+  it("leaves a record of another schema version alone", () => {
+    const dir = state();
+    plant(dir, "2147483646-1.json", {
+      ...record(2147483646),
+      schema: "piship-task-record/v99",
+    });
+    plant(dir, "2147483646-2.json", "not json");
+    expect(takeOrphanedTasks(dir)).toEqual([]);
+    expect(files(dir)).toEqual(["2147483646-1.json"]);
   });
 
   it("reports a dead owner's tasks once, and leaves a live owner's alone", () => {
@@ -73,25 +91,29 @@ describe("task records", () => {
     expect(files(dir)).toHaveLength(1);
   });
 
-  it("reports tasks whose owner ID now belongs to an unrelated live process", async () => {
-    const dir = state();
-    const other = spawn("sleep", ["30"], { stdio: "ignore" });
-    try {
-      // Started long before this process: the ID was reused.
-      plant(
-        dir,
-        `${other.pid}-1.json`,
-        record(other.pid as number, {
-          identity: "other-boot:1",
-        }),
-      );
-      expect(takeOrphanedTasks(dir)).toEqual([
-        { id: "dead", owner: other.pid },
-      ]);
-    } finally {
-      other.kill();
-    }
-  });
+  // Needs a `sleep` binary, which Windows does not have.
+  it.runIf(process.platform !== "win32")(
+    "reports tasks whose owner ID now belongs to an unrelated live process",
+    async () => {
+      const dir = state();
+      const other = spawn("sleep", ["30"], { stdio: "ignore" });
+      try {
+        // Started long before this process: the ID was reused.
+        plant(
+          dir,
+          `${other.pid}-1.json`,
+          record(other.pid as number, {
+            identity: "other-boot:1",
+          }),
+        );
+        expect(takeOrphanedTasks(dir)).toEqual([
+          { id: "dead", owner: other.pid },
+        ]);
+      } finally {
+        other.kill();
+      }
+    },
+  );
 
   it("does not overwrite an orphan when a new process gets its ID", () => {
     const dir = state();
