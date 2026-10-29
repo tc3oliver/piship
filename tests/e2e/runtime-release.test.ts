@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { PISHIP_VERSION } from "@piship/core";
+import { PI_VERSION, PISHIP_VERSION } from "@piship/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { lifecycleReleases, lifecycleScenario } from "../helpers/lifecycle.js";
 
@@ -40,6 +40,18 @@ describe("runtime release", () => {
       qualification: "qualified",
       searchTools: { fd: expect.any(String), rg: expect.any(String) },
     });
+    const folder = cli("verify-release", directory, "--json");
+    expect(folder.status, folder.stderr).toBe(0);
+    expect(JSON.parse(folder.stdout)).toEqual(JSON.parse(verified.stdout));
+    const { pi } = JSON.parse(
+      readFileSync(join(directory, "runtime.json"), "utf8"),
+    );
+    expect(pi.version).toBe(PI_VERSION);
+    const exe = process.platform === "win32" ? ".exe" : "";
+    for (const tool of ["fd", "rg"])
+      expect(
+        existsSync(join(directory, "payload", "tools", `${tool}${exe}`)),
+      ).toBe(true);
     const own = spawnSync(
       process.execPath,
       [join(directory, "payload", "piship.mjs"), "verify-release", directory],
