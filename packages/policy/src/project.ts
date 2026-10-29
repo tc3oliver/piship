@@ -781,10 +781,40 @@ function hooksPathTargets(
         : resolve(root, value);
     const directory = real(named);
     if (isWithin(directory, project)) continue;
-    if (workingTree || !isWithin(project, directory))
+    if (workingTree || !inWorkingTree(directory, project, root, gitDir))
       targets.push({ named, directory });
   }
   return targets;
+}
+
+/**
+ * Whether a hooks directory lies in the working tree: inside the project, but
+ * not inside `.git`, the git directory a `.git` file points to, or the common
+ * directory (`.git/hooks-local` is git's own and stays protected).
+ */
+function inWorkingTree(
+  directory: string,
+  project: string,
+  root: string,
+  gitDir: string | undefined,
+): boolean {
+  if (!isWithin(project, directory)) return false;
+  const gitDirs = [join(root, ".git")];
+  if (gitDir) gitDirs.push(gitDir, commonDirectory(gitDir));
+  return !gitDirs.some((dir) => isWithin(real(dir), directory));
+}
+
+/**
+ * The `core.hooksPath` directories in the working tree that `scope: "sandbox"`
+ * leaves writable (husky's `.husky/_`). Git runs hooks from them outside the
+ * sandbox, so a caller reports git control as not verified while any exists.
+ */
+export function projectWorkingTreeHooksPaths(root: string): string[] {
+  const gitDir = gitDirectory(root);
+  const project = real(root);
+  return hooksPathTargets(root, gitDir)
+    .map(({ directory }) => directory)
+    .filter((directory) => inWorkingTree(directory, project, root, gitDir));
 }
 
 function hooksPathDirectories(
@@ -810,10 +840,10 @@ function hooksPathDirectories(
  * of the shared directory a worktree names. Also the directory
  * `core.hooksPath` names in those configs, which may lie in the working tree
  * (husky's `.husky/_`); with `scope: "sandbox"` a directory in the working
- * tree is left out, since `git worktree add`, `git submodule update`, and a
- * `prepare` script that regenerates it must be able to write it, and the
- * hook scripts it calls are ordinary project files the sandbox can write
- * anyway. PiShip's own file tools keep refusing it.
+ * tree (not one inside `.git`) is left out, since a `prepare` script that
+ * regenerates it must be able to write it, and the hook scripts it calls are
+ * ordinary project files the sandbox can write anyway. PiShip's own file
+ * tools keep refusing it; `projectWorkingTreeHooksPaths` lists what is left out.
  * Paths are normalized (symlink-resolved, POSIX separators).
  */
 export function projectGitControlDirectories(

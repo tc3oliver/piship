@@ -116,8 +116,10 @@ export const STDERR_TRUNCATION_MARKER = "[stderr truncated: ";
  *
  * `CARGO_HOME` is redirected: Cargo writes its registry index and crates under
  * it, so the read-only home made every `cargo build` fail with EACCES. The
- * command then does not pick up `~/.cargo/config.toml`; the toolchain is
- * found through `RUSTUP_HOME` and `PATH`, not `CARGO_HOME`.
+ * command then does not pick up `~/.cargo/config.toml` (source replacement,
+ * mirrors); the toolchain is found through `RUSTUP_HOME` and `PATH`, not
+ * `CARGO_HOME`. A profile that makes `~/.cargo` writable keeps it, see
+ * `sessionEnvironment`.
  */
 export const CACHE_VARIABLES: Readonly<Record<string, string>> = {
   XDG_CACHE_HOME: "",

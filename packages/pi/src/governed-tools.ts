@@ -5,21 +5,17 @@
 // PiShip runs so the full output is owned by the session (governedBashTool).
 // Custom tools passed to the SDK take precedence over any extension tool of
 // the same name.
-import { randomUUID } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants } from "node:fs";
 import {
   access,
   type FileHandle,
   mkdir,
   open,
   readlink,
-  realpath,
-  rename,
   stat,
-  unlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import {
   type BashOperations,
   type BashToolDetails,
@@ -481,43 +477,6 @@ async function openDecided(
     return handle;
   } catch (error) {
     await handle.close();
-    throw error;
-  }
-}
-
-/**
- * Write `content` to a new file and rename it over `path`, so a hard-linked
- * file's other names keep their bytes. The path is resolved again and gated,
- * and must still be the file that was opened, before anything is renamed.
- */
-async function replaceName(
-  gov: GovernanceSession,
-  path: string,
-  content: string,
-  held: Stats,
-  tool: string,
-): Promise<void> {
-  const target = await realpath(resolve(path));
-  await gatePath(gov, "filesystem.write", target, tool);
-  const current = await stat(target);
-  if (current.ino !== held.ino || current.dev !== held.dev)
-    throw blocked(`${path} changed while it was being opened.`);
-  const temporary = join(
-    dirname(target),
-    `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`,
-  );
-  const handle = await open(
-    temporary,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-    held.mode & 0o7777,
-  );
-  try {
-    await handle.writeFile(content, "utf8");
-    await handle.close();
-    await rename(temporary, target);
-  } catch (error) {
-    await handle.close().catch(() => {});
-    await unlink(temporary).catch(() => {});
     throw error;
   }
 }
@@ -1095,13 +1054,11 @@ export function governedTools(
     );
     try {
       // Writing in place would change the other name of a hard-linked file,
-      // which may lie outside the workspace (pnpm and uv link their stores).
-      // Replace this name with a new file instead, as an editor does.
-      const held = await handle.stat();
-      if (held.nlink > 1) {
-        await replaceName(gov, path, content, held, tool);
-        return;
-      }
+      // which may lie outside the workspace.
+      if ((await handle.stat()).nlink > 1)
+        throw blocked(
+          `${path} has more than one hard link; tools may not write it.`,
+        );
       await handle.truncate(0);
       await handle.writeFile(content, "utf8");
     } finally {

@@ -577,40 +577,22 @@ describe("governed built-in tools", () => {
     },
   );
 
-  it("replaces a file that has another hard link instead of writing through it, and writes ordinary and new ones", async () => {
+  it("refuses to write a file that has another hard link, but not an ordinary or new one", async () => {
     const { session, workspace, home } = await open();
     const write = tool(governedTools(session, workspace), "write");
     const approve = context(true);
     const outside = join(home, "rc");
-    writeFileSync(outside, "keep\n", { mode: 0o640 });
+    writeFileSync(outside, "keep\n");
     linkSync(outside, join(workspace, "rc"));
-    await run(write, { path: "rc", content: "new" }, approve);
+    await expect(
+      run(write, { path: "rc", content: "attacker" }, approve),
+    ).rejects.toThrow(/hard link/);
     expect(readFileSync(outside, "utf8")).toBe("keep\n");
-    expect(readFileSync(join(workspace, "rc"), "utf8")).toBe("new");
-    expect(statSync(join(workspace, "rc")).nlink).toBe(1);
-    if (process.platform !== "win32")
-      expect(statSync(join(workspace, "rc")).mode & 0o777).toBe(0o640);
-    expect(readdirSync(workspace).filter((n) => n.endsWith(".tmp"))).toEqual(
-      [],
-    );
     writeFileSync(join(workspace, "plain.txt"), "old");
     await run(write, { path: "plain.txt", content: "new" }, approve);
     await run(write, { path: "fresh.txt", content: "new" }, approve);
     expect(readFileSync(join(workspace, "plain.txt"), "utf8")).toBe("new");
     expect(readFileSync(join(workspace, "fresh.txt"), "utf8")).toBe("new");
-  });
-
-  it("still refuses a hard-linked file the policy denies", async () => {
-    const { session, workspace, home } = await open();
-    const write = tool(governedTools(session, workspace), "write");
-    const outside = join(home, "rc2");
-    writeFileSync(outside, "keep\n");
-    mkdirSync(join(workspace, ".git"));
-    linkSync(outside, join(workspace, ".git", "config"));
-    await expect(
-      run(write, { path: ".git/config", content: "x" }, context(true)),
-    ).rejects.toThrow();
-    expect(readFileSync(outside, "utf8")).toBe("keep\n");
   });
 
   it("compares protected git paths without case where the filesystem ignores it", () => {

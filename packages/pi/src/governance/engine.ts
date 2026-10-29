@@ -20,6 +20,7 @@ import {
   projectGitControlFiles,
   projectGitControlLinks,
   projectGitControlUnverified,
+  projectWorkingTreeHooksPaths,
   readProjectRestrictions,
   toPosixPath,
 } from "@piship/policy";
@@ -148,7 +149,19 @@ export function gitProtection(root: string): {
       return false;
     }
   };
-  const unverified = projectGitControlUnverified(root);
+  // Git runs hooks from a working-tree directory outside the sandbox, and the
+  // sandbox may write it (husky's prepare must), so the report cannot say verified.
+  const inTree = projectWorkingTreeHooksPaths(root);
+  const unverified = [
+    projectGitControlUnverified(root),
+    ...(inTree.length
+      ? [
+          "core.hooksPath names a directory in the working tree that sandboxed commands may write, and git runs the hooks in it outside the sandbox",
+        ]
+      : []),
+  ]
+    .filter(Boolean)
+    .join("; ");
   const links = projectGitControlLinks(root, { scope: "sandbox" });
   return {
     files: projectGitControlFiles(root, { scope: "sandbox" }).filter(
@@ -156,7 +169,7 @@ export function gitProtection(root: string): {
     ),
     directories: projectGitControlDirectories(root, { scope: "sandbox" }),
     ...(links.length ? { links } : {}),
-    ...(unverified === undefined ? {} : { unverified }),
+    ...(unverified ? { unverified } : {}),
   };
 }
 

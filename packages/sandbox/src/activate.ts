@@ -240,7 +240,17 @@ function sessionEnvironment(
   env.TMPDIR = profile.tmpDir;
   // The package tools' caches live under the home directory, which a
   // contained command cannot write: keep them in the writable session temp.
-  return withCacheEnvironment(env, profile.tmpDir);
+  const cached = withCacheEnvironment(env, profile.tmpDir);
+  // A writable ~/.cargo is meant to be used: mirrors in its config.toml,
+  // registry credentials, installed binaries.
+  if (
+    env.CARGO_HOME === undefined &&
+    profile.writeAllow.some((path) =>
+      isWithin(join(profile.homeDir, ".cargo"), path),
+    )
+  )
+    delete cached.CARGO_HOME;
+  return cached;
 }
 
 function nodeDirectory(): string | undefined {
