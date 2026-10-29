@@ -779,6 +779,23 @@ export class GovernanceSession {
       // approved gets its own key. The stored auto mode, the usual one,
       // leaves none.
       ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
+      // Why this ask was not skipped: a rule that keeps its prompt, a grant
+      // limited to the exact target, or the first use of a rule grant.
+      // A reason only, never a target.
+      ...(decision.effect === "ask" &&
+      resolved.approval !== "auto" &&
+      resolved.approval !== "session" &&
+      resolved.approval !== "grant"
+        ? {
+            promptReason: !asks.every((ask) =>
+              this.#offersSession(ask.action, ask.resources),
+            )
+              ? "rule-keeps-prompt"
+              : grants.some((grant) => grant.rule)
+                ? "rule-grant-first-use"
+                : "exact-target-only",
+          }
+        : {}),
     };
     // Each decision of a combined prompt keeps its own event and rule; the
     // answer is recorded on the ones that asked. A resource that was allowed

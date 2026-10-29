@@ -855,6 +855,27 @@ describe("allow for this session", () => {
     expect(shown).toHaveLength(2);
   });
 
+  it("audits why a prompt was retained or skipped, never the target", async () => {
+    const { session, workspace, events } = await open({ mode: "managed" });
+    const { channel } = sessionPrompt();
+    const write = (name: string) =>
+      session.decide("filesystem.write", join(workspace, name), channel, {
+        allowed: "tool.allowed",
+        denied: "tool.denied",
+      });
+    await write("a.txt");
+    await write("b.txt");
+    await write(join("kept", "a.txt"));
+    await session.close();
+    const detail = events()
+      .filter((event) => event.event === "tool.allowed")
+      .map((event) => event.detail);
+    expect(detail[0]).toMatchObject({ promptReason: "rule-grant-first-use" });
+    expect(detail[1]).toMatchObject({ approval: "session" });
+    expect(detail[1]).not.toHaveProperty("promptReason");
+    expect(detail[2]).toMatchObject({ promptReason: "rule-keeps-prompt" });
+  });
+
   it("does not reuse a managed workspace session grant across path traversal", async () => {
     const { session, workspace } = await open({ mode: "managed" });
     const { shown, channel } = sessionPrompt();
