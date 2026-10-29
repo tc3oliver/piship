@@ -20,7 +20,7 @@ import { hash } from "../digest.js";
 import { currentTarget } from "../compatibility.js";
 import { verifyPayloadContents, type DistributionLock } from "../index.js";
 import { launcherSource } from "../launcher-source.js";
-import { verifyWrittenPayload } from "../payload.js";
+import { inventory as inventoryOf, verifyWrittenPayload } from "../payload.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
 import type { PackMetadata } from "../release/index.js";
 import { checkArchiveDigest } from "../release/verify.js";
@@ -82,6 +82,8 @@ export interface ComposedPack {
   readonly payload: string;
   readonly lock: DistributionLock;
   readonly release: NonNullable<InstalledRelease["release"]>;
+  /** The pack's recorded Pi compatibility status. */
+  readonly compatibility: string;
 }
 
 export interface ComposeOptions {
@@ -89,11 +91,89 @@ export interface ComposeOptions {
   readonly expectedSha256?: string;
   /** The runtime archive; by default the one named in `pack.json`, beside the pack. */
   readonly runtime?: string;
+  /**
+   * An installed payload built from the same runtime archive (its receipt
+   * records the archive digest): the runtime files are taken from it, checked
+   * against the runtime inventory the pack pins, instead of from the archive.
+   * A payload that is not that runtime throws; the caller uses the archive.
+   */
+  readonly runtimeFrom?: {
+    readonly payload: string;
+    readonly archiveSha256: string;
+  };
   readonly store?: ContentStore;
 }
 
+/**
+ * The installed runtime does not match the one a pack pins. Only this error
+ * makes an update fetch the runtime instead of reusing the installed one; any
+ * other failure of composing a pack is the pack's.
+ */
+export class InstalledRuntimeError extends PiShipError {
+  constructor(message: string) {
+    super("INTEGRITY_FAILED", `Pack install: ${message}`, {
+      component: "install",
+      userAction:
+        "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
+    });
+  }
+}
+
+/** Files a pack adds to the runtime payload; the rest of an installed payload is the runtime's. */
+function packFile(file: string): boolean {
+  return (
+    file === "piship.yaml" ||
+    file === "piship.lock" ||
+    file.startsWith("resources/") ||
+    file.startsWith(`${PI_PACKAGE_VENDOR_DIRECTORY}/`) ||
+    file.startsWith("bin/")
+  );
+}
+
+/**
+ * Copy the runtime files out of an installed, composed payload into `payload`
+ * and check them, byte by byte, against the inventory the pack pins for that
+ * runtime: the installed inventory without what the pack added is the
+ * runtime's own, and its serialization is what was pinned.
+ */
+export function copyInstalledRuntime(
+  installed: string,
+  payload: string,
+  pinnedInventorySha256: string,
+): Record<string, string> {
+  const composed = JSON.parse(
+    readFileSync(join(installed, "metadata", "inventory.json"), "utf8"),
+  ) as Record<string, string>;
+  const runtime = Object.fromEntries(
+    Object.entries(composed).filter(([file]) => !packFile(file)),
+  );
+  const text = `${JSON.stringify(runtime, null, 2)}\n`;
+  if (hash(text) !== pinnedInventorySha256)
+    throw new InstalledRuntimeError(
+      "the installed runtime is not the one this pack pins",
+    );
+  for (const file of Object.keys(runtime)) {
+    const target = join(payload, ...file.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(installed, ...file.split("/")), target);
+  }
+  const copied = inventoryOf(payload);
+  const wrong = Object.keys(runtime).filter(
+    (file) => copied[file] !== runtime[file],
+  );
+  if (
+    wrong.length ||
+    Object.keys(copied).length !== Object.keys(runtime).length
+  )
+    throw new InstalledRuntimeError(
+      `the installed runtime files do not match their inventory (${wrong.slice(0, 3).join(", ") || "extra files"})`,
+    );
+  writeFileSync(join(payload, "metadata", "inventory.json"), text);
+  return runtime;
+}
+
 /** The pack read and verified: `checksums.txt` covers every file, and `pack.json` agrees with the lock. */
-async function openPack(
+export async function openPack(
   source: string,
   staging: string,
   expectedSha256: string | undefined,
@@ -219,55 +299,72 @@ export async function composePack(
           "Ask the publisher for a pack that includes this platform, or a per-target release",
       },
     );
-  const archive = runtimeArchive(path, pinned.name, options.runtime);
-  const root = rootName(archive);
-  const prefix = `${root}/payload/`;
   const payload = join(staging, "payload");
-  const extracted = await extractArchive(archive, payload, {
-    expectedRoot: root,
-    digests: true,
-    ...(options.store ? { place: options.store.placer() } : {}),
-    capture: (key) => key === `${root}/runtime.json`,
-    mapEntry: (name) =>
-      name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
-  }).catch((error: Error) => {
-    throw fail(`${basename(archive)}: ${error.message}`);
-  });
-  const archiveSha256 = extracted.sha256 as string;
-  if (archiveSha256 !== pinned.sha256)
-    throw fail(
-      `${basename(archive)} is ${archiveSha256}, but the pack pins ${pinned.sha256}`,
-      "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
-    );
-  checkArchiveDigest(archive, archiveSha256, undefined);
-  const runtimeJson = extracted.captured?.get(`${root}/runtime.json`);
-  if (!runtimeJson) throw fail(`${basename(archive)} has no runtime.json`);
-  const runtime = JSON.parse(runtimeJson.toString("utf8")) as {
-    target: string;
-    pishipVersion: string;
-    npmLockSha256: string;
-    pi: { version: string };
-    inventory: { sha256: string };
-  };
-  const files = extracted.files as ReadonlyMap<string, string>;
-  const inventoryFile = join(payload, "metadata", "inventory.json");
+  let archiveSha256: string;
+  let runtimePishipVersion: string;
+  let inventory: Record<string, string>;
   if (
-    runtime.target !== target ||
-    runtime.pishipVersion !== metadata.runtime.pishipVersion ||
-    runtime.npmLockSha256 !== metadata.runtime.npmLockSha256 ||
-    runtime.pi.version !== metadata.runtime.pi ||
-    runtime.inventory.sha256 !== pinned.inventorySha256 ||
-    files.get("metadata/inventory.json") !== pinned.inventorySha256
-  )
-    throw fail(
-      `${basename(archive)} does not match the runtime this pack pins`,
-      "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
+    options.runtimeFrom &&
+    options.runtimeFrom.archiveSha256 === pinned.sha256
+  ) {
+    mkdirSync(payload, { recursive: true });
+    inventory = copyInstalledRuntime(
+      options.runtimeFrom.payload,
+      payload,
+      pinned.inventorySha256,
     );
-  const inventory = JSON.parse(readFileSync(inventoryFile, "utf8")) as Record<
-    string,
-    string
-  >;
-  verifyWrittenPayload(files, inventory, payload);
+    archiveSha256 = pinned.sha256;
+    runtimePishipVersion = metadata.runtime.pishipVersion;
+  } else {
+    const archive = runtimeArchive(path, pinned.name, options.runtime);
+    const root = rootName(archive);
+    const prefix = `${root}/payload/`;
+    const extracted = await extractArchive(archive, payload, {
+      expectedRoot: root,
+      digests: true,
+      ...(options.store ? { place: options.store.placer() } : {}),
+      capture: (key) => key === `${root}/runtime.json`,
+      mapEntry: (name) =>
+        name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
+    }).catch((error: Error) => {
+      throw fail(`${basename(archive)}: ${error.message}`);
+    });
+    archiveSha256 = extracted.sha256 as string;
+    if (archiveSha256 !== pinned.sha256)
+      throw fail(
+        `${basename(archive)} is ${archiveSha256}, but the pack pins ${pinned.sha256}`,
+        "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
+      );
+    checkArchiveDigest(archive, archiveSha256, undefined);
+    const runtimeJson = extracted.captured?.get(`${root}/runtime.json`);
+    if (!runtimeJson) throw fail(`${basename(archive)} has no runtime.json`);
+    const runtime = JSON.parse(runtimeJson.toString("utf8")) as {
+      target: string;
+      pishipVersion: string;
+      npmLockSha256: string;
+      pi: { version: string };
+      inventory: { sha256: string };
+    };
+    const files = extracted.files as ReadonlyMap<string, string>;
+    if (
+      runtime.target !== target ||
+      runtime.pishipVersion !== metadata.runtime.pishipVersion ||
+      runtime.npmLockSha256 !== metadata.runtime.npmLockSha256 ||
+      runtime.pi.version !== metadata.runtime.pi ||
+      runtime.inventory.sha256 !== pinned.inventorySha256 ||
+      files.get("metadata/inventory.json") !== pinned.inventorySha256
+    )
+      throw fail(
+        `${basename(archive)} does not match the runtime this pack pins`,
+        "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
+      );
+    inventory = JSON.parse(
+      readFileSync(join(payload, "metadata", "inventory.json"), "utf8"),
+    ) as Record<string, string>;
+    verifyWrittenPayload(files, inventory, payload);
+    runtimePishipVersion = runtime.pishipVersion;
+  }
+  const inventoryFile = join(payload, "metadata", "inventory.json");
 
   // The pack's files over the runtime, as `piship build` places them.
   const added = new Map<string, Buffer | string>();
@@ -353,6 +450,7 @@ export async function composePack(
   return {
     payload,
     lock: composed,
+    compatibility: metadata.pi.compatibility,
     release: {
       target,
       channel: composed.updates?.channel ?? "stable",
@@ -362,7 +460,7 @@ export async function composePack(
       pack: { sha256: pack.sha256, version: composed.app.version },
       runtime: {
         archiveSha256,
-        pishipVersion: runtime.pishipVersion,
+        pishipVersion: runtimePishipVersion,
       },
     },
   };

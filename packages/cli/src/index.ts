@@ -11,6 +11,7 @@ import {
   buildDistribution,
   buildPack,
   buildRelease,
+  isPack,
   buildRuntimeRelease,
   releaseKind,
   checkEnforceability,
@@ -234,7 +235,7 @@ const lifecycleCommands: Record<
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--key <private-key-file> --key-id <id>]... [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
+      "sign-channel <channel-dir> <archive|pack>... --channel <name> --key <private-key-file> --key-id <id> [--key <private-key-file> --key-id <id>]... [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>] [--runtime <archive|dir>]...",
     positional: [2, 64],
     values: [
       "--channel",
@@ -244,7 +245,7 @@ const lifecycleCommands: Record<
       "--expires-days",
     ],
     flags: ["--passphrase-stdin"],
-    repeated: ["--key", "--key-id"],
+    repeated: ["--key", "--key-id", "--runtime"],
   },
   "trust-root": {
     usage:
@@ -1333,10 +1334,15 @@ async function runLifecycle(
       passphraseInput(options, flags),
       output,
     );
+    // A Company Pack is listed under `packs`, a release archive under `releases`.
+    const artifacts = positional.slice(1);
+    const kinds = await Promise.all(artifacts.map((item) => isPack(item)));
     const signed = await signChannel({
       directory: first,
       channel,
-      archives: positional.slice(1),
+      archives: artifacts.filter((_, index) => !kinds[index]),
+      packs: artifacts.filter((_, index) => kinds[index]),
+      runtimes: repeated["--runtime"] ?? [],
       signer: signer as KeyedSigner,
       additionalSigners,
       ...(previous
@@ -1353,7 +1359,14 @@ async function runLifecycle(
       ...(expiresDays ? { expiresDays } : {}),
     });
     output.stdout(
-      `Signed ${signed.path} (sequence ${signed.metadata.sequence}, expires ${signed.metadata.expires}) with ${keyIds.join(", ")}:\n${signed.metadata.releases.map((item) => `  ${item.version} ${item.target} ${item.archive}`).join("\n")}`,
+      `Signed ${signed.path} (sequence ${signed.metadata.sequence}, expires ${signed.metadata.expires}) with ${keyIds.join(", ")}:\n${[
+        ...signed.metadata.releases.map(
+          (item) => `  ${item.version} ${item.target} ${item.archive}`,
+        ),
+        ...(signed.metadata.packs ?? []).map(
+          (item) => `  ${item.version} pack ${item.archive}`,
+        ),
+      ].join("\n")}`,
     );
   } else if (command === "trust-root") {
     const expiry = {
