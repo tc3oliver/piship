@@ -91,6 +91,47 @@ import {
 const RELEASE_DIRECTORY = ".release";
 const AUDIT_DIRECTORY = ".audit";
 
+/**
+ * The directory `npm audit` scans: the payload's npm lock beside the
+ * build-input manifests it was resolved from.
+ */
+export function prepareAuditDirectory(
+  payload: string,
+  lockDirectory: string,
+): void {
+  mkdirSync(lockDirectory);
+  copyFileSync(
+    join(payload, "package-lock.json"),
+    join(lockDirectory, "package-lock.json"),
+  );
+  const buildInputDirectory = join(
+    payload,
+    "node_modules",
+    "@piship",
+    "core",
+    "dist",
+    "build-input",
+  );
+  if (existsSync(join(buildInputDirectory, "package.json"))) {
+    copyFileSync(
+      join(buildInputDirectory, "package.json"),
+      join(lockDirectory, "package.json"),
+    );
+    // npm audit reaches the runtime dependencies only through the
+    // workspace packages that declare them. Without their manifests every
+    // locked package is unreachable, `--omit=dev` drops it, and the scan
+    // passes without checking anything.
+    for (const name of workspacePackages) {
+      const folder = join(lockDirectory, "packages", name);
+      mkdirSync(folder, { recursive: true });
+      copyFileSync(
+        join(buildInputDirectory, "packages", name, "package.json"),
+        join(folder, "package.json"),
+      );
+    }
+  }
+}
+
 function createdTime(): string {
   const epoch = Number(process.env.SOURCE_DATE_EPOCH);
   const seconds =
@@ -328,37 +369,7 @@ export async function buildRelease(
     renameWithRetry(built, payload);
     const root = dirname(payload);
     const lockDirectory = join(stage, AUDIT_DIRECTORY);
-    mkdirSync(lockDirectory);
-    copyFileSync(
-      join(payload, "package-lock.json"),
-      join(lockDirectory, "package-lock.json"),
-    );
-    const buildInputDirectory = join(
-      payload,
-      "node_modules",
-      "@piship",
-      "core",
-      "dist",
-      "build-input",
-    );
-    if (existsSync(join(buildInputDirectory, "package.json"))) {
-      copyFileSync(
-        join(buildInputDirectory, "package.json"),
-        join(lockDirectory, "package.json"),
-      );
-      // npm audit reaches the runtime dependencies only through the
-      // workspace packages that declare them. Without their manifests every
-      // locked package is unreachable, `--omit=dev` drops it, and the scan
-      // passes without checking anything.
-      for (const name of workspacePackages) {
-        const folder = join(lockDirectory, "packages", name);
-        mkdirSync(folder, { recursive: true });
-        copyFileSync(
-          join(buildInputDirectory, "packages", name, "package.json"),
-          join(folder, "package.json"),
-        );
-      }
-    }
+    prepareAuditDirectory(payload, lockDirectory);
     const release = lock.release as ReleaseManifest;
     const { bundle, strip } = releaseOptions(lock.manifest.schema, release);
     const now = options.now ?? (() => new Date());

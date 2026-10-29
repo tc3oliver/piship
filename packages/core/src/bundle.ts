@@ -356,7 +356,10 @@ rmSync(mainSource); rmSync(bootSource);`;
       }
     }
     const commandDirectory = join(payload, "bin");
-    for (const command of readdirSync(commandDirectory)) {
+    // A runtime release has no branded command.
+    for (const command of existsSync(commandDirectory)
+      ? readdirSync(commandDirectory)
+      : []) {
       const path = join(commandDirectory, command);
       if (command.endsWith(".cmd")) continue;
       const source = readFileSync(path, "utf8");

@@ -148,7 +148,9 @@ export interface HostFacts {
 
 /** The runtime cache a build of `lock` on this machine reads and fills. */
 export function runtimeCacheFor(
-  lock: DistributionLock,
+  // A runtime release has no manifest: it is stripped, as the v1 defaults are.
+  lock: Pick<DistributionLock, "runtime"> &
+    Partial<Pick<DistributionLock, "manifest" | "release">>,
   env: NodeJS.ProcessEnv = process.env,
   host: HostFacts = {},
 ): RuntimeCache {
@@ -173,7 +175,9 @@ export function runtimeCacheFor(
     framework: hash(
       canonicalJson({ schema: SCHEMA, input: buildInputDigest(buildInput) }),
     ),
-    strip: releaseOptions(lock.manifest.schema, lock.release).strip,
+    strip: lock.manifest
+      ? releaseOptions(lock.manifest.schema, lock.release).strip
+      : true,
   };
 }
 

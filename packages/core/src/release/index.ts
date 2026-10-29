@@ -93,6 +93,19 @@ export {
   readSourceFile,
 } from "./source.js";
 export {
+  buildRuntimeRelease,
+  isRuntimeRelease,
+  RUNTIME_FILES,
+  RUNTIME_PREFIX,
+  RUNTIME_SCHEMA,
+  runtimeReleaseName,
+  verifyRuntimeRelease,
+  type BuiltRuntimeRelease,
+  type RuntimeMetadata,
+  type RuntimeReleaseOptions,
+  type VerifiedRuntimeRelease,
+} from "./runtime.js";
+export {
   payloadStateSchemas,
   verifyRelease,
   type VerifiedRelease,

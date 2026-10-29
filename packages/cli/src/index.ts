@@ -10,6 +10,8 @@ import {
   binHome,
   buildDistribution,
   buildRelease,
+  buildRuntimeRelease,
+  isRuntimeRelease,
   checkEnforceability,
   checkDataContract,
   checkSearchTools,
@@ -68,6 +70,7 @@ import {
   uninstallDistribution,
   verifyPayload,
   verifyRelease,
+  verifyRuntimeRelease,
   withTestState,
   writePrivateKey,
   type AbandonedStaging,
@@ -106,7 +109,9 @@ const summaries = {
   migrate: "Migrate a manifest to the current schema",
   config: "Explain the effective configuration and its sources",
   release: "Build a local release archive",
-  "verify-release": "Verify a release archive or directory",
+  "runtime-release":
+    "Build the distribution-independent PiShip runtime release",
+  "verify-release": "Verify a release or runtime release archive or directory",
   diff: "Compare two locks, payloads, releases, or installs",
   update: "Update an installed distribution",
   rollback: "Return an installed distribution to its previous release",
@@ -157,6 +162,12 @@ const lifecycleCommands: Record<
       "release <manifest> [--out <dir>] [--channel <name>] [--rebuild] [--reclaim-staging]",
     positional: [1, 1],
     values: ["--out", "--channel"],
+    flags: ["--rebuild", "--reclaim-staging"],
+  },
+  "runtime-release": {
+    usage: "runtime-release [--out <dir>] [--rebuild] [--reclaim-staging]",
+    positional: [0, 0],
+    values: ["--out"],
     flags: ["--rebuild", "--reclaim-staging"],
   },
   "verify-release": {
@@ -1089,6 +1100,31 @@ async function runLifecycle(
     // Where the runtime came from is no part of the release, so it goes to
     // stderr and to the build-info file beside the archive.
     output.stderr(runtimeCacheLine(built.runtimeCache));
+  } else if (command === "runtime-release") {
+    const built = await buildRuntimeRelease({
+      ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
+      cache: !flags.has("--rebuild"),
+      reclaimStaging: flags.has("--reclaim-staging"),
+      abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+    });
+    output.stdout(
+      `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThis local build is unsigned: publish it with verified provenance before calling it a release.`,
+    );
+    output.stderr(runtimeCacheLine(built.runtimeCache));
+  } else if (command === "verify-release" && isRuntimeRelease(first)) {
+    const verified = await verifyRuntimeRelease(first, {
+      ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),
+    });
+    try {
+      const { metadata } = verified;
+      output.stdout(
+        flags.has("--json")
+          ? JSON.stringify(metadata, null, 2)
+          : `Verified PiShip runtime ${metadata.pishipVersion} for ${metadata.target}\n  Pi ${metadata.pi.version} (${metadata.pi.compatibility}), npm lock ${metadata.npmLockSha256}\n  payload ${metadata.inventory.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification}\nPublisher identity is not checked here: verify the build provenance.`,
+      );
+    } finally {
+      verified.cleanup();
+    }
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
       ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),
