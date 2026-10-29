@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PISHIP_VERSION } from "@piship/core";
+import { PISHIP_VERSION, verifySignature } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsArgv } from "../helpers/distribution.js";
@@ -590,10 +590,11 @@ describe("CLI", () => {
       const release = admin("release", otherManifest, "--out", releaseOut);
       expect(release.status, release.stderr).toBe(0);
       const releases = join(releaseOut, "releases");
-      const archive = join(
-        releases,
-        readdirSync(releases).find((name) => name.endsWith(".tar.gz")) ?? "",
+      const archiveName = readdirSync(releases).find((name) =>
+        name.endsWith(".tar.gz"),
       );
+      expect(archiveName).toMatch(/^other-agent-.*\.tar\.gz$/);
+      const archive = join(releases, archiveName as string);
       expect(existsSync(archive)).toBe(true);
       const verifiedRelease = admin("verify-release", archive);
       expect(verifiedRelease.status, verifiedRelease.stderr).toBe(0);
@@ -613,7 +614,14 @@ describe("CLI", () => {
         "PISHIP_E2E_ADMIN_PASSPHRASE",
       );
       expect(signed.status, signed.stderr).toBe(0);
-      expect(readdirSync(channelDir).length).toBeGreaterThan(0);
+      // The metadata verifies against the public key keygen printed.
+      expect(
+        verifySignature(
+          readFileSync(join(channelDir, "stable.json")),
+          JSON.parse(readFileSync(join(channelDir, "stable.json.sig"), "utf8")),
+          [{ id: "channel-a", publicKey }],
+        ),
+      ).toBe("channel-a");
       for (const result of [keygen, trustRoot, release, signed])
         expect(`${result.stdout}${result.stderr}`).not.toContain(
           "e2e-admin-pw",

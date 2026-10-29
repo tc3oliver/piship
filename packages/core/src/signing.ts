@@ -9,7 +9,7 @@ import {
   verify,
 } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { PiShipError, systemError } from "@piship/contracts";
 
 /** A release key a distribution trusts: base64 of the 44-byte Ed25519 SPKI DER. */
@@ -190,10 +190,13 @@ function git(args: readonly string[], cwd: string) {
  */
 export function privateKeyLocation(path: string): KeyLocation {
   const target = resolve(path);
-  const parent = existsSync(dirname(target))
-    ? realpathSync(dirname(target))
-    : dirname(target);
-  const file = join(parent, basename(target));
+  // keygen creates missing folders, so classify from the nearest existing
+  // ancestor, resolved through symlinks, and append the folders to be made.
+  let ancestor = dirname(target);
+  while (!existsSync(ancestor) && dirname(ancestor) !== ancestor)
+    ancestor = dirname(ancestor);
+  const parent = realpathSync(ancestor);
+  const file = join(parent, relative(ancestor, target));
   const inside = git(["rev-parse", "--is-inside-work-tree"], parent);
   if (!inside.error && inside.status === 0) {
     const answer = inside.stdout.trim();

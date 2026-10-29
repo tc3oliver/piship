@@ -7,6 +7,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -148,6 +149,25 @@ describe("private key location", () => {
     const file = join(outside, "a", "b", "k.pem");
     expect(writePrivateKey(file, pem)).toBe("outside");
     expect(existsSync(file)).toBe(true);
+  });
+
+  it("classifies a missing key folder from its nearest existing ancestor", () => {
+    const root = repo();
+    expect(writePrivateKey(join(root, "secret", "new", "k.pem"), pem)).toBe(
+      "ignored",
+    );
+    expect(() =>
+      writePrivateKey(join(root, "src", "new", "k.pem"), pem),
+    ).toThrow(/inside a git work tree and not git-ignored/);
+    expect(existsSync(join(root, "src", "new"))).toBe(false);
+    if (process.platform === "win32") return;
+    const outside = mkdtempSync(join(tmpdir(), "piship-keygen-out-"));
+    roots.push(outside);
+    symlinkSync(join(root, "src"), join(outside, "link"));
+    expect(() =>
+      writePrivateKey(join(outside, "link", "new", "k.pem"), pem),
+    ).toThrow(/inside a git work tree and not git-ignored/);
+    expect(existsSync(join(root, "src", "new"))).toBe(false);
   });
 
   it("fails closed when git exits with an error inside a work tree", () => {
