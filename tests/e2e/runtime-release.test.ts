@@ -99,9 +99,9 @@ describe("runtime release", () => {
     expect(Object.keys(bound.excluded)).not.toContain(target);
   }, 900000);
 
-  // The admin path without a clone: the runtime does not carry esbuild, so a
-  // pretranspile package is packed as TypeScript with a warning, not refused.
-  it("packs a pretranspile package with the runtime's own piship.mjs, saying it skipped the JavaScript", () => {
+  // The admin path without a clone: the runtime does not carry esbuild, so
+  // pack gets it as a build does and writes the generated JavaScript.
+  it("packs a pretranspile package with the runtime's own piship.mjs, writing the JavaScript", () => {
     const target = `${process.platform}-${process.arch}`;
     const directory = join(
       out,
@@ -126,7 +126,7 @@ describe("runtime release", () => {
       join(out, "relocated"),
     );
     expect(packed.status, packed.stderr).toBe(0);
-    expect(packed.stderr).toContain("pretranspile of ts was skipped");
+    expect(packed.stderr).not.toContain("pretranspile");
     const lib = join(
       out,
       "relocated",
@@ -139,7 +139,7 @@ describe("runtime release", () => {
       "lib",
     );
     expect(existsSync(join(lib, "values.ts"))).toBe(true);
-    expect(existsSync(join(lib, "values.js"))).toBe(false);
+    expect(existsSync(join(lib, "values.js"))).toBe(true);
   }, 300000);
 
   // Its release targets are linux-x64 and darwin-arm64 only.
