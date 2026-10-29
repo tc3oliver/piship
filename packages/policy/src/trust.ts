@@ -77,14 +77,24 @@ export function defaultProjectDimensions(
       }),
       external: dimensions("deny", {
         passiveContext: "allow",
-        instructions: "ask",
+        instructions: "allow",
+        skills: "allow",
       }),
-      unknown: dimensions("deny", { passiveContext: "allow" }),
+      unknown: dimensions("deny", {
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+      }),
     };
   return {
     company: dimensions("allow", { hooks: "deny" }),
     external: dimensions("allow", { hooks: "deny" }),
-    unknown: dimensions("ask", { passiveContext: "allow", hooks: "deny" }),
+    unknown: dimensions("ask", {
+      passiveContext: "allow",
+      instructions: "allow",
+      skills: "allow",
+      hooks: "deny",
+    }),
   };
 }
 
@@ -105,11 +115,12 @@ function claudeDimensions(
  * Per-origin defaults of the Claude Code dimensions (`.claude/rules`,
  * `commands`, `skills`, `agents`, `hooks`). The manifest leaves them absent
  * unless declared (so existing locks do not change); this is what applies
- * then. Personal mode loads them like the other project items: company and
- * external projects without a prompt, an unknown one after the person says
- * yes. Managed mode follows the agents and hooks pattern: `hooks` are denied
- * and the rest are `company-approved`, which admits no project content, so a
- * company opts in by declaring `allow`.
+ * then. Personal mode loads them like the other project items for company and
+ * external projects without a prompt; an unknown one loads rules, commands and
+ * skills, and asks for agents and hooks. Managed mode follows
+ * the agents and hooks pattern: `hooks` are denied and the rest are
+ * `company-approved`, which admits no project content, so a company opts in by
+ * declaring `allow`.
  */
 export function defaultClaudeDimensions(
   mode: DeploymentMode,
@@ -128,7 +139,11 @@ export function defaultClaudeDimensions(
   return {
     company: claudeDimensions("allow"),
     external: claudeDimensions("allow"),
-    unknown: claudeDimensions("ask"),
+    unknown: claudeDimensions("ask", {
+      claudeRules: "allow",
+      claudeCommands: "allow",
+      claudeSkills: "allow",
+    }),
   };
 }
 

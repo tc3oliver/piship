@@ -181,8 +181,8 @@ describe("v1alpha3 defaults", () => {
           match: [],
           dimensions: {
             passiveContext: "allow",
-            instructions: "ask",
-            skills: "deny",
+            instructions: "allow",
+            skills: "allow",
             agents: "deny",
             hooks: "deny",
             extensions: "deny",
@@ -193,8 +193,8 @@ describe("v1alpha3 defaults", () => {
         unknown: {
           dimensions: {
             passiveContext: "allow",
-            instructions: "deny",
-            skills: "deny",
+            instructions: "allow",
+            skills: "allow",
             agents: "deny",
             hooks: "deny",
             extensions: "deny",
@@ -264,8 +264,8 @@ describe("v1alpha3 defaults", () => {
     expect(result.policy.projectTrust.external.dimensions).toEqual(allowAll);
     expect(result.policy.projectTrust.unknown.dimensions).toEqual({
       passiveContext: "allow",
-      instructions: "ask",
-      skills: "ask",
+      instructions: "allow",
+      skills: "allow",
       agents: "ask",
       hooks: "deny",
       extensions: "ask",
@@ -1247,7 +1247,7 @@ describe("v1alpha3 policy", () => {
       policy({ projectTrust: { unknown: { mcp: "deny" } } }),
     ).policy.projectTrust;
     expect(result.unknown.dimensions.mcp).toBe("deny");
-    expect(result.unknown.dimensions.skills).toBe("ask");
+    expect(result.unknown.dimensions.skills).toBe("allow");
   });
   it.each([
     [

@@ -201,14 +201,24 @@ export function defaultProjectDimensions(
       }),
       external: dimensions("deny", {
         passiveContext: "allow",
-        instructions: "ask",
+        instructions: "allow",
+        skills: "allow",
       }),
-      unknown: dimensions("deny", { passiveContext: "allow" }),
+      unknown: dimensions("deny", {
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+      }),
     };
   return {
     company: dimensions("allow", { hooks: "deny" }),
     external: dimensions("allow", { hooks: "deny" }),
-    unknown: dimensions("ask", { passiveContext: "allow", hooks: "deny" }),
+    unknown: dimensions("ask", {
+      passiveContext: "allow",
+      instructions: "allow",
+      skills: "allow",
+      hooks: "deny",
+    }),
   };
 }
 

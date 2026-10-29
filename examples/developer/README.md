@@ -126,9 +126,9 @@ The two layers are not redundant. PiShip's rules cover its own governed tools on
 | --- | --- | --- | --- | --- |
 | `company` | `allow` | `allow` | `ask` | `deny` |
 | `external` | `allow` | `allow` | `ask` | `deny` |
-| `unknown` | `ask` | `ask` | `ask` | `deny` |
+| `unknown` | `allow`, except `claudeAgents` and `claudeHooks` `ask` | `ask` | `ask` | `deny` |
 
-`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so the project's Claude configuration is asked about, in one question, before it loads. Answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. Nothing loads when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
+`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so its text-only Claude configuration (rules, commands, skills) loads without a question, while agents, hooks, `.mcp.json` and extensions still ask. Because the configuration is admitted as a whole, a project with Claude hooks, agents or a settings file is asked about once, in one question. Answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. Nothing loads when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
 
 ```yaml
 policy:

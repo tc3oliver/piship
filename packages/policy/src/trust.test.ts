@@ -106,8 +106,8 @@ describe("resource trust defaults", () => {
       resourceTrustDecision(policy, "project", "prompts", "external"),
     ).toMatchObject({
       dimension: "instructions",
-      effect: "ask",
-      allowed: false,
+      effect: "allow",
+      allowed: true,
     });
     expect(
       resourceTrustDecision(policy, "project", "extensions", "company"),
@@ -175,11 +175,17 @@ describe("project dimension defaults", () => {
       mcp: "company-approved",
       providers: "deny",
     });
-    expect(managed.external.instructions).toBe("ask");
-    expect(managed.external.skills).toBe("deny");
-    expect(Object.values(managed.unknown).filter((v) => v !== "deny")).toEqual([
-      "allow",
-    ]);
+    for (const origin of [managed.external, managed.unknown])
+      expect(origin).toEqual({
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+        agents: "deny",
+        hooks: "deny",
+        extensions: "deny",
+        mcp: "deny",
+        providers: "deny",
+      });
   });
   it("match the documented personal table", () => {
     const personal = defaultProjectDimensions("personal");
@@ -187,8 +193,8 @@ describe("project dimension defaults", () => {
     expect(personal.external.extensions).toBe("allow");
     expect(personal.unknown).toEqual({
       passiveContext: "allow",
-      instructions: "ask",
-      skills: "ask",
+      instructions: "allow",
+      skills: "allow",
       agents: "ask",
       hooks: "deny",
       extensions: "ask",

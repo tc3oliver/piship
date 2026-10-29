@@ -59,15 +59,7 @@ policy:
       mcp: ask
       providers: deny
     external: *own
-    unknown:
-      passiveContext: allow
-      instructions: ask
-      skills: ask
-      agents: deny
-      hooks: deny
-      extensions: ask
-      mcp: ask
-      providers: deny
+    unknown: *own
 
 mcp:
   mode: off

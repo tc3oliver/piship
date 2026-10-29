@@ -38,37 +38,39 @@ function createAmbientResources(root: string): void {
   for (const home of homes) {
     // The personal template loads a project theme (passive context), so the
     // placeholder one would be read and rejected. Only the user-level
-    // themes are ambient here; project skills, extensions, and instructions
-    // stay unloaded because a headless launch resolves `ask` to deny.
+    // themes are ambient here; the personal template also loads a project's
+    // skills, prompts, and instructions, so those are left out of the project
+    // home. Project extensions stay unloaded because a headless launch
+    // resolves `ask` to deny.
     const projectHome = home === join(root, ".pi");
-    const skill = join(home, "skills", "ambient");
-    mkdirSync(skill, { recursive: true });
-    writeFileSync(
-      join(skill, "SKILL.md"),
-      "---\nname: ambient\ndescription: Must not load\n---\n",
-    );
+    if (!projectHome) {
+      const skill = join(home, "skills", "ambient");
+      mkdirSync(skill, { recursive: true });
+      writeFileSync(
+        join(skill, "SKILL.md"),
+        "---\nname: ambient\ndescription: Must not load\n---\n",
+      );
+    }
     for (const [directory, filename, content] of [
       ["extensions", "ambient.ts", "export default function ambient() {}\n"],
       ["prompts", "ambient.md", "Ambient prompt\n"],
       ["themes", "ambient.json", "{}\n"],
     ] as const) {
-      if (projectHome && directory === "themes") continue;
+      if (projectHome && (directory === "themes" || directory === "prompts"))
+        continue;
       mkdirSync(join(home, directory), { recursive: true });
       writeFileSync(join(home, directory, filename), content);
     }
-    writeFileSync(join(home, "AGENTS.md"), "Ambient instructions\n");
+    if (!projectHome)
+      writeFileSync(join(home, "AGENTS.md"), "Ambient instructions\n");
   }
-  for (const skill of [
-    join(root, "home", ".agents", "skills", "ambient"),
-    join(root, ".agents", "skills", "ambient"),
-  ]) {
+  for (const skill of [join(root, "home", ".agents", "skills", "ambient")]) {
     mkdirSync(skill, { recursive: true });
     writeFileSync(
       join(skill, "SKILL.md"),
       "---\nname: ambient\ndescription: Must not load\n---\n",
     );
   }
-  writeFileSync(join(root, "AGENTS.md"), "Ambient project instructions\n");
 }
 afterEach(() => {
   for (const path of temporary.splice(0))

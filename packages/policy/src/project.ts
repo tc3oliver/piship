@@ -1296,9 +1296,18 @@ function evaluateCandidate(
       dimension,
       mode,
     );
+    // The unknown default admits text, but a link out of the root would read
+    // any file the user can, so it is never allowed without a question.
     return {
       origin: "unknown",
-      effect: effect === "company-approved" ? "deny" : effect,
+      effect:
+        effect === "company-approved"
+          ? "deny"
+          : effect === "allow"
+            ? mode === "managed"
+              ? "deny"
+              : "ask"
+            : effect,
       reason: `Resolves outside the project root; evaluated as unknown origin: ${projectEffectReason("unknown", dimension, effect)}`,
     };
   }

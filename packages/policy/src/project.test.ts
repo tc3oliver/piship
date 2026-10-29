@@ -1722,10 +1722,29 @@ describe("discoverProjectResources", () => {
       personal,
       {
         homeDir: home,
+        mode: "personal",
       },
     );
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ origin: "unknown", effect: "ask" });
+  });
+
+  it("denies an outside instruction link in managed mode", () => {
+    const outside = dir("outside-managed");
+    write(join(outside, "AGENTS.md"), "x");
+    const root = dir("instr-link-managed");
+    if (
+      !trySymlink(join(outside, "AGENTS.md"), join(root, "AGENTS.md"), "file")
+    )
+      return;
+    const managed = makePolicy({}, "managed");
+    const found = discoverProjectResources(
+      identifyProject(root, managed.projectTrust),
+      managed,
+      { homeDir: home, mode: "managed" },
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ origin: "unknown", effect: "deny" });
   });
 
   it("denies instruction imports that escape the root", () => {
@@ -1757,7 +1776,7 @@ describe("discoverProjectResources", () => {
     expect(passwd?.importedFrom).toBe(`${posix(root)}/AGENTS.md`);
   });
 
-  it("denies .pi/extensions in an unknown repository", () => {
+  it("denies .pi/extensions in an unknown repository in managed mode and asks in personal mode", () => {
     for (const mode of ["managed", "personal"] as const) {
       const root = dir(`unknown-${mode}`);
       gitRepo(root, "https://random.example/x/y.git");

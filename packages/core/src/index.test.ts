@@ -211,7 +211,7 @@ describe("init", () => {
         providers: "deny",
       };
       // A person's own projects must work: instructions and skills load
-      // (asked for an unknown origin), code asks, and hooks, agents, and
+      // (an unknown origin is treated like an external one), code asks, and hooks, agents, and
       // providers stay denied.
       const own = {
         passiveContext: "allow",
@@ -224,9 +224,7 @@ describe("init", () => {
         providers: "deny",
       };
       expect(projectTrust?.external.dimensions).toEqual(managed ? closed : own);
-      expect(projectTrust?.unknown.dimensions).toEqual(
-        managed ? closed : { ...own, instructions: "ask", skills: "ask" },
-      );
+      expect(projectTrust?.unknown.dimensions).toEqual(managed ? closed : own);
       expect(manifest.runtime.searchTools).toEqual(
         managed ? undefined : { mode: "bundled" },
       );

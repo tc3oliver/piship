@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-8e05d832971644eaca2c626a7655f3ee1ae68843878b249eec31f832e5356fed"
+    "sha256": "sha256-36b924311a4d57387d5aad5f98f756d773a48b071904798420584db1c606868c"
   },
   "app": {
     "id": "mypi-local",
@@ -1139,8 +1139,8 @@
           "unknown": {
             "dimensions": {
               "passiveContext": "allow",
-              "instructions": "ask",
-              "skills": "ask",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
               "extensions": "ask",
@@ -1238,7 +1238,7 @@
   },
   "digests": {
     "resources": "sha256-1939a95167d86318487ddf7c5aba64cdd6d8f7e8f8e1327a1e641b9216e0d7fc",
-    "policy": "sha256-44822a77145631049342c642d7a32d77ef3325a30f58cc6ec2452c1cdfd67d66",
+    "policy": "sha256-d5720966ebabaa1150e8701c303910239c74ee6f884a0b409bdea6b089525876",
     "capabilities": "sha256-4022bc787f6db8d35c5a068d80546a5c3b3dd8720fe1bf6ecb7ae4b84a0b0791",
     "mcp": "sha256-9c86a5a216a08e2e5c954edae514fa193e41a151a6f6ba4fdc3fbd979d9f9ae9",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
