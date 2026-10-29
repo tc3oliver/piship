@@ -22,6 +22,8 @@ export interface WorkspaceData {
   readonly local?: boolean;
   /** No sandbox is enforced, so commands run on this host's files. */
   readonly uncontained?: boolean;
+  /** The sandbox already warned that git control is not verified (a missing file). */
+  readonly gitControlWarned?: boolean;
 }
 
 /** The workspace facts of the inspected sandbox. */
@@ -42,6 +44,9 @@ export function workspaceData(
     ...(workspace.reason ? { reason: workspace.reason } : {}),
     complete: workspace.complete,
     gitControl: workspace.gitControlProtection,
+    gitControlWarned: report.warnings.some((line) =>
+      line.startsWith("git control is not verified"),
+    ),
     local: report.isolation === "local",
   };
 }
@@ -113,6 +118,9 @@ export function workspaceGroup(data: DoctorData, out: DoctorSection): void {
       "no: remote commands do not see the files the agent edits",
     );
   const gitControl = workspace.gitControl ?? "not-verified";
-  // Expected and permanent under bubblewrap in a regular repository: a note.
-  out.info("git control files", GIT_CONTROL_TEXT[gitControl]);
+  // Under bubblewrap a missing control file is expected and already named in
+  // a sandbox warning: a note. Any other cause stays a warning.
+  if (gitControl === "not-verified" && !workspace.gitControlWarned)
+    out.warn("git control files", GIT_CONTROL_TEXT[gitControl]);
+  else out.info("git control files", GIT_CONTROL_TEXT[gitControl]);
 }

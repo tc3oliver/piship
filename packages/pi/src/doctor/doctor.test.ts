@@ -1462,8 +1462,35 @@ describe("Sandbox and Workspace groups", () => {
         }),
       ).at(-1),
     ).toBe(
-      `  - ${"git control files".padEnd(20)} not verified; sandboxed commands may be able to change them`,
+      `  ! ${"git control files".padEnd(20)} not verified; sandboxed commands may be able to change them`,
     );
+  });
+
+  it("notes unverified git control only when the sandbox already named the missing files", () => {
+    const local = {
+      declared: "shared",
+      effective: "shared",
+      verification: "not-required",
+      gitControlProtection: "not-verified",
+      complete: true,
+    } as const;
+    const text = "not verified; sandboxed commands may be able to change them";
+    expect(
+      workspaceLines(
+        inspection({
+          workspace: local,
+          warnings: ["git control is not verified: .git/commondir is missing"],
+        }),
+      ).at(-1),
+    ).toBe(`  - ${"git control files".padEnd(20)} ${text}`);
+    expect(
+      workspaceLines(
+        remote({
+          ...snapshot,
+          gitControlProtection: "not-verified",
+        }),
+      ).at(-1),
+    ).toBe(`  ! ${"git control files".padEnd(20)} ${text}`);
   });
 
   it("never reports a snapshot as a complete workspace", () => {
@@ -1535,6 +1562,35 @@ describe("Sandbox and Workspace groups", () => {
     ).toEqual([
       `  - ${"consistency".padEnd(20)} none: no sandbox is enforced; commands run on this host's files`,
     ]);
+  });
+});
+
+describe("Sandbox containment severity", () => {
+  const containment = (sandbox: Partial<GovernanceInspection["sandbox"]>) => {
+    const inspected = inspection({ required: false, planes: [], ...sandbox });
+    return group(
+      renderDoctor(
+        doctorData("personal", {
+          governance: governanceData({
+            inspection: inspected,
+            isolation: sandboxIsolation(inspected.sandbox),
+            workspace: workspaceData(inspected),
+          }),
+        }),
+      ).render(),
+      "Sandbox",
+    ).find((line) => line.includes("containment"));
+  };
+
+  it("notes a sandbox that is off by choice and warns when one configured on is not working", () => {
+    expect(containment({ level: "not-required" })).toBe(
+      `  - ${"containment".padEnd(20)} not-required (macos-seatbelt)`,
+    );
+    expect(
+      containment({ level: "unavailable", reason: "bwrap not found" }),
+    ).toBe(
+      `  ! ${"containment".padEnd(20)} unavailable (macos-seatbelt): bwrap not found`,
+    );
   });
 });
 

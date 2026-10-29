@@ -420,7 +420,9 @@ export class GovernanceSession {
   denialHint(decision: Parameters<typeof denialHint>[0]): string {
     const hint = denialHint(decision, this.options.lock.deployment.mode, {
       policyFile: join(this.options.stateDir, "config", "policy.json"),
-      grants: this.grantsAllowed,
+      ...(this.grantsAllowed
+        ? { grants: { actions: this.manifest.policy.taskGrants?.actions } }
+        : {}),
     });
     return hint ? ` ${hint}` : "";
   }
@@ -477,6 +479,7 @@ export class GovernanceSession {
         throw userAutoDenied(
           this.options.lock.app.command,
           this.options.lock.deployment.mode,
+          this.grantsAllowed,
         );
       this.audit.assertAvailable();
       this.emit("policy.auto_enabled", {

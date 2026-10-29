@@ -6,7 +6,10 @@ import {
   redact,
   type ResolvedDecision,
 } from "@piship/contracts";
-import type { PolicyExplanation } from "./engine.js";
+import {
+  BUILTIN_UNKNOWN_ACTION_RULE,
+  type PolicyExplanation,
+} from "./engine.js";
 import { decisionStatus } from "./seams.js";
 
 const HEADINGS: Readonly<Record<PolicyEffect, string>> = {
@@ -154,20 +157,35 @@ export function formatDecisionJSON(
 
 /**
  * One sentence on how to change a blocking decision, chosen by the layer of
- * the deciding rule. It adds no resource or path beyond what the denial text
- * already carries, and a distribution-enforced or team rule never gets a
- * workaround.
+ * the deciding rule. A personal hint may name the user's own policy file (an
+ * absolute path under their state directory), never a resource beyond what
+ * the denial text carries, and a distribution-enforced or team rule never
+ * gets a workaround.
  */
 export function denialHint(
-  decision: Pick<PolicyDecision, "layer" | "action" | "ruleId"> & {
+  decision: Pick<PolicyDecision, "layer" | "action" | "ruleId" | "effect"> & {
     readonly approval?: ResolvedDecision["approval"];
   },
   deployment: "personal" | "managed",
-  where: { readonly policyFile?: string; readonly grants?: boolean } = {},
+  where: {
+    readonly policyFile?: string;
+    /** Task grants are on; `actions` limits which actions a grant covers. */
+    readonly grants?: { readonly actions?: readonly string[] | undefined };
+  } = {},
 ): string {
   const file = where.policyFile ?? "config/policy.json";
-  // A personal user's own two ways out: a session grant, or a standing rule.
-  const personalWay = `${where.grants ? "type `/grant <folder>` to approve that folder's prompts for this session, or " : ""}add a rule to ${file}`;
+  // A grant covers only an interactive ask for a file or shell action.
+  const grantable =
+    deployment === "personal" &&
+    where.grants !== undefined &&
+    decision.effect === "ask" &&
+    decision.approval !== "unavailable" &&
+    (decision.action.startsWith("filesystem.") ||
+      decision.action === "shell.execute") &&
+    (where.grants.actions?.includes(decision.action) ?? true);
+  const grant = grantable
+    ? " Or type `/grant <folder>` to approve that folder's prompts for this session."
+    : "";
   // The person's own refusal of a prompt needs no way to change a rule.
   if (decision.approval === "denied" || decision.approval === "cancelled")
     return "";
@@ -180,15 +198,17 @@ export function denialHint(
     case "team-project":
       return "This rule comes from the project or team policy; ask its owner to change it.";
     case "user-preference":
-      return `This is your own rule ${decision.ruleId}; edit it in ${file} (${explain}).`;
+      return `This is your own rule ${decision.ruleId}; edit it in ${file} (${explain}).${grant}`;
     case "builtin":
       // No rule decided: only the person's own grant or rule can change it.
-      return deployment === "personal" && where.policyFile
-        ? `Nothing allows this yet; ${personalWay} (${explain}).`
+      return deployment === "personal" &&
+        where.policyFile &&
+        decision.ruleId !== BUILTIN_UNKNOWN_ACTION_RULE
+        ? `Nothing allows this yet; add a rule to ${file} (${explain}).${grant}`
         : "";
     default:
       return deployment === "managed"
         ? "This is a distribution default; contact the distribution owner."
-        : `This is a distribution default; ${personalWay} to change it (${explain}).`;
+        : `This is a distribution default; add a rule to ${file} to change it (${explain}).${grant}`;
   }
 }
