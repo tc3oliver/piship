@@ -10,6 +10,7 @@ import {
 } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import type { DoctorData } from "./data.js";
+import { networkText } from "./sandbox.js";
 import type { DoctorSection } from "./report.js";
 
 /**
@@ -251,16 +252,16 @@ function networkLines(data: DoctorData, out: DoctorSection): void {
  */
 function egressLines(data: DoctorData, out: DoctorSection): void {
   const report = data.governance?.inspection?.sandbox;
-  const managed = data.ctx.mode === "managed";
-  const unrestricted = managed ? out.warn.bind(out) : out.info.bind(out);
-  const contained = report?.level === "enforced" && report.network === "deny";
-  const sandboxed = contained
-    ? `network denied by the sandbox (${report.networkDenial?.evidence === "verified" ? "verified" : "attested by the backend"})`
-    : undefined;
+  const denial =
+    report?.level === "enforced" ? report.networkDenial : undefined;
+  const denied = report?.level === "enforced" && report.network === "deny";
+  // Only a live-probed denial is PiShip's to claim; an attested one is the
+  // backend's word, reported as such.
+  const verified = denied && denial?.evidence === "verified";
   if (data.access?.network.privateOnly)
     out.ok("egress: Pi", "PiShip: private-only, declared hosts");
   else
-    unrestricted(
+    out.info(
       "egress: Pi",
       "not restricted by PiShip (network.privateOnly is off)",
     );
@@ -268,14 +269,22 @@ function egressLines(data: DoctorData, out: DoctorSection): void {
     "egress: extensions",
     "not restricted by PiShip; in-process extensions are not contained",
   );
-  const none =
-    "no PiShip hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them, so they are not counted as enforced";
-  for (const label of ["shell", "MCP stdio"])
-    if (sandboxed) out.ok(`egress: ${label}`, `PiShip: ${sandboxed}`);
-    else unrestricted(`egress: ${label}`, none);
+  const none = `not enforced by PiShip: no hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them${report?.level === "enforced" ? "" : process.platform === "win32" ? " (Windows has no native sandbox adapter)" : ""}`;
+  // A sandbox the distribution requires but that does not deny the network
+  // is a missing control, not an IT-owned setup.
+  const expected = report?.required === true && !denied;
+  for (const label of ["shell", "MCP stdio"]) {
+    const name = `egress: ${label}`;
+    if (verified && report)
+      out.ok(name, `PiShip: network ${networkText(report)}`);
+    else if (denied && report)
+      out.info(name, `not verified: network ${networkText(report)}`);
+    else if (expected) out.warn(name, none);
+    else out.info(name, none);
+  }
   out.info(
     "egress: Git, npm",
-    "run as shell children or in Pi; covered as above, not separately",
+    "run as shell children or in the Pi process; covered as above, not separately",
   );
   out.info(
     "IT egress",
