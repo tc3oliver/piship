@@ -36,7 +36,9 @@ describe("shared shell tokenizer", () => {
     expect(grantCommandWords("npm\u00a0test", "posix")).toBeUndefined();
     expect(grantCommandWords("npm run 'a&b'", "win32")).toBeUndefined();
     expect(grantCommandWords('npm run "a^&b"', "win32")).toBeUndefined();
-    expect(grantCommandWords('npm run "a\\\" & whoami"', "win32")).toBeUndefined();
+    expect(
+      grantCommandWords('npm run "a\\\" & whoami"', "win32"),
+    ).toBeUndefined();
     expect(grantCommandWords("git diff 'src/a b.ts'", "win32")).toEqual([
       "git",
       "diff",
