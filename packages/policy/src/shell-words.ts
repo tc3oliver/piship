@@ -261,6 +261,7 @@ export function grantCommandWords(
   let quote: "'" | '"' | undefined;
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
+    if (char === "\n" || char === "\r") return undefined;
     if (platform === "win32" && /[%^!]/.test(char)) return undefined;
     if (quote === "'") {
       if (char === "'") {
@@ -280,6 +281,8 @@ export function grantCommandWords(
         continue;
       }
       if (char === "\\") {
+        // cmd.exe does not use POSIX backslash quoting.
+        if (platform === "win32") return undefined;
         // Only escaped quotes/backslashes are unambiguous in this subset.
         if (text[i + 1] !== '"' && text[i + 1] !== "\\")
           return undefined;
