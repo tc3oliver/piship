@@ -102,6 +102,24 @@ builds a branded coding agent on top of upstream Pi.
 
 The steps it follows are in [docs/agent-setup.md](docs/agent-setup.md), so you can read exactly what it will do first.
 
+### For a company that serves several operating systems
+
+A [Company Pack](docs/release/owner-workflow.md#building-a-company-pack) is one artifact for every platform, bound to PiShip's official runtime archives, so IT does not build a release on each operating system. Paste this instead:
+
+```text
+Set up our company coding agent with PiShip. Read
+https://github.com/tc3oliver/piship/blob/main/docs/agent-setup.md and follow it.
+Use the runtime archives from a PiShip release if the release lists them, and say
+so if it does not; do not clone or build PiShip unless the guide sends you to the
+clone route. Ask me before every value you do not have; never invent URLs, client
+IDs, or model IDs. Never read, copy, or print a private key or passphrase: I type
+those myself. If a feature needs per-OS builds or Windows sandboxing, stop and
+tell me instead of changing the policy. At the end, report what you checked and
+what you could not.
+```
+
+What this supports today: the runtime archive and `piship pack` exist on `main` and are exercised in CI ([status](docs/status.md#company-packs-on-main-unreleased)), but **no PiShip release has published a runtime archive yet**. Until one does, each target's runtime must be built with `piship runtime-release` on that operating system. Limits, listed in full in [status](docs/status.md#company-packs-on-main-unreleased): a pack cannot carry a Pi package with `os`/`cpu`/`libc` fields, install scripts, or per-target optional dependencies, or a native resource file (use `piship release` on each operating system); `sandbox.required: true` leaves Windows out; and a target whose runtime lacks the locked search tools is left out too.
+
 ## One file
 
 A minimal managed distribution. `piship validate` accepts it as is; the demo's own manifest adds policy, resources, MCP, and audit on top.

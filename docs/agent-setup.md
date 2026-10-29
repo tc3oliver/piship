@@ -16,6 +16,22 @@ A distribution is either **personal** (one person, no company services) or **man
 
 ## 1. Get PiShip
 
+There are two routes. A company that serves several operating systems uses a [Company Pack](release/owner-workflow.md#building-a-company-pack), which needs the PiShip runtime archive of every target it serves. **Today no PiShip release ships runtime archives**, so every target's runtime has to be built with `piship runtime-release` on a machine of that operating system, from a clone. Once a release ships runtime archives, IT downloads and verifies them instead, and needs no clone and no machine per operating system. The **clone** is also for contributors and for a distribution that needs per-target bytes (see step 5).
+
+### The runtime archive (no clone)
+
+The official runtime is `piship-runtime-<PiShip version>-<os>-<arch>.tar.gz`: PiShip's CLI, Pi, and the locked npm closure with no distribution in it ([artifact contract](release/artifact-contract.md#runtime-release)). Its `payload/piship.mjs` is the PiShip CLI. The `release-candidate` workflow builds, attests, and verifies one per target (run 40848981331 on `7d1159c7`). **No PiShip release has published a runtime archive yet.** Until one does, build the runtime of each target with `piship runtime-release` from [a clone](#the-clone) on a machine of that operating system, and do not tell the person a runtime download exists. A distribution's pre-release archive (v0.13.0) is not a substitute for a pack: its CLI has no `pack`.
+
+Prerequisites for either route: Node.js 22.19.0 or newer, and npm 11 or later for `piship lock` when the distribution declares Pi packages.
+
+Once a release lists runtime archives:
+
+1. Download the archive for this machine and its `.sha256`, and for a pack that serves more than one target, the archive for each of those targets.
+2. Verify it: `gh attestation verify <archive> --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`, the attestation proves where the archive came from. Then extract it into a new, empty directory and run `node <dir>/<archive-name>/payload/piship.mjs verify-release <dir>/<archive-name>`, which only detects damage to the archive (it runs the archive's own code, so it does not replace the attestation). Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`.
+3. Use it by path for `init`, `validate`, `lock`, `pack`, `keygen`, `trust-root`, and `sign-channel`. A runtime archive has no esbuild; `piship pack` installs it from the build input's npm lock (needs the registry) only when a Pi package asks for `pretranspile`.
+
+### The clone
+
 Clone it outside the person's project, where they agree (the default here is `~/src/piship`), and build it:
 
 ```bash
@@ -173,6 +189,16 @@ Fix what `validate` reports and run it again until it says the manifest is valid
 
 `test` launches with the distribution's credential, so a `local-secret` or managed distribution needs a stored key or sign-in first, or it fails with `CREDENTIAL_REQUIRED`. Run `piship test` once to create the state, then have the person sign in with the built command, `dist/<id>/bin/<command> login`, run in the directory where you ran `piship test` (run that from the distribution repository), since `dist/` is written under the directory `build` or `test` runs in (`dist\<id>\bin\<command>.cmd` on Windows), and run `piship test` again. The key lands in the same state the installed command uses, and `install` still adopts it. With `storage.provider: system` on Linux, `login` needs an unlocked Secret Service and `secret-tool` (often missing under WSL or over SSH) and otherwise fails with `SECRET_STORE_UNAVAILABLE`; ask the person whether to switch to `storage: {provider: file}`, then lock and build again.
 
+### Company Pack: one pack for every operating system
+
+Use this when the employees run more than one operating system, or the person wants one artifact to publish. It replaces `piship release` on one machine per operating system. Ask which employee operating systems there are, and whether a Windows enforced sandbox is required: with `sandbox.required: true` Windows is left out of the pack, because PiShip has no Windows sandbox adapter, and the pack records why. Say that to the person plainly; do not change the policy to include Windows.
+
+1. Obtain the runtime archive for each target (built with `piship runtime-release` on that operating system today, see step 1) and verify each one. The pack binds to them exactly: `piship lock` must have been run with the same PiShip version, so a PiShip update means `piship lock` and a new pack.
+2. `piship pack <directory>/piship.yaml --runtime <archive>... --out <dir>`. It runs the same static gates as `release`, refuses a distribution that needs per-target bytes with `PACK_INELIGIBLE`, and writes `<out>/packs/<id>-<version>-pack.tar.gz`.
+3. If it is refused, tell the person what it says and offer `piship release` on one machine per operating system. That applies to a Pi package with `os`, `cpu`, or `libc` fields, install scripts, or per-target optional dependencies, and to a native resource file. Pure-JavaScript Pi packages are allowed. A target whose runtime does not bundle the search tool versions the lock names is left out of the pack and listed under `excluded` in `pack.json`; if every target is left out, `pack` fails with `CONFIG_INVALID` ("no release target can be served"). Read [the full list](release/owner-workflow.md#building-a-company-pack).
+
+The pack is unsigned and is not smoke-tested by `piship pack`; the install runs `version` (and `capabilities --json` when governed) once before it activates anything.
+
 ## 6. Setup completion checklist
 
 Setup is not complete until each applicable check below passes. Report each one as passed, failed (with the error), or not applicable.
@@ -185,6 +211,8 @@ Setup is not complete until each applicable check below passes. Report each one 
    ```bash
    node dist/<id>/piship.mjs install dist/<id>
    ```
+
+   For a pack, install it the way an employee will: `sh install.sh` from the extracted pack with its runtime archive beside it (`powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1` on Windows), or `piship install <pack> --runtime <archive>`. The scripts check the runtime archive's SHA-256 against the pack before any of its code runs.
 
    State that `piship test` created is adopted automatically. If install fails with `State already exists`, that state was not created by `piship test` (an earlier install, say): ask the person before adding `--use-existing-state` to keep it. If `~/.local/bin` is not on the person's `PATH`, tell them; do not edit their shell profile without asking.
 5. **Runtime auth and configuration:**
@@ -203,7 +231,8 @@ If a signed update source is configured, also check update and rollback before h
 Only when the person asked for it (S11, P5, or M12). A personal distribution may run its own self-managed signed channel; a managed one uses the company's update source. Follow the [release guide](release.md) and the [owner workflow](release/owner-workflow.md), which describe the update trust fields of the current manifest schema:
 
 1. The key holders run `piship keygen --encrypt` (a root key and a channel key; a personal distribution may use one key for both) and keep the private keys out of the repository. `piship trust-root init` prints the `updates.trust.bootstrap` block for the manifest from their public keys; the channel URL goes in `updates.source` (a runtime variable or an `https` URL).
-2. `piship release`, `piship verify-release`, and `piship sign-channel` produce the signed artifacts the person uploads to the update source. Later key changes are published with `piship trust-root next` ([key runbook](release/key-runbook.md)), never by editing the bootstrap of a new release.
+   The person runs `keygen --encrypt` and types the passphrase at the hidden prompt. You never open, `cat`, copy, or upload a `.pem` file, and never put a passphrase on a command line (`--passphrase-env` is for CI the person controls). The person runs `sign-channel` and types the passphrase there too; an encrypted key is useless to you without it, which is the real control.
+2. `piship release`, `piship verify-release`, and `piship sign-channel` produce the signed artifacts the person uploads to the update source. For a Company Pack, `piship sign-channel <channel-dir> <pack>... --channel <name> --key ... --key-id ...` lists the pack under `packs` in the same signed channel and copies the runtime archives it pins beside it; an employee's `update` takes the newest of the release and the pack for their platform ([update lifecycle](release/update-lifecycle.md#company-packs-in-a-channel)). A new PiShip runtime means `piship lock`, `piship pack`, and `sign-channel` again, with no change to the repository's content. Later key changes are published with `piship trust-root next` ([key runbook](release/key-runbook.md)), never by editing the bootstrap of a new release.
 3. Before handoff, install one release, publish a newer one, and check:
 
    ```bash

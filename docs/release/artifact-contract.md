@@ -60,6 +60,23 @@ gh attestation verify piship-runtime-0.13.0-linux-x64.tar.gz --repo tc3oliver/pi
 node packages/cli/dist/bin.js verify-release piship-runtime-0.13.0-linux-x64.tar.gz
 ```
 
+## Company Pack
+
+`piship pack <manifest> --runtime <runtime-archive>...` builds `<id>-<version>-pack.tar.gz` (with a `.sha256` sidecar), by the same deterministic archive rules, and the same inputs give the same bytes. It has no per-target bytes:
+
+```text
+acmecode-1.2.0-pack/
+  pack/                  piship.yaml, piship.lock, the locked resources, piship.lock.d/packages/<id>/,
+                         and pi-packages/<id>/ (the vendored pure-JavaScript Pi packages, with any pretranspile output)
+  pack.json              piship-pack/v1
+  install.sh, install.ps1
+  checksums.txt          sha256sum lines for pack.json, the two scripts, and every file under pack/
+```
+
+`pack.json` records the distribution, the lock digest, the pack inventory digest, the Pi version and compatibility, the state schemas, the exact runtime binding (`pishipVersion`, `pi`, `npmLockSha256`, and per target the runtime archive's name, sha256, size, and inventory digest), `runtimeSettings` (what `release.bundle` and `release.strip` set to false were overridden), the `targets` the pack serves, and `excluded` (a target with the reason, for example the `sandbox` gate's text for `win32-x64` under `sandbox.required`). It has no timestamp and no signature: publish it through a signed channel (`sign-channel`, [update lifecycle](update-lifecycle.md#company-packs-in-a-channel)).
+
+An install checks `checksums.txt` against every file (a file it does not list is refused), `pack/piship.lock` against `pack.json`, the runtime archive's digest and every runtime file against what the pack pins, and the composed payload against its lock, then runs the local acceptance check ([owner workflow](owner-workflow.md#installing-a-company-pack)). The receipt's `release.pack` and `release.runtime` record the digests, and a composed release has no `release.archiveSha256`. `verify-release` verifies a runtime archive, not a pack.
+
 ## Reproducibility
 
 `piship reproducibility <release-a> <release-b> [--out report.json]` verifies both releases, refuses to compare different distributions, versions, or targets, and writes a `piship-reproducibility/v1` report. Payload equality is the claim: every declared payload path and SHA-256 must match, and the command exits 1 otherwise, listing the differing paths. Wrapper files (`release.json`, SBOM, notices, scan result, install scripts) and whole-archive equality are reported separately. Whether the build reused the runtime cache is not recorded in any of them: a cache hit, a miss, and a cold build give a byte-identical archive, `release.json`, and `checksums.txt`, and the cache result goes to stderr, the timing output, and an unsigned `<name>.build-info.json` beside the archive. A new vulnerability advisory published between two builds changes `vulnerabilities.json` without changing the payload. Equality is claimed only per target: `metadata/target.json` and native package files differ between targets by design.
