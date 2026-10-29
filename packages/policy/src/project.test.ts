@@ -389,7 +389,10 @@ describe.runIf(process.platform === "win32")(
           [".MCP.JSON", ".mcp.json"],
           [".mcp.json::$DATA", ".mcp.json"],
           [".CLAUDE\\SETTINGS.JSON", ".claude\\settings.json"],
-          [".claude::$INDEX_ALLOCATION\\settings.json", ".claude\\settings.json"],
+          [
+            ".claude::$INDEX_ALLOCATION\\settings.json",
+            ".claude\\settings.json",
+          ],
         ];
         for (const [spelling, real] of spellings) {
           // Guard the premise: the filesystem really treats them as one file.
@@ -398,6 +401,7 @@ describe.runIf(process.platform === "win32")(
         }
         // An 8.3 short name resolves to the file but is not textual; callers
         // check the `realpath.native` form too, which names the long file.
+        // Skipped when 8.3 short names are disabled on the volume.
         const short = join(root, "MCP~1.JSO");
         if (same(short, join(root, ".mcp.json")))
           expect(isProjectConfigPath(realpathSync.native(short), "win32")).toBe(
