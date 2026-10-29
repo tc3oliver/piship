@@ -28,7 +28,7 @@ const context = (shell: boolean): PolicyContext => ({
   workspaceRoot: join(base, "work"),
   homeDir: join(base, "home"),
   tmpDir: join(base, "tmp"),
-  containment: { ...NO_CONTAINMENT, shell },
+  containment: { ...NO_CONTAINMENT, shell, filesystem: shell },
 });
 
 function managed(extra: Record<string, unknown> = {}): PolicyConfig {
@@ -90,6 +90,19 @@ describe("piship.routine@1", () => {
         resource: join(base, "work", "a.ts"),
       }).effect,
     ).toBe("allow");
+  });
+
+  it("allows the session tmp only under an enforced sandbox", () => {
+    const tmp = join(base, "tmp", "scratch.txt");
+    for (const action of ["filesystem.read", "filesystem.write"] as const) {
+      expect(engine(managed()).evaluate({ action, resource: tmp }).effect).toBe(
+        "allow",
+      );
+      // Without a sandbox tmp is the whole system temp directory.
+      expect(
+        engine(managed(), false).evaluate({ action, resource: tmp }).effect,
+      ).toBe("ask");
+    }
   });
 
   it("asks for secrets and execution config, allows examples", () => {
@@ -216,4 +229,4 @@ describe("piship.routine@1", () => {
 
 const RULE_COUNT = 207;
 const DIGEST =
-  "cc2295d1082d32ac84c9f18ea66a3fa0887254c7c6af4b2b2f4b9167c6e8690a";
+  "aac42141aec3205665a60890e272504009c9cc3055e443d1775bf153e475c9f9";

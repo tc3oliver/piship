@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-2f5c2c005498619a623a3c032cb3fb8fc52cdb62bb55dc065c88e554c47d25de"
+    "sha256": "sha256-da389f9b7d5c21fff2343278d6970fd59a3e393540243e6f7ff7792de0704aec"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1362,13 +1362,6 @@
             "reason": "piship.routine@1: routine fs work"
           },
           {
-            "id": "piship.routine.fs.read-tmp",
-            "action": "filesystem.read",
-            "resource": "tmp/**",
-            "effect": "allow",
-            "reason": "piship.routine@1: routine fs work"
-          },
-          {
             "id": "piship.routine.fs.write-workspace",
             "action": "filesystem.write",
             "resource": "workspace/**",
@@ -1376,11 +1369,20 @@
             "reason": "piship.routine@1: routine fs work"
           },
           {
+            "id": "piship.routine.fs.read-tmp",
+            "action": "filesystem.read",
+            "resource": "tmp/**",
+            "effect": "allow",
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
+          },
+          {
             "id": "piship.routine.fs.write-tmp",
             "action": "filesystem.write",
             "resource": "tmp/**",
             "effect": "allow",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: routine fs work",
+            "contained": true
           },
           {
             "id": "piship.routine.fs.secrets.shell-example",
@@ -3046,7 +3048,7 @@
   },
   "digests": {
     "resources": "sha256-812525c208520fe2c1fa44effbcc4c2f609dc064c6f67f152a030ca95a1c721a",
-    "policy": "sha256-2ab926b383786e4e8575dcc5287e150152bc619bff96a7fee147da027295fb2a",
+    "policy": "sha256-71f5102bed07d85ab54de2acf0cf3f74ec328b6cbf13f581dd39bace7e70a9db",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
     "sandbox": "sha256-07750fd7b86a9767b567a9380fd0af05e0f43a284093783a7e8e2baf39c7d02f",
