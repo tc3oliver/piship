@@ -266,10 +266,7 @@ export function grantCommandWords(
     if (quote === "'") {
       if (char === "'") {
         quote = undefined;
-      } else if (
-        platform === "win32" &&
-        /[;&|$\x60<>()\\\r\n]/.test(char)
-      ) {
+      } else if (platform === "win32" && /[;&|$\x60<>()\\\r\n]/.test(char)) {
         // cmd.exe does not treat single quotes as quoting.
         return undefined;
       }
@@ -284,8 +281,7 @@ export function grantCommandWords(
         // cmd.exe does not use POSIX backslash quoting.
         if (platform === "win32") return undefined;
         // Only escaped quotes/backslashes are unambiguous in this subset.
-        if (text[i + 1] !== '"' && text[i + 1] !== "\\")
-          return undefined;
+        if (text[i + 1] !== '"' && text[i + 1] !== "\\") return undefined;
         i++;
         continue;
       }
@@ -300,10 +296,8 @@ export function grantCommandWords(
     if (/[;&|$\x60<>()\\\r\n]/.test(char)) return undefined;
     // Bash splits only on ASCII spaces/tabs here. The git-push scanner's
     // broader Unicode whitespace parsing must not grant a different program.
-    if (/\s/.test(char) && char !== " " && char !== "\t")
-      return undefined;
-    if (char !== "\t" && /[\u0000-\u001f\u007f]/.test(char))
-      return undefined;
+    if (/\s/.test(char) && char !== " " && char !== "\t") return undefined;
+    if (char !== "\t" && /[\u0000-\u001f\u007f]/.test(char)) return undefined;
   }
   if (quote !== undefined) return undefined;
   const parsed = simpleCommands(text);
