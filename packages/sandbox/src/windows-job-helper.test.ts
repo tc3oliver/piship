@@ -406,5 +406,55 @@ describe.runIf(process.platform === "win32")(
       const alive = childPid !== undefined;
       expect(alive).toBe(false);
     }, 60_000);
+
+    it("kills a detached grandchild when the helper is killed", async () => {
+      await run("0");
+      // The child starts a detached grandchild and prints both ids.
+      const grandchild =
+        "const g = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }); g.unref(); console.log(process.pid + ' ' + g.pid); setInterval(() => {}, 1000)";
+      const { file, args, env } = windowsJobSupervisor({
+        file: process.execPath,
+        args: ["-e", grandchild],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH ?? "" },
+      });
+      expect(file).not.toMatch(/powershell/i);
+      const supervisor = spawn(file, args, { env, windowsHide: true });
+      let pids: number[] = [];
+      const alive = (pid: number) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      try {
+        pids = await new Promise<number[]>((done) =>
+          supervisor.stdout.once("data", (chunk) =>
+            done(String(chunk).trim().split(" ").map(Number)),
+          ),
+        );
+        expect(pids).toHaveLength(2);
+        expect(pids.every(alive)).toBe(true);
+        // No /T: the Job Object, not taskkill, must end the whole tree.
+        spawn("taskkill", ["/pid", String(supervisor.pid), "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        }).on("error", () => {});
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline && pids.some(alive))
+          await new Promise((wait) => setTimeout(wait, 100));
+        expect(pids.filter(alive)).toEqual([]);
+      } finally {
+        supervisor.kill();
+        for (const pid of pids)
+          try {
+            process.kill(pid);
+          } catch {
+            // already gone
+          }
+      }
+    }, 60_000);
   },
 );
