@@ -1328,9 +1328,9 @@ describeIsolated(isolator)(
       expect(process.stderr.write).toBe(write);
     }, 120_000);
 
-    // Each seeded defect breaks exactly one behavior: the kit fails that one
-    // with a reason and passes every other. A behavior that needs a verified
-    // workspace first is skipped, never passed, when the first check failed.
+    // Seeded defects must fail with a reason. A falsely claimed shared
+    // workspace also fails the cancellation readiness check; workspace
+    // dependents are skipped when the first consistency check fails.
     const seeds: [
       Fault,
       Variant,
@@ -1600,7 +1600,7 @@ describeIsolated(isolator)(
     }, 120_000);
 
     it.concurrent.each(seeds)(
-      "fails only %j (%s reference), under %s",
+      "detects %j (%s reference), under %s",
       async (fault, variant, behavior, reason, dependents = []) => {
         const report = await run({ variant, fault });
         const result = report.results.find(
@@ -1611,11 +1611,18 @@ describeIsolated(isolator)(
         expect(statuses(report)).toEqual({
           ...expected[variant],
           [behavior]: "failed",
+          ...(fault === "claims shared but is a snapshot"
+            ? { cancellation: "failed" }
+            : {}),
           ...Object.fromEntries(dependents.map((b) => [b, "skipped"])),
         });
         for (const dependent of dependents)
           expect(reasons(report)[dependent]).toMatch(
             /first workspace check did not pass/,
+          );
+        if (fault === "claims shared but is a snapshot")
+          expect(reasons(report).cancellation).toMatch(
+            /readiness marker was not observable/,
           );
         expectCleanReasons(report);
       },
