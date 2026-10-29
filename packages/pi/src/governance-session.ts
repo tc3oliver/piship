@@ -4,7 +4,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
@@ -418,7 +418,10 @@ export class GovernanceSession {
 
   /** How to change a blocking decision, led by a space; empty when none applies. */
   denialHint(decision: Parameters<typeof denialHint>[0]): string {
-    const hint = denialHint(decision, this.options.lock.deployment.mode);
+    const hint = denialHint(decision, this.options.lock.deployment.mode, {
+      policyFile: join(this.options.stateDir, "config", "policy.json"),
+      grants: this.grantsAllowed,
+    });
     return hint ? ` ${hint}` : "";
   }
 

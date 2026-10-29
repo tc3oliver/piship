@@ -268,6 +268,21 @@ describe("denialHint", () => {
     expect(denialHint(at("builtin"), "personal")).toBe("");
   });
 
+  it("names /grant and the absolute policy file for a personal user", () => {
+    const where = { policyFile: "/state/config/policy.json", grants: true };
+    expect(denialHint(at("builtin"), "personal", where)).toBe(
+      "Nothing allows this yet; type `/grant <folder>` to approve that folder's prompts for this session, or add a rule to /state/config/policy.json (`piship policy explain shell.execute <resource>` shows how it was decided).",
+    );
+    expect(denialHint(at("builtin"), "managed", where)).toBe("");
+    expect(
+      denialHint(at("distribution-default"), "personal", {
+        policyFile: "/state/config/policy.json",
+      }),
+    ).toMatch(
+      /^This is a distribution default; add a rule to \/state\/config\/policy\.json to change it/,
+    );
+  });
+
   it("is empty after the person refused a prompt", () => {
     expect(
       denialHint({ ...at("user-preference"), approval: "denied" }, "personal"),

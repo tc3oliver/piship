@@ -113,7 +113,6 @@ export function workspaceGroup(data: DoctorData, out: DoctorSection): void {
       "no: remote commands do not see the files the agent edits",
     );
   const gitControl = workspace.gitControl ?? "not-verified";
-  if (gitControl === "not-verified")
-    out.warn("git control files", GIT_CONTROL_TEXT[gitControl]);
-  else out.info("git control files", GIT_CONTROL_TEXT[gitControl]);
+  // Expected and permanent under bubblewrap in a regular repository: a note.
+  out.info("git control files", GIT_CONTROL_TEXT[gitControl]);
 }

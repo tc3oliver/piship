@@ -409,7 +409,7 @@ export async function installDistribution(
           !ownStateMarker(runtimeStateDirectory({ value: id }), id)
         )
           throw new Error(
-            `State already exists for ${id} but is not marked as this distribution's own; pass --use-existing-state to explicitly reuse it`,
+            `State already exists for ${id}: saved data that this distribution did not create (for example, another install left it). To keep and use that data, run the install again with --use-existing-state`,
           );
         // The app directory appears with its marker in one rename, so an
         // interruption never leaves an unmarked apps/<id> that the next

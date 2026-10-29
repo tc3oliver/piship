@@ -217,7 +217,7 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
     else if (report.required)
       out.bad("containment", `${containment}: ${report.reason ?? "required"}`);
     else
-      out.warn(
+      out.info(
         "containment",
         `${containment}${report.reason ? `: ${report.reason}` : ""}`,
       );

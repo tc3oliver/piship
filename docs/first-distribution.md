@@ -54,7 +54,7 @@ $PISHIP test my-agent/piship.yaml
 
 `test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed` and a short summary of what Pi loaded.
 
-The first time, there is no `piship.lock` yet, so `test` writes one and says so (`Created piship.lock: none existed, so nothing was reviewed yet`). The lock records the digest of every resource and the pinned runtime; review it, and commit it with `piship.yaml`.
+The first time, there is no `piship.lock` yet, so `test` writes one and says so (`Created <path>/piship.lock: none existed, so nothing was reviewed yet`). The lock records the digest of every resource and the pinned runtime; review it, and commit it with `piship.yaml`.
 
 ## 4. Edit and repeat
 
@@ -64,7 +64,7 @@ The first time, there is no `piship.lock` yet, so `test` writes one and says so 
 $PISHIP dev my-agent/piship.yaml
 ```
 
-After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
+After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
 ```bash
 $PISHIP lock my-agent/piship.yaml

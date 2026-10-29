@@ -569,8 +569,8 @@ async function prepareLock(
   lockManifest(target);
   output.stderr(
     status === "missing"
-      ? "Created piship.lock: none existed, so nothing was reviewed yet. Review it and commit it with piship.yaml."
-      : "Relocked piship.lock: the manifest or a resource changed since it was written.",
+      ? `Created ${join(target, "piship.lock")}: none existed, so nothing was reviewed yet. Review it and commit it with piship.yaml.`
+      : `Relocked ${join(target, "piship.lock")}: the manifest or a resource changed since it was written.`,
   );
 }
 /**

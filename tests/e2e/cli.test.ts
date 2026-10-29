@@ -213,7 +213,7 @@ describe("CLI", () => {
     createAmbientResources(temp);
     const result = dev("dev", manifest, "--smoke");
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("Created piship.lock");
+    expect(result.stderr).toMatch(/Created .*piship\.lock: none existed/);
     expect(existsSync(join(temp, "dev-agent", "piship.lock"))).toBe(true);
     expect(JSON.parse(result.stdout)).toMatchObject({
       skills: [],
@@ -233,7 +233,7 @@ describe("CLI", () => {
     expect(stale.stderr).toContain("Lockfile is stale");
     const relocked = dev("dev", manifest, "--smoke");
     expect(relocked.status, relocked.stderr).toBe(0);
-    expect(relocked.stderr).toContain("Relocked piship.lock");
+    expect(relocked.stderr).toMatch(/Relocked .*piship\.lock: the manifest/);
     expect(dev("build", manifest).status).toBe(0);
   }, 360000);
   it("installs after piship test without --use-existing-state, and only once", () => {

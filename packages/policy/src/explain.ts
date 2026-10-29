@@ -163,7 +163,11 @@ export function denialHint(
     readonly approval?: ResolvedDecision["approval"];
   },
   deployment: "personal" | "managed",
+  where: { readonly policyFile?: string; readonly grants?: boolean } = {},
 ): string {
+  const file = where.policyFile ?? "config/policy.json";
+  // A personal user's own two ways out: a session grant, or a standing rule.
+  const personalWay = `${where.grants ? "type `/grant <folder>` to approve that folder's prompts for this session, or " : ""}add a rule to ${file}`;
   // The person's own refusal of a prompt needs no way to change a rule.
   if (decision.approval === "denied" || decision.approval === "cancelled")
     return "";
@@ -176,13 +180,15 @@ export function denialHint(
     case "team-project":
       return "This rule comes from the project or team policy; ask its owner to change it.";
     case "user-preference":
-      return `This is your own rule ${decision.ruleId}; edit it in config/policy.json (${explain}).`;
+      return `This is your own rule ${decision.ruleId}; edit it in ${file} (${explain}).`;
     case "builtin":
-      // No rule decided: nothing a user rule or the distribution can change here.
-      return "";
+      // No rule decided: only the person's own grant or rule can change it.
+      return deployment === "personal" && where.policyFile
+        ? `Nothing allows this yet; ${personalWay} (${explain}).`
+        : "";
     default:
       return deployment === "managed"
         ? "This is a distribution default; contact the distribution owner."
-        : `This is a distribution default; add a rule to config/policy.json to change it (${explain}).`;
+        : `This is a distribution default; ${personalWay} to change it (${explain}).`;
   }
 }

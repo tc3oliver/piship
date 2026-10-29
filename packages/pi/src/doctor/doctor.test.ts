@@ -1135,7 +1135,11 @@ describe("Network group", () => {
       `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
     );
     expect(lines.findIndex((line) => line.includes("agent commands"))).toBe(
-      lines.findIndex((line) => line.includes("egress: Pi")) - 1,
+      lines.findIndex((line) => line.startsWith(`  - ${"egress".padEnd(20)}`)) -
+        1,
+    );
+    expect(lines).toContain(
+      `  - ${"egress".padEnd(20)} not enforced by PiShip: Pi, extensions, shell, MCP stdio, Git and npm reach any host; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them`,
     );
     expect(lines).toContain(
       `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
@@ -1458,7 +1462,7 @@ describe("Sandbox and Workspace groups", () => {
         }),
       ).at(-1),
     ).toBe(
-      `  ! ${"git control files".padEnd(20)} not verified; sandboxed commands may be able to change them`,
+      `  - ${"git control files".padEnd(20)} not verified; sandboxed commands may be able to change them`,
     );
   });
 

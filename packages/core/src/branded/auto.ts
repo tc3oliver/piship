@@ -23,7 +23,7 @@ export function userAutoDenied(
         "Auto mode is for managed distributions; in personal mode you own the policy",
         {
           component: "policy",
-          userAction: `Add allow rules for what should run without a prompt to config/policy.json in the ${command} state directory`,
+          userAction: `Add allow rules for what should run without a prompt to config/policy.json in the ${command} state directory, or type /grant <folder> in a session to approve a folder for a while`,
         },
       )
     : new PiShipError(
