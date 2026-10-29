@@ -6,11 +6,6 @@ const SEPARATORS = new Set([";", "&", "|", "\n", "(", ")"]);
 
 /** Substitutions nested deeper than this make the push target unnamed. */
 const MAX_NESTING = 8;
-/** More resources than this collapse to one unnamed target. */
-const MAX_RESOURCES = 64;
-/** More git options than this before the subcommand count as a push to `*`. */
-const MAX_GIT_OPTIONS = 64;
-
 /**
  * A substitution being read: `$(`, a backtick, or arithmetic (`((` or
  * `$((`), whose words are read as commands too and where `<<` is a shift.
@@ -266,6 +261,7 @@ export function grantCommandWords(
   let quote: "'" | '"' | undefined;
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
+    if (platform === "win32" && /[%^!]/.test(char)) return undefined;
     if (quote === "'") {
       if (char === "'") quote = undefined;
       continue;
@@ -286,6 +282,8 @@ export function grantCommandWords(
       continue;
     }
     if (char === "'" || char === '"') {
+      // Single quotes do not quote metacharacters in cmd.exe.
+      if (platform === "win32" && char === "'") return undefined;
       quote = char;
       continue;
     }
