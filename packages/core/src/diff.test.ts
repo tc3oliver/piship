@@ -244,7 +244,7 @@ describe("diffLocks", () => {
 
     const defaultLoosened = clone(base);
     defaultLoosened.governance.manifest.policy.default = "allow";
-    defaultLoosened.governance.manifest.policy.projectTrust.unknown.dimensions.skills =
+    defaultLoosened.governance.manifest.policy.projectTrust.unknown.dimensions.extensions =
       "allow";
     expect(
       diffLocks(base, defaultLoosened).changes.map((change) => change.risk),

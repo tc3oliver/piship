@@ -181,8 +181,8 @@ describe("v1alpha3 defaults", () => {
           match: [],
           dimensions: {
             passiveContext: "allow",
-            instructions: "ask",
-            skills: "deny",
+            instructions: "allow",
+            skills: "allow",
             agents: "deny",
             hooks: "deny",
             extensions: "deny",
@@ -193,8 +193,8 @@ describe("v1alpha3 defaults", () => {
         unknown: {
           dimensions: {
             passiveContext: "allow",
-            instructions: "deny",
-            skills: "deny",
+            instructions: "allow",
+            skills: "allow",
             agents: "deny",
             hooks: "deny",
             extensions: "deny",

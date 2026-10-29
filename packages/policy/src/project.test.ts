@@ -1722,10 +1722,11 @@ describe("discoverProjectResources", () => {
       personal,
       {
         homeDir: home,
+        mode: "personal",
       },
     );
     expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ origin: "unknown", effect: "allow" });
+    expect(found[0]).toMatchObject({ origin: "unknown", effect: "ask" });
   });
 
   it("denies instruction imports that escape the root", () => {

@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-1e3705b4d40d52b9806d94f76cb7ab1b7253f34600a7ab35188c30cf2eaa86c2"
+    "sha256": "sha256-420194bc0f6e001616a2c3fa8f6cc07f149703938b04a6185f6114a34ccd568c"
   },
   "app": {
     "id": "acmecode",
@@ -1344,8 +1344,8 @@
             "match": [],
             "dimensions": {
               "passiveContext": "allow",
-              "instructions": "ask",
-              "skills": "deny",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
               "extensions": "deny",
@@ -1356,8 +1356,8 @@
           "unknown": {
             "dimensions": {
               "passiveContext": "allow",
-              "instructions": "deny",
-              "skills": "deny",
+              "instructions": "allow",
+              "skills": "allow",
               "agents": "deny",
               "hooks": "deny",
               "extensions": "deny",
@@ -1532,7 +1532,7 @@
   },
   "digests": {
     "resources": "sha256-4324767ab5f9114492df68197c3391cd2f048d701396e692f8546a8aefb59f33",
-    "policy": "sha256-44861e2e71d220f146ab77a15a76db2141dcee29783ed82cee1f156468db85bb",
+    "policy": "sha256-da1f2491cda9181092a0092b3309ee0ecc6172aaca9c423e3df9bd3621571fbb",
     "capabilities": "sha256-8a306de9e2ece858b1255dae71a16193516148e5d0db680e6c6250cdb765f494",
     "mcp": "sha256-0a3052edf09f38f5736d9a44c9b8cb4a564fedde6eba06cfb551c9545272a2e6",
     "sandbox": "sha256-a2e206c220b291bada5380fbf7ce351fd1728ff4505d59c7b159e176c834c26d",

@@ -159,13 +159,13 @@ Resource globs are anchored and case-sensitive. `*` matches any run of character
 | Dimension | Project items | Managed default (company / external / unknown) | Personal default (company, external, unknown) |
 | --- | --- | --- | --- |
 | `passiveContext` | `.pi/themes` | allow / allow / allow | allow / allow / allow |
-| `instructions` | Root instruction files such as `AGENTS.md` and `AGENTS.override.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md`, `.pi/prompts`, and `@path` imports | allow / ask / deny | allow / allow / allow |
-| `skills` | `.pi/skills`, `.agents/skills` | allow / deny / deny | allow / allow / allow |
+| `instructions` | Root instruction files such as `AGENTS.md` and `AGENTS.override.md`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md`, `.pi/prompts`, and `@path` imports | allow / allow / allow | allow / allow / allow |
+| `skills` | `.pi/skills`, `.agents/skills` | allow / allow / allow | allow / allow / allow |
 | `extensions` | `.pi/extensions` | company-approved / deny / deny | allow / allow / allow |
 | `mcp` | `.mcp.json` | company-approved / deny / deny | allow / allow / allow |
 | `agents`, `hooks`, `providers` | `.pi/agents`, `.pi/settings.json`, `.piship/providers` | deny | allow (`hooks` deny) |
 
-`company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny. All the items of one project that ask are covered by one question, and in a personal distribution the answer can be kept ([remembered answers](#claude-code-project-configuration)). The user's [auto mode](#user-auto-mode) never answers these project trust prompts: they decide whether to trust a workspace's content, not whether to run an action.
+The text-only items (`passiveContext`, `instructions`, `skills`) load for every origin by default, because a workspace that matches no company matcher is a normal case (research, a new technology, a third-party repository); everything that starts code stays denied or `company-approved` in a managed distribution. A company can set any dimension back to `ask` or `deny`, and a project's `.piship/policy.json` still only narrows. `company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny. All the items of one project that ask are covered by one question, and in a personal distribution the answer can be kept ([remembered answers](#claude-code-project-configuration)). The user's [auto mode](#user-auto-mode) never answers these project trust prompts: they decide whether to trust a workspace's content, not whether to run an action.
 
 ### Claude Code project configuration
 
