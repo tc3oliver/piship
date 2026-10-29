@@ -1295,13 +1295,16 @@ describe("Sandbox and Workspace groups", () => {
         "not verified: network deny (attested by the backend, not verified: the backend declares no network probe to check it with)",
       ),
     );
-    // A required sandbox that does not deny the network is a missing control.
-    const missing = run(
+    // A sandbox that allows the network is a deliberate choice (it contains
+    // the filesystem), so egress stays a note; a required sandbox that is not
+    // enforced is already a failed containment line in the Sandbox group.
+    const allowed = run(
       "managed",
       withSandbox(inspection({ network: "allow" })),
     );
+    expect(allowed.failed).toBe(false);
     expect(
-      missing.lines.some((line) => line.startsWith(shell("!", none))),
+      allowed.lines.some((line) => line.startsWith(shell("-", none))),
     ).toBe(true);
     // Personal mode is information.
     expect(
