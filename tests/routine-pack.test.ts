@@ -105,6 +105,27 @@ describe("piship.routine@1", () => {
     }
   });
 
+  it("keeps tmp closed when only shell commands are contained", () => {
+    // A remote sandbox backend can contain commands without containing the
+    // local filesystem, where tmp is still the system temp directory.
+    const remote = new PolicyEngine({
+      policy: managed(),
+      context: {
+        ...context(true),
+        containment: { ...NO_CONTAINMENT, shell: true, filesystem: false },
+      },
+    });
+    expect(
+      remote.evaluate({
+        action: "filesystem.write",
+        resource: join(base, "tmp", "scratch.txt"),
+      }).effect,
+    ).toBe("ask");
+    expect(
+      remote.evaluate({ action: "shell.execute", resource: "npm test" }).effect,
+    ).toBe("allow");
+  });
+
   it("asks for secrets and execution config, allows examples", () => {
     const e = engine(managed());
     const at = (action: "filesystem.read" | "filesystem.write", path: string) =>
