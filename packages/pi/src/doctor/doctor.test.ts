@@ -846,7 +846,7 @@ describe("Network group", () => {
       }),
     ).render();
     const lines = group(output, "Network");
-    expect(lines).toEqual([
+    expect(lines.filter((line) => !line.includes("egress"))).toEqual([
       `  ✓ ${"TLS verification".padEnd(20)} on`,
       `  ✓ ${"outbound".padEnd(20)} private-only: declared hosts only (gateway.acme.example); public fallback denied`,
       `  ✓ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128)`,
@@ -1124,7 +1124,7 @@ describe("Network group", () => {
     expect(lines).toContain(
       `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
     );
-    expect(lines.at(-1)).toBe(
+    expect(lines).toContain(
       `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
     );
     expect(lines.join("\n")).not.toContain("withheld");
@@ -1209,6 +1209,52 @@ describe("Sandbox and Workspace groups", () => {
     );
     expect(sandbox).toContain(
       `  - ${"summary".padEnd(20)} enforced by macos-seatbelt (required)`,
+    );
+  });
+
+  it("separates what PiShip restricts from IT-owned egress it cannot verify", () => {
+    const egress = (
+      mode: "managed" | "personal",
+      governance: GovernanceData | undefined,
+    ) =>
+      group(
+        renderDoctor(
+          doctorData(mode, {
+            access: accessData(),
+            ...(governance ? { governance } : {}),
+          }),
+        ).render(),
+        "Network",
+      ).filter((line) => /egress/.test(line));
+    const none =
+      "no PiShip hostname-level egress control; only IT's firewall, proxy, DLP or EDR can limit it, and PiShip cannot verify them, so they are not counted as enforced";
+    // No sandbox: unverifiable controls are reported as not enforced.
+    const bare = egress("managed", undefined);
+    expect(bare).toContain(`  ! ${"egress: shell".padEnd(20)} ${none}`);
+    expect(bare).toContain(`  ! ${"egress: MCP stdio".padEnd(20)} ${none}`);
+    expect(bare).toContain(
+      `  ✓ ${"egress: Pi".padEnd(20)} PiShip: private-only, declared hosts`,
+    );
+    expect(bare.join("\n")).toContain("PiShip does not read endpoint firewall");
+    // A verified network-deny sandbox is the PiShip restriction.
+    const inspected = inspection({
+      networkDenial: { evidence: "verified", probe: false },
+    });
+    const sandboxed = egress(
+      "managed",
+      governanceData({
+        inspection: inspected,
+        isolation: sandboxIsolation(inspected.sandbox),
+        workspace: workspaceData(inspected),
+      }),
+    );
+    expect(sandboxed).toContain(
+      `  ✓ ${"egress: shell".padEnd(20)} PiShip: network denied by the sandbox (verified)`,
+    );
+    expect(sandboxed.join("\n")).not.toContain("not counted as enforced");
+    // Personal mode is information, not a warning.
+    expect(egress("personal", undefined)).toContain(
+      `  - ${"egress: shell".padEnd(20)} ${none}`,
     );
   });
 
