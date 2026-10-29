@@ -1,14 +1,14 @@
 import { spawnSync } from "node:child_process";
 import {
-  type KeyObject,
   createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
+  type KeyObject,
   sign,
   verify,
 } from "node:crypto";
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError, systemError } from "@piship/contracts";
 
@@ -235,6 +235,7 @@ export function writePrivateKey(
       },
     );
   try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(path, privateKeyPem, { mode: 0o600, flag: "wx" });
   } catch (error) {
     throw (

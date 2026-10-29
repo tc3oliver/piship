@@ -142,6 +142,14 @@ describe("private key location", () => {
     expect(privateKeyLocation(join(outside, "k.pem"))).toBe("outside");
   });
 
+  it("creates the missing parent directory of the key file", () => {
+    const outside = mkdtempSync(join(tmpdir(), "piship-keygen-out-"));
+    roots.push(outside);
+    const file = join(outside, "a", "b", "k.pem");
+    expect(writePrivateKey(file, pem)).toBe("outside");
+    expect(existsSync(file)).toBe(true);
+  });
+
   it("fails closed when git exits with an error inside a work tree", () => {
     const root = repo();
     const ceiling = process.env.GIT_CEILING_DIRECTORIES;

@@ -547,7 +547,6 @@ describe("CLI", () => {
           env: adminEnv,
           encoding: "utf8",
         });
-      mkdirSync(join(temp, "admin-keys"));
       const keyFile = join(temp, "admin-keys", "channel.pem");
       const keygen = admin(
         "keygen",
