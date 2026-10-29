@@ -9,7 +9,6 @@ export {
   buildPack,
   PACK_SCHEMA,
   readRuntimeArchive,
-  RUNTIME_SCHEMA,
   type BuiltPack,
   type PackMetadata,
   type PackOptions,

@@ -14,6 +14,8 @@ import { generateSigningKey } from "../signing.js";
 import {
   buildPack,
   packageClosureProblems,
+  type PackOptions,
+  type PackRuntime,
   readRuntimeArchive,
 } from "./pack.js";
 
@@ -81,31 +83,39 @@ function project(
   return { dir, path };
 }
 
+const described = new Map<string, PackRuntime>();
+const pack = (manifest: string, options: PackOptions) =>
+  buildPack(manifest, {
+    ...options,
+    readRuntime: async (path) => described.get(path) as PackRuntime,
+  });
+
 /** A runtime archive as `piship-runtime/v1` describes it. */
 async function runtime(
   path: string,
   target: string,
-  change: Record<string, unknown> = {},
+  change: Partial<PackRuntime> = {},
 ): Promise<string> {
   const lock = requireCurrentLock(path);
   const root = `piship-runtime-${lock.runtime.pishipVersion}-${target}`;
   const source = temp();
   mkdirSync(join(source, root), { recursive: true });
-  writeFileSync(
-    join(source, root, "runtime.json"),
-    JSON.stringify({
-      schema: "piship-runtime/v1",
-      pishipVersion: lock.runtime.pishipVersion,
-      npmLockSha256: lock.runtime.npmLockSha256,
-      target,
-      pi: { package: lock.runtime.package, version: lock.runtime.version },
-      inventory: { sha256: "a".repeat(64), files: 3 },
-      ...change,
-    }),
-  );
+  writeFileSync(join(source, root, "runtime.json"), "{}");
   const out = join(temp(), `${root}.tar.gz`);
   const archive = await createArchive(join(source, root), root, out);
   writeFileSync(`${out}.sha256`, `${archive.sha256}  ${root}.tar.gz\n`);
+  described.set(out, {
+    name: `${root}.tar.gz`,
+    target,
+    sha256: archive.sha256,
+    bytes: archive.bytes,
+    pishipVersion: lock.runtime.pishipVersion,
+    piVersion: lock.runtime.version,
+    npmLockSha256: lock.runtime.npmLockSha256,
+    inventorySha256: "a".repeat(64),
+    searchTools: {},
+    ...change,
+  });
   return out;
 }
 
@@ -128,7 +138,7 @@ describe("piship pack", () => {
     const { path } = project();
     const runtimes = await all(path);
     const out = temp();
-    const built = await buildPack(path, { runtimes, outputRoot: out });
+    const built = await pack(path, { runtimes, outputRoot: out });
     const lock = requireCurrentLock(path);
     expect(built.metadata.schema).toBe("piship-pack/v1");
     expect(built.metadata.targets).toEqual(lock.release?.targets);
@@ -137,7 +147,7 @@ describe("piship pack", () => {
       lock.runtime.npmLockSha256,
     );
     expect(Object.keys(built.metadata.runtime.archives)).toHaveLength(3);
-    const read = await readRuntimeArchive(runtimes[0] as string);
+    const read = described.get(runtimes[0] as string) as PackRuntime;
     expect(built.metadata.runtime.archives[read.target]?.sha256).toBe(
       read.sha256,
     );
@@ -154,14 +164,14 @@ describe("piship pack", () => {
   it("is deterministic", async () => {
     const { path } = project();
     const runtimes = await all(path);
-    const first = await buildPack(path, { runtimes, outputRoot: temp() });
-    const second = await buildPack(path, { runtimes, outputRoot: temp() });
+    const first = await pack(path, { runtimes, outputRoot: temp() });
+    const second = await pack(path, { runtimes, outputRoot: temp() });
     expect(second.sha256).toBe(first.sha256);
   });
 
   it("drops win32 when a sandbox is required, with the sandbox gate text", async () => {
     const { path } = project("sandbox:\n  required: true\n");
-    const built = await buildPack(path, {
+    const built = await pack(path, {
       runtimes: await all(path),
       outputRoot: temp(),
     });
@@ -173,7 +183,7 @@ describe("piship pack", () => {
 
   it("records a target without a runtime archive as excluded", async () => {
     const { path } = project();
-    const built = await buildPack(path, {
+    const built = await pack(path, {
       runtimes: [await runtime(path, "linux-x64")],
       outputRoot: temp(),
     });
@@ -183,7 +193,7 @@ describe("piship pack", () => {
 
   it("allows release.bundle and release.strip false: the runtime is always bundled and stripped", async () => {
     const { path } = project(undefined, "  bundle: false\n  strip: false\n");
-    const built = await buildPack(path, {
+    const built = await pack(path, {
       runtimes: await all(path),
       outputRoot: temp(),
     });
@@ -233,7 +243,7 @@ describe("piship pack", () => {
     ]);
     const { path } = project(undefined, undefined, elf);
     const error = await rejection(
-      buildPack(path, { runtimes: await all(path), outputRoot: temp() }),
+      pack(path, { runtimes: await all(path), outputRoot: temp() }),
     );
     expect(error.code).toBe("PACK_INELIGIBLE");
     expect(error.message).toMatch(/resources\/AGENTS\.md is a native artifact/);
@@ -252,7 +262,7 @@ describe("piship pack", () => {
     const klass = project(undefined, undefined, header(65));
     expect(
       (
-        await buildPack(klass.path, {
+        await pack(klass.path, {
           runtimes: await all(klass.path),
           outputRoot: temp(),
         })
@@ -260,7 +270,7 @@ describe("piship pack", () => {
     ).toHaveLength(3);
     const fat = project(undefined, undefined, header(2));
     const error = await rejection(
-      buildPack(fat.path, {
+      pack(fat.path, {
         runtimes: await all(fat.path),
         outputRoot: temp(),
       }),
@@ -273,10 +283,10 @@ describe("piship pack", () => {
     for (const change of [
       { npmLockSha256: "b".repeat(64) },
       { pishipVersion: "0.0.1" },
-      { pi: { package: "x", version: "0.0.1" } },
+      { piVersion: "0.0.1" },
     ]) {
       const error = await rejection(
-        buildPack(path, {
+        pack(path, {
           runtimes: [await runtime(path, "linux-x64", change)],
           outputRoot: temp(),
         }),
@@ -289,14 +299,14 @@ describe("piship pack", () => {
   it("refuses a runtime for a target outside release.targets and duplicates", async () => {
     const { path } = project();
     const odd = await rejection(
-      buildPack(path, {
+      pack(path, {
         runtimes: [await runtime(path, "linux-arm64")],
         outputRoot: temp(),
       }),
     );
     expect(odd.message).toMatch(/not in release\.targets/);
     const twice = await rejection(
-      buildPack(path, {
+      pack(path, {
         runtimes: [
           await runtime(path, "linux-x64"),
           await runtime(path, "linux-x64"),
@@ -311,9 +321,7 @@ describe("piship pack", () => {
     const { dir, path } = project();
     const runtimes = await all(path);
     writeFileSync(join(dir, "resources", "AGENTS.md"), "# edited\n");
-    const error = await rejection(
-      buildPack(path, { runtimes, outputRoot: temp() }),
-    );
+    const error = await rejection(pack(path, { runtimes, outputRoot: temp() }));
     expect(error.code).toBe("LOCK_INVALID");
   });
 

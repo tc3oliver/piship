@@ -28,7 +28,6 @@ import { createArchive, extractArchive } from "../archive.js";
 import type { DistributionLock } from "../index.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";
 import { packageLockFiles, vendorPiPackages } from "../pi-packages/lock.js";
-import { SEARCH_TOOL_SPECS } from "../search-tools/catalog.js";
 import { formatChecksums } from "../supply-chain.js";
 import { sweepOutputStaging } from "../temporary-directories.js";
 import { STATE_SCHEMAS } from "../migration.js";
@@ -41,10 +40,10 @@ import {
   sandboxGate,
 } from "./gates.js";
 import type { ReleaseOptions } from "./metadata.js";
+import { verifyRuntimeRelease } from "./runtime.js";
 import { gate, hash, writeJson } from "./shared.js";
 
 export const PACK_SCHEMA = "piship-pack/v1";
-export const RUNTIME_SCHEMA = "piship-runtime/v1";
 
 /** A runtime archive as `piship pack` binds it: read from its `runtime.json`. */
 export interface PackRuntime {
@@ -56,6 +55,8 @@ export interface PackRuntime {
   readonly piVersion: string;
   readonly npmLockSha256: string;
   readonly inventorySha256: string;
+  /** Version of each search tool the runtime bundles. */
+  readonly searchTools: Readonly<Record<string, string>>;
 }
 
 export interface PackMetadata {
@@ -117,6 +118,8 @@ export interface PackOptions
   > {
   /** Official runtime archives, one per target. */
   readonly runtimes: readonly string[];
+  /** Test seam: replaces `readRuntimeArchive`. */
+  readonly readRuntime?: (path: string) => Promise<PackRuntime>;
 }
 
 export interface BuiltPack {
@@ -127,68 +130,28 @@ export interface BuiltPack {
   readonly metadata: PackMetadata;
 }
 
-function integrity(message: string): PiShipError {
-  return new PiShipError("INTEGRITY_FAILED", `Pack runtime: ${message}`, {
-    component: "release",
-    userAction:
-      "Obtain the runtime archive again from the official release and verify it",
-  });
-}
-
-function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value)
-    throw integrity(`runtime.json has no ${field}`);
-  return value;
-}
-
 /**
- * The one reader of `runtime.json` (`piship-runtime/v1`): the archive is
- * hashed and only that file is read from it.
+ * The one reader of a runtime archive: the runtime release verifier (archive
+ * digest and sidecar, checksums, every payload file against its inventory,
+ * qualification, scans, tests) and then its `runtime.json`.
  */
 export async function readRuntimeArchive(path: string): Promise<PackRuntime> {
-  const name = basename(path);
-  const root = name.replace(/\.tar\.gz$/, "");
-  const key = `${root}/runtime.json`;
-  const scratch = createTemporaryDirectory(tmpdir(), "verify");
+  const verified = await verifyRuntimeRelease(path);
   try {
-    const extracted = await extractArchive(path, join(scratch.path, "x"), {
-      expectedRoot: root,
-      capture: (entry) => entry === key,
-      mapEntry: () => undefined,
-    }).catch((error: Error) => {
-      throw integrity(`${name}: ${error.message}`);
-    });
-    const sha256 = extracted.sha256 as string;
-    const sidecar = `${path}.sha256`;
-    if (
-      existsSync(sidecar) &&
-      readFileSync(sidecar, "utf8").trim().split(/\s+/)[0] !== sha256
-    )
-      throw integrity(`${name} does not match its .sha256 file`);
-    const raw = extracted.captured?.get(key);
-    if (!raw) throw integrity(`${name} has no runtime.json`);
-    const json = JSON.parse(raw.toString("utf8")) as {
-      schema?: unknown;
-      target?: unknown;
-      pishipVersion?: unknown;
-      npmLockSha256?: unknown;
-      pi?: { version?: unknown };
-      inventory?: { sha256?: unknown };
-    };
-    if (json.schema !== RUNTIME_SCHEMA)
-      throw integrity(`${name}: unknown runtime schema ${json.schema}`);
+    const { metadata } = verified;
     return {
-      name,
-      target: text(json.target, "target"),
-      sha256,
+      name: basename(path),
+      target: metadata.target,
+      sha256: verified.archiveSha256 as string,
       bytes: statSync(path).size,
-      pishipVersion: text(json.pishipVersion, "pishipVersion"),
-      piVersion: text(json.pi?.version, "pi.version"),
-      npmLockSha256: text(json.npmLockSha256, "npmLockSha256"),
-      inventorySha256: text(json.inventory?.sha256, "inventory.sha256"),
+      pishipVersion: metadata.pishipVersion,
+      piVersion: metadata.pi.version,
+      npmLockSha256: metadata.npmLockSha256,
+      inventorySha256: metadata.inventory.sha256,
+      searchTools: metadata.searchTools,
     };
   } finally {
-    scratch.remove();
+    verified.cleanup();
   }
 }
 
@@ -254,13 +217,6 @@ export function packageClosureProblems(
 /** Every reason this distribution cannot be a pack; empty when eligible. */
 function ineligibility(lock: DistributionLock, base: string): string[] {
   const reasons: string[] = [];
-  for (const tool of SEARCH_TOOLS) {
-    const version = lock.searchTools?.[tool]?.version;
-    if (version && version !== SEARCH_TOOL_SPECS[tool].defaultVersion)
-      reasons.push(
-        `runtime.searchTools pins ${tool} ${version}, not the runtime's ${SEARCH_TOOL_SPECS[tool].defaultVersion}; use the default version, or build per-target releases with piship release`,
-      );
-  }
   for (const entry of lock.packages ?? []) {
     const { lockfile } = packageLockFiles(base, entry.id);
     const problems = packageClosureProblems(
@@ -308,7 +264,7 @@ export async function buildPack(
 
   const archives: Record<string, PackRuntime> = {};
   for (const path of options.runtimes) {
-    const runtime = await readRuntimeArchive(path);
+    const runtime = await (options.readRuntime ?? readRuntimeArchive)(path);
     if (!(release.targets as readonly string[]).includes(runtime.target))
       throw gate(
         "CONFIG_INVALID",
@@ -341,7 +297,19 @@ export async function buildPack(
     if (sandbox) excluded[target] = sandbox.message;
     else if (!archives[target])
       excluded[target] = "no runtime archive was supplied";
-    else targets.push(target);
+    else {
+      const missing = SEARCH_TOOLS.flatMap((tool) => {
+        const wanted = lock.searchTools?.[tool]?.version;
+        const has = archives[target]?.searchTools[tool];
+        return wanted && wanted !== has
+          ? [`${tool} ${wanted} (the runtime has ${has ?? "none"})`]
+          : [];
+      });
+      if (missing.length)
+        excluded[target] =
+          `${archives[target]?.name} does not bundle the locked search tools: ${missing.join(", ")}; use a runtime with those versions, or lock the versions it bundles`;
+      else targets.push(target);
+    }
   }
   if (!targets.length)
     throw gate(
