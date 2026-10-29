@@ -83,10 +83,10 @@ describe("spawnManaged", () => {
       args: ["-e", TREE, heartbeat, token],
       cwd: dir,
       env: { PATH: process.env.PATH ?? "" },
-      // Long enough for a loaded Windows runner to start the child and its
-      // grandchild before the deadline; at 1 s the child was sometimes killed
-      // before it printed "started".
-      timeoutMs: 5000,
+      // The Windows helper and child can take over 5 s to start on a busy
+      // runner. Keep the readiness assertion and the actual timeout/tree
+      // reclaim checks; allow a separate startup budget on Windows.
+      timeoutMs: process.platform === "win32" ? 10_000 : 5000,
       graceMs: 300,
       onStdout: (chunk) => {
         output += chunk.toString();
@@ -98,7 +98,7 @@ describe("spawnManaged", () => {
     expect(exit.cancelled).toBe(false);
     expect(await heartbeatStopped(heartbeat)).toBe(true);
     expect(running(token)).toBe(false);
-  });
+  }, process.platform === "win32" ? 20_000 : 15_000);
 
   it("cancels through an AbortSignal", async () => {
     const heartbeat = join(dir, "hb");
