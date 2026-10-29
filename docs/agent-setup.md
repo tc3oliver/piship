@@ -25,6 +25,19 @@ cd ~/src/piship && npm ci && npm run build
 
 It needs Node.js 22.19.0 or newer (`node --version`), and npm 11 or later (`npm install -g npm@11`) to lock a distribution that declares Pi packages. Below, `piship` means `node ~/src/piship/packages/cli/dist/bin.js`.
 
+### Admin tooling without a clone
+
+If the person does not want a clone, use the PiShip CLI that every release archive carries. This is the only part of step 1 that replaces the clone; the rest of this page is unchanged.
+
+1. Download the archive for this machine's OS from a [GitHub pre-release](https://github.com/tc3oliver/piship/releases), for example `devcode-<version>-<os>-<arch>.tar.gz` with its `.sha256`. Any distribution's archive carries the same tooling; `devcode` is a neutral choice.
+2. Verify it: `gh attestation verify <archive> --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`.
+3. Extract it into a new, empty directory. Below, `piship` means `node <dir>/<archive-name>/payload/piship.mjs`. Run `piship verify-release <dir>/<archive-name>` once before using it.
+4. Use it by path for `init`, `validate`, `lock`, `build`, `test`, `release`, `keygen`, `trust-root`, `sign-channel`, and `verify-release`.
+
+**Never run the archive's `install.sh` or `install.ps1` for this.** They install that archive's own distribution (for example `devcode`), not the admin tooling.
+
+What is tested: a payload moved out of its build tree runs `init`, `lock`, and `build` (Ubuntu release qualification), and `validate`, `keygen --encrypt`, `trust-root init`, `release`, `verify-release`, and `sign-channel` (run once, on macOS; the Ubuntu and Windows qualification runs have not covered it yet). It is the same code as the clone's CLI. `release` builds only for the machine's own OS and CPU, so a distribution for several targets needs one machine per target.
+
 ## 2. Ask the person
 
 Ask the shared questions and the questions of the person's branch; if they have not said which branch, ask question S1 first. Say that any question can be answered "not sure yet"; collect those as open items instead of guessing. Do not paste the whole list as one message:
