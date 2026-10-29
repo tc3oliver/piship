@@ -7,9 +7,20 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const TARGETS = ["ubuntu", "macos", "windows"];
 const runs = TARGETS.map(() => new Map());
-for (const log of process.argv.slice(2)) {
-  // gh writes the colour codes of the log as text: ^[[32m.
-  const text = readFileSync(log, "utf8").replace(/\^\[\[[0-9;]*m/g, "");
+const args = process.argv.slice(2);
+const output =
+  args[0] === "--out"
+    ? args[1]
+    : new URL("../tests/helpers/unit-durations.json", import.meta.url);
+const logs = args[0] === "--out" ? args.slice(2) : args;
+if (!output || logs.length === 0)
+  throw new Error("Usage: unit-durations.mjs [--out file] <CI unit log>...");
+// `gh run view --log` can retain raw ANSI escape bytes or their ^[[ spelling.
+const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+for (const log of logs) {
+  const text = readFileSync(log, "utf8")
+    .replace(ansi, "")
+    .replace(/\^\[\[[0-9;]*m/g, "");
   const target = TARGETS.findIndex((name) => text.startsWith(`check (${name}`));
   if (target < 0) throw new Error(`${log} is not a CI check log`);
   let parsed = 0;
@@ -33,7 +44,4 @@ const lines = files.map(
   (file) =>
     `  ${JSON.stringify(file)}: [${runs.map((run) => Math.round(median(run.get(file)) * 10) / 10).join(", ")}]`,
 );
-writeFileSync(
-  new URL("../tests/helpers/unit-durations.json", import.meta.url),
-  `{\n${lines.join(",\n")}\n}\n`,
-);
+writeFileSync(output, `{\n${lines.join(",\n")}\n}\n`);
