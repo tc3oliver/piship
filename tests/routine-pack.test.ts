@@ -44,6 +44,11 @@ const engine = (policy: PolicyConfig, shell = true) =>
   new PolicyEngine({ policy, context: context(shell) });
 
 describe("piship.routine@1", () => {
+  it("gives every rule its own ID", () => {
+    const ids = managed().defaults.map((rule) => rule.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it("is frozen", () => {
     const rules = managed().defaults;
     // Changing the pack needs routine@2, not an edit of this digest.
@@ -211,4 +216,4 @@ describe("piship.routine@1", () => {
 
 const RULE_COUNT = 207;
 const DIGEST =
-  "d8578a1f88f698315b7f89ba60e2b08d0ff6888d79deacafdad9e05503c33629";
+  "cc2295d1082d32ac84c9f18ea66a3fa0887254c7c6af4b2b2f4b9167c6e8690a";

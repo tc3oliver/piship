@@ -19,6 +19,8 @@ type Entry = readonly [
 
 const slug = (text: string) =>
   text
+    // `.env` and `.env.*` must not share an ID.
+    .replace(/\.\*/g, "-any")
     .replace(/[^a-z0-9]+/gi, "-")
     .replace(/^-|-$/g, "")
     .toLowerCase();
