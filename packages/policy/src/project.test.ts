@@ -356,7 +356,7 @@ describe("isProjectConfigPath", () => {
     expect(isProjectConfigPath("/w/.PI/extensions/x.ts", "darwin")).toBe(true);
     expect(isProjectConfigPath("C:\\w\\.pi.\\x.ts", "win32")).toBe(true);
     // An NTFS stream name, also of a file that does not exist yet.
-    // Unverified on a real Windows host: the platform flag is simulated.
+    // Also checked against a real NTFS volume below.
     expect(isProjectConfigPath("C:\\w\\.mcp.json::$DATA", "win32")).toBe(true);
     expect(
       isProjectConfigPath("C:\\w\\.claude\\settings.json:x", "win32"),
@@ -364,6 +364,55 @@ describe("isProjectConfigPath", () => {
     expect(isProjectConfigPath("C:\\w\\src\\a.ts::$DATA", "win32")).toBe(false);
   });
 });
+
+describe.runIf(process.platform === "win32")(
+  "isProjectConfigPath on a real Windows filesystem",
+  () => {
+    it("recognises every spelling the filesystem resolves to a configuration file", () => {
+      const root = realpathSync.native(
+        mkdtempSync(join(tmpdir(), "piship-config-")),
+      );
+      try {
+        writeFileSync(join(root, ".mcp.json"), "{}");
+        mkdirSync(join(root, ".claude"));
+        writeFileSync(join(root, ".claude", "settings.json"), "{}");
+        const same = (a: string, b: string) => {
+          try {
+            const x = statSync(a, { bigint: true });
+            const y = statSync(b, { bigint: true });
+            return x.dev === y.dev && x.ino === y.ino;
+          } catch {
+            return false;
+          }
+        };
+        const spellings: [string, string][] = [
+          [".MCP.JSON", ".mcp.json"],
+          [".mcp.json::$DATA", ".mcp.json"],
+          [".CLAUDE\\SETTINGS.JSON", ".claude\\settings.json"],
+          [
+            ".claude::$INDEX_ALLOCATION\\settings.json",
+            ".claude\\settings.json",
+          ],
+        ];
+        for (const [spelling, real] of spellings) {
+          // Guard the premise: the filesystem really treats them as one file.
+          expect(same(join(root, spelling), join(root, real))).toBe(true);
+          expect(isProjectConfigPath(join(root, spelling), "win32")).toBe(true);
+        }
+        // An 8.3 short name resolves to the file but is not textual; callers
+        // check the `realpath.native` form too, which names the long file.
+        // Skipped when 8.3 short names are disabled on the volume.
+        const short = join(root, "MCP~1.JSO");
+        if (same(short, join(root, ".mcp.json")))
+          expect(isProjectConfigPath(realpathSync.native(short), "win32")).toBe(
+            true,
+          );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  },
+);
 
 describe("project git control paths", () => {
   it("lists the config files and the hooks and info trees of a repository", () => {
