@@ -1,6 +1,6 @@
 // Test-only helper: build a self-signed loopback certificate with Node's crypto
 // so TLS tests need neither openssl nor committed key material.
-import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, type KeyObject, sign } from "node:crypto";
 
 function length(size: number): Buffer {
   if (size < 0x80) return Buffer.from([size]);

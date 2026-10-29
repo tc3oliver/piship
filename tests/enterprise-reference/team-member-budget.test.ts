@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  type ReferenceStack,
   errorType,
   poll,
+  type ReferenceStack,
   startReferenceStack,
 } from "./stack.js";
 

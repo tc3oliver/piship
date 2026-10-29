@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  type ReferenceStack,
   errorType,
+  type ReferenceStack,
   startReferenceStack,
 } from "./stack.js";
 

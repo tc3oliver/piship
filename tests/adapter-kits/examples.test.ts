@@ -5,8 +5,8 @@
 // examples call are fakes the kits (or this file) own.
 import {
   CREDENTIAL_BEHAVIORS,
-  type IssuedCredential,
   IDENTITY_BEHAVIORS,
+  type IssuedCredential,
   SANDBOX_BEHAVIORS,
   testCredentialAdapter,
   testIdentityAdapter,

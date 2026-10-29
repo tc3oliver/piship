@@ -4,15 +4,13 @@
 // `piship.routine@1` pack run through PiShip's policy engine with shell
 // containment enforced. Only the commands both profiles can be asked about
 // share a row: the developer provider allows more (docker, rm, gh, ...), by
-// design. `afterWp2` is the routine verdict once command matching strips safe
-// wrappers, redirects and `cd` prefixes; until then those rows ask.
+// design.
 export type Verdict = "allow" | "ask" | "deny";
 
 export interface RoutineCase {
   readonly command: string;
   readonly developer: Verdict | undefined;
   readonly routine: Verdict;
-  readonly afterWp2?: Verdict;
   readonly note?: string;
 }
 
@@ -21,13 +19,11 @@ const row = (
   developer: Verdict | undefined,
   routine: Verdict,
   note?: string,
-  afterWp2?: Verdict,
 ): RoutineCase => ({
   command,
   developer,
   routine,
   ...(note === undefined ? {} : { note }),
-  ...(afterWp2 === undefined ? {} : { afterWp2 }),
 });
 
 export const ROUTINE_CASES: readonly RoutineCase[] = [
@@ -55,9 +51,9 @@ export const ROUTINE_CASES: readonly RoutineCase[] = [
   row("rm file.txt", "allow", "ask", "the pack never allows rm"),
   row("docker compose up -d", "allow", "ask", "docker is never in the pack"),
   row("gh pr view 12", "allow", "ask", "gh is never in the pack"),
-  row("cd src && npm test", "allow", "ask", "chained", "allow"),
-  row("FOO=1 npm test", undefined, "ask", "env prefix", "ask"),
-  row("npm test 2>&1", "allow", "ask", "redirect", "allow"),
+  row("cd src && npm test", "allow", "ask", "chained"),
+  row("FOO=1 npm test", undefined, "ask", "env prefix"),
+  row("npm test 2>&1", "allow", "allow", "redirect"),
   row("sudo ls", "ask", "ask"),
   row("rm -rf build", "ask", "ask"),
   row("find . -name x -delete", "ask", "ask"),
@@ -104,5 +100,5 @@ export const ROUTINE_CASES: readonly RoutineCase[] = [
   row("npm run test:unit", undefined, "allow"),
   row("npm run dev", undefined, "ask", "starts a server"),
   row("make install", undefined, "ask"),
-  row(" npm test", undefined, "ask", "leading space", "allow"),
+  row(" npm test", undefined, "allow", "leading space"),
 ];

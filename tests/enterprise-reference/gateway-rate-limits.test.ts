@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  errorType,
   type HttpResult,
   type ReferenceStack,
-  errorType,
   startReferenceStack,
 } from "./stack.js";
 

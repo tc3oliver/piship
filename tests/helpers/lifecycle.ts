@@ -27,15 +27,15 @@ import {
   clearPlatformStore,
   expectOwnParts,
   LIVE_SECRET_STORE,
-  platformStoreRefs,
   PRIMARY_STORAGE,
+  platformStoreRefs,
   primaryRefs,
   type Storage,
   shareKeychainSearchList,
 } from "./secret-store.js";
+import { describeSightings, scanTree } from "./security.js";
 import { acquireLease, runAll, storeScenarioTeardown } from "./teardown.js";
 import { bootstrapTrust } from "./update-trust.js";
-import { describeSightings, scanTree } from "./security.js";
 
 // Shared, immutable release fixtures for the production lifecycle scenarios.
 // For each example distribution (the managed demo company and the personal

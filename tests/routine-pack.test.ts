@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   NO_CONTAINMENT,
-  PolicyEngine,
   type PolicyContext,
+  PolicyEngine,
 } from "@piship/policy";
-import { parsePolicy, type PolicyConfig } from "@piship/schema";
+import { type PolicyConfig, parsePolicy } from "@piship/schema";
 import { afterAll, describe, expect, it } from "vitest";
 import { ROUTINE_CASES } from "./fixtures/routine-cases.js";
 

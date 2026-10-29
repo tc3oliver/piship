@@ -11,11 +11,11 @@ import {
   DEFAULT_NETWORK_POLICY,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
+import { PI_VERSION } from "@piship/core";
 import {
   capabilityMismatch,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
-import { PI_VERSION } from "@piship/core";
 import {
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
