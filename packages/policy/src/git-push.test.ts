@@ -140,6 +140,8 @@ describe("gitPushResources", () => {
     "gp origin main",
     "$GIT push origin main",
     "./deploy.sh",
+    "make push",
+    "npm run release",
     "python -c \"import subprocess; subprocess.run(['git', 'push'])\"",
   ])("does not recognize %s", (command) => {
     expect(gitPushResources(command)).toEqual([]);
@@ -185,10 +187,11 @@ describe("gitPushResources", () => {
       "a git alias (`git -c alias.p=push p`)",
       "a quoted command string",
       "`$GIT push`",
-      "a script or Makefile that pushes",
+      "a script, Makefile, or npm script that pushes",
       "a Python or Node subprocess",
     ])
       expect(security).toContain(wrapper);
+    expect(security).toContain("not verified until you have confirmed them");
     expect(
       readFileSync(
         new URL("../../../docs/manifest.md", import.meta.url),
