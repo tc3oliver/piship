@@ -218,11 +218,15 @@ interface PayloadSearchTool {
 }
 
 /**
- * The bundled search tools of a payload, from its `piship.lock` and target.
- * Empty for a payload without them.
+ * The bundled search tools of a payload, from its `piship.lock` (a runtime
+ * release has no lock: `metadata/search-tools.json`) and target. Empty for a
+ * payload without them.
  */
 function payloadSearchTools(payloadDir: string): PayloadSearchTool[] {
-  const lockPath = join(payloadDir, "piship.lock");
+  const distribution = join(payloadDir, "piship.lock");
+  const lockPath = existsSync(distribution)
+    ? distribution
+    : join(payloadDir, "metadata", "search-tools.json");
   const targetPath = join(payloadDir, "metadata", "target.json");
   if (!existsSync(lockPath) || !existsSync(targetPath)) return [];
   const lock = JSON.parse(readFileSync(lockPath, "utf8")) as {

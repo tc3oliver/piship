@@ -94,7 +94,7 @@ export {
 } from "./source.js";
 export {
   buildRuntimeRelease,
-  isRuntimeRelease,
+  releaseKind,
   RUNTIME_FILES,
   RUNTIME_PREFIX,
   RUNTIME_SCHEMA,

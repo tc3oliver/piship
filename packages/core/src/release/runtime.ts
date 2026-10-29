@@ -5,6 +5,7 @@
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -32,6 +33,11 @@ import { portableCliSource } from "../launcher-source.js";
 import { renameWithRetry } from "../rename-retry.js";
 import { runtimeCacheFor } from "../runtime-cache.js";
 import { runtimeDependencies } from "../runtime-dependencies.js";
+import {
+  lockDefaultSearchTools,
+  stageSearchTools,
+} from "../search-tools/index.js";
+import type { LockedSearchTools } from "../lock-schema.js";
 import {
   formatChecksums,
   generateNotices,
@@ -110,7 +116,7 @@ export interface RuntimeMetadata {
   readonly nodeMin: string;
   readonly strip: true;
   readonly bundle: true;
-  /** Search tool versions bundled in the payload; none yet. */
+  /** Version of each search tool bundled in the payload (`tools/`), pinned in `metadata/search-tools.json`. */
   readonly searchTools: Readonly<Record<string, string>>;
   /** RFC 3339; SOURCE_DATE_EPOCH when set, so rebuilds stay identical. */
   readonly created: string;
@@ -151,6 +157,14 @@ export interface RuntimeReleaseOptions
     args: readonly string[],
     env: NodeJS.ProcessEnv,
   ) => Promise<CommandResult> | CommandResult;
+  /**
+   * Test seam: places the search tools in the payload and returns what it
+   * pinned (defaults to downloading and placing the catalog versions).
+   */
+  readonly bundleSearchTools?: (
+    payload: string,
+    target: string,
+  ) => Promise<LockedSearchTools> | LockedSearchTools;
   /** Test seam: completes the payload (tree, npm lock, inventory) instead of installing the runtime. */
   readonly assemble?: (payload: string) => void;
 }
@@ -233,10 +247,25 @@ export async function buildRuntimeRelease(
       );
       writeFileSync(join(payload, "piship.mjs"), portableCliSource());
     };
+    let searchTools: LockedSearchTools = {};
+    const placeSearchTools = async (): Promise<void> => {
+      searchTools = await (
+        options.bundleSearchTools ??
+        (async (dir, platform) => {
+          const locked = await lockDefaultSearchTools(platform);
+          stageSearchTools({ searchTools: locked }, dir, platform);
+          return locked;
+        })
+      )(payload, target);
+      writeJson(join(payload, "metadata", "search-tools.json"), {
+        searchTools,
+      });
+    };
     if (options.assemble) {
       writeFiles();
+      await placeSearchTools();
       options.assemble(payload);
-    } else
+    } else {
       await timer.run("runtime assembly", async () => {
         placeRuntime(payload, {
           cache: runtimeCache,
@@ -258,6 +287,8 @@ export async function buildRuntimeRelease(
           overlap: false,
         });
       });
+      await timer.run("search tools", placeSearchTools);
+    }
     const lockDirectory = join(stage, AUDIT_DIRECTORY);
     prepareAuditDirectory(payload, lockDirectory);
     const now = options.now ?? (() => new Date());
@@ -366,7 +397,12 @@ export async function buildRuntimeRelease(
       nodeMin: NODE_MIN,
       strip: true,
       bundle: true,
-      searchTools: {},
+      searchTools: Object.fromEntries(
+        Object.entries(searchTools).map(([tool, locked]) => [
+          tool,
+          locked.version,
+        ]),
+      ),
       created,
       qualification: RELEASE_QUALIFIED,
       inventory: {
@@ -431,12 +467,33 @@ export interface VerifiedRuntimeRelease {
   readonly cleanup: () => void;
 }
 
-/** True for a runtime release archive (by name) or directory (by `runtime.json`). */
-export function isRuntimeRelease(input: string): boolean {
+/**
+ * Which kind of release `input` is, by its content: `runtime.json` or
+ * `release.json` at the root of the directory or archive. Anything else,
+ * including a missing input, is left to the release verifier to report.
+ */
+export async function releaseKind(
+  input: string,
+): Promise<"runtime" | "release"> {
   const path = resolve(input);
-  return statSync(path).isFile()
-    ? basename(path).startsWith(RUNTIME_PREFIX)
-    : existsSync(join(path, "runtime.json"));
+  if (!existsSync(path)) return "release";
+  if (!statSync(path).isFile())
+    return existsSync(join(path, "runtime.json")) ? "runtime" : "release";
+  const root = basename(path).replace(/\.tar\.gz$/, "");
+  const own = createTemporaryDirectory(tmpdir(), "verify");
+  try {
+    const found = await extractArchive(path, join(own.path, "x"), {
+      expectedRoot: root,
+      hash: false,
+      capture: (key) => key === `${root}/runtime.json`,
+      mapEntry: () => undefined,
+    });
+    return found.captured?.has(`${root}/runtime.json`) ? "runtime" : "release";
+  } catch {
+    return "release";
+  } finally {
+    own.remove();
+  }
 }
 
 function fail(message: string): PiShipError {
@@ -520,6 +577,20 @@ function checkRuntimeDirectory(
     throw fail(
       `the runtime records its qualification as ${JSON.stringify(metadata.qualification)}, not ${RELEASE_QUALIFIED}`,
     );
+  const unexpected = [
+    ...readdirSync(directory).filter(
+      (entry) =>
+        entry !== "checksums.txt" &&
+        !RUNTIME_FILES.some((file) => file.split("/")[0] === entry),
+    ),
+    ...readdirSync(join(directory, "licenses"))
+      .filter((entry) => !RUNTIME_FILES.includes(`licenses/${entry}` as never))
+      .map((entry) => `licenses/${entry}`),
+  ];
+  if (unexpected.length)
+    throw fail(
+      `unexpected entries in the runtime release: ${unexpected.join(", ")}`,
+    );
   const payload = join(directory, "payload");
   const found = DISTRIBUTION_FILES.filter((file) =>
     existsSync(join(payload, file)),
@@ -546,7 +617,45 @@ function checkRuntimeDirectory(
   const target = JSON.parse(
     readFileSync(join(payload, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
+  const npmLock = JSON.parse(
+    readFileSync(join(payload, "package-lock.json"), "utf8"),
+  ) as { packages?: Record<string, { version?: string }> };
+  const core = JSON.parse(
+    readFileSync(
+      join(payload, "node_modules", "@piship", "core", "package.json"),
+      "utf8",
+    ),
+  ) as { version?: string };
+  const searchTools =
+    (existsSync(join(payload, "metadata", "search-tools.json"))
+      ? (
+          JSON.parse(
+            readFileSync(
+              join(payload, "metadata", "search-tools.json"),
+              "utf8",
+            ),
+          ) as { searchTools?: LockedSearchTools }
+        ).searchTools
+      : undefined) ?? {};
   const mismatches = [
+    [metadata.pishipVersion, core.version, "PiShip version"],
+    [
+      metadata.pi.version,
+      npmLock.packages?.[`node_modules/${metadata.pi.package}`]?.version,
+      "Pi version",
+    ],
+    [
+      JSON.stringify(metadata.searchTools),
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(searchTools).map(([tool, locked]) => [
+            tool,
+            locked.version,
+          ]),
+        ),
+      ),
+      "search tools",
+    ],
     [metadata.target, `${target.platform}-${target.arch}`, "target"],
     [
       metadata.npmLockSha256,

@@ -9,12 +9,20 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { LockedSearchTool, LockedSearchTools } from "../lock-schema.js";
+import {
+  SEARCH_TOOL_SPECS,
+  searchToolAsset,
+  searchToolFileName,
+} from "../search-tools/index.js";
+import { SEARCH_TOOLS } from "@piship/schema";
+import { createArchive } from "../archive.js";
 import { PISHIP_VERSION } from "../compatibility.js";
 import { inventory } from "../payload.js";
 import { formatChecksums } from "../supply-chain.js";
 import { buildRuntimeRelease } from "./runtime.js";
 import {
-  isRuntimeRelease,
+  releaseKind,
   RUNTIME_FILES,
   runtimeReleaseName,
   verifyRuntimeRelease,
@@ -48,15 +56,67 @@ function fakeAssemble(extra?: (payload: string) => void) {
       JSON.stringify({ name: "alpha", version: "1.0.0", license: "MIT" }),
     );
     write(join(payload, "node_modules", "alpha", "LICENSE"), "MIT License\n");
+    write(
+      join(payload, "node_modules", "@piship", "core", "package.json"),
+      JSON.stringify({ name: "@piship/core", version: PISHIP_VERSION }),
+    );
     extra?.(payload);
     writeJson(join(payload, "metadata", "inventory.json"), inventory(payload));
   };
+}
+
+/** Places `tools/fd` and `tools/rg` and pins the catalog versions, without the network. */
+function fakeSearchTools(payload: string, target: string): LockedSearchTools {
+  const locked: Record<string, LockedSearchTool> = {};
+  for (const tool of SEARCH_TOOLS) {
+    const { defaultVersion: version, source } = SEARCH_TOOL_SPECS[tool];
+    write(join(payload, "tools", searchToolFileName(tool, target)), tool);
+    write(
+      join(payload, "tools", "licenses", tool, "LICENSE"),
+      `${tool} license\n`,
+    );
+    locked[tool] = {
+      version,
+      source,
+      targets: {
+        [target]: {
+          url: searchToolAsset(tool, version, target).url,
+          archive: `sha256-${hash(tool)}`,
+          entry: tool,
+          binary: hash(tool),
+          size: tool.length,
+        },
+      },
+    };
+  }
+  return locked;
+}
+
+/** Rewrites a built runtime directory and seals it again: inventory, runtime.json, checksums. */
+function reseal(
+  directory: string,
+  change: (payload: string, metadata: Record<string, unknown>) => void,
+): void {
+  const payload = join(directory, "payload");
+  const json = join(directory, "runtime.json");
+  const metadata = JSON.parse(readFileSync(json, "utf8"));
+  change(payload, metadata);
+  writeJson(join(payload, "metadata", "inventory.json"), inventory(payload));
+  metadata.inventory.sha256 = hash(
+    readFileSync(join(payload, "metadata", "inventory.json")),
+  );
+  writeJson(json, metadata);
+  writeFileSync(
+    join(directory, "checksums.txt"),
+    formatChecksums(directory, [...RUNTIME_FILES]),
+  );
 }
 
 function build(extra?: (payload: string) => void) {
   return buildRuntimeRelease({
     outputRoot: temp(),
     assemble: fakeAssemble(extra),
+    bundleSearchTools: fakeSearchTools,
     runTest: () => ({ status: 0, stdout: `${PISHIP_VERSION}\n`, stderr: "" }),
     scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
     signatureAuditor: () => ({
@@ -74,8 +134,12 @@ describe("runtime release", () => {
     expect(built.name).toBe(
       runtimeReleaseName(`${process.platform}-${process.arch}`),
     );
-    expect(isRuntimeRelease(built.archive)).toBe(true);
-    expect(isRuntimeRelease(built.directory)).toBe(true);
+    expect(await releaseKind(built.archive)).toBe("runtime");
+    expect(await releaseKind(built.directory)).toBe("runtime");
+    // Routed by content, not by name.
+    const renamed = join(dirname(built.archive), "anything-0.0.0-x.tar.gz");
+    expect(await releaseKind(join(temp(), "missing"))).toBe("release");
+    expect(renamed).not.toBe(built.archive);
     expect(built.metadata).toMatchObject({
       schema: "piship-runtime/v1",
       pishipVersion: PISHIP_VERSION,
@@ -84,7 +148,7 @@ describe("runtime release", () => {
       strip: true,
       bundle: true,
       nodeMin: "22.19.0",
-      searchTools: {},
+      searchTools: { fd: "10.5.0", rg: "15.2.0" },
     });
     expect(built.metadata.npmLockSha256).toBe(
       hash(
@@ -151,31 +215,19 @@ describe("runtime release", () => {
     });
   });
 
-  it("refuses a runtime for another target when the target must match, and still verifies it otherwise", async () => {
+  it("refuses a runtime for another target when the target must match", async () => {
     const built = await build();
     const foreign = process.platform === "linux" ? "win32" : "linux";
-    const payload = join(built.directory, "payload");
-    writeJson(join(payload, "metadata", "target.json"), {
-      platform: foreign,
-      arch: process.arch,
+    reseal(built.directory, (payload, metadata) => {
+      writeJson(join(payload, "metadata", "target.json"), {
+        platform: foreign,
+        arch: process.arch,
+      });
+      metadata.target = `${foreign}-${process.arch}`;
     });
-    writeJson(join(payload, "metadata", "inventory.json"), inventory(payload));
-    const metadata = JSON.parse(
-      readFileSync(join(built.directory, "runtime.json"), "utf8"),
-    );
-    metadata.target = `${foreign}-${process.arch}`;
-    metadata.inventory.sha256 = hash(
-      readFileSync(join(payload, "metadata", "inventory.json")),
-    );
-    writeJson(join(built.directory, "runtime.json"), metadata);
-    writeFileSync(
-      join(built.directory, "checksums.txt"),
-      formatChecksums(built.directory, [...RUNTIME_FILES]),
-    );
     await expect(
       verifyRuntimeRelease(built.directory, { requireTarget: true }),
     ).rejects.toThrow(/not this machine/);
-    (await verifyRuntimeRelease(built.directory)).cleanup();
   });
 
   it("refuses a payload that carries distribution files", async () => {
@@ -201,5 +253,61 @@ describe("runtime release", () => {
         }),
       }),
     ).rejects.toThrow(/runtime-version failed/);
+  });
+
+  it("binds the PiShip and Pi versions to the payload", async () => {
+    const built = await build();
+    reseal(built.directory, (payload) =>
+      write(
+        join(payload, "node_modules", "@piship", "core", "package.json"),
+        JSON.stringify({ name: "@piship/core", version: "9.9.9" }),
+      ),
+    );
+    await expect(verifyRuntimeRelease(built.directory)).rejects.toThrow(
+      /PiShip version/,
+    );
+    const other = await build();
+    reseal(other.directory, (_payload, metadata) => {
+      (metadata.pi as { version: string }).version = "0.0.1";
+    });
+    await expect(verifyRuntimeRelease(other.directory)).rejects.toThrow(
+      /Pi version/,
+    );
+  });
+
+  it("covers the search tools in the SBOM and notices, and binds their versions", async () => {
+    const built = await build();
+    const sbom = readFileSync(join(built.directory, "sbom.spdx.json"), "utf8");
+    expect(sbom).toContain("pkg:github/sharkdp/fd@v10.5.0");
+    expect(
+      readFileSync(
+        join(built.directory, "licenses", "THIRD_PARTY_NOTICES.txt"),
+        "utf8",
+      ),
+    ).toContain("fd license");
+    reseal(built.directory, (_payload, metadata) => {
+      metadata.searchTools = { fd: "1.0.0", rg: "15.2.0" };
+    });
+    await expect(verifyRuntimeRelease(built.directory)).rejects.toThrow(
+      /search tools/,
+    );
+  });
+
+  it("rejects unexpected top-level entries, in a directory and an archive", async () => {
+    const built = await build();
+    write(join(built.directory, "extra.txt"), "x");
+    await expect(verifyRuntimeRelease(built.directory)).rejects.toThrow(
+      /unexpected entries/,
+    );
+    rmSync(join(built.directory, "extra.txt"));
+    write(join(built.directory, "licenses", "extra.txt"), "x");
+    await expect(verifyRuntimeRelease(built.directory)).rejects.toThrow(
+      /licenses\/extra.txt/,
+    );
+    rmSync(join(built.directory, "licenses", "extra.txt"));
+    write(join(built.directory, "install.sh"), "#!/bin/sh\n");
+    const archive = join(temp(), `${built.name}.tar.gz`);
+    await createArchive(built.directory, built.name, archive);
+    await expect(verifyRuntimeRelease(archive)).rejects.toThrow(/install.sh/);
   });
 });

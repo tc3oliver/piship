@@ -11,7 +11,7 @@ import {
   buildDistribution,
   buildRelease,
   buildRuntimeRelease,
-  isRuntimeRelease,
+  releaseKind,
   checkEnforceability,
   checkDataContract,
   checkSearchTools,
@@ -1111,7 +1111,10 @@ async function runLifecycle(
       `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThis local build is unsigned: publish it with verified provenance before calling it a release.`,
     );
     output.stderr(runtimeCacheLine(built.runtimeCache));
-  } else if (command === "verify-release" && isRuntimeRelease(first)) {
+  } else if (
+    command === "verify-release" &&
+    (await releaseKind(first)) === "runtime"
+  ) {
     const verified = await verifyRuntimeRelease(first, {
       ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),
     });
