@@ -173,6 +173,16 @@ describe("doctor verification states", () => {
     expect(lines[0]?.[1]).not.toContain("artifact");
   });
 
+  it("does not call a receipt without via a file install", () => {
+    const { via: _via, ...older } = composed(pinned);
+    const detail = verificationStates(
+      installed(older, company, composedInventory),
+      none,
+    ).config.detail;
+    expect(detail).toContain("how this release was accepted is not recorded");
+    expect(detail).not.toContain("from a file");
+  });
+
   it("reports a per-target release from the one release", () => {
     const states = verificationStates(
       installed({ archiveSha256: "b".repeat(64) }),

@@ -325,7 +325,9 @@ export function verificationStates(
   const source =
     release?.via === "channel"
       ? "accepted from a signed channel entry"
-      : "installed from a file; the channel signature was not checked";
+      : release?.via === "file"
+        ? "installed from a file; the channel signature was not checked"
+        : "how this release was accepted is not recorded";
   const config: DoctorVerificationState = release?.pack
     ? {
         state: "verified",

@@ -183,7 +183,10 @@ function retainedCandidate(
     lock,
     pi: lock.runtime.version,
     schemas: payloadStateSchemas(lock),
-    release: retained.release as NonNullable<InstalledRelease["release"]>,
+    release: {
+      ...(retained.release as NonNullable<InstalledRelease["release"]>),
+      via: "channel",
+    },
     cleanup: () => {},
   };
 }
