@@ -1063,6 +1063,46 @@ describe("allow for this session", () => {
     expect(shown).toHaveLength(2);
   });
 
+  it("decides by the rules a session started with, and a later session by the edited rules", async () => {
+    const { session, workspace, options, stateDir } = await open({
+      mode: "personal",
+    });
+    const policyFile = join(stateDir, "config", "policy.json");
+    const target = (name: string) => join(workspace, "private", name);
+    const { shown, channel } = sessionPrompt();
+    expect(
+      await session.decide("filesystem.read", target("a.txt"), channel),
+    ).toMatchObject({ outcome: "allow", remember: "session", ruleId: "mine" });
+
+    // Edited on disk mid-session: the rule now denies.
+    writeFileSync(
+      policyFile,
+      JSON.stringify([{ ...USER_ASK, effect: "deny" }]),
+    );
+    expect(
+      await session.decide("filesystem.read", target("b.txt"), channel),
+    ).toMatchObject({ outcome: "allow", approval: "session", ruleId: "mine" });
+    expect(shown).toHaveLength(1);
+
+    // A session started afterwards decides by the edited rules, and the
+    // first session's remembered approval does not reach it.
+    const later = await GovernanceSession.open(options);
+    sessions.push(later);
+    expect(
+      await later.decide("filesystem.read", target("b.txt"), channel),
+    ).toMatchObject({ outcome: "deny", ruleId: "mine" });
+    expect(shown).toHaveLength(1);
+
+    // Back to an ask: the next session prompts again for the same target.
+    writeFileSync(policyFile, JSON.stringify([USER_ASK]));
+    const again = await GovernanceSession.open(options);
+    sessions.push(again);
+    expect(
+      await again.decide("filesystem.read", target("b.txt"), channel),
+    ).toMatchObject({ outcome: "allow", ruleId: "mine" });
+    expect(shown).toHaveLength(2);
+  });
+
   it("stores nothing, and a later session or a subagent child does not inherit it", async () => {
     const { session, workspace, stateDir, options } = await open({
       mode: "personal",
