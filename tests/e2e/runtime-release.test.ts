@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { PI_VERSION, PISHIP_VERSION } from "@piship/core";
+import { SEARCH_TOOLS } from "@piship/schema";
+import { PI_VERSION, PISHIP_VERSION, SEARCH_TOOL_SPECS } from "@piship/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { lifecycleReleases, lifecycleScenario } from "../helpers/lifecycle.js";
 
@@ -38,7 +39,12 @@ describe("runtime release", () => {
       pishipVersion: PISHIP_VERSION,
       target,
       qualification: "qualified",
-      searchTools: { fd: expect.any(String), rg: expect.any(String) },
+      searchTools: Object.fromEntries(
+        SEARCH_TOOLS.map((tool) => [
+          tool,
+          SEARCH_TOOL_SPECS[tool].defaultVersion,
+        ]),
+      ),
     });
     const folder = cli("verify-release", directory, "--json");
     expect(folder.status, folder.stderr).toBe(0);
@@ -64,6 +70,11 @@ describe("runtime release", () => {
     const s = await lifecycleScenario("runtime-release");
     const verified = s.cli("verify-release", (await lifecycleReleases()).first);
     expect(verified.status, verified.stderr).toBe(0);
-    expect(verified.stdout).toContain("Verified");
+    const { distribution } = JSON.parse(
+      s.cli("verify-release", (await lifecycleReleases()).first, "--json")
+        .stdout,
+    );
+    expect(distribution.id).toBe("acmecode");
+    expect(verified.stdout).toContain(`Verified ${distribution.name}`);
   }, 900000);
 });
