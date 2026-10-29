@@ -554,6 +554,32 @@ describe("core.hooksPath", () => {
     expect(projectGitControlFiles(root)).toContain(`${base(root)}/config`);
   });
 
+  it("leaves a working-tree directory writable for the sandbox, and keeps .git, the config that names it, and an outside directory protected", () => {
+    const outside = dir("shared-hooks-sandbox");
+    const root = repoWithHooksPath(".husky/_");
+    write(
+      join(root, ".git", "config"),
+      `[core]\n\thooksPath = .husky/_\n\thooksPath = ${posix(outside)}\n`,
+    );
+    const sandbox = projectGitControlDirectories(root, { scope: "sandbox" });
+    expect(sandbox).not.toContain(posix(join(root, ".husky", "_")));
+    expect(sandbox).toContain(posix(outside));
+    expect(sandbox).toEqual(
+      expect.arrayContaining(
+        ["hooks", "info", "modules", "worktrees"].map(
+          (name) => `${base(root)}/${name}`,
+        ),
+      ),
+    );
+    expect(projectGitControlFiles(root, { scope: "sandbox" })).toContain(
+      `${base(root)}/config`,
+    );
+    // The file tools keep refusing it.
+    expect(projectGitControlDirectories(root)).toContain(
+      posix(join(root, ".husky", "_")),
+    );
+  });
+
   it("protects an absolute directory, one outside the project, and one under the home directory", () => {
     const outside = dir("shared-hooks");
     const root = repoWithHooksPath(posix(outside));

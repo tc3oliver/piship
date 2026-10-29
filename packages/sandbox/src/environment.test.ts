@@ -197,6 +197,7 @@ describe("withCacheEnvironment", () => {
       npm_config_cache: join("/tmp/session/tmp", "cache", "npm"),
       PIP_CACHE_DIR: join("/tmp/session/tmp", "cache", "pip"),
       GOCACHE: join("/tmp/session/tmp", "cache", "go-build"),
+      CARGO_HOME: join("/tmp/session/tmp", "cache", "cargo"),
     });
   });
 
@@ -211,9 +212,12 @@ describe("withCacheEnvironment", () => {
     expect(env.PIP_CACHE_DIR).toBeDefined();
   });
 
-  it("leaves CARGO_HOME and GOMODCACHE alone", () => {
-    const env = withCacheEnvironment({}, "/tmp/session/tmp");
-    expect(Object.keys(env)).not.toContain("CARGO_HOME");
+  it("leaves GOMODCACHE alone, and keeps a CARGO_HOME the user allowed", () => {
+    const env = withCacheEnvironment(
+      { CARGO_HOME: "/work/cargo" },
+      "/tmp/session/tmp",
+    );
     expect(Object.keys(env)).not.toContain("GOMODCACHE");
+    expect(env.CARGO_HOME).toBe("/work/cargo");
   });
 });

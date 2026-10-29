@@ -373,21 +373,21 @@ describe.runIf(tasksRun)("a background task", () => {
       );
   });
 
-  it("refuses a fifth running task before it asks anything", async () => {
+  it("refuses a ninth running task before it asks anything", async () => {
     const { call, events } = await open();
     const { ctx } = context();
-    for (let index = 0; index < 4; index++)
+    for (let index = 0; index < 8; index++)
       await call("task_start")({ command: "sleep 30" }, ctx);
     const prompted = context(true);
     expect(
       await outcome(call("task_start")({ command: "true" }, prompted.ctx)),
-    ).toContain("4 background tasks are already running");
+    ).toContain("8 background tasks are already running");
     expect(prompted.prompts.count).toBe(0);
     expect(
       (await events())
         .filter((event) => event.event === "task.start")
         .map((event) => event.decision),
-    ).toEqual(["allowed", "allowed", "allowed", "allowed", "denied"]);
+    ).toEqual([...Array(8).fill("allowed"), "denied"]);
   });
 
   it("records running tasks on disk until their process is gone", async () => {

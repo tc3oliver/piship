@@ -273,13 +273,11 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       const result = await run(
         sandbox,
         [
-          `for dir in "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$GOCACHE"; do`,
+          `for dir in "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR" "$GOCACHE" "$CARGO_HOME"; do`,
           `mkdir -p "$dir" && echo ok > "$dir/probe" || echo "failed $dir"; done`,
-          `echo "cargo=\${CARGO_HOME-unset}"`,
         ].join("\n"),
       );
       expect(result.output).not.toContain("failed");
-      expect(result.output).toContain("cargo=unset");
       expect(
         readFileSync(
           join(sandbox.profile.tmpDir, "cache", "npm", "probe"),

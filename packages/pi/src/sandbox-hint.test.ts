@@ -57,6 +57,26 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     expect(hint).toContain("distribution owner");
   });
 
+  it("names a protected git control path instead of suggesting a wider write allowlist", () => {
+    const p = profile();
+    const scanner = new SandboxFailureScanner({
+      profile: {
+        ...p,
+        writeProtect: {
+          files: [join(p.workspace, ".git", "config")],
+          directories: [join(p.workspace, ".git", "worktrees")],
+        },
+      },
+      mode: "personal",
+    });
+    scanner.feed(
+      `fatal: could not create directory '${p.workspace}/.git/worktrees/w': Permission denied\n`,
+    );
+    const hint = scanner.hint();
+    expect(hint).toContain("protected git control path");
+    expect(hint).not.toContain("write.allow");
+  });
+
   it("tells a personal user to edit their own piship.yaml", () => {
     expect(
       hintFor(

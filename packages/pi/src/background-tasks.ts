@@ -36,7 +36,7 @@ export interface TaskLimits {
 }
 
 export const TASK_LIMITS: TaskLimits = {
-  maxTasks: 4,
+  maxTasks: 8,
   bufferBytes: 256 * 1024,
   defaultTimeoutSeconds: 30 * 60,
   maxTimeoutSeconds: 2 * 60 * 60,

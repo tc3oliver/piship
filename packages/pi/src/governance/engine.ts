@@ -149,12 +149,12 @@ export function gitProtection(root: string): {
     }
   };
   const unverified = projectGitControlUnverified(root);
-  const links = projectGitControlLinks(root);
+  const links = projectGitControlLinks(root, { scope: "sandbox" });
   return {
     files: projectGitControlFiles(root, { scope: "sandbox" }).filter(
       (path) => !isDirectory(path),
     ),
-    directories: projectGitControlDirectories(root),
+    directories: projectGitControlDirectories(root, { scope: "sandbox" }),
     ...(links.length ? { links } : {}),
     ...(unverified === undefined ? {} : { unverified }),
   };
