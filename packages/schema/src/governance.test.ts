@@ -262,16 +262,7 @@ describe("v1alpha3 defaults", () => {
     };
     expect(result.policy.projectTrust.company.dimensions).toEqual(allowAll);
     expect(result.policy.projectTrust.external.dimensions).toEqual(allowAll);
-    expect(result.policy.projectTrust.unknown.dimensions).toEqual({
-      passiveContext: "allow",
-      instructions: "ask",
-      skills: "ask",
-      agents: "ask",
-      hooks: "deny",
-      extensions: "ask",
-      mcp: "ask",
-      providers: "ask",
-    });
+    expect(result.policy.projectTrust.unknown.dimensions).toEqual(allowAll);
     expect(result.mcp).toEqual({
       mode: "explicit",
       servers: [],
@@ -1247,7 +1238,7 @@ describe("v1alpha3 policy", () => {
       policy({ projectTrust: { unknown: { mcp: "deny" } } }),
     ).policy.projectTrust;
     expect(result.unknown.dimensions.mcp).toBe("deny");
-    expect(result.unknown.dimensions.skills).toBe("ask");
+    expect(result.unknown.dimensions.skills).toBe("allow");
   });
   it.each([
     [

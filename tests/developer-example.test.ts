@@ -561,14 +561,12 @@ describe("project trust in the personal profile", () => {
     }
   });
 
-  it("loads Claude configuration for a company or external project and asks for an unknown one", () => {
-    for (const origin of ["company", "external"] as const)
+  it("loads Claude configuration for a company, external, or unknown project", () => {
+    for (const origin of ["company", "external", "unknown"] as const)
       for (const name of claude)
         expect(trust?.[origin].dimensions[name], `${origin} ${name}`).toBe(
           "allow",
         );
-    for (const name of claude)
-      expect(trust?.unknown.dimensions[name], name).toBe("ask");
     for (const origin of ["company", "external", "unknown"] as const) {
       expect(trust?.[origin].dimensions.extensions, origin).toBe("ask");
       expect(trust?.[origin].dimensions.hooks, origin).toBe("deny");

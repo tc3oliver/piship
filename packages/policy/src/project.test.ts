@@ -1725,7 +1725,7 @@ describe("discoverProjectResources", () => {
       },
     );
     expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ origin: "unknown", effect: "ask" });
+    expect(found[0]).toMatchObject({ origin: "unknown", effect: "allow" });
   });
 
   it("denies instruction imports that escape the root", () => {
@@ -1757,7 +1757,7 @@ describe("discoverProjectResources", () => {
     expect(passwd?.importedFrom).toBe(`${posix(root)}/AGENTS.md`);
   });
 
-  it("denies .pi/extensions in an unknown repository", () => {
+  it("denies .pi/extensions in an unknown repository in managed mode and allows them in personal mode", () => {
     for (const mode of ["managed", "personal"] as const) {
       const root = dir(`unknown-${mode}`);
       gitRepo(root, "https://random.example/x/y.git");
@@ -1773,7 +1773,7 @@ describe("discoverProjectResources", () => {
         homeDir: home,
       });
       expect(byKind(found, ".pi/extensions")?.effect).toBe(
-        mode === "managed" ? "deny" : "ask",
+        mode === "managed" ? "deny" : "allow",
       );
       expect(byKind(found, ".pi/settings.json")?.effect).toBe("deny");
     }

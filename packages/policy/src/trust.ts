@@ -84,7 +84,7 @@ export function defaultProjectDimensions(
   return {
     company: dimensions("allow", { hooks: "deny" }),
     external: dimensions("allow", { hooks: "deny" }),
-    unknown: dimensions("ask", { passiveContext: "allow", hooks: "deny" }),
+    unknown: dimensions("allow", { hooks: "deny" }),
   };
 }
 
@@ -105,11 +105,11 @@ function claudeDimensions(
  * Per-origin defaults of the Claude Code dimensions (`.claude/rules`,
  * `commands`, `skills`, `agents`, `hooks`). The manifest leaves them absent
  * unless declared (so existing locks do not change); this is what applies
- * then. Personal mode loads them like the other project items: company and
- * external projects without a prompt, an unknown one after the person says
- * yes. Managed mode follows the agents and hooks pattern: `hooks` are denied
- * and the rest are `company-approved`, which admits no project content, so a
- * company opts in by declaring `allow`.
+ * then. Personal mode loads them like the other project items, for company,
+ * external and unknown projects alike, without a prompt. Managed mode follows
+ * the agents and hooks pattern: `hooks` are denied and the rest are
+ * `company-approved`, which admits no project content, so a company opts in by
+ * declaring `allow`.
  */
 export function defaultClaudeDimensions(
   mode: DeploymentMode,
@@ -128,7 +128,7 @@ export function defaultClaudeDimensions(
   return {
     company: claudeDimensions("allow"),
     external: claudeDimensions("allow"),
-    unknown: claudeDimensions("ask"),
+    unknown: claudeDimensions("allow"),
   };
 }
 

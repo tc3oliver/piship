@@ -45,10 +45,9 @@ resources:
     user: [./resources/themes/mypi.json]
 
 # Personal policy: everything the distribution declares is allowed, and your
-# own projects work. A project's AGENTS.md, skills, and themes load (an
-# unknown origin, such as a repository with no remote, is asked once per
-# launch, on the terminal before Pi starts; a headless run resolves ask to
-# deny). Anything that starts code, project extensions and .mcp.json servers,
+# own projects work. A project's AGENTS.md, skills, and themes load, and a
+# repository with no known origin is treated like an external one: opening it
+# asks nothing. Anything that starts code, project extensions and .mcp.json servers,
 # asks first. Hooks, agents, and providers stay denied.
 policy:
   default: allow
@@ -63,15 +62,7 @@ policy:
       mcp: ask
       providers: deny
     external: *own
-    unknown:
-      passiveContext: allow
-      instructions: ask
-      skills: ask
-      agents: deny
-      hooks: deny
-      extensions: ask
-      mcp: ask
-      providers: deny
+    unknown: *own
 
 # A user-managed MCP server: a local stdio script shipped with the
 # distribution. It needs no network and no credential.

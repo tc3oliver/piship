@@ -71,7 +71,7 @@ updates: { channel: stable, channels: [stable] }
     expect(lock.manifest).toEqual({
       schema: "piship/v1alpha6",
       sha256:
-        "sha256-171f69297f0e884ad753b25a805f0e991d97872a54e44be679f6903d788d45ae",
+        "sha256-1092028b6d85790603ac56e41dbbde01c4f4b4605a9c39a7b94e0c63b02e3a8d",
     });
   });
 

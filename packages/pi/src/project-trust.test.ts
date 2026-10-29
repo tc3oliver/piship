@@ -72,6 +72,15 @@ const ALL_ALLOW = [
   "claudeHooks: allow",
 ];
 
+const ASK_UNKNOWN = [
+  "instructions: ask",
+  "claudeRules: ask",
+  "claudeCommands: ask",
+  "claudeSkills: ask",
+  "claudeAgents: ask",
+  "claudeHooks: ask",
+];
+
 async function open(
   options: {
     readonly mode?: "managed" | "personal";
@@ -112,6 +121,10 @@ async function open(
     ? join(workspace, options.subdirectory)
     : workspace;
   mkdirSync(cwd, { recursive: true });
+  // The personal default loads an unknown project without a question; the
+  // tests of the question configure it, as anyone who wants it does.
+  const unknownLines =
+    options.unknown ?? (options.unmatched ? ASK_UNKNOWN : []);
   const manifest = join(distribution, "piship.yaml");
   writeFileSync(
     manifest,
@@ -131,8 +144,8 @@ async function open(
         ? ["      match: []"]
         : [`      match: [{ path: "${toPosixPath(workspace)}/**" }]`]),
       ...(options.company ?? []).map((line) => `      ${line}`),
-      ...(options.unknown?.length
-        ? ["    unknown:", ...options.unknown.map((line) => `      ${line}`)]
+      ...(unknownLines.length
+        ? ["    unknown:", ...unknownLines.map((line) => `      ${line}`)]
         : []),
       ...(options.sandboxRequired
         ? [
@@ -246,6 +259,16 @@ describe("personal mode", () => {
     expect(prompts[0]?.message).toContain("CLAUDE.md");
     for (const path of CLAUDE_PATHS)
       expect(prompts[0]?.message).toContain(path);
+    expect(session.projectTrust.trusted).toBe(true);
+    for (const item of claude()) expect(item.loaded).toBe(true);
+  });
+
+  it("loads an unknown project's configuration without a question by default", async () => {
+    const { session, prompts, claude } = await open({
+      unmatched: true,
+      unknown: [],
+    });
+    expect(prompts).toEqual([]);
     expect(session.projectTrust.trusted).toBe(true);
     for (const item of claude()) expect(item.loaded).toBe(true);
   });
