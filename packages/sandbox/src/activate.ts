@@ -246,7 +246,7 @@ function sessionEnvironment(
   if (
     env.CARGO_HOME === undefined &&
     profile.writeAllow.some((path) =>
-      isWithin(join(profile.homeDir, ".cargo"), path),
+      isWithin(realpathNearest(join(profile.homeDir, ".cargo")), path),
     )
   )
     delete cached.CARGO_HOME;

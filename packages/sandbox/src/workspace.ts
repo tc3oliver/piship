@@ -51,7 +51,8 @@ export type Propagation = "immediate" | "delayed" | "missing";
  * checked before the first sandboxed command. `not-verified`: not proven. A
  * local live probe that could not prove it (reported, not yet required); a
  * remote check that found a protected path it could rename; or a hooks
- * directory in the working tree, where the scripts git runs stay writable.
+ * directory in the working tree, where the scripts git runs stay writable
+ * (engine-built profiles leave it writable and say so through `unverified`).
  * `not-applicable`: the sandbox cannot reach this host's files.
  */
 export type GitControlProtectionState =
@@ -128,9 +129,11 @@ export function workspaceWindowMs(
 /**
  * Whether a protected directory lies in the working tree instead of in the
  * workspace's own `.git`: `core.hooksPath` naming a directory such as
- * husky's `.husky/_`. It is kept read-only like the others, but the scripts
- * git runs from there are ordinary project files the sandbox can write, so
- * git control cannot be reported as protected.
+ * husky's `.husky/_`. A profile that lists it keeps it read-only, but the
+ * scripts git runs from there are ordinary project files the sandbox can
+ * write, so git control cannot be reported as protected. Profiles built by
+ * the governance engine leave such a directory out of the list and report
+ * `unverified` instead; this covers custom and remote callers.
  */
 export function hooksInWorkingTree(
   workspace: string,

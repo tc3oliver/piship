@@ -482,6 +482,33 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       }
     });
 
+    it("leaves CARGO_HOME alone where ~/.cargo is a link to a writable directory", async () => {
+      const real = join(outside, "cargo-real");
+      mkdirSync(real);
+      symlinkSync(real, join(home, ".cargo"));
+      const cargo: SandboxPolicy = {
+        ...config,
+        environment: { allow: [...config.environment.allow, "CARGO_HOME"] },
+        filesystem: {
+          ...config.filesystem,
+          write: { allow: ["workspace", "tmp", real] },
+        },
+      };
+      const box = await activateSandbox(cargo, {
+        workspace: ws,
+        homeDir: home,
+        env: { PATH: process.env.PATH ?? "", HOME: home },
+      });
+      try {
+        expect(
+          (await run(box, 'echo "cargo=${CARGO_HOME-unset}"')).output,
+        ).toBe("cargo=unset\n");
+      } finally {
+        await box.dispose();
+        rmSync(join(home, ".cargo"), { force: true });
+      }
+    });
+
     it("keeps the user's own git config read-only where the sandbox may write the home directory", async () => {
       // A distribution that lets commands write `~`: the global config git
       // reads there must not take a hooks path from a sandboxed command.
