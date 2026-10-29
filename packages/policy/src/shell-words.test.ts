@@ -33,6 +33,15 @@ describe("shared shell tokenizer", () => {
       "--format=%H",
     ]);
     expect(grantCommandWords("git log --format=%H", "win32")).toBeUndefined();
+    expect(grantCommandWords("npm\u00a0test", "posix")).toBeUndefined();
+    expect(grantCommandWords("npm run 'a&b'", "win32")).toBeUndefined();
+    expect(grantCommandWords('npm run "a^&b"', "win32")).toBeUndefined();
+    expect(grantCommandWords('npm run "a\\\" & whoami"', "win32")).toBeUndefined();
+    expect(grantCommandWords("git diff 'src/a b.ts'", "win32")).toEqual([
+      "git",
+      "diff",
+      "src/a b.ts",
+    ]);
     expect(simpleCommands("git push origin main; echo ok").commands).toEqual([
       ["git", "push", "origin", "main"],
       ["echo", "ok"],
