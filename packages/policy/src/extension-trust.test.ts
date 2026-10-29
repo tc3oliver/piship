@@ -129,12 +129,14 @@ function summary(
 }
 
 describe("Claude Code trust dimensions", () => {
-  it("default, in personal mode, to allow for company, external, and unknown projects", () => {
+  it("default, in personal mode, to allow for company and external projects, and for the text-only part of an unknown one", () => {
     const defaults = defaultClaudeDimensions("personal");
     for (const dimension of CLAUDE_TRUST_DIMENSIONS) {
       expect(defaults.company[dimension]).toBe("allow");
       expect(defaults.external[dimension]).toBe("allow");
-      expect(defaults.unknown[dimension]).toBe("allow");
+      expect(defaults.unknown[dimension]).toBe(
+        ["claudeAgents", "claudeHooks"].includes(dimension) ? "ask" : "allow",
+      );
     }
   });
 
@@ -240,7 +242,7 @@ describe("discovery of Claude Code configuration", () => {
     });
   });
 
-  it("admits an unknown project without a question in personal mode, and admits nothing in managed mode by default", () => {
+  it("admits the text-only Claude configuration of an unknown project in personal mode, and admits nothing in managed mode by default", () => {
     const root = claudeProject();
     const personal = discover(root, "personal", {
       ...trust("personal"),
@@ -250,10 +252,16 @@ describe("discovery of Claude Code configuration", () => {
       },
     });
     expect(personal.identity.origin).toBe("unknown");
-    for (const [, [, effect]] of Object.entries(
+    for (const [, [dimension, effect]] of Object.entries(
       summary(personal.candidates, root),
     ) as [string, [string, string]][])
-      expect(effect).toBe("allow");
+      expect(effect).toBe(
+        ["claudeAgents", "claudeHooks", "agents", "mcp", "extensions"].includes(
+          dimension,
+        )
+          ? "ask"
+          : "allow",
+      );
     const managed = discover(root, "managed", trust("managed"));
     expect(managed.identity.origin).toBe("company");
     expect(summary(managed.candidates, root)).toMatchObject({

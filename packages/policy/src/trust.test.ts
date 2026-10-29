@@ -191,7 +191,16 @@ describe("project dimension defaults", () => {
     const personal = defaultProjectDimensions("personal");
     expect(personal.company.hooks).toBe("deny");
     expect(personal.external.extensions).toBe("allow");
-    expect(personal.unknown).toEqual(personal.external);
+    expect(personal.unknown).toEqual({
+      passiveContext: "allow",
+      instructions: "allow",
+      skills: "allow",
+      agents: "ask",
+      hooks: "deny",
+      extensions: "ask",
+      mcp: "ask",
+      providers: "ask",
+    });
   });
 });
 

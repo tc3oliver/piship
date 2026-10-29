@@ -262,7 +262,16 @@ describe("v1alpha3 defaults", () => {
     };
     expect(result.policy.projectTrust.company.dimensions).toEqual(allowAll);
     expect(result.policy.projectTrust.external.dimensions).toEqual(allowAll);
-    expect(result.policy.projectTrust.unknown.dimensions).toEqual(allowAll);
+    expect(result.policy.projectTrust.unknown.dimensions).toEqual({
+      passiveContext: "allow",
+      instructions: "allow",
+      skills: "allow",
+      agents: "ask",
+      hooks: "deny",
+      extensions: "ask",
+      mcp: "ask",
+      providers: "ask",
+    });
     expect(result.mcp).toEqual({
       mode: "explicit",
       servers: [],

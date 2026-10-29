@@ -561,12 +561,20 @@ describe("project trust in the personal profile", () => {
     }
   });
 
-  it("loads Claude configuration for a company, external, or unknown project", () => {
-    for (const origin of ["company", "external", "unknown"] as const)
+  it("loads Claude configuration for a company or external project, and only the text-only part for an unknown one", () => {
+    for (const origin of ["company", "external"] as const)
       for (const name of claude)
         expect(trust?.[origin].dimensions[name], `${origin} ${name}`).toBe(
           "allow",
         );
+    for (const name of [
+      "claudeRules",
+      "claudeCommands",
+      "claudeSkills",
+    ] as const)
+      expect(trust?.unknown.dimensions[name], name).toBe("allow");
+    expect(trust?.unknown.dimensions.claudeAgents).toBe("ask");
+    expect(trust?.unknown.dimensions.claudeHooks).toBe("deny");
     for (const origin of ["company", "external", "unknown"] as const) {
       expect(trust?.[origin].dimensions.extensions, origin).toBe("ask");
       expect(trust?.[origin].dimensions.hooks, origin).toBe("deny");

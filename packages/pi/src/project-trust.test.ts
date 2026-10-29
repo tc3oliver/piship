@@ -263,10 +263,11 @@ describe("personal mode", () => {
     for (const item of claude()) expect(item.loaded).toBe(true);
   });
 
-  it("loads an unknown project's configuration without a question by default", async () => {
+  it("loads the text-only configuration of an unknown project without a question by default", async () => {
     const { session, prompts, claude } = await open({
       unmatched: true,
       unknown: [],
+      files: ["CLAUDE.md", ".claude/rules/r.md", ".claude/commands/c.md"],
     });
     expect(prompts).toEqual([]);
     expect(session.projectTrust.trusted).toBe(true);

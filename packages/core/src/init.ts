@@ -13,7 +13,7 @@ function initGovernance(managed: boolean, id: string): string {
   // Managed: workspace-provided items (.pi, .agents, AGENTS.md, .mcp.json)
   // stay unloaded outside trusted projects. Personal: the person's own
   // projects must work, so instructions and skills load (an unknown origin,
-  // such as a repository with no remote, is treated like an external one) and
+  // such as a repository with no remote, loads its text only) and
   // anything that starts code asks. Hooks, agents, and providers stay denied.
   const projectTrust = managed
     ? `  # Relax per dimension, or add company.match entries, to trust projects.

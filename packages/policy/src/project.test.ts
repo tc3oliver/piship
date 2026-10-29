@@ -1758,7 +1758,7 @@ describe("discoverProjectResources", () => {
     expect(passwd?.importedFrom).toBe(`${posix(root)}/AGENTS.md`);
   });
 
-  it("denies .pi/extensions in an unknown repository in managed mode and allows them in personal mode", () => {
+  it("denies .pi/extensions in an unknown repository in managed mode and asks in personal mode", () => {
     for (const mode of ["managed", "personal"] as const) {
       const root = dir(`unknown-${mode}`);
       gitRepo(root, "https://random.example/x/y.git");
@@ -1774,7 +1774,7 @@ describe("discoverProjectResources", () => {
         homeDir: home,
       });
       expect(byKind(found, ".pi/extensions")?.effect).toBe(
-        mode === "managed" ? "deny" : "allow",
+        mode === "managed" ? "deny" : "ask",
       );
       expect(byKind(found, ".pi/settings.json")?.effect).toBe("deny");
     }

@@ -46,8 +46,8 @@ resources:
 
 # Personal policy: everything the distribution declares is allowed, and your
 # own projects work. A project's AGENTS.md, skills, and themes load, and a
-# repository with no known origin is treated like an external one: opening it
-# asks nothing. Anything that starts code, project extensions and .mcp.json servers,
+# repository with no known origin loads its text the same way: opening it
+# asks nothing about instructions or skills. Anything that starts code, project extensions and .mcp.json servers,
 # asks first. Hooks, agents, and providers stay denied.
 policy:
   default: allow

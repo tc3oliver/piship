@@ -161,7 +161,12 @@ export function defaultProjectDimensions(
   return {
     company: dimensions("allow", { hooks: "deny" }),
     external: dimensions("allow", { hooks: "deny" }),
-    unknown: dimensions("allow", { hooks: "deny" }),
+    unknown: dimensions("ask", {
+      passiveContext: "allow",
+      instructions: "allow",
+      skills: "allow",
+      hooks: "deny",
+    }),
   };
 }
 

@@ -951,10 +951,11 @@ describe.skipIf(windows)(
       hookMarker: string | null;
     }
 
-    it("is loaded without a question when the origin is unknown, as for an external one", async () => {
+    it("is loaded by neither PiShip nor pi-code when the origin is unknown and nobody can be asked", async () => {
       const where = area("claude-closed");
       const project = fixtureProject(join(where.base, "project"));
       const result = await smoke({ ...where, workspace: project });
+      // PiShip loads the root CLAUDE.md as an instruction, and nothing else.
       const claude = result.governance.resources.filter(
         (item) => item.kind === "claude",
       );
@@ -966,16 +967,16 @@ describe.skipIf(windows)(
         ".claude/settings.json",
         ".claude/skills",
       ]);
-      expect(claude.every((item) => item.loaded)).toBe(true);
+      expect(claude.every((item) => !item.loaded)).toBe(true);
       expect(
         result.governance.resources.find((item) => item.path === "CLAUDE.md"),
       ).toMatchObject({ kind: "instructions", loaded: true });
-      // pi-code reads PiShip's decision from the trust store and finds it.
+      // pi-code reads PiShip's decision from the trust store and finds none.
       const loaded = probed<Claude>(where, "claude", project);
-      expect(loaded.commands).toContain("fixture-hello");
-      expect(loaded.skills).toContain("fixture-skill");
-      expect(loaded.prompt).toContain("FIXTURE_RULE_ALWAYS_MARKER");
-      expect(loaded.hookMarker).toBe("FIXTURE_HOOK_MARKER");
+      expect(loaded.commands).not.toContain("fixture-hello");
+      expect(loaded.skills).not.toContain("fixture-skill");
+      expect(loaded.prompt).not.toContain("FIXTURE_RULE_ALWAYS_MARKER");
+      expect(loaded.hookMarker).toBeNull();
     }, 600_000);
 
     it("is loaded once policy admits the origin: rules, commands, skills, agents, hooks, CLAUDE.md", async (context) => {

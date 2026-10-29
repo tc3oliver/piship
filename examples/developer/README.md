@@ -13,14 +13,14 @@ It is `deployment.mode: personal` with `identity.mode: none` and Pi's own provid
 
 Six Pi packages, each pinned to an exact version and bound by the lock:
 
-| Package                                 | What it gives the session                                                                                                                                                                                           | Left out                                                                                                                              |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `pi-code` 1.4.2                         | Claude Code compatibility (rules, commands, skills, agents, hooks, `CLAUDE.md`, `.mcp.json`), `web_search` and `web_fetch`, plan mode, `todo`, `question`, `memory`, checkpoints and `/rewind`, `subagent`, `/goal` | Nothing                                                                                                                               |
-| `pi-lens` 4.3.0                         | Diagnostics, LSP navigation, ast-grep, formatting and lint feedback after every edit                                                                                                                                | The two skills about writing pi-lens rules                                                                                            |
-| `pi-background-tasks` 2.6.9             | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; `/bg` and `/jobs`                                                                                                                                                      | Its delegate, Fusion, and attested features, and the extension that makes requests look like Claude Code's and reads `~/.claude.json` |
-| `pi-review` 1.2.1                       | `/review` and `/review-back`                                                                                                                                                                                        | Nothing                                                                                                                               |
-| `pi-browser-use` 0.12.11                | `browser_*` tools over a headless Chrome                                                                                                                                                                            | The two skills about signing in to Google accounts                                                                                    |
-| `@gotgenes/pi-permission-system` 39.0.4 | The permission provider (`certified` class)                                                                                                                                                                         | Nothing                                                                                                                               |
+| Package | What it gives the session | Left out |
+| --- | --- | --- |
+| `pi-code` 1.4.2 | Claude Code compatibility (rules, commands, skills, agents, hooks, `CLAUDE.md`, `.mcp.json`), `web_search` and `web_fetch`, plan mode, `todo`, `question`, `memory`, checkpoints and `/rewind`, `subagent`, `/goal` | Nothing |
+| `pi-lens` 4.3.0 | Diagnostics, LSP navigation, ast-grep, formatting and lint feedback after every edit | The two skills about writing pi-lens rules |
+| `pi-background-tasks` 2.6.9 | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; `/bg` and `/jobs` | Its delegate, Fusion, and attested features, and the extension that makes requests look like Claude Code's and reads `~/.claude.json` |
+| `pi-review` 1.2.1 | `/review` and `/review-back` | Nothing |
+| `pi-browser-use` 0.12.11 | `browser_*` tools over a headless Chrome | The two skills about signing in to Google accounts |
+| `@gotgenes/pi-permission-system` 39.0.4 | The permission provider (`certified` class) | Nothing |
 
 It also turns on Pi's Codemode and tool search (`runtime.tools`), ships one instruction file (`resources/AGENTS.md`), and ships one skill (`code-review-targets`).
 
@@ -62,33 +62,33 @@ The decisions come from the permission provider, configured by the file the mani
 
 ### Without a prompt
 
-| Area                             | What                                                                                                                                                                                                                             |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files                            | `read`, `write`, `edit`, `grep`, `find`, and `ls` in the workspace; reads anywhere outside it (toolchains, sibling repositories, caches) except the denied paths; writes to `/tmp`, the system temporary folders, and `~/.cache` |
-| Inspecting                       | `cat`, `head`, `tail`, `wc`, `diff`, `rg`, `fd`, `jq`, `sed`, `awk`, `ps`, `lsof`, `which`, `echo`, `sleep`, and similar                                                                                                         |
-| Changing the workspace           | `mkdir`, `touch`, `cp`, `mv`, `ln`, `rm` without a recursive flag, `tee`, `chmod` without `-R`, `tar`, `zip`, `patch`, and scripts the project holds (`./...`, `node_modules/.bin/...`, `.venv/bin/...`, `bash x.sh`)            |
-| Version control                  | `git` in general, `git clean -n`, and reading `git config`; `gh pr`, `issue`, `repo`, `run`, and `search` reads                                                                                                                  |
-| JavaScript and TypeScript        | `node`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `deno`, `tsc`, `eslint`, `prettier`, `biome`, `vitest`, `jest`, `playwright`, `vite`, `next`, `turbo`, `esbuild`, and similar                                                       |
-| Python                           | `python`, `pytest`, `uv`, `pip`, `poetry`, `pdm`, `tox`, `nox`, `ruff`, `black`, `mypy`, `pyright`, and similar                                                                                                                  |
-| Other languages                  | `cargo`, `go`, `java`, `mvn`, `gradle`, `dotnet`, `ruby`, `bundle`, `php`, `composer`, `swift`, `flutter`, `dart`, `make`, `cmake`, `gcc`, `clang`, and similar                                                                  |
-| Containers                       | `docker ps`, `build`, `compose`, `exec`, `run`, `logs`, `inspect`, `pull`, and the like                                                                                                                                          |
-| MCP                              | `get_*`, `list_*`, `search_*`, `read_*`, `find_*`, `describe_*`, `fetch_*`, `query*`, and similar read-style tools, and the MCP status tools                                                                                     |
-| Everything else the packages add | `web_search`, `web_fetch`, `todo`, `question`, `memory`, `subagent`, pi-lens tools, `bg_*`, and `browser_*` except the five below                                                                                                |
+| Area | What |
+| --- | --- |
+| Files | `read`, `write`, `edit`, `grep`, `find`, and `ls` in the workspace; reads anywhere outside it (toolchains, sibling repositories, caches) except the denied paths; writes to `/tmp`, the system temporary folders, and `~/.cache` |
+| Inspecting | `cat`, `head`, `tail`, `wc`, `diff`, `rg`, `fd`, `jq`, `sed`, `awk`, `ps`, `lsof`, `which`, `echo`, `sleep`, and similar |
+| Changing the workspace | `mkdir`, `touch`, `cp`, `mv`, `ln`, `rm` without a recursive flag, `tee`, `chmod` without `-R`, `tar`, `zip`, `patch`, and scripts the project holds (`./...`, `node_modules/.bin/...`, `.venv/bin/...`, `bash x.sh`) |
+| Version control | `git` in general, `git clean -n`, and reading `git config`; `gh pr`, `issue`, `repo`, `run`, and `search` reads |
+| JavaScript and TypeScript | `node`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `deno`, `tsc`, `eslint`, `prettier`, `biome`, `vitest`, `jest`, `playwright`, `vite`, `next`, `turbo`, `esbuild`, and similar |
+| Python | `python`, `pytest`, `uv`, `pip`, `poetry`, `pdm`, `tox`, `nox`, `ruff`, `black`, `mypy`, `pyright`, and similar |
+| Other languages | `cargo`, `go`, `java`, `mvn`, `gradle`, `dotnet`, `ruby`, `bundle`, `php`, `composer`, `swift`, `flutter`, `dart`, `make`, `cmake`, `gcc`, `clang`, and similar |
+| Containers | `docker ps`, `build`, `compose`, `exec`, `run`, `logs`, `inspect`, `pull`, and the like |
+| MCP | `get_*`, `list_*`, `search_*`, `read_*`, `find_*`, `describe_*`, `fetch_*`, `query*`, and similar read-style tools, and the MCP status tools |
+| Everything else the packages add | `web_search`, `web_fetch`, `todo`, `question`, `memory`, `subagent`, pi-lens tools, `bg_*`, and `browser_*` except the five below |
 
 ### Asks
 
-| Area                                | What                                                                                                                                                                                                                                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Privilege                           | `sudo`, `doas`, `su`, `pkexec`                                                                                                                                                                                                                                                                    |
-| Bulk deletes                        | `rm -r`, `rm -rf`, `rm --recursive`, `find ... -delete`, `chmod -R`                                                                                                                                                                                                                               |
-| Destructive git                     | `reset --hard`, `clean` (not the dry run), `push --force`, `-f`, `--delete`, `--mirror`, `branch -D`, `checkout -f`, `checkout` of existing paths, `restore` (except `--staged`), `stash drop` and `clear`, `reflog expire`, `filter-branch`, `remote add` and `set-url`, and `git config` writes |
-| Publishing and signing in           | `npm publish` and `login`, global installs (`-g`), `cargo publish`, `twine`, `docker push` and `login`, `docker ... prune`, `rm -f`, `--privileged`, and `down -v`, `gh api`                                                                                                                      |
-| Outside the workspace               | A write or edit outside it, except the temporary and cache directories above                                                                                                                                                                                                                      |
-| Settings that change what runs next | A write to `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.mcp.json`, `.pi/settings.json`, `.pi/extensions/`, `.git/hooks/`, and `.git/config`                                                                                                                        |
-| Unknown executables                 | Any command not listed above, for example `ssh`, `scp`, `kubectl`, `terraform`, `brew`, `apt`, and `curl` and `wget` HTTP requests                                                                                                                                                                |
-| Possible secrets                    | A read or write of `.env` and `.env.*` (not `.example`, `.sample`, `.template`, or `.dist`), and of `.pem`, `.key`, `.p12`, `.pfx`, `.jks`, and `.keystore` files that are not under a `fixtures`, `fixture`, `__fixtures__`, `testdata`, `test`, `tests`, or `spec` directory                    |
-| MCP that changes things             | A tool whose name holds `create`, `update`, `delete`, `remove`, `write`, `replace`, `execute`, `merge`, `push`, `send`, `deploy`, or `drop`, and any tool the list does not recognize                                                                                                             |
-| Browser                             | `browser_evaluate_script`, `browser_upload_file`, `browser_switch_mode`, `browser_setup`, and `browser_reauth`                                                                                                                                                                                    |
+| Area | What |
+| --- | --- |
+| Privilege | `sudo`, `doas`, `su`, `pkexec` |
+| Bulk deletes | `rm -r`, `rm -rf`, `rm --recursive`, `find ... -delete`, `chmod -R` |
+| Destructive git | `reset --hard`, `clean` (not the dry run), `push --force`, `-f`, `--delete`, `--mirror`, `branch -D`, `checkout -f`, `checkout` of existing paths, `restore` (except `--staged`), `stash drop` and `clear`, `reflog expire`, `filter-branch`, `remote add` and `set-url`, and `git config` writes |
+| Publishing and signing in | `npm publish` and `login`, global installs (`-g`), `cargo publish`, `twine`, `docker push` and `login`, `docker ... prune`, `rm -f`, `--privileged`, and `down -v`, `gh api` |
+| Outside the workspace | A write or edit outside it, except the temporary and cache directories above |
+| Settings that change what runs next | A write to `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.mcp.json`, `.pi/settings.json`, `.pi/extensions/`, `.git/hooks/`, and `.git/config` |
+| Unknown executables | Any command not listed above, for example `ssh`, `scp`, `kubectl`, `terraform`, `brew`, `apt`, and `curl` and `wget` HTTP requests |
+| Possible secrets | A read or write of `.env` and `.env.*` (not `.example`, `.sample`, `.template`, or `.dist`), and of `.pem`, `.key`, `.p12`, `.pfx`, `.jks`, and `.keystore` files that are not under a `fixtures`, `fixture`, `__fixtures__`, `testdata`, `test`, `tests`, or `spec` directory |
+| MCP that changes things | A tool whose name holds `create`, `update`, `delete`, `remove`, `write`, `replace`, `execute`, `merge`, `push`, `send`, `deploy`, or `drop`, and any tool the list does not recognize |
+| Browser | `browser_evaluate_script`, `browser_upload_file`, `browser_switch_mode`, `browser_setup`, and `browser_reauth` |
 
 ### Denied
 
@@ -122,13 +122,13 @@ The two layers are not redundant. PiShip's rules cover its own governed tools on
 
 `pi-code` reads Claude Code configuration: `CLAUDE.md`, `.claude/rules`, `commands`, `skills`, `agents`, `hooks`, `settings.json`, and `.mcp.json`. PiShip decides it by where the project came from, with five dimensions (`claudeRules`, `claudeCommands`, `claudeSkills`, `claudeAgents`, `claudeHooks`) beside the eight older ones. The manifest declares all thirteen for all three origins:
 
-| Origin     | The five Claude dimensions | `agents`, `mcp` | `extensions` | `hooks`, `providers` |
-| ---------- | -------------------------- | --------------- | ------------ | -------------------- |
-| `company`  | `allow`                    | `allow`         | `ask`        | `deny`               |
-| `external` | `allow`                    | `allow`         | `ask`        | `deny`               |
-| `unknown`  | `allow`                    | `allow`         | `ask`        | `deny`               |
+| Origin | The five Claude dimensions | `agents`, `mcp` | `extensions` | `hooks`, `providers` |
+| --- | --- | --- | --- | --- |
+| `company` | `allow` | `allow` | `ask` | `deny` |
+| `external` | `allow` | `allow` | `ask` | `deny` |
+| `unknown` | `allow`, except `claudeAgents` `ask` and `claudeHooks` `deny` | `ask` | `ask` | `deny` |
 
-`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so it is treated like an external one: the project's Claude configuration loads without a question. Set a dimension to `ask` to be asked in one question before it loads; answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. An `ask` loads nothing when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
+`passiveContext`, `instructions`, and `skills` are `allow` for every origin. A repository you cloned today is `unknown`, so its text-only Claude configuration (rules, commands, skills) loads without a question, while agents, `.mcp.json` and extensions still ask and hooks are denied. Because the configuration is admitted as a whole, a project with Claude hooks or settings stays closed. Answer `a` to keep the answer for that project until its files change (`never` keeps a refusal); `devcode config trust list` shows what is kept and `devcode config trust forget [<path>|--all]` undoes it. Nothing loads when nobody can be asked (a headless run) and no answer is kept. A repository is `company` or `external` only when you say so:
 
 ```yaml
 policy:
@@ -144,7 +144,7 @@ policy:
 
 `path` is a glob over the absolute project root and `remote` a glob over the normalized `host/path` of the `origin` remote; a matcher with both needs both. A `remote` alone is a claim, because a checkout declares its own remote. Edit the copy, run `piship lock`, and rebuild. `company` is for your own repositories, `external` for third-party ones you have decided to read.
 
-To close the part that runs commands, set `claudeHooks` to `deny` for all three origins (or `ask` for the first two). The profile admits hooks for `company` and `external` projects because the same files configure Claude Code for them, and hooks run with your privileges. The fixture used by the tests (`tests/fixtures/developer/claude-project`) ships a rule, a scoped rule, a command, a skill, an agent, an import, and a `SessionStart` hook, and the Portable E2E test checks that all of it is loaded for a `company` project and, now that `unknown` is treated like `external`, for an `unknown` project too.
+To close the part that runs commands, set `claudeHooks` to `deny` for `company` and `external` too (or `ask`). The profile admits hooks for `company` and `external` projects because the same files configure Claude Code for them, and hooks run with your privileges. The fixture used by the tests (`tests/fixtures/developer/claude-project`) ships a rule, a scoped rule, a command, a skill, an agent, an import, and a `SessionStart` hook, and the Portable E2E test checks that all of it is loaded for a `company` project and none of it for an `unknown` project in a headless run.
 
 ### Not governed
 

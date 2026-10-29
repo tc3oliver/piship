@@ -681,10 +681,11 @@ policy:
   default: allow
   # What a project can bring in, decided by where it came from. The origin is
   # unknown until a company or external matcher claims it (see the README), so a
-  # repository you cloned today is the "unknown" column, treated like an
-  # external one. A project's own instructions and skills are read; its .pi
-  # extensions ask. Its Claude Code configuration (pi-code reads it) is loaded
-  # for every origin without a question. Hooks are the part of
+  # repository you cloned today is the "unknown" column. A project's
+  # own instructions, skills, Claude rules, commands and skills are read; its
+  # .pi extensions, MCP servers and agents ask. Its Claude Code configuration
+  # (pi-code reads it) is loaded for a company or external origin, and for an
+  # unknown one unless it brings hooks or agents. Hooks are the part of
   # that configuration that runs commands: the README says how to close them.
   projectTrust:
     company:
@@ -719,16 +720,16 @@ policy:
       passiveContext: allow
       instructions: allow
       skills: allow
-      agents: allow
+      agents: ask
       hooks: deny
       extensions: ask
-      mcp: allow
+      mcp: ask
       providers: deny
       claudeRules: allow
       claudeCommands: allow
       claudeSkills: allow
-      claudeAgents: allow
-      claudeHooks: allow
+      claudeAgents: ask
+      claudeHooks: deny
   # Clear secrets, for every governed tool (read, write, edit) and in every
   # layer: a project file or a user rule cannot relax an enforced rule. The
   # permission provider denies the same paths for bash and the other tools.
