@@ -1,6 +1,6 @@
 // The doctor groups that need no Pi runtime or governed session.
 import { statfsSync } from "node:fs";
-import { LocalMetrics } from "@piship/audit";
+import { LocalMetrics, type MetricsSnapshot } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import {
@@ -248,4 +248,92 @@ export function undeclaredGovernanceHosts(
     if (!allowHosts.includes(host)) found.push({ label: target.label, host });
   }
   return found;
+}
+
+export interface DoctorVerificationState {
+  /**
+   * `verified`: checked and good. `local`: nothing vouches for it beyond this
+   * machine's own checks. `not-tested`: no evidence exists yet. `not-applicable`.
+   */
+  readonly state: "verified" | "local" | "not-tested" | "not-applicable";
+  readonly detail: string;
+}
+
+/** What `doctor` reports under DoctorVerification: three states, never merged. */
+export interface DoctorVerification {
+  readonly runtime: DoctorVerificationState;
+  readonly config: DoctorVerificationState;
+  readonly integration: DoctorVerificationState;
+}
+
+const short = (digest: string) =>
+  digest.replace(/^sha256[-:]/, "").slice(0, 12);
+
+/**
+ * The runtime, the company configuration, and the integration on this
+ * machine, each judged from its own evidence. The payload inventory has
+ * already been verified when doctor gets here; integration is live evidence
+ * only, and stays `not-tested` until a login or a model request has happened.
+ */
+export function verificationStates(
+  ctx: BrandedContext,
+  metrics: MetricsSnapshot,
+): DoctorVerification {
+  const here = installedHere(ctx);
+  const active = here?.releases.find((item) => item.version === here.active);
+  const release = active?.release;
+  const command = ctx.metadata.app.command;
+  const runtime: DoctorVerificationState = release?.runtime
+    ? {
+        state: "verified",
+        detail: `runtime archive for PiShip ${release.runtime.pishipVersion} (sha256 ${short(release.runtime.archiveSha256)}), Pi ${release.pi}; installed files match the inventory`,
+      }
+    : release
+      ? {
+          state: "verified",
+          detail: `${release.target} release (${release.channel}), PiShip ${release.piship}, Pi ${release.pi}; installed files match the inventory`,
+        }
+      : {
+          state: "local",
+          detail: here
+            ? "installed from a payload directory: a local build, not a qualified runtime"
+            : "running from a build directory: a local build, not a qualified runtime",
+        };
+  const config: DoctorVerificationState = release?.pack
+    ? {
+        state: "verified",
+        detail: `company pack ${release.pack.version} (sha256 ${short(release.pack.sha256)}); lock ${short(release.lockSha256)}`,
+      }
+    : release
+      ? {
+          state: "verified",
+          detail: `${ctx.metadata.app.name} ${active?.version} from its signed release; lock ${short(release.lockSha256)}`,
+        }
+      : {
+          state: "local",
+          detail: `lock and payload match each other; not release-signed (${ctx.metadata.manifest.schema})`,
+        };
+  const evidence = [
+    (metrics.latency?.["credential.acquire"]?.count ?? 0) > 0
+      ? "a sign-in credential was acquired"
+      : undefined,
+    metrics.gateway?.lastReachableAt
+      ? `the model gateway answered at ${metrics.gateway.lastReachableAt}`
+      : undefined,
+    metrics.modelCatalog?.fetchedAt
+      ? `the model catalog was fetched at ${metrics.modelCatalog.fetchedAt}`
+      : undefined,
+  ].filter((item): item is string => item !== undefined);
+  const integration: DoctorVerificationState = !ctx.metadata.access
+    ? { state: "not-applicable", detail: "no company sign-in or gateway" }
+    : evidence.length
+      ? {
+          state: "verified",
+          detail: `on this machine ${evidence.join("; ")}`,
+        }
+      : {
+          state: "not-tested",
+          detail: `not tested on this machine: run ${command} login and ${command} --smoke-model`,
+        };
+  return { runtime, config, integration };
 }
