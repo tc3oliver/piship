@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -108,7 +109,7 @@ async function open(options: { subagent?: boolean } = {}) {
       undefined,
       ctx,
     );
-  return { session, workspace, tools, call, events };
+  return { session, workspace, tools, call, events, stateDir };
 }
 
 /** A tool context; with `answer`, an interactive one whose prompts count. */
@@ -388,6 +389,38 @@ describe.runIf(tasksRun)("a background task", () => {
         .map((event) => event.decision),
     ).toEqual(["allowed", "allowed", "allowed", "allowed", "denied"]);
   });
+
+  it("records running tasks on disk until their process is gone", async () => {
+    const { session, call, stateDir } = await open();
+    const records = () => {
+      try {
+        return readdirSync(join(stateDir, "data", "tasks"));
+      } catch {
+        return [];
+      }
+    };
+    const { ctx } = context();
+    const started = await call("task_start")({ command: "sleep 30" }, ctx);
+    const id = (started as { details: { id: string } }).details.id;
+    expect(records()).toHaveLength(1);
+    await call("task_stop")({ id }, ctx);
+    expect(records()).toHaveLength(0);
+    // A stop that the process outlives keeps the record for doctor.
+    let release = () => {};
+    const stuck = session.backgroundTasks?.start(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ exitCode: null });
+        }),
+      "stuck",
+    ) as string;
+    expect(records()).toHaveLength(1);
+    await session.backgroundTasks?.stop(stuck);
+    expect(records()).toHaveLength(1);
+    release();
+    await session.backgroundTasks?.settled(stuck);
+    expect(records()).toHaveLength(0);
+  }, 20_000);
 
   it("is stopped when the session closes", async () => {
     const { session, call, events } = await open();

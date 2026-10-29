@@ -206,7 +206,7 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   for (const task of data.orphanedTasks ?? [])
     out.warn(
       `task ${task.id}`,
-      `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run: \`${task.command}\`. Find it with ps and stop it; this is reported once`,
+      `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
     );
   if (!governance) return;
   if (inspection) {

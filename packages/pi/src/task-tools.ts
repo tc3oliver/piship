@@ -60,7 +60,7 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
       : new TaskRecorder(stateDir);
   const tasks = new TaskRegistry({
     start: (task) => {
-      recorder?.add(task.id, task.command);
+      recorder?.add(task.id);
       record("task.start", task, "allowed");
     },
     exit: (task) => record("task.exit", task),

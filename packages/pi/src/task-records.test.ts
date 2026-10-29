@@ -1,8 +1,11 @@
+import { spawn } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,14 +24,32 @@ const state = () => {
   dirs.push(dir);
   return dir;
 };
-const files = (dir: string) => readdirSync(join(dir, "data", "tasks"));
+const root = (dir: string) => join(dir, "data", "tasks");
+const files = (dir: string) => readdirSync(root(dir));
+/** Writes a record by hand, as another process would have left it. */
+function plant(dir: string, name: string, record: object | string) {
+  mkdirSync(root(dir), { recursive: true });
+  writeFileSync(
+    join(root(dir), name),
+    typeof record === "string" ? record : JSON.stringify(record),
+  );
+}
+const record = (pid: number, extra: object = {}) => ({
+  schema: "piship-task-record/v2",
+  pid,
+  identity: null,
+  host: processHostToken(),
+  started: 1,
+  tasks: ["dead"],
+  ...extra,
+});
 
 describe("task records", () => {
   it("keeps a record while tasks run, and removes it when the last ends", () => {
     const dir = state();
     const recorder = new TaskRecorder(dir);
-    recorder.add("a", "sleep 1");
-    recorder.add("b", "sleep 2");
+    recorder.add("a");
+    recorder.add("b");
     expect(files(dir)).toHaveLength(1);
     recorder.remove("a");
     expect(files(dir)).toHaveLength(1);
@@ -36,35 +57,65 @@ describe("task records", () => {
     expect(files(dir)).toHaveLength(0);
   });
 
-  it("redacts the command it records", () => {
+  it("holds ids and the owner, never a command", () => {
     const dir = state();
-    new TaskRecorder(dir).add(
-      "a",
-      "curl -H 'Authorization: Bearer abcdefghijkl'",
-    );
-    expect(takeOrphanedTasks(dir)).toEqual([]);
-    const text = JSON.stringify(readdirSync(join(dir, "data", "tasks")));
-    expect(text).toContain(String(process.pid));
-  });
-
-  it("reports the tasks of a dead owner once, and leaves a live owner's alone", () => {
-    const dir = state();
-    new TaskRecorder(dir).add("live", "sleep 1");
-    const root = join(dir, "data", "tasks");
-    mkdirSync(root, { recursive: true });
-    writeFileSync(
-      join(root, "2147483646.json"),
-      JSON.stringify({
-        schema: "piship-task-record/v1",
-        pid: 2147483646,
-        host: processHostToken(),
-        tasks: [{ id: "dead", command: "sleep 9" }],
-      }),
-    );
-    expect(takeOrphanedTasks(dir)).toEqual([
-      { id: "dead", command: "sleep 9", owner: 2147483646 },
-    ]);
+    new TaskRecorder(dir).add("a");
     expect(takeOrphanedTasks(dir)).toEqual([]);
     expect(files(dir)).toHaveLength(1);
+  });
+
+  it("reports a dead owner's tasks once, and leaves a live owner's alone", () => {
+    const dir = state();
+    new TaskRecorder(dir).add("live");
+    plant(dir, "2147483646-1.json", record(2147483646));
+    expect(takeOrphanedTasks(dir)).toEqual([{ id: "dead", owner: 2147483646 }]);
+    expect(takeOrphanedTasks(dir)).toEqual([]);
+    expect(files(dir)).toHaveLength(1);
+  });
+
+  it("reports tasks whose owner ID now belongs to an unrelated live process", async () => {
+    const dir = state();
+    const other = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      // Started long before this process: the ID was reused.
+      plant(
+        dir,
+        `${other.pid}-1.json`,
+        record(other.pid as number, {
+          identity: "other-boot:1",
+        }),
+      );
+      expect(takeOrphanedTasks(dir)).toEqual([
+        { id: "dead", owner: other.pid },
+      ]);
+    } finally {
+      other.kill();
+    }
+  });
+
+  it("does not overwrite an orphan when a new process gets its ID", () => {
+    const dir = state();
+    plant(dir, `${process.pid}-1.json`, record(process.pid));
+    new TaskRecorder(dir).add("mine");
+    expect(files(dir)).toHaveLength(2);
+    expect(takeOrphanedTasks(dir)).toEqual([
+      { id: "dead", owner: process.pid },
+    ]);
+    expect(files(dir)).toHaveLength(1);
+  });
+
+  it("removes malformed records and stale temporary files", () => {
+    const dir = state();
+    plant(dir, "a.json", "not json");
+    plant(dir, "b.json", record(0));
+    plant(dir, "c.json", record(-5));
+    plant(dir, "d.json", { ...record(1), tasks: [1] });
+    plant(dir, "old.json.tmp", "{");
+    plant(dir, "new.json.tmp", "{");
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(join(root(dir), "old.json.tmp"), old, old);
+    expect(takeOrphanedTasks(dir)).toEqual([]);
+    expect(files(dir).sort()).toEqual(["new.json.tmp"]);
+    expect(existsSync(join(root(dir), "b.json"))).toBe(false);
   });
 });
