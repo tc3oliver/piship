@@ -229,27 +229,32 @@ describe.runIf(process.platform === "win32")(
         // would not test what happens when the actual PiShip owner dies.
         const entry = command.replace(/\.cmd$/i, "");
         expect(existsSync(entry)).toBe(true);
-        const heartbeat = join(project, `heartbeat-${tool}`);
-        const stop = join(project, `stop-${tool}`);
+        const heartbeat = join(project, "heartbeat");
+        const stop = join(project, "stop");
         writeFileSync(
-          join(project, `child-${tool}.cjs`),
+          join(project, "child.cjs"),
           [
             'const fs = require("node:fs");',
-            `setInterval(() => { if (fs.existsSync(${JSON.stringify(stop)})) process.exit(0); fs.appendFileSync(${JSON.stringify(heartbeat)}, "."); }, 75);`,
+            'const path = require("node:path");',
+            'const heartbeat = path.join(__dirname, "heartbeat");',
+            'const stop = path.join(__dirname, "stop");',
+            'setInterval(() => { if (fs.existsSync(stop)) process.exit(0); fs.appendFileSync(heartbeat, "."); }, 75);',
           ].join("\n"),
         );
         writeFileSync(
-          join(project, `parent-${tool}.cjs`),
+          join(project, "parent.cjs"),
           [
             'const { spawn } = require("node:child_process");',
             'const { existsSync } = require("node:fs");',
-            `spawn(process.execPath, ["child-${tool}.cjs"], { cwd: __dirname, detached: true, stdio: "ignore" }).unref();`,
-            `setInterval(() => { if (existsSync(${JSON.stringify(stop)})) process.exit(0); }, 100);`,
+            'const path = require("node:path");',
+            'const stop = path.join(__dirname, "stop");',
+            'spawn(process.execPath, ["child.cjs"], { cwd: __dirname, detached: true, stdio: "ignore" }).unref();',
+            'setInterval(() => { if (existsSync(stop)) process.exit(0); }, 100);',
           ].join("\n"),
         );
         services.knobs.gatewayMode = "script";
         services.knobs.toolScript = [
-          { name: tool, arguments: { command: `node parent-${tool}.cjs` } },
+          { name: tool, arguments: { command: "node parent.cjs" } },
           ...(tool === "task_start"
             ? [
                 {
