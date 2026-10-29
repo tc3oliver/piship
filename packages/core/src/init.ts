@@ -58,7 +58,13 @@ function initGovernance(managed: boolean, id: string): string {
     ? `# Unmatched actions ask the person; headless runs resolve ask to deny.
 policy:
   default: ask
-${projectTrust}  defaults:
+${projectTrust}  # Routine work runs without a prompt (workspace reads and writes, tests,
+  # builds, read-only git, search); its shell rules apply once sandbox.required
+  # is true. Use exclude to take rules out, or write your own defaults above it.
+  packs:
+    - pack: piship.routine
+      version: 1
+  defaults:
     - id: distribution.models
       action: model.select
       resource: "${id}/**"
@@ -66,10 +72,6 @@ ${projectTrust}  defaults:
     - id: distribution.instructions
       action: instruction.load
       resource: "company:**"
-      effect: allow
-    - id: workspace.read
-      action: filesystem.read
-      resource: "workspace/**"
       effect: allow
 `
     : `policy:

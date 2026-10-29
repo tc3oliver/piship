@@ -568,8 +568,8 @@ describe("governed distribution (local fixtures)", () => {
         )
         // Only the distribution can relax its managed `ask` defaults.
         .replace(
-          '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
-          '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
+          "    - id: acme.models\n",
+          '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n    - id: acme.models\n',
         ),
     );
     dist.env.ACMECODE_AUDIT_URL = sinkUrl;

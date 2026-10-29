@@ -948,7 +948,7 @@ describe("the managed examples allow ordinary workspace writes", () => {
 
 describe("the enterprise reference manifests", () => {
   it.each(["", "sandbox/"])(
-    "%sallow ordinary workspace writes like demo-company",
+    "%sallow ordinary workspace writes through the routine pack",
     (dir) => {
       const lock = resolveLock(
         join(
@@ -958,7 +958,9 @@ describe("the enterprise reference manifests", () => {
       );
       const policy = lock.governance?.manifest.policy;
       expect(
-        policy?.defaults.find((rule) => rule.id === "acme.workspace.write"),
+        policy?.defaults.find(
+          (rule) => rule.id === "piship.routine.fs.write-workspace",
+        ),
       ).toMatchObject({ effect: "allow" });
       expect(policy?.projectTrust.company).not.toHaveProperty("claudeHooks");
     },

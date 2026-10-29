@@ -116,14 +116,11 @@ function pinKey(source: string, publicKey: string, version: string): string {
  */
 function allowCommands(source: string): string {
   const shell =
-    ' - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect:';
+    '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n';
   const edited = source
     .replace("defaultMode: plan", "defaultMode: build")
-    .replace(`${shell} ask`, `${shell} allow`);
-  if (
-    !edited.includes("defaultMode: build") ||
-    !edited.includes(`${shell} allow`)
-  )
+    .replace("    - id: acme.models\n", `${shell}    - id: acme.models\n`);
+  if (!edited.includes("defaultMode: build") || !edited.includes(shell))
     throw new Error("demo: the command policy was not patched");
   return edited;
 }

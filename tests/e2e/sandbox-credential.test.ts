@@ -83,8 +83,8 @@ function build(services: Services) {
     .replace("  network:\n    mode: deny\n", "  network:\n    mode: allow\n")
     .replace("defaultMode: plan", "defaultMode: build")
     .replace(
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
+      "    - id: acme.models\n",
+      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n    - id: acme.models\n',
     );
   for (const marker of [
     "credential: stored",

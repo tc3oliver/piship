@@ -235,8 +235,8 @@ function build(kind: "sandboxed" | "unsandboxed"): Built {
     ["127.0.0.1:8765", "127.0.0.1"],
     ["defaultMode: plan", "defaultMode: build"],
     [
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
-      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
+      "    - id: acme.models\n",
+      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n    - id: acme.models\n',
     ],
     [
       "  - ACMECODE_LLM_GATEWAY_URL\n",

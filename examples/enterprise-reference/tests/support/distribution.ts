@@ -15,13 +15,13 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSecretStore } from "@piship/credentials";
 import { readManifestDocument } from "@piship/schema";
+import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
+import { bootstrapTrust } from "../../../../tests/helpers/update-trust.js";
 import {
   type AuthorizationRequest,
   authorizationRequest,
   signInAtKeycloak,
 } from "./keycloak.js";
-import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
-import { bootstrapTrust } from "../../../../tests/helpers/update-trust.js";
 import { type ReferenceUser, referenceDirectory, type Stack } from "./stack.js";
 import { type ChannelHost, serveChannel } from "./updates.js";
 
@@ -262,14 +262,11 @@ function patchManifest(source: string, patch: ManifestPatch): string {
   }
   if (patch.commands) {
     const shell =
-      ' - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect:';
+      '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow\n';
     const next = text
       .replace("defaultMode: plan", "defaultMode: build")
-      .replace(`${shell} ask`, `${shell} allow`);
-    if (
-      !next.includes("defaultMode: build") ||
-      !next.includes(`${shell} allow`)
-    )
+      .replace("    - id: acme.models\n", `${shell}    - id: acme.models\n`);
+    if (!next.includes("defaultMode: build") || !next.includes(shell))
       throw new Error("the command policy was not patched");
     text = next;
   }

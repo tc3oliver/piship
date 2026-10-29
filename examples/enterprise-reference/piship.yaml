@@ -149,6 +149,12 @@ policy:
       resource: "~/.ssh/**"
       effect: deny
       reason: Credentials stay outside the agent
+  # Routine work (workspace reads and writes, tests, builds, read-only git,
+  # search) runs without a prompt; anything else asks. The pack's shell rules
+  # apply only while the required sandbox contains commands.
+  packs:
+    - pack: piship.routine
+      version: 1
   defaults:
     - id: acme.models
       action: model.select
@@ -170,18 +176,6 @@ policy:
       action: resource.load
       resource: "company:packages/pi-platform/**"
       effect: allow
-    - id: acme.workspace.read
-      action: filesystem.read
-      resource: "workspace/**"
-      effect: allow
-    - id: acme.workspace.write
-      action: filesystem.write
-      resource: "workspace/**"
-      effect: allow
-    - id: acme.shell
-      action: shell.execute
-      resource: "**"
-      effect: ask
     - id: acme.tools
       action: tool.execute
       resource: "*"

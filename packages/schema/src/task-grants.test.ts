@@ -246,6 +246,7 @@ describe("policy.taskGrants", () => {
       "piship/v1alpha3",
     );
     for (const key of ["updates", "release"]) delete v1alpha3[key];
+    delete (v1alpha3.policy as Json).packs;
     expect(fieldError(v1alpha3)).toMatchObject({
       field: "policy.taskGrants",
       message: expect.stringContaining("Unknown field"),

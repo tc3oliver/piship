@@ -32,7 +32,7 @@ This writes `my-agent/piship.yaml` and `my-agent/resources/AGENTS.md`. The direc
 $PISHIP init ./my_agent --id my-agent
 ```
 
-Without `--id` the error suggests the id to use. `init` writes a personal distribution; `--managed` writes a company template.
+Without `--id` the error suggests the id to use. `init` writes a personal distribution; `--managed` writes a company template that asks for anything unlisted and opts into the `piship.routine@1` rule pack, so routine work (workspace edits, tests, builds, read-only git, search) does not prompt once `sandbox.required` is true.
 
 A personal distribution bundles Pi's search tools, `fd` and `rg` (`runtime.searchTools`), which `piship lock` downloads from GitHub. So `init` first checks, with a request of at most 3 seconds that follows `HTTPS_PROXY` and `NO_PROXY`, that github.com answers from where it runs. If it does not (an intranet without GitHub access, say), `init` leaves out `runtime.searchTools` and `https://github.com` in `release.sources`, so the first `lock` needs no download, and says so on stderr. Pi's `@` file completion and its find and grep tools then need `fd` and `rg` on `PATH`. Add the two entries later to bundle them ([bundled search tools](manifest.md#bundled-search-tools-v1alpha6)).
 
