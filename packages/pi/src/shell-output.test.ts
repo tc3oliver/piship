@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   freeBytes,
   SessionOutputStore,
@@ -22,12 +22,31 @@ import {
   userBashBudget,
 } from "./shell-output.js";
 
+// Lets one test pin the free space the store sees; a real disk's free space
+// drifts under parallel test files and made the cap assertion flaky on macOS.
+const pinnedFree = vi.hoisted(() => ({
+  bytes: undefined as number | undefined,
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    statfsSync: ((...args: Parameters<typeof actual.statfsSync>) => {
+      const stats = actual.statfsSync(...args);
+      return pinnedFree.bytes === undefined
+        ? stats
+        : { ...stats, bavail: pinnedFree.bytes / Number(stats.bsize) };
+    }) as typeof actual.statfsSync,
+  };
+});
+
 const posix = process.platform !== "win32";
 let root = "";
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "piship-shell-output-")));
 });
 afterEach(() => {
+  pinnedFree.bytes = undefined;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -68,13 +87,10 @@ describe("SessionOutputStore", () => {
   });
 
   it("caps one file at the free space above the reserve", async () => {
-    const free = freeBytes(root);
-    if (free === undefined) return;
-    // About 1 MiB of room; the command writes 3 MiB.
-    const store = new SessionOutputStore({
-      root,
-      reserveBytes: free - 1024 * 1024,
-    });
+    if (freeBytes(root) === undefined) return;
+    // Exactly 1 MiB of room above the reserve; the command writes 3 MiB.
+    pinnedFree.bytes = 1024 * 1024 + TEMP_DISK_RESERVE_BYTES;
+    const store = new SessionOutputStore({ root });
     const output = new ShellOutput(store);
     for (let i = 0; i < 3; i++) output.append(Buffer.alloc(1024 * 1024, 120));
     output.finish();
