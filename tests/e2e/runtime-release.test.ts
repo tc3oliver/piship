@@ -137,6 +137,18 @@ describe("runtime release", () => {
       expect(readFileSync(join(directory, "checksums.txt"), "utf8")).toContain(
         "pack/pi-packages/pi-platform/package.json",
       );
+      expect(
+        existsSync(
+          join(
+            directory,
+            "pack",
+            "pi-packages",
+            "pi-platform",
+            "node_modules",
+            "ms",
+          ),
+        ),
+      ).toBe(true);
     },
     900000,
   );

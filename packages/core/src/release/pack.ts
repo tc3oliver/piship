@@ -324,7 +324,7 @@ export async function buildPack(
     throw gate(
       "CONFIG_INVALID",
       "runtime",
-      `no release target has a runtime archive (${Object.values(excluded).join("; ")})`,
+      `no release target can be served (${Object.values(excluded).join("; ")})`,
     );
 
   const name = `${lock.app.id}-${lock.app.version}-pack`;

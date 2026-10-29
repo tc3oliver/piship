@@ -388,6 +388,7 @@ function tarGz(files: Record<string, string>): Buffer {
 describe("piship pack with bundled search tools", () => {
   const targets = ["linux-x64", "darwin-arm64"];
   let cache: string;
+  const saved = process.env.PISHIP_CACHE_HOME;
   beforeEach(() => {
     cache = temp();
     process.env.PISHIP_CACHE_HOME = cache;
@@ -407,7 +408,8 @@ describe("piship pack with bundled search tools", () => {
       }
   });
   afterEach(() => {
-    delete process.env.PISHIP_CACHE_HOME;
+    if (saved === undefined) delete process.env.PISHIP_CACHE_HOME;
+    else process.env.PISHIP_CACHE_HOME = saved;
   });
 
   function bundled() {
@@ -471,6 +473,6 @@ describe("piship pack with bundled search tools", () => {
       }),
     );
     expect(error.code).toBe("CONFIG_INVALID");
-    expect(error.message).toMatch(/no release target has a runtime archive/);
+    expect(error.message).toMatch(/no release target can be served/);
   });
 });
