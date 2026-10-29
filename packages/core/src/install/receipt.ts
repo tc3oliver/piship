@@ -54,6 +54,12 @@ export interface InstalledRelease {
     readonly piship: string;
     readonly lockSha256: string;
     readonly archiveSha256?: string;
+    /** A release composed from a Company Pack and a runtime archive has no archive digest of its own. */
+    readonly pack?: { readonly sha256: string; readonly version: string };
+    readonly runtime?: {
+      readonly archiveSha256: string;
+      readonly pishipVersion: string;
+    };
   };
 }
 

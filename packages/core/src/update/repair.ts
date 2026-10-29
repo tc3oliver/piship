@@ -13,6 +13,7 @@ import {
   syncDirectory,
   syncTree,
 } from "../install/receipt.js";
+import { composePack, isPack } from "../install/compose.js";
 import { acquireLaunchGate, runtimeLeases } from "../install/runtime-lease.js";
 import { verifyRelease } from "../release/index.js";
 import { createStagingDirectory } from "../temporary-directories.js";
@@ -38,6 +39,7 @@ export interface RepairResult {
 export async function repairDistribution(
   id: string,
   source: string,
+  options: { readonly runtime?: string } = {},
 ): Promise<RepairResult> {
   requireManaged(readInstallReceipt(id));
   const lifecycle = acquireLock(id);
@@ -51,7 +53,21 @@ export async function repairDistribution(
       const isArchive = statSync(path).isFile();
       let payload = path;
       let archiveSha256: string | undefined;
-      if (isArchive || existsSync(join(path, "release.json"))) {
+      let composed: Awaited<ReturnType<typeof composePack>> | undefined;
+      if (options.runtime !== undefined && !(await isPack(path)))
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          "--runtime applies to a Company Pack, and the repair source is not one",
+          { userAction: "Omit --runtime, or repair from the pack" },
+        );
+      if (await isPack(path)) {
+        // The release was composed from a pack and a runtime archive: both are
+        // verified against each other again, and against what was installed.
+        composed = await composePack(path, temporary.path, {
+          ...(options.runtime ? { runtime: options.runtime } : {}),
+        });
+        payload = composed.payload;
+      } else if (isArchive || existsSync(join(path, "release.json"))) {
         const verified = await verifyRelease(path, {
           requireTarget: true,
           extractTo: join(temporary.path, "release"),
@@ -82,9 +98,16 @@ export async function repairDistribution(
             entry.release.lockSha256 &&
           "lock digest",
         isArchive &&
+          !composed &&
           entry.release?.archiveSha256 &&
           archiveSha256 !== entry.release.archiveSha256 &&
           "archive digest",
+        composed &&
+          entry.release?.pack &&
+          (entry.release.pack.sha256 !== composed.release.pack?.sha256 ||
+            entry.release.runtime?.archiveSha256 !==
+              composed.release.runtime?.archiveSha256) &&
+          "pack or runtime digest",
       ].filter(Boolean);
       if (problems.length)
         throw new PiShipError(

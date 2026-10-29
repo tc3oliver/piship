@@ -50,6 +50,7 @@ import {
   type InstallReceipt,
   type InstalledRelease,
 } from "./receipt.js";
+import { composePack, isPack } from "./compose.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree } from "./copy.js";
 import { renameWithRetry } from "./files.js";
@@ -179,6 +180,11 @@ export interface InstallChecks {
    * collision.
    */
   readonly replace?: boolean;
+  /**
+   * With a Company Pack: the runtime archive it runs on. By default the one
+   * the pack names, found beside the pack.
+   */
+  readonly runtime?: string;
 }
 
 function invalidCheck(message: string, userAction: string): PiShipError {
@@ -228,16 +234,23 @@ export async function installDistribution(
       ) ?? error
     );
   }
+  const pack = await isPack(source);
+  if (checks.runtime !== undefined && !pack)
+    throw invalidCheck(
+      "--runtime applies to a Company Pack, and this artifact is not one",
+      "Omit --runtime, or install the pack",
+    );
   if (expectedSha256 !== undefined && !isArchive)
     throw invalidCheck(
       `--sha256 checks a release archive, but ${source} is a directory and has no archive digest`,
       "Install the release .tar.gz archive with --sha256, or omit --sha256 for a release or payload directory",
     );
-  const isRelease = isArchive || existsSync(join(source, "release.json"));
+  const isRelease =
+    !pack && (isArchive || existsSync(join(source, "release.json")));
   const lap = stopwatch();
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
-  if (isArchive)
+  if (isArchive && !pack)
     assertFreeSpace(installHome(), extractionNeed(statSync(source).size));
   // Where the runtime, Pi package, and dependency files come from a shared
   // store, they are placed from it; the installed release is whole without it.
@@ -250,7 +263,19 @@ export async function installDistribution(
     let info: InstalledRelease["release"];
     // The inventory digest release.json binds, for a release directory.
     let boundInventory: string | undefined;
-    if (isRelease) {
+    if (pack) {
+      // The pack and its runtime are verified against each other and composed
+      // into the staging directory, which is moved into place like an archive.
+      const composed = await composePack(source, staging, {
+        ...(expectedSha256 ? { expectedSha256 } : {}),
+        ...(checks.runtime ? { runtime: checks.runtime } : {}),
+        ...(store ? { store } : {}),
+      });
+      payload = composed.payload;
+      lock = composed.lock;
+      info = composed.release;
+      lap("install compose pack");
+    } else if (isRelease) {
       // An archive is read once: the same pass extracts it into the staging
       // directory and computes its digest and the SHA-256 of every payload
       // file, which are checked against the expected digest and the inventory
@@ -433,7 +458,7 @@ export async function installDistribution(
           // is moved into place; a directory is copied straight into it,
           // hashed as it is copied, and the partial copy is removed if it does
           // not match its inventory.
-          if (isArchive) renameWithRetry(payload, target);
+          if (isArchive || pack) renameWithRetry(payload, target);
           else {
             // Files are copied and hashed as they are copied. PISHIP_INSTALL_LINK=1
             // hard-links them from an extracted release instead: the installed
