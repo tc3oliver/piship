@@ -209,6 +209,7 @@ describe("Pi public SDK", () => {
       "createEditToolDefinition",
       "createBashToolDefinition",
       "createLocalBashOperations",
+      "getShellConfig",
       "truncateTail",
       "formatSize",
     ])
@@ -227,6 +228,23 @@ describe("Pi public SDK", () => {
     const tool = createReadTool(temp);
     expect(tool.name).toBe("read");
     expect(typeof tool.execute).toBe("function");
+  });
+
+  // Background tasks and foreground bash must run under one shell: the
+  // policy checks (git.push, chaining) read bash syntax. Pi's own
+  // getShellConfig decides it; a Windows host without Git Bash must fail
+  // rather than fall back to cmd.exe.
+  it("resolves the shell that background tasks and foreground bash share", () => {
+    const explicit = upstreamPi.getShellConfig(process.execPath);
+    expect(explicit.shell).toBe(process.execPath);
+    expect(explicit.args).toContain("-c");
+    expect(() =>
+      upstreamPi.getShellConfig(join(temp, "no-such-shell")),
+    ).toThrow(/not found/);
+    if (process.platform === "win32") {
+      const config = upstreamPi.getShellConfig();
+      expect(basename(config.shell).toLowerCase()).toMatch(/^(?:bash|sh)/);
+    }
   });
 
   // Managed model governance narrows these public ModelRuntime methods on the
