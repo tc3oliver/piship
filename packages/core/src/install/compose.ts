@@ -104,6 +104,21 @@ export interface ComposeOptions {
   readonly store?: ContentStore;
 }
 
+/**
+ * The installed runtime does not match the one a pack pins. Only this error
+ * makes an update fetch the runtime instead of reusing the installed one; any
+ * other failure of composing a pack is the pack's.
+ */
+export class InstalledRuntimeError extends PiShipError {
+  constructor(message: string) {
+    super("INTEGRITY_FAILED", `Pack install: ${message}`, {
+      component: "install",
+      userAction:
+        "Use the runtime archive this pack was built with, or ask the publisher for a new pack",
+    });
+  }
+}
+
 /** Files a pack adds to the runtime payload; the rest of an installed payload is the runtime's. */
 function packFile(file: string): boolean {
   return (
@@ -121,7 +136,7 @@ function packFile(file: string): boolean {
  * runtime: the installed inventory without what the pack added is the
  * runtime's own, and its serialization is what was pinned.
  */
-function copyInstalledRuntime(
+export function copyInstalledRuntime(
   installed: string,
   payload: string,
   pinnedInventorySha256: string,
@@ -134,7 +149,9 @@ function copyInstalledRuntime(
   );
   const text = `${JSON.stringify(runtime, null, 2)}\n`;
   if (hash(text) !== pinnedInventorySha256)
-    throw fail("the installed runtime is not the one this pack pins");
+    throw new InstalledRuntimeError(
+      "the installed runtime is not the one this pack pins",
+    );
   for (const file of Object.keys(runtime)) {
     const target = join(payload, ...file.split("/"));
     mkdirSync(dirname(target), { recursive: true });
@@ -148,7 +165,7 @@ function copyInstalledRuntime(
     wrong.length ||
     Object.keys(copied).length !== Object.keys(runtime).length
   )
-    throw fail(
+    throw new InstalledRuntimeError(
       `the installed runtime files do not match their inventory (${wrong.slice(0, 3).join(", ") || "extra files"})`,
     );
   writeFileSync(join(payload, "metadata", "inventory.json"), text);

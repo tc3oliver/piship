@@ -48,7 +48,11 @@ import { verifyPayloadContents } from "../payload.js";
 import { openInstallStore } from "../store/policy.js";
 import type { ContentStore } from "../store/store.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
-import { composePack, type ComposedPack } from "../install/compose.js";
+import {
+  composePack,
+  type ComposedPack,
+  InstalledRuntimeError,
+} from "../install/compose.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import { raiseThreadpool } from "../threadpool.js";
 import { isUrlSource } from "../release/source.js";
@@ -361,8 +365,7 @@ async function composeOffered(input: {
       // That copy is damaged or is not this runtime: start over cleanly.
       rmSync(join(staging, "payload"), { recursive: true, force: true });
       rmSync(join(staging, "pack"), { recursive: true, force: true });
-      if (!(error instanceof PiShipError) || error.code !== "INTEGRITY_FAILED")
-        throw error;
+      if (!(error instanceof InstalledRuntimeError)) throw error;
       damaged = error.message;
       input.progress?.(
         `The installed runtime does not match what the pack pins (${error.message}); downloading it`,
@@ -381,7 +384,12 @@ async function composeOffered(input: {
       input.transport,
     );
   } catch (error) {
-    if (damaged === undefined) throw error;
+    // A runtime that is not the signed bytes is refused as it is, not as unreachable.
+    if (
+      damaged === undefined ||
+      (error instanceof PiShipError && error.code === "INTEGRITY_FAILED")
+    )
+      throw error;
     throw new PiShipError(
       "UPDATE_FAILED",
       `The installed runtime is damaged (${damaged}) and the runtime ${pinned.archive} that the ${pack.version} pack pins could not be fetched from the update source: ${(error as Error).message}`,
