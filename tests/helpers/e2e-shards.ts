@@ -98,6 +98,9 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   "personal-local-model": { seconds: { linux: 22, darwin: 31, win32: 63 } },
   // Estimated from one darwin run (lock, build, install, launch); no fixtures.
   "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
+  // Estimated from background-tasks (one demo build and launch); skipped on
+  // Windows, where the pack's shell rules need an enforced sandbox.
+  "routine-pack": { seconds: { linux: 30, darwin: 36, win32: 2 } },
   // Estimated from one warm darwin run (10 s of tests): a cold runtime build
   // installs the npm closure and downloads fd and rg; the demo release is the
   // lifecycle fixture. The pack cases pack examples/personal and enterprise-reference (vendors a Pi package) against that runtime.
