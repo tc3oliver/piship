@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +18,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ROUTINE_CASES } from "./fixtures/routine-cases.js";
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-routine-")));
+// The workspace exists so `cd` can be judged against real directories.
+mkdirSync(join(base, "work", "src"), { recursive: true });
+mkdirSync(join(base, "outside"));
+symlinkSync(join(base, "outside"), join(base, "work", "outside-link"));
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
 const context = (shell: boolean): PolicyContext => ({
@@ -183,7 +193,7 @@ describe("piship.routine@1", () => {
         {
           defaults: [
             {
-              id: "fa6b8adad69ce31377ad3e4b38b65e8fac7c4582fb14fd47c54f1e8d8a89981e",
+              id: "own.contained",
               action: "shell.execute",
               resource: "a",
               effect: "allow",
@@ -195,10 +205,10 @@ describe("piship.routine@1", () => {
         { id: "acme" },
         { acknowledgeUnenforced: true },
       ),
-    ).toThrow();
+    ).toThrow(/contained/);
   });
 });
 
-const RULE_COUNT = 196;
+const RULE_COUNT = 205;
 const DIGEST =
-  "fa6b8adad69ce31377ad3e4b38b65e8fac7c4582fb14fd47c54f1e8d8a89981e";
+  "452ba8eb0adc9f9cf8f0a79b2440be44a3405ddf0d04f6eeb68dfbba3c1a6cfa";

@@ -103,6 +103,27 @@ const OPEN: readonly Entry[] = [
 
 /** Shell rules: active only when the sandbox contains shell commands. */
 const CONTAINED: readonly Entry[] = [
+  // A shell command naming a dotenv file asks, as the read tool does. The
+  // examples come first and must end the command, so `cat .env.example .env`
+  // still asks. Only an explicit name is seen: a recursive search can still
+  // read a dotenv file, and the sandbox is the boundary there.
+  ...[
+    ["example", "**.env.example", "allow"],
+    ["sample", "**.env.sample", "allow"],
+    ["template", "**.env.template", "allow"],
+    ["after-space", "** .env**", "ask"],
+    ["after-slash", "**/.env**", "ask"],
+    ["after-colon", "**:.env**", "ask"],
+    ["after-quote", "**'.env**", "ask"],
+    ["after-double-quote", '**".env**', "ask"],
+  ].map(
+    ([name, resource, effect]): Entry => [
+      `fs.secrets.shell-${name}`,
+      "shell.execute",
+      resource as string,
+      effect as PolicyEffect,
+    ],
+  ),
   ...shell("search", "ask", "rg**--pre**", "rg**--hostname-bin**"),
   ...shell(
     "search",
@@ -143,6 +164,7 @@ const CONTAINED: readonly Entry[] = [
     "ask",
     "git switch**--discard-changes**",
     "git switch** -f**",
+    "git switch**--force**",
     "git checkout** -f**",
     "git checkout**--force**",
   ),

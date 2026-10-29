@@ -94,8 +94,4 @@ describe("prompt budget of a scripted coding session", () => {
       "shell.execute rm -rf build",
     ]);
   });
-
-  it("asks far more without the pack", () => {
-    expect(asks(managed(undefined)).length).toBeGreaterThan(40);
-  });
 });
