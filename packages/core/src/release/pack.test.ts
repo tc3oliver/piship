@@ -7,9 +7,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { gzipSync } from "node:zlib";
+import { SEARCH_TOOLS } from "@piship/schema";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createArchive, extractArchive } from "../archive.js";
 import { lockManifest, requireCurrentLock } from "../index.js";
+import {
+  SEARCH_TOOL_SPECS,
+  searchToolAsset,
+  searchToolFileName,
+} from "../search-tools/index.js";
 import { generateSigningKey } from "../signing.js";
 import {
   buildPack,
@@ -234,6 +241,12 @@ describe("piship pack", () => {
     expect(
       packageClosureProblems(lockfile({}), { "linux-x64": ["x"] }),
     ).toEqual(["it has per-target optional dependencies"]);
+    expect(
+      packageClosureProblems(lockfile({}), {
+        "linux-x64": [],
+        "win32-x64": [],
+      }),
+    ).toEqual([]);
   });
 
   it("refuses a native resource file and points to per-target releases", async () => {
@@ -338,5 +351,126 @@ describe("piship pack", () => {
     expect((await rejection(readRuntimeArchive(corrupt))).code).toBe(
       "INTEGRITY_FAILED",
     );
+  });
+
+  it("refuses a runtime given as a folder", async () => {
+    const error = await rejection(readRuntimeArchive(temp()));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(/not an archive file/);
+  });
+});
+
+/** A gzip ustar archive of regular files: the shape of an upstream tool asset. */
+function tarGz(files: Record<string, string>): Buffer {
+  const blocks: Buffer[] = [];
+  for (const [name, text] of Object.entries(files)) {
+    const data = Buffer.from(text);
+    const header = Buffer.alloc(512);
+    header.write(name, 0, 100, "utf8");
+    header.write("0000755\0", 100);
+    header.write("0000000\0", 108);
+    header.write("0000000\0", 116);
+    header.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124);
+    header.write("00000000000\0", 136);
+    header.write("        ", 148);
+    header.write("0", 156);
+    header.write("ustar\0", 257);
+    header.write("00", 263);
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148);
+    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
+}
+
+describe("piship pack with bundled search tools", () => {
+  const targets = ["linux-x64", "darwin-arm64"];
+  let cache: string;
+  beforeEach(() => {
+    cache = temp();
+    process.env.PISHIP_CACHE_HOME = cache;
+    mkdirSync(join(cache, "search-tools"));
+    for (const tool of SEARCH_TOOLS)
+      for (const target of targets) {
+        const version = SEARCH_TOOL_SPECS[tool].defaultVersion;
+        const asset = searchToolAsset(tool, version, target);
+        const root = asset.name.replace(/\.tar\.gz$/, "");
+        writeFileSync(
+          join(cache, "search-tools", asset.name),
+          tarGz({
+            [`${root}/${searchToolFileName(tool, target)}`]: `#!/bin/sh\necho ${tool} ${target}\n`,
+            [`${root}/LICENSE-MIT`]: "MIT\n",
+          }),
+        );
+      }
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_CACHE_HOME;
+  });
+
+  function bundled() {
+    const dir = temp();
+    mkdirSync(join(dir, "resources"));
+    writeFileSync(join(dir, "resources", "AGENTS.md"), "# AcmePi\n");
+    const path = join(dir, "piship.yaml");
+    writeFileSync(
+      path,
+      manifest(
+        "",
+        "  targets: [linux-x64, darwin-arm64]\n  sources: [https://registry.npmjs.org, https://github.com]\n",
+      ).replace(
+        'runtime:\n  pi: "1.1.0"\n',
+        'runtime:\n  pi: "1.1.0"\n  searchTools: { mode: bundled }\n',
+      ),
+    );
+    lockManifest(path);
+    return path;
+  }
+  const defaults = Object.fromEntries(
+    SEARCH_TOOLS.map((tool) => [tool, SEARCH_TOOL_SPECS[tool].defaultVersion]),
+  );
+
+  it("excludes a target whose runtime lacks the locked tools, and keeps the rest", async () => {
+    const path = bundled();
+    const built = await pack(path, {
+      runtimes: [
+        await runtime(path, "linux-x64", { searchTools: {} }),
+        await runtime(path, "darwin-arm64", { searchTools: defaults }),
+      ],
+      outputRoot: temp(),
+    });
+    expect(built.metadata.targets).toEqual(["darwin-arm64"]);
+    expect(built.metadata.excluded["linux-x64"]).toMatch(
+      /does not bundle the locked search tools: fd .*\(the runtime has none\)/,
+    );
+  });
+
+  it("includes runtimes that bundle the locked versions", async () => {
+    const path = bundled();
+    const built = await pack(path, {
+      runtimes: [
+        await runtime(path, "linux-x64", { searchTools: defaults }),
+        await runtime(path, "darwin-arm64", { searchTools: defaults }),
+      ],
+      outputRoot: temp(),
+    });
+    expect(built.metadata.targets).toEqual(targets);
+  });
+
+  it("refuses when no runtime bundles them", async () => {
+    const path = bundled();
+    const error = await rejection(
+      pack(path, {
+        runtimes: [
+          await runtime(path, "linux-x64"),
+          await runtime(path, "darwin-arm64"),
+        ],
+        outputRoot: temp(),
+      }),
+    );
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(/no release target has a runtime archive/);
   });
 });

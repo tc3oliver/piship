@@ -136,6 +136,14 @@ export interface BuiltPack {
  * qualification, scans, tests) and then its `runtime.json`.
  */
 export async function readRuntimeArchive(path: string): Promise<PackRuntime> {
+  // A folder has no archive digest for pack.json to pin.
+  if (!statSync(path).isFile())
+    throw gate(
+      "CONFIG_INVALID",
+      "runtime",
+      `${path} is not an archive file`,
+      "Pass the piship-runtime-<version>-<target>.tar.gz archive, not its extracted folder",
+    );
   const verified = await verifyRuntimeRelease(path);
   try {
     const { metadata } = verified;
@@ -194,7 +202,8 @@ export function packageClosureProblems(
   optionalDependencies?: Readonly<Record<string, readonly string[]>>,
 ): string[] {
   const problems: string[] = [];
-  if (Object.keys(optionalDependencies ?? {}).length)
+  // The lock keeps an entry per target even when its list is empty.
+  if (Object.values(optionalDependencies ?? {}).some((list) => list.length))
     problems.push("it has per-target optional dependencies");
   const closure = (JSON.parse(lockfile).packages ?? {}) as Record<
     string,

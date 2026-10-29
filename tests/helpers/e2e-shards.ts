@@ -100,9 +100,9 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
   // Estimated from one warm darwin run (10 s of tests): a cold runtime build
   // installs the npm closure and downloads fd and rg; the demo release is the
-  // lifecycle fixture. The pack case packs examples/personal against that runtime.
+  // lifecycle fixture. The pack cases pack examples/personal and enterprise-reference (vendors a Pi package) against that runtime.
   "runtime-release": {
-    seconds: { linux: 100, darwin: 70, win32: 200 },
+    seconds: { linux: 110, darwin: 80, win32: 200 },
     fixtures: ["demo"],
   },
   "sandbox-credential": { seconds: { linux: 34, darwin: 43, win32: 93 } },
