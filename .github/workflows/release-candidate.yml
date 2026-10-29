@@ -1,7 +1,8 @@
 name: Release candidate
 # Builds, verifies, and attests the release archives of the managed demo
 # (acmecode), the personal example (mypi), and the developer example
-# (devcode).
+# (devcode), and the distribution-independent PiShip runtime release
+# (piship-runtime), which has no manifest and so no install job.
 # Output stays in workflow artifacts: nothing is published or released here.
 # Release qualification (release-qualification.yml) calls it on the exact
 # candidate HEAD after CI, CodeQL, Portable E2E, and Reference E2E pass; it
@@ -116,6 +117,10 @@ jobs:
             name="$id-1.0.0-${{ matrix.target }}"
             cp "$RUNNER_TEMP/out/releases/$name.tar.gz" "$RUNNER_TEMP/out/releases/$name.tar.gz.sha256" "$RUNNER_TEMP/upload/"
           done
+          # The runtime release has no manifest: it is the PiShip runtime itself.
+          node packages/cli/dist/bin.js runtime-release --out "$RUNNER_TEMP/out"
+          name="piship-runtime-$(node packages/cli/dist/bin.js --version)-${{ matrix.target }}"
+          cp "$RUNNER_TEMP/out/releases/$name.tar.gz" "$RUNNER_TEMP/out/releases/$name.tar.gz.sha256" "$RUNNER_TEMP/upload/"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-${{ matrix.target }}-${{ matrix.build }}
@@ -160,7 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distribution: [acmecode, mypi, devcode]
+        distribution: [acmecode, mypi, devcode, piship-runtime]
         target: [linux-x64, darwin-arm64, win32-x64]
         include:
           - os: ubuntu-latest
@@ -201,6 +206,12 @@ jobs:
         with:
           name: release-${{ matrix.target }}-second
           path: ${{ runner.temp }}/second
+      # The runtime release is named for the PiShip version that built it, which
+      # this job has no checkout to read: take it from the archive.
+      - name: Name the runtime archive
+        if: matrix.distribution == 'piship-runtime'
+        working-directory: ${{ runner.temp }}/first
+        run: echo "NAME=$(basename "$(ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
       - name: Compare the two builds
         run: |
           mkdir -p "$RUNNER_TEMP/report"
@@ -248,7 +259,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distribution: [acmecode, mypi, devcode]
+        distribution: [acmecode, mypi, devcode, piship-runtime]
         target: [linux-x64, darwin-arm64, win32-x64]
         include:
           - os: ubuntu-latest
@@ -264,6 +275,7 @@ jobs:
       NAME: ${{ matrix.distribution }}-1.0.0-${{ matrix.target }}
       GH_TOKEN: ${{ github.token }}
       ATTESTED: ${{ needs.attest.result == 'success' }}
+      DIST: ${{ matrix.distribution }}
     steps:
       # Only for scripts/check-release-evidence.mjs below, which reads the
       # extracted release; the archive under test is the downloaded one.
@@ -294,6 +306,12 @@ jobs:
         with:
           name: release-${{ matrix.target }}-first
           path: ${{ runner.temp }}/candidate
+      # The runtime release is named for the PiShip version that built it, which
+      # this job has no checkout to read: take it from the archive.
+      - name: Name the runtime archive
+        if: matrix.distribution == 'piship-runtime'
+        working-directory: ${{ runner.temp }}/candidate
+        run: echo "NAME=$(basename "$(ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"
       - name: Verify the release
         working-directory: ${{ runner.temp }}/candidate
         run: |
@@ -341,6 +359,12 @@ jobs:
           mkdir extracted
           tar -xzf "$NAME.tar.gz" -C extracted
           dir="extracted/$NAME"
+          # The runtime release names its metadata and payload failure differently.
+          if [ "$DIST" = piship-runtime ]; then
+            meta=runtime.json payload_layer="does not match its inventory"
+          else
+            meta=release.json payload_layer="payload integrity mismatch"
+          fi
           node "$PISHIP_CLI" verify-release "$dir"
           expect_rejected() {
             local file="$dir/$1" label="$2" layer="$3" edit="$4"
@@ -357,7 +381,7 @@ jobs:
             cmp pristine "$file"
           }
           append='require("node:fs").appendFileSync(process.argv[1], " ");'
-          expect_rejected release.json "a modified release.json" "Checksum mismatch for release.json" "$append"
+          expect_rejected "$meta" "a modified $meta" "Checksum mismatch for $meta" "$append"
           expect_rejected sbom.spdx.json "a modified SBOM" "Checksum mismatch for sbom.spdx.json" "$append"
           expect_rejected checksums.txt "a modified checksums.txt" "Checksum mismatch" '
             const fs = require("node:fs");
@@ -367,7 +391,7 @@ jobs:
             lines[0] = (lines[0][0] === "0" ? "1" : "0") + lines[0].slice(1);
             fs.writeFileSync(file, lines.join("\n"));
           '
-          expect_rejected payload/package.json "a modified payload file" "payload integrity mismatch" "$append"
+          expect_rejected payload/package.json "a modified payload file" "$payload_layer" "$append"
       # The evidence the release records about itself, read from the pristine
       # extraction on every target: qualified, tests and vulnerability verdict
       # passed, every SBOM package covered by the notices (the logical

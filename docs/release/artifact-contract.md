@@ -35,6 +35,31 @@ The archive is plain ustar in gzip at zlib level 6: entries are sorted by byte o
 
 These checks prove the release is complete and internally consistent. They do not prove who built it: anyone can produce a consistent release. Publisher identity comes from the channel signature for updates, and from build provenance for CI-built artifacts. `--json` prints `release.json`.
 
+## Runtime release
+
+`piship runtime-release [--out <dir>]` builds the distribution-independent PiShip runtime for this machine's target as `piship-runtime-<PiShip version>-<target>.tar.gz` (with a `.sha256` sidecar), by the same archive rules as a release. It is the bundled, stripped runtime (Pi, the locked npm closure, the `piship.mjs` CLI, and `fd` and `rg` at PiShip's catalog versions under `payload/tools/`) with no manifest, lock, resources, or branded command, so it doubles as the admin tooling download. Its layout:
+
+```text
+piship-runtime-0.13.0-linux-x64/
+  payload/                          the runtime tree, metadata/{target,inventory,search-tools}.json, piship.mjs
+  runtime.json                      piship-runtime/v1 metadata
+  sbom.spdx.json, licenses/THIRD_PARTY_NOTICES.txt, licenses/index.json, vulnerabilities.json
+  checksums.txt                     sha256sum lines for every file above except payload/, plus payload/metadata/inventory.json
+```
+
+`runtime.json` records the PiShip version, the Pi package and version with its compatibility status, the digest of the payload's `package-lock.json` (`npmLockSha256`), the target, the minimum Node, the bundled search tool versions, the inventory digest and file count, the state schemas, the qualification, the passed tests, and the SBOM, notices, vulnerability, and signature results. A pack binds to the PiShip version, Pi version, and `npmLockSha256`.
+
+`piship verify-release` accepts a runtime archive or directory, chosen by whether `runtime.json` or `release.json` is at its root. It applies the release checks to the runtime: the archive digest, `checksums.txt`, every payload file against the inventory, no entries beyond the expected ones, `runtime.json` against the payload (the target, the npm lock digest, the inventory digest, the PiShip version against the payload's `@piship/core`, the Pi version against its npm lock, the search tool versions), the SBOM, the notices, the vulnerability verdict, and the recorded tests. A payload with a `piship.lock`, `piship.yaml`, `resources`, or `bin` is refused. The target need not be this machine to verify; a caller that installs or composes with the runtime requires it. `piship reproducibility` compares two runtime archives the same way as two releases.
+
+`release-candidate` builds the runtime on every evidenced target beside the three distributions, and it gets the same two independent builds, reproducibility comparison, build provenance attestation, fresh-runner verification with the separately built CLI, tamper rejection, and evidence check. It has no install job: there is no shipped install script, and `piship.mjs` runs from the extracted archive. Verify one the same way:
+
+```bash
+gh attestation verify piship-runtime-0.13.0-linux-x64.tar.gz --repo tc3oliver/piship \
+  --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml \
+  --source-ref refs/heads/main
+node packages/cli/dist/bin.js verify-release piship-runtime-0.13.0-linux-x64.tar.gz
+```
+
 ## Reproducibility
 
 `piship reproducibility <release-a> <release-b> [--out report.json]` verifies both releases, refuses to compare different distributions, versions, or targets, and writes a `piship-reproducibility/v1` report. Payload equality is the claim: every declared payload path and SHA-256 must match, and the command exits 1 otherwise, listing the differing paths. Wrapper files (`release.json`, SBOM, notices, scan result, install scripts) and whole-archive equality are reported separately. Whether the build reused the runtime cache is not recorded in any of them: a cache hit, a miss, and a cold build give a byte-identical archive, `release.json`, and `checksums.txt`, and the cache result goes to stderr, the timing output, and an unsigned `<name>.build-info.json` beside the archive. A new vulnerability advisory published between two builds changes `vulnerabilities.json` without changing the payload. Equality is claimed only per target: `metadata/target.json` and native package files differ between targets by design.

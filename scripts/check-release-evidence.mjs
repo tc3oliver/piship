@@ -19,6 +19,8 @@
 //   audit" is not that: npm reached no package, so nothing was verified, and
 //   that is a problem.
 //
+// A runtime release (runtime.json) is checked the same way.
+//
 // It prints a Markdown summary and exits 1 on any problem.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,7 +32,18 @@ const read = (dir, path) => JSON.parse(readFileSync(join(dir, path), "utf8"));
 export function checkReleaseEvidence(dir) {
   const problems = [];
   const warnings = [];
-  const release = read(dir, "release.json");
+  // A runtime release has runtime.json in the place of release.json; its
+  // fields map onto the ones checked below.
+  const runtime = existsSync(join(dir, "runtime.json"))
+    ? read(dir, "runtime.json")
+    : undefined;
+  const release = runtime
+    ? {
+        ...runtime,
+        distribution: { id: "piship-runtime", version: runtime.pishipVersion },
+        payload: { files: runtime.inventory?.files },
+      }
+    : read(dir, "release.json");
   const sbom = read(dir, "sbom.spdx.json");
   const notices = read(dir, "licenses/index.json");
   const vulnerabilities = read(dir, "vulnerabilities.json");

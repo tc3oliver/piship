@@ -17,6 +17,7 @@ import {
 } from "../search-tools/index.js";
 import { SEARCH_TOOLS } from "@piship/schema";
 import { createArchive } from "../archive.js";
+import { compareReleases } from "./reproducibility.js";
 import { PISHIP_VERSION } from "../compatibility.js";
 import { inventory } from "../payload.js";
 import { formatChecksums } from "../supply-chain.js";
@@ -309,5 +310,22 @@ describe("runtime release", () => {
     const archive = join(temp(), `${built.name}.tar.gz`);
     await createArchive(built.directory, built.name, archive);
     await expect(verifyRuntimeRelease(archive)).rejects.toThrow(/install.sh/);
+  });
+
+  it("compares two builds of the runtime by their payloads", async () => {
+    const first = await build();
+    const second = await build();
+    expect(await compareReleases(first.archive, second.archive)).toMatchObject({
+      distribution: "piship-runtime",
+      version: PISHIP_VERSION,
+      payloadEqual: true,
+      archiveEqual: true,
+    });
+    const other = await build((payload) =>
+      write(join(payload, "extra.txt"), "x"),
+    );
+    const report = await compareReleases(first.archive, other.archive);
+    expect(report.payloadEqual).toBe(false);
+    expect(report.payloadDifferences).toContain("extra.txt");
   });
 });
