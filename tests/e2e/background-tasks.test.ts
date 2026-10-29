@@ -249,7 +249,7 @@ describe.runIf(process.platform === "win32")(
             'const path = require("node:path");',
             'const stop = path.join(__dirname, "stop");',
             'spawn(process.execPath, ["child.cjs"], { cwd: __dirname, detached: true, stdio: "ignore" }).unref();',
-            'setInterval(() => { if (existsSync(stop)) process.exit(0); }, 100);',
+            "setInterval(() => { if (existsSync(stop)) process.exit(0); }, 100);",
           ].join("\n"),
         );
         services.knobs.gatewayMode = "script";
