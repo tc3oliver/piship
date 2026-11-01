@@ -26,7 +26,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, part: unit, shard: 1/1 }
+          - { os: ubuntu-latest, part: unit, shard: 1/2 }
+          - { os: ubuntu-latest, part: unit, shard: 2/2 }
           - { os: ubuntu-latest, part: compatibility }
     steps: &check-steps
       # Windows runners are ephemeral VMs whose C: drive is slow for the many
@@ -159,8 +160,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, part: unit, shard: 1/2 }
-          - { os: windows-latest, part: unit, shard: 2/2 }
+          - { os: windows-latest, part: unit, shard: 1/3 }
+          - { os: windows-latest, part: unit, shard: 2/3 }
+          - { os: windows-latest, part: unit, shard: 3/3 }
           - { os: windows-latest, part: compatibility }
     steps: *check-steps
   # The required checks, one per target by these exact names. Each passes
