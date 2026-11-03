@@ -23,7 +23,7 @@
     "dist"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@piship/audit": "0.13.0",
     "@piship/contracts": "0.13.0",
     "@piship/core": "0.13.0",
