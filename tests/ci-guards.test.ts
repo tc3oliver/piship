@@ -66,14 +66,18 @@ describe("the CI check job", () => {
 // always and fail unless every runner of its target succeeded.
 describe("the CI check runners", () => {
   const TARGETS = {
-    ubuntu: ["{ os: ubuntu-latest, part: unit, shard: 1/1 }"],
+    ubuntu: [
+      "{ os: ubuntu-latest, part: unit, shard: 1/2 }",
+      "{ os: ubuntu-latest, part: unit, shard: 2/2 }",
+    ],
     macos: [
       "{ os: macos-latest, part: unit, shard: 1/2 }",
       "{ os: macos-latest, part: unit, shard: 2/2 }",
     ],
     windows: [
-      "{ os: windows-latest, part: unit, shard: 1/2 }",
-      "{ os: windows-latest, part: unit, shard: 2/2 }",
+      "{ os: windows-latest, part: unit, shard: 1/3 }",
+      "{ os: windows-latest, part: unit, shard: 2/3 }",
+      "{ os: windows-latest, part: unit, shard: 3/3 }",
     ],
   } as const;
 

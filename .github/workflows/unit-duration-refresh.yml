@@ -37,8 +37,8 @@ jobs:
           for run in "${runs[@]}"; do
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" \
               --jq '.jobs[] | select(.conclusion == "success" and (.name | contains(", unit "))) | [.id,.name] | @tsv' > "$RUNNER_TEMP/unit-jobs.tsv"
-            if [ "$(wc -l < "$RUNNER_TEMP/unit-jobs.tsv")" -ne 5 ]; then
-              echo "Expected all five successful unit shards in CI run $run" >&2
+            if [ "$(wc -l < "$RUNNER_TEMP/unit-jobs.tsv")" -ne 7 ]; then
+              echo "Expected all seven successful unit shards in CI run $run" >&2
               exit 1
             fi
             while IFS=$'\t' read -r job name; do
