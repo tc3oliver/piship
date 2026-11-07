@@ -16,7 +16,7 @@ Six Pi packages, each pinned to an exact version and bound by the lock:
 | Package | What it gives the session | Left out |
 | --- | --- | --- |
 | `pi-code` 1.4.2 | Claude Code compatibility (rules, commands, skills, agents, hooks, `CLAUDE.md`, `.mcp.json`), `web_search` and `web_fetch`, plan mode, `todo`, `question`, `memory`, checkpoints and `/rewind`, `subagent`, `/goal` | Nothing |
-| `pi-lens` 4.3.0 | Diagnostics, LSP navigation, ast-grep, formatting and lint feedback after every edit | The two skills about writing pi-lens rules |
+| `pi-lens` 4.4.8 | Diagnostics, LSP navigation, ast-grep, formatting and lint feedback after every edit | The two skills about writing pi-lens rules |
 | `pi-background-tasks` 2.6.9 | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; `/bg` and `/jobs` | Its delegate, Fusion, and attested features, and the extension that makes requests look like Claude Code's and reads `~/.claude.json` |
 | `pi-review` 1.2.1 | `/review` and `/review-back` | Nothing |
 | `pi-browser-use` 0.12.11 | `browser_*` tools over a headless Chrome | The two skills about signing in to Google accounts |
@@ -186,8 +186,9 @@ Pi renames a command two packages register: pi-code's `/tasks` and the backgroun
 `pi-lens` runs diagnostics and formatters after an edit, and gives the model navigation tools. Its behavior on the network is the part to know:
 
 - It **installs** linters and language servers on first use, into `PI_LENS_HOME`, which the manifest points at `<state>/pi-lens`: the install stays inside DevCode's state, and `purge` removes it. The installs come from package registries and GitHub releases.
-- It resolves a **GitHub token** for those release downloads. In pi-lens 4.3.0's source it runs `gh auth token` or reads `GH_TOKEN` or `GITHUB_TOKEN`, and sends the token as an authorization header to `api.github.com`. This is the package's own process, not a command the model ran, so the deny on `gh auth token` above (for the agent's bash) does not apply to it. This comes from reading the source, not from captured traffic.
+- It resolves a **GitHub token** for those release downloads. In pi-lens 4.4.8's source it runs `gh auth token` or reads `GH_TOKEN` or `GITHUB_TOKEN`, and sends the token as an authorization header to `api.github.com`. This is the package's own process, not a command the model ran, so the deny on `gh auth token` above (for the agent's bash) does not apply to it. This comes from reading the source, not from captured traffic.
 - It fetches **tree-sitter grammar files** from `unpkg.com`.
+- It refreshes **Opengrep's rule pack** from `semgrep.dev` in the background, about weekly (read in pi-lens 4.4.8's source). `PI_LENS_DISABLE_TOOL_REFRESH=1` turns the refresh off.
 - To stop all installs, set `PI_LENS_DISABLE_TOOL_INSTALL=1` and `PI_LENS_DISABLE_LSP_INSTALL=1`, as [`managed.piship.yaml`](managed.piship.yaml) does. It then uses only what is already on the machine. To keep the token out of it, do not sign in with `gh` and do not export `GH_TOKEN` or `GITHUB_TOKEN`.
 
 ## Hardening for a company
@@ -221,7 +222,7 @@ Pi renames a command two packages register: pi-code's `/tasks` and the backgroun
 
 The build installs each package with `--ignore-scripts`, and PiShip never runs a dependency's install script. `release.installScripts` lists the two a reviewer read for this lock, each pinned by package path and version, so a release that gains another one fails:
 
-- `@ast-grep/cli@0.45.3` (a dependency of `pi-lens`): a `postinstall` that hard-links or copies the platform binary from its own optional package over the package's `ast-grep` shim. It reads files inside `node_modules`, runs nothing, and uses no network. Without it the shim still resolves the binary at run time.
+- `@ast-grep/cli@0.51.0` (a dependency of `pi-lens`): a `postinstall` that hard-links or copies the platform binary from its own optional package over the package's `ast-grep` shim. It reads files inside `node_modules`, runs nothing, and uses no network. Without it the shim still resolves the binary at run time.
 - `tree-sitter-bash@0.25.1` (a dependency of the permission provider): an `install` of `node-gyp-build`, which loads a native binding from `prebuilds/` and compiles from source only when none matches. The provider loads the package's WebAssembly parser through `web-tree-sitter` and never the native binding.
 
 ## What the tests cover
