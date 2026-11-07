@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-8e7b9d7b655be372f63d2130b11fdb68f9fbf4429f65cdde839f16413a5634d9"
+    "sha256": "sha256-3ed4e29b50eee1a393ac4e0f054626b727f122a913d3a3f93a699fbeab7e8922"
   },
   "app": {
     "id": "devcode",
@@ -18,7 +18,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.5.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "ec97c28d0c1f484b9aac44d8b292011efdffa9eaa1f24562ff0c8b8cde6b27fd",
+    "npmLockSha256": "19d9a9cd6576c011c17fcb318c2ee27079ebf313848702f2aa97b72624975a07",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -1075,7 +1075,7 @@
             },
             "source": "npm",
             "package": "pi-lens",
-            "version": "4.3.0"
+            "version": "4.4.8"
           },
           {
             "id": "pi-background-tasks",
@@ -1973,7 +1973,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-54abee15042bc2fdbb53bb5c4037f886c8801fc9fb7657a7a77f3d7625c85e88",
+    "packages": "sha256-6bb7dae01bab768a588db325fe26744e48357401d1c7d5d4bd3f3ba8e5fa2390",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2001,7 +2001,7 @@
       "allow": []
     },
     "installScripts": [
-      "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3",
+      "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.51.0",
       "pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1"
     ],
     "strip": true,
@@ -2017,7 +2017,7 @@
       "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
       "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
       "files": 105,
-      "lockfileSha256": "ba1bdb01f4e66e25b2148037be21dae050ca669518fd741af5334278f7799e66",
+      "lockfileSha256": "ae11fe058be0aadb526b9b57f5173b9ef63fc4c0b36a7f39c4753843ea94a013",
       "resources": [
         {
           "kind": "extensions",
@@ -2145,17 +2145,17 @@
       "id": "pi-lens",
       "source": "npm",
       "class": "user",
-      "url": "https://registry.npmjs.org/pi-lens/-/pi-lens-4.3.0.tgz",
-      "version": "4.3.0",
-      "integrity": "sha512-6PTzboAc9z2WSEA6aNXCWGsd5ES5MKNJBMIxazbEk2fzcXZFerhJ1k07UDrGjE+hkkd6TnPhsHAxMQ28ZT0WGQ==",
-      "tree": "sha256-c572b0417918aa4b1d372ee8c5e446a3974fda19a3e40617476d813946f34016",
-      "files": 1568,
-      "lockfileSha256": "733fba2370b06c7177ffe8b1c3ac5a1891887b9c64d2a6e84b3dc2aa65ebd0a7",
+      "url": "https://registry.npmjs.org/pi-lens/-/pi-lens-4.4.8.tgz",
+      "version": "4.4.8",
+      "integrity": "sha512-SfUKD8VbYdgOq9tBvEgO2BvY8aoN8HG242RSm4gMl5/nhOiid35UJKDCyC/WMQ0Q+FuFgknlNkF3XtDDZsd4WA==",
+      "tree": "sha256-2159a79ddb2fc0c265966d2fbb8a43affe8a5a8a0052aca83e3bf4ee2f461b4d",
+      "files": 1249,
+      "lockfileSha256": "670a39d8cff4b6782cd9fd1bdfc2b2b6974b2eca7f362ae9291e438e912e25b8",
       "resources": [
         {
           "kind": "extensions",
           "path": "dist/index.js",
-          "sha256": "c16fd7f3bc7c55691ff7ac37f808568617456385e3a6c7848233e4e1d408994e"
+          "sha256": "59e40189c1b4c00b5bd928ee93f474762b9df8530debca90eb363d5ab2c1749c"
         },
         {
           "kind": "skills",
@@ -2170,21 +2170,21 @@
       ],
       "optionalDependencies": {
         "darwin-arm64": [
-          "node_modules/@ast-grep/cli-darwin-arm64@0.45.3",
-          "node_modules/@ast-grep/napi-darwin-arm64@0.45.3",
+          "node_modules/@ast-grep/cli-darwin-arm64@0.51.0",
+          "node_modules/@ast-grep/napi-darwin-arm64@0.51.1",
           "node_modules/jiti@2.7.0",
           "node_modules/web-tree-sitter@0.25.10"
         ],
         "linux-x64": [
-          "node_modules/@ast-grep/cli-linux-x64-gnu@0.45.3",
-          "node_modules/@ast-grep/napi-linux-x64-gnu@0.45.3",
-          "node_modules/@ast-grep/napi-linux-x64-musl@0.45.3",
+          "node_modules/@ast-grep/cli-linux-x64-gnu@0.51.0",
+          "node_modules/@ast-grep/napi-linux-x64-gnu@0.51.1",
+          "node_modules/@ast-grep/napi-linux-x64-musl@0.51.1",
           "node_modules/jiti@2.7.0",
           "node_modules/web-tree-sitter@0.25.10"
         ],
         "win32-x64": [
-          "node_modules/@ast-grep/cli-win32-x64-msvc@0.45.3",
-          "node_modules/@ast-grep/napi-win32-x64-msvc@0.45.3",
+          "node_modules/@ast-grep/cli-win32-x64-msvc@0.51.0",
+          "node_modules/@ast-grep/napi-win32-x64-msvc@0.51.1",
           "node_modules/jiti@2.7.0",
           "node_modules/web-tree-sitter@0.25.10"
         ]
@@ -2254,7 +2254,7 @@
       "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
       "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
       "files": 68,
-      "lockfileSha256": "d7b8a745c3766068f1ef493becae57776258d68457b2acabdc9638dbf5ff308f",
+      "lockfileSha256": "23bbf7e77adeaa7d391784e52667c33b239303aaa65929e3b65e68a1af9e2b4f",
       "resources": [
         {
           "kind": "extensions",

@@ -925,7 +925,7 @@ describe("CLI", () => {
     cpSync(join(root, "examples/personal"), example, { recursive: true });
     const manifest = join(example, "piship.yaml");
     const original = readFileSync(manifest, "utf8");
-    writeFileSync(manifest, original.replace('"1.1.0"', '"0.88.0"'));
+    writeFileSync(manifest, original.replace('"1.5.0"', '"0.88.0"'));
     expect(cli("validate", manifest).stderr).toContain("Pinned runtime: 1.5.0");
     writeFileSync(
       manifest,

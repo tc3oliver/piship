@@ -331,7 +331,7 @@ resources:
     - id: pi-lens
       source: npm
       package: pi-lens
-      version: 4.3.0
+      version: 4.4.8
       class: user
       environment:
         PI_LENS_HOME: { statePath: pi-lens }   # <state>/pi-lens, resolved on each machine

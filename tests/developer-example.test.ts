@@ -214,7 +214,7 @@ describe("the developer example manifests", () => {
 
   it("reviews exactly the install scripts the lock contains", () => {
     expect(personal.lifecycle?.release.installScripts).toEqual([
-      "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3",
+      "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.51.0",
       "pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1",
     ]);
     expect(lock.release.installScripts).toEqual(
