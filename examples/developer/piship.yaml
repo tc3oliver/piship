@@ -67,7 +67,7 @@ resources:
     - id: pi-lens
       source: npm
       package: pi-lens
-      version: 4.3.0
+      version: 4.4.8
       class: user
       environment:
         PI_LENS_HOME: { statePath: pi-lens }
@@ -872,5 +872,5 @@ release:
   # pi-permission-system loads the package's WebAssembly parser
   # (tree-sitter-bash.wasm) through web-tree-sitter and never the native binding.
   installScripts:
-    - pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3
+    - pi-packages/pi-lens/node_modules/@ast-grep/cli@0.51.0
     - pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1
