@@ -227,6 +227,33 @@ describe("Pi packages in the lock", () => {
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
   }, 120_000);
 
+  it("a relock resolves from the stored npm lockfile, so transitive versions stay put", () => {
+    const manifest = distribution();
+    const base = dirname(manifest);
+    lockPackages(manifest);
+    const stored = join(
+      base,
+      PACKAGE_LOCK_DIRECTORY,
+      "team",
+      "package-lock.json",
+    );
+    const before = readFileSync(stored, "utf8");
+    const seen: string[] = [];
+    lockPiPackages(readManifest(manifest), base, {
+      run: (command, args, options) => {
+        if (command === "npm" && args.includes("--package-lock-only"))
+          seen.push(
+            readFileSync(
+              join(String(options.cwd), "package-lock.json"),
+              "utf8",
+            ),
+          );
+        return run(command, args, options);
+      },
+    });
+    expect(seen).toContain(before);
+  }, 120_000);
+
   it("switching pretranspile on or off makes the lock stale until it is locked again", (context) => {
     requireNpm11(context);
     const manifest = distribution();

@@ -24,6 +24,8 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- `piship lock` no longer re-resolves a Pi package's transitive dependencies on every run. It now starts npm from the package's stored lockfile in `piship.lock.d/`, so a relock for an unrelated change (a resource, a dev-dependency bump) keeps the recorded versions instead of picking up whatever patch releases appeared since; a changed declaration still updates what it needs. Delete the stored `package-lock.json` to re-resolve a package ([manifest](docs/manifest.md#pi-packages-v1alpha6)).
+
 - Stored identity metadata with a malformed expiry is refused before its token is restored, so an invalid date cannot bypass expiry-triggered renewal.
 - Identity renewal rejects an invalid declared expiry before storing a refreshed token, instead of allowing an invalid date through the expiry check.
 - Identity renewal now refuses a refreshed token whose declared expiry has already passed, including a token concurrently stored by another process. It fails with `IDENTITY_EXPIRED` instead of persisting or reusing that token; valid sessions and sessions without a declared expiry retain their existing behavior.
