@@ -111,8 +111,20 @@ async function killBuildMidStaging(flags: string[] = []): Promise<string> {
     if (Date.now() > deadline) throw new Error("the build never staged");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  process.kill(-(child.pid as number), "SIGKILL");
+  const group = -(child.pid as number);
+  process.kill(group, "SIGKILL");
   await exited;
+  // The build's own exit is not enough: an npm process of its group still
+  // dying could write into the staging the next build is removing.
+  for (const until = Date.now() + 10_000; ; ) {
+    try {
+      process.kill(group, 0);
+    } catch {
+      break;
+    }
+    if (Date.now() > until) throw new Error("the build's processes survived");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   return said;
 }
 
@@ -148,12 +160,11 @@ describe.runIf(posix)("piship build killed with SIGKILL", () => {
       true,
     );
     // Asked: what is abandoned goes, and leftovers do not grow however often.
-    const counts: number[] = [];
     for (let run = 0; run < 3; run += 1) {
-      await killBuildMidStaging(["--reclaim-staging"]);
-      counts.push(stagings().length);
+      const said = await killBuildMidStaging(["--reclaim-staging"]);
+      // On failure, the names and what the build said tell which was left.
+      expect(stagings(), `run ${run}: ${said}`).toHaveLength(1);
     }
-    expect(counts).toEqual([1, 1, 1]);
     const result = spawnSync(
       process.execPath,
       [bin, "build", manifest, "--reclaim-staging"],
