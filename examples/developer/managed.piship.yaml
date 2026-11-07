@@ -33,7 +33,7 @@ app:
   banner: DevCode, hardened for a company (example)
 
 runtime:
-  pi: "1.1.0"
+  pi: "1.5.0"
 
 deployment:
   mode: managed
@@ -153,7 +153,7 @@ resources:
         source: https://www.npmjs.com/package/@gotgenes/pi-permission-system
         integrity: sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84
         license: MIT
-        pi: ["1.1.0"]
+        pi: ["1.5.0"]
       agentFiles:
         - path: extensions/pi-permission-system/config.json
           # Rewritten at every launch.

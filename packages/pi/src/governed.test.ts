@@ -125,7 +125,7 @@ async function open(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.1.0" }',
+      'runtime: { pi: "1.5.0" }',
       "deployment: { mode: personal }",
       ...POLICY.flatMap((line) =>
         line === "  enforced:"
@@ -171,7 +171,7 @@ async function open(
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "1.1.0",
+    piVersion: "1.5.0",
     interactive: false,
     fetch:
       options.fetch ??
@@ -2940,7 +2940,7 @@ describe("launch metrics", () => {
           "        source: https://example.org/cite",
           `        integrity: ${integrity}`,
           "        license: MIT",
-          '        pi: ["1.1.0"]',
+          '        pi: ["1.5.0"]',
         ],
         {
           files: {

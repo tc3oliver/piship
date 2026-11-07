@@ -104,6 +104,19 @@ describe("real bundled Pi runtime", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("passed");
   });
+  it("gives extensions Pi's pi-ai view at the path its loader resolves", () => {
+    const view = join(
+      payload,
+      "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/pi-ai-extension-view.js",
+    );
+    const result = run([
+      "--input-type=module",
+      "-e",
+      `const {Type, StringEnum, getModel} = await import(${esmImport(view)}); console.log(JSON.stringify([typeof Type.Object, StringEnum(["a"]).enum, typeof getModel]));`,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(["function", ["a"], "function"]);
+  });
   it("preserves structured runtime errors across the boot bundle boundary", () => {
     const result = run([join(payload, "bin", "mypi"), "--model"]);
     expect(result.status).toBe(1);
@@ -141,7 +154,6 @@ describe("real bundled Pi runtime", () => {
       "pi-agent-core",
       "pi-codemode",
       "pi-tui",
-      "chord",
     ])
       present(upstream, name, "package.json");
     const agent = join(upstream, "pi-coding-agent");
@@ -192,14 +204,13 @@ describe("real bundled Pi runtime", () => {
       "pi-coding-agent",
       "pi-ai",
       "pi-ai-compat",
+      "pi-ai-models",
       "pi-ai-oauth",
       "pi-ai-providers-all",
       "pi-agent-core",
       "pi-codemode",
       "pi-tui",
-      "chord",
-      "chord-context",
-      "chord-node",
+      "pi-ai-extension-view",
       "typebox",
       "codemode-worker",
       "image-resize-worker",

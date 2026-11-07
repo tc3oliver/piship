@@ -56,7 +56,7 @@ function receipt(active: string, previous?: string): InstallReceipt {
       entry("1.0.0", {
         target: "linux-x64",
         channel: "stable",
-        pi: "1.1.0",
+        pi: "1.5.0",
         piship: "0.13.0",
         lockSha256: "a".repeat(64),
         archiveSha256: "b".repeat(64),
@@ -65,7 +65,7 @@ function receipt(active: string, previous?: string): InstallReceipt {
       entry("1.1.0", {
         target: "linux-x64",
         channel: "stable",
-        pi: "1.1.0",
+        pi: "1.5.0",
         piship: "0.13.0",
         lockSha256: "c".repeat(64),
         pack: { sha256: "d".repeat(64), version: "1.1.0" },

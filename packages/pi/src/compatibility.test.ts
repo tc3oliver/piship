@@ -3194,3 +3194,47 @@ it("resolves the public upstream exports used by portable bundles", async () => 
   expect(typeof loader.setBedrockProviderModule).toBe("function");
   expect(typeof bedrock.bedrockProviderModule).toBe("object");
 });
+
+// Pi 1.5.0 shows new changelog entries of `package`-origin extensions on the
+// next launch; a distribution's vendored packages must not reach that path.
+it("records extensions passed by path as top-level, with no changelog", async () => {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), "piship-pi-changelog-")),
+  );
+  try {
+    const dir = join(root, "pkg");
+    mkdirSync(join(dir, "extensions"), { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "vendored",
+        version: "2.0.0",
+        pi: { extensions: ["./extensions/e.js"] },
+      }),
+    );
+    writeFileSync(join(dir, "CHANGELOG.md"), "# C\n\n## [2.0.0]\n\n- x\n");
+    writeFileSync(
+      join(dir, "extensions", "e.js"),
+      "export default function () {}\n",
+    );
+    for (const path of [dir, join(dir, "extensions", "e.js")]) {
+      const loader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: upstreamPi.SettingsManager.inMemory(),
+        additionalExtensionPaths: [path],
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      });
+      await loader.reload();
+      const [extension] = loader.getExtensions().extensions;
+      expect(extension?.sourceInfo.origin).toBe("top-level");
+      expect(extension?.sourceInfo.changelogPath).toBeUndefined();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

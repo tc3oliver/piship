@@ -48,7 +48,7 @@ app:
   command: acmepi
   version: 1.0.0
 runtime:
-  pi: "1.1.0"
+  pi: "1.5.0"
 deployment:
   mode: personal
 variables:
@@ -440,8 +440,8 @@ describe("piship pack with bundled search tools", () => {
         "",
         "  targets: [linux-x64, darwin-arm64]\n  sources: [https://registry.npmjs.org, https://github.com]\n",
       ).replace(
-        'runtime:\n  pi: "1.1.0"\n',
-        'runtime:\n  pi: "1.1.0"\n  searchTools: { mode: bundled }\n',
+        'runtime:\n  pi: "1.5.0"\n',
+        'runtime:\n  pi: "1.5.0"\n  searchTools: { mode: bundled }\n',
       ),
     );
     lockManifest(path);

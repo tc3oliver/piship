@@ -69,21 +69,21 @@ export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 // What a session publishes for its subagent children; a test stands in for one.
 export { publishSubagentOwner } from "./launch/subagent-owner.js";
 
-export const PINNED_PI_VERSION = "1.1.0" as const;
+export const PINNED_PI_VERSION = "1.5.0" as const;
 /**
  * Pi's sibling packages at the exact versions reviewed with the pinned Pi.
- * Pi 1.0.1+ ships no npm shrinkwrap and declares them with `^`, so the root
+ * Pi 1.0.1+ ships no npm shrinkwrap, so the root
  * package.json `overrides` hold them here when the npm lock is regenerated;
  * the compatibility suite asserts the overrides, the lock, and the install.
  */
 export const PI_SIBLING_PINS: Readonly<Record<string, string>> = {
-  "@earendil-works/chord": "1.1.0",
-  "@earendil-works/pi-agent-core": "1.1.0",
-  "@earendil-works/pi-ai": "1.1.0",
-  "@earendil-works/pi-codemode": "1.1.0",
-  "@earendil-works/pi-mcp": "1.1.0",
-  "@earendil-works/pi-telemetry": "1.1.0",
-  "@earendil-works/pi-tui": "1.1.0",
+  "@earendil-works/pi-agent-core": "1.5.0",
+  "@earendil-works/pi-ai": "1.5.0",
+  "@earendil-works/pi-codemode": "1.5.0",
+  "@earendil-works/pi-mcp": "1.5.0",
+  "@earendil-works/pi-schema": "1.5.0",
+  "@earendil-works/pi-telemetry": "1.5.0",
+  "@earendil-works/pi-tui": "1.5.0",
 };
 export interface LaunchOptions {
   readonly distributionDir: string;

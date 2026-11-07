@@ -180,7 +180,7 @@ describe("managed distribution (local fixtures)", () => {
       schema: "piship-metrics/v1",
       versions: {
         distribution: "1.0.0",
-        pi: "1.1.0",
+        pi: "1.5.0",
         node: process.versions.node,
       },
       latency: {

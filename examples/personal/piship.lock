@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-62064f4df13018924c0ed12f8a0f2e23d334bd723a8f803f3906ffaae438ead2"
+    "sha256": "sha256-bcf12aa3c33eee5b45e7905d9a932abd147b20d5f2cad851471086fc1464cc9f"
   },
   "app": {
     "id": "mypi",
@@ -17,9 +17,9 @@
   },
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "1.1.0",
+    "version": "1.5.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "9f7e8e21bfc94ab11f3a1f8808c23568fa262789c9ee0c5c27451a2f930cf7d8",
+    "npmLockSha256": "19d9a9cd6576c011c17fcb318c2ee27079ebf313848702f2aa97b72624975a07",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -154,34 +154,28 @@
         "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz"
       },
       {
-        "path": "node_modules/@earendil-works/chord",
-        "version": "1.1.0",
-        "integrity": "sha512-gsHzKfyQ3t0ZIQ3cLBjJ5Vqy1TYnFyruHIV3g3BwmulCDYe5BW4yT9vaJk9QzN6YANILIO75uzuq+Gdxtzz1og==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.1.0.tgz"
-      },
-      {
         "path": "node_modules/@earendil-works/pi-agent-core",
-        "version": "1.1.0",
-        "integrity": "sha512-aX1KZomNCPmwYnXa3OivF3VYLJ+WPUkIJlEIZTgwdOZdY/+oToWTQ334WYpQeOz9POpiYFNMJLPwIhXQ4e48kg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-FOj+jXj48DbzMycR/ghNa2KcsqWmvOln24e0FnQOVgnd8vn5H79g335WdHaZUVdRo+zCeogb40/qPPlCWFuvmA==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-ai",
-        "version": "1.1.0",
-        "integrity": "sha512-1T7LAkc/5Bvc0v6w4vAGVdCrli0o/E0pEmYKTnixu95vSFArBjvbhS/G4ZwI0RUePgf0Imcu0VyqlM4EcXxqfw==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-VeWxNqTHSqRCf8AcY/6kvNwh+neRL6MPxZPePVztIQy6qqK9MR/YoCSN/ZgDnIyCD3pqEXgRyQbzk4KV4uvjbg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-codemode",
-        "version": "1.1.0",
-        "integrity": "sha512-8Asc2AzhoNaXS1snmRFa96OhcWIlFM5k1Kuiz6p2DvIYgi5QHQccRAmDVY9oO92TzWrizpvQpconZGQ7JhlI7Q==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-PLBJZ17AEWGzOlAAcFuOkw3PxkOti0JlFuZQyeF2GRTqbpuYo4k9t8YqUV2uOQVzrUnKdxahwaFUqc1eNS1WAg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",
-        "version": "1.1.0",
-        "integrity": "sha512-SeEi/4hdcHNgA9UWlefZl7ZZpm3dzi2OoxNjDHsBJ9o298LNOtbL4DGKgitlEj6uCTccvtw6f2hlCkTPVJ2RXg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node",
@@ -244,12 +238,6 @@
         "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.4.0.tgz"
       },
       {
-        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/minimatch",
-        "version": "10.2.6",
-        "integrity": "sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==",
-        "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz"
-      },
-      {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile",
         "version": "4.1.2",
         "integrity": "sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==",
@@ -275,21 +263,27 @@
       },
       {
         "path": "node_modules/@earendil-works/pi-mcp",
-        "version": "1.1.0",
-        "integrity": "sha512-xGKwvu3SvVTeoIx8Z7UGoJprB4VK20wKORMhufcWGx61fIauhu3J+UqfB5eeoF1oE/geYBA598K6nh1SdABQkg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-DURw3IwHCTMHV8CzUJWVp9css27NowsCWfXt4xg2r09IZ+P1O/Uq58hp0hb9WJO0dbkaKGXKBIkV4LVXcu2nlg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.5.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-schema",
+        "version": "1.5.0",
+        "integrity": "sha512-RW0MbT2tR65OY6xMsgB/yVBb7m/RTNwA+9hurSN1vVXfHZRVmVnXbruBPrx/PzbrQnW5yLVlMRWxErGDQtF1Hg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-schema/-/pi-schema-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-telemetry",
-        "version": "1.1.0",
-        "integrity": "sha512-8gAK05/2pPozZZz6hCLOi8x2vsqzvsmO9gG92kbvuvTPm0qMHaFlaXX98ndXsrOi5pmzha7vNLguuG4+0Rgxjw==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-VW3tcVdnNfl/Vk8wHPTzZdKkxcsCOM12ppiO4DXnd9wMxUCmOfLt/wvUnWeKWbTVlVSRg0uqKtnnhE2UCsG2Bw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.5.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-tui",
-        "version": "1.1.0",
-        "integrity": "sha512-v7wkS0y2ErZvZkSfemqd9RrBZJ5x6p8Ujsv7NdJj01IXJyFM0kNL6rMdcKcvTe7EVTd6ugvDB9VPZSoaBF9QxQ==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.1.0.tgz"
+        "version": "1.5.0",
+        "integrity": "sha512-56KqrDVeLF18k+syppVbT35Ai1opbM44ot+sL7O3K40CaWwXCiwOpqEFugDBAILtAhseZh6uYIuYxPPOJHLFAA==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.5.0.tgz"
       },
       {
         "path": "node_modules/@esbuild/aix-ppc64",
@@ -453,6 +447,12 @@
         "integrity": "sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q==",
         "resolved": "https://registry.npmjs.org/@google/genai/-/genai-2.21.0.tgz",
         "installScript": true
+      },
+      {
+        "path": "node_modules/@isaacs/nonrecursive-glob-match",
+        "version": "1.1.0",
+        "integrity": "sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw==",
+        "resolved": "https://registry.npmjs.org/@isaacs/nonrecursive-glob-match/-/nonrecursive-glob-match-1.1.0.tgz"
       },
       {
         "path": "node_modules/@protobufjs/aspromise",
@@ -760,6 +760,18 @@
         "version": "18.0.11",
         "integrity": "sha512-HnslJfsZkRPBDJRHvVtAaWlZHEpSu7u8LgQuJCELjRKuWR+hpq4A7sLq3p8HaI9ypVoXDXxV34CsQJEe1+J5Aw==",
         "resolved": "https://registry.npmjs.org/marked/-/marked-18.0.11.tgz"
+      },
+      {
+        "path": "node_modules/marked-cjk-friendly",
+        "version": "0.1.2",
+        "integrity": "sha512-GUj8HjiEbur9yhgUo52FBgKizggF1QtT6gVdrYdWW6ZB4lVVjgS3EyyXPyfyRD0V4ghGRPlO7MO80rgSWbm0eA==",
+        "resolved": "https://registry.npmjs.org/marked-cjk-friendly/-/marked-cjk-friendly-0.1.2.tgz"
+      },
+      {
+        "path": "node_modules/minimatch",
+        "version": "11.0.3",
+        "integrity": "sha512-iny/40PEGkNJQ5/Pv6z3nm6FbRAby32GeZRjCUJk2WnNDbgPSTcdI+DDvLqsgBdD4cD5sMtMheqPPnehCCa8Nw==",
+        "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-11.0.3.tgz"
       },
       {
         "path": "node_modules/ms",
@@ -1436,7 +1448,7 @@
     "userOverride": false
   },
   "enforcement": {
-    "pi": "1.1.0",
+    "pi": "1.5.0",
     "seams": {
       "agent.invoke": "none",
       "browser.execute": "none",
@@ -1460,7 +1472,7 @@
       "tool.execute": "hook",
       "web.request": "none"
     },
-    "digest": "sha256-deade12b52f1dcbd48676e733fd6064ac2d4716f554d7751ae852285b5be7f2a"
+    "digest": "sha256-c569d174cfd15100eaebd637ce98959ff3df2a084985a5abb69161a878c9a62a"
   },
   "data": {
     "contract": "piship-data/v1"

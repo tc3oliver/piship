@@ -8,7 +8,7 @@ import type {
   SessionExportResource,
 } from "@piship/contracts";
 
-/** The seam table against Pi 1.1.0. */
+/** The seam table against Pi 1.5.0. */
 export const RUNTIME_SEAMS: Readonly<Record<PolicyAction, RuntimeSeamKind>> = {
   "model.select": "hook",
   "model.dispatch": "hook",
