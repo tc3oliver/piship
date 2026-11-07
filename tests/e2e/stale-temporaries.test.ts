@@ -114,15 +114,25 @@ async function killBuildMidStaging(flags: string[] = []): Promise<string> {
   const group = -(child.pid as number);
   process.kill(group, "SIGKILL");
   await exited;
-  // The build's own exit is not enough: an npm process of its group still
-  // dying could write into the staging the next build is removing.
+  // The build's own exit is not enough: on macOS part of its group outlived
+  // the kill by 10 s (Portable E2E 42390160498), and one still running can
+  // write into the staging the next build removes. Kill the group again
+  // until none of it is left.
   for (const until = Date.now() + 10_000; ; ) {
     try {
-      process.kill(group, 0);
+      process.kill(group, "SIGKILL");
     } catch {
       break;
     }
-    if (Date.now() > until) throw new Error("the build's processes survived");
+    if (Date.now() > until) {
+      const ps = spawnSync("ps", ["-A", "-o", "pid=,pgid=,stat=,command="], {
+        encoding: "utf8",
+      }).stdout.split("\n");
+      const left = ps.filter(
+        (line) => line.trim().split(/\s+/)[1] === `${-group}`,
+      );
+      throw new Error(`the build's processes survived:\n${left.join("\n")}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   return said;
