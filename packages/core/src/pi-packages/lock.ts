@@ -96,7 +96,9 @@ export function reviewedInstallScripts(
 /**
  * `piship lock`: resolve every declared package, apply the source and
  * install-script gates to its closure, and write its npm root beside the
- * lock. Package directories no longer declared are removed.
+ * lock. A stored npm lockfile is the starting point, so transitive versions
+ * stay put; delete it to re-resolve them. Package directories no longer
+ * declared are removed.
  */
 export function lockPiPackages(
   manifest: Manifest,
@@ -116,7 +118,12 @@ export function lockPiPackages(
   const context = packageContext(manifest, base, options);
   const release = manifest.lifecycle?.release;
   return declared.map((declaration) => {
-    const resolved = resolvePiPackage(declaration, context);
+    const stored = packageLockFiles(base, declaration.id).lockfile;
+    const resolved = resolvePiPackage(
+      declaration,
+      context,
+      existsSync(stored) ? readFileSync(stored, "utf8") : undefined,
+    );
     checkCertifiedPackage(declaration, resolved.locked);
     // The install-script review applies with or without lifecycle.release;
     // the source gate needs its release.sources.

@@ -649,6 +649,7 @@ function materialize(
   directory: string,
   work: string,
   pin?: Pin,
+  previousLockfile?: string,
 ): VendoredPiPackage {
   const run = context.run ?? runCommand;
   const { id } = declaration;
@@ -728,6 +729,10 @@ function materialize(
   } else {
     // npm has already been checked for an npm package.
     if (declaration.source !== "npm") checkNpmVersion(run, id, directory, env);
+    // Starting from the stored lockfile keeps every transitive version that
+    // still satisfies the declaration, so a relock changes only what it must.
+    if (previousLockfile !== undefined)
+      writeFileSync(lockfilePath, previousLockfile);
     mustRun(
       run,
       id,
@@ -832,17 +837,25 @@ function workDirectory(context: PackageContext): string {
 
 /**
  * `piship lock` for one package: resolve it to an immutable identity, write
- * its npm lockfile, install it once without scripts, and expand its resource
+ * its npm lockfile (from `previousLockfile`, the stored one, when given), install it once without scripts, and expand its resource
  * inventory. Nothing is left on disk.
  */
 export function resolvePiPackage(
   declaration: DeclaredPackage,
   context: PackageContext,
+  previousLockfile?: string,
 ): ResolvedPiPackage {
   const work = workDirectory(context);
   try {
     const { locked, lockfile, manifest, dependencies, ownInstallScript } =
-      materialize(declaration, context, join(work, "vendor"), work);
+      materialize(
+        declaration,
+        context,
+        join(work, "vendor"),
+        work,
+        undefined,
+        previousLockfile,
+      );
     return {
       locked,
       lockfile,
