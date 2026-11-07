@@ -17,7 +17,7 @@ function manifest(
   return {
     schema,
     app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-    runtime: { pi: "1.1.0" },
+    runtime: { pi: "1.5.0" },
     deployment: { mode: "personal" },
     updates: { channel: "stable", channels: ["stable"] },
     sandbox,

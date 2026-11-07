@@ -101,7 +101,7 @@ export function bundleDistribution(
       );
     }
   }
-  // Public module shims preserve extension imports and Chord's module identity.
+  // Public module shims preserve extension imports.
   const upstream = join(payload, "node_modules", "@earendil-works");
   for (const name of [
     "pi-coding-agent",
@@ -109,18 +109,15 @@ export function bundleDistribution(
     "pi-agent-core",
     "pi-codemode",
     "pi-tui",
-    "chord",
   ]) {
     const directory = join(upstream, name);
     const manifest = JSON.parse(
       readFileSync(join(directory, "package.json"), "utf8"),
     );
     const keys =
-      name === "chord"
-        ? [".", "./context", "./node"]
-        : name === "pi-ai"
-          ? [".", "./compat", "./oauth", "./providers/all"]
-          : ["."];
+      name === "pi-ai"
+        ? [".", "./compat", "./models", "./oauth", "./providers/all"]
+        : ["."];
     for (const key of keys) {
       const declared =
         manifest.exports?.[key] ??
@@ -154,6 +151,19 @@ export function bundleDistribution(
       join(typebox, target),
     );
   }
+  // Pi's extension loader resolves the pi-ai import of an extension to this
+  // file by its path next to the loader (Pi 1.5.0).
+  add(
+    "pi-ai-extension-view",
+    join(
+      upstream,
+      "pi-coding-agent",
+      "dist",
+      "core",
+      "extensions",
+      "pi-ai-extension-view.js",
+    ),
+  );
   add(
     "codemode-worker",
     join(upstream, "pi-codemode", "dist", "runtime", "worker.js"),
@@ -272,7 +282,6 @@ rmSync(mainSource); rmSync(bootSource);`;
         "pi-agent-core",
         "pi-codemode",
         "pi-tui",
-        "chord",
       ])
         keep(`@earendil-works/${name}/package.json`);
       for (const asset of [

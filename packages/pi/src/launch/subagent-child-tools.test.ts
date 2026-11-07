@@ -140,9 +140,9 @@ describe("a bounded child's effective tools", () => {
   });
 });
 
-// What the pinned Pi 1.1.0 does with the forms the parser refuses. Should a
+// What the pinned Pi 1.5.0 does with the forms the parser refuses. Should a
 // Pi upgrade change this, these tests fail and the refusal can be re-examined.
-describe("why the parser refuses patterns and modifiers (Pi 1.1.0)", () => {
+describe("why the parser refuses patterns and modifiers (Pi 1.5.0)", () => {
   it("activates every registered declarable tool for a `*` allowlist, Codemode and tool search included", async () => {
     // A bounded child's exclusions do not name codemode or tool_search: they
     // are registered and merely kept inactive by PiShip, so `*` activates them.
@@ -187,7 +187,7 @@ describe("why the parser refuses patterns and modifiers (Pi 1.1.0)", () => {
 // `_isAllowedTool` applies `excludeTools` to both the active set and
 // registration, so a pattern narrows; it never adds a tool or re-widens one the
 // allowlist left out.
-describe("why an exclusion pattern only narrows (Pi 1.1.0)", () => {
+describe("why an exclusion pattern only narrows (Pi 1.5.0)", () => {
   it("removes the tools a `*` exclusion matches and never adds one", async () => {
     const options = childToolOptions(
       {

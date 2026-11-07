@@ -1,5 +1,5 @@
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
-export const PI_VERSION = "1.1.0";
+export const PI_VERSION = "1.5.0";
 export const PISHIP_VERSION = "0.13.0";
 /** OS/CPU targets with installed lifecycle evidence; others are never advertised. */
 export const EVIDENCED_TARGETS = ["linux-x64", "darwin-arm64", "win32-x64"];
@@ -40,6 +40,12 @@ export const PI_COMPATIBILITY: Readonly<
     lifecycle: "candidate",
   },
   "1.1.0": {
+    personal: "supported",
+    managed: "candidate",
+    governance: "candidate",
+    lifecycle: "candidate",
+  },
+  "1.5.0": {
     personal: "supported",
     managed: "candidate",
     governance: "candidate",

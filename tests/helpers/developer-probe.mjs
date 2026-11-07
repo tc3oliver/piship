@@ -163,14 +163,17 @@ if (mode === "permissions") {
   await new Promise((resolve) => setTimeout(resolve, 1500));
   const runner = probed.extensionRunner;
   const start = JSON.stringify(
-    await runner.emitBeforeAgentStart("hello", undefined, {
-      cwd: root,
-      contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
-      customPrompt: undefined,
-      selectedTools: [],
-      toolSnippets: {},
-      promptGuidelines: [],
-    }),
+    await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "hello" },
+      {
+        cwd: root,
+        contextFiles: resourceLoader.getAgentsFiles().agentsFiles,
+        customPrompt: undefined,
+        selectedTools: [],
+        toolSnippets: {},
+        promptGuidelines: [],
+      },
+    ),
   );
   const scoped = JSON.stringify(
     await runner.emitToolResult({

@@ -16,7 +16,7 @@ import {
 const valid = {
   schema: PISHIP_SCHEMA_VERSION,
   app: { id: "mypi", name: "My Pi", command: "mypi", version: "0.1.0" },
-  runtime: { pi: "1.1.0" },
+  runtime: { pi: "1.5.0" },
   deployment: { mode: "personal" },
 };
 const validV6 = {
@@ -83,7 +83,7 @@ describe("alpha manifest", () => {
     [
       {
         ...validV6,
-        runtime: { pi: "1.1.0", verifyAtLaunch: "yes" },
+        runtime: { pi: "1.5.0", verifyAtLaunch: "yes" },
       },
       "runtime.verifyAtLaunch",
     ],
@@ -102,7 +102,7 @@ describe("runtime.verifyAtLaunch", () => {
       expect(
         parseManifest({
           ...validV6,
-          runtime: { pi: "1.1.0", verifyAtLaunch: input },
+          runtime: { pi: "1.5.0", verifyAtLaunch: input },
         }).runtime.verifyAtLaunch,
       ).toBe(expected);
     },
@@ -114,7 +114,7 @@ describe("runtime.verifyAtLaunch", () => {
     const message = messageOf(() =>
       parseManifest({
         ...validV6,
-        runtime: { pi: "1.1.0", verifyAtLaunch: "yes" },
+        runtime: { pi: "1.5.0", verifyAtLaunch: "yes" },
       }),
     );
     expect(message).toContain("runtime.verifyAtLaunch");

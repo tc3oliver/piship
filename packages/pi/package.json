@@ -23,7 +23,7 @@
     "dist"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
     "@piship/audit": "0.13.0",
     "@piship/contracts": "0.13.0",
     "@piship/core": "0.13.0",
@@ -31,9 +31,8 @@
     "@piship/policy": "0.13.0",
     "@piship/sandbox": "0.13.0",
     "@piship/schema": "0.13.0",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-codemode": "1.1.0",
-    "@earendil-works/chord": "1.1.0"
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-codemode": "1.5.0"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",
   "keywords": [

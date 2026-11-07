@@ -1,5 +1,5 @@
 // Expansion of a Pi package into an explicit resource inventory (spec §8.2
-// step 4). It follows Pi 1.1.0's package discovery (`package-manager.js`):
+// step 4). It follows Pi 1.5.0's package discovery (`package-manager.js`):
 // the `pi` manifest in package.json or the conventional directories, then the
 // declaration's object-form filters. At runtime the files enter the governed
 // loader lists one by one; Pi never sees the package as a package.
@@ -351,6 +351,11 @@ export function expandPackageResources(
   const root = resolve(packageRoot);
   const expander = new Expander(id, root);
   const manifest = readPiManifest(join(root, "package.json"));
+  // Pi 1.5.0: a `pi` object that lists no resources (only `changelogPath`, say)
+  // is not an explicit manifest, so conventional discovery still applies.
+  const explicit = PACKAGE_RESOURCE_KINDS.some(
+    (kind) => manifest?.[kind] !== undefined,
+  );
   const enabled = new Map<string, PackageResourceKind>();
   const add = (kind: PackageResourceKind, paths: Iterable<string>) => {
     for (const path of paths) if (!enabled.has(path)) enabled.set(path, kind);
@@ -364,7 +369,7 @@ export function expandPackageResources(
     if (!hasFilters(filters)) {
       // Pi without a filter: the manifest alone when there is one, else the
       // conventional directories.
-      if (manifest) {
+      if (explicit) {
         if (entries) manifestEntries(kind, entries);
       } else add(kind, expander.collect(join(root, kind), kind));
       continue;

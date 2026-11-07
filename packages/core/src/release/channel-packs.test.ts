@@ -17,7 +17,7 @@ const release = {
   archive: "acmepi-1.0.0-linux-x64.tar.gz",
   sha256: hex("release"),
   bytes: 10,
-  pi: "1.1.0",
+  pi: "1.5.0",
   piship: "0.13.0",
   lockSha256: hex("lock"),
 };
@@ -26,7 +26,7 @@ const pack = {
   archive: "acmepi-1.1.0-pack.tar.gz",
   sha256: hex("pack"),
   bytes: 10,
-  pi: "1.1.0",
+  pi: "1.5.0",
   piship: "0.13.0",
   lockSha256: hex("lock-2"),
   runtimes: {

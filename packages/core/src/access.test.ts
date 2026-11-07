@@ -196,7 +196,7 @@ describe("configuration precedence", () => {
     const personal = parseManifest({
       schema: PISHIP_SCHEMA_V1ALPHA2,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.1.0" },
+      runtime: { pi: "1.5.0" },
       deployment: { mode: "personal" },
       config: { enforced: { model: "openai/gpt-x" } },
     });
@@ -862,7 +862,7 @@ describe("credential adapters", () => {
     const manifest = parseManifest({
       schema: PISHIP_SCHEMA_V1ALPHA2,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.1.0" },
+      runtime: { pi: "1.5.0" },
       deployment: { mode: "personal" },
       credential: { provider: "adapter", adapter },
       inference: {
@@ -1492,7 +1492,7 @@ describe("identity requirements of credential providers", () => {
     const manifest = parseManifest({
       schema: PISHIP_SCHEMA_V1ALPHA2,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.1.0" },
+      runtime: { pi: "1.5.0" },
       deployment: { mode: "personal" },
       credential: { provider: "adapter", adapter: "./adapters/needs-id.mjs" },
       inference: {
@@ -1647,7 +1647,7 @@ describe("capability model requirements", () => {
         computeCapabilityStates({
           capabilities: distribution.options.capabilities ?? [],
           policy: { providerTrust: {} } as never,
-          piVersion: "1.1.0",
+          piVersion: "1.5.0",
           platform: process.platform,
           model: configuredModel(distribution.options),
         }).find((state) => state.name === "workflow")?.axes.compatible;
@@ -1705,7 +1705,7 @@ describe("capability model requirements", () => {
     const personal = parseManifest({
       schema: PISHIP_SCHEMA_V1ALPHA2,
       app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-      runtime: { pi: "1.1.0" },
+      runtime: { pi: "1.5.0" },
       deployment: { mode: "personal" },
     });
     const open = (capabilities: readonly CapabilityConfig[]) =>

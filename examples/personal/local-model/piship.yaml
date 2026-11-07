@@ -11,7 +11,7 @@ app:
   banner: MyPi on a local model server
 
 runtime:
-  pi: "1.1.0"
+  pi: "1.5.0"
 
 deployment:
   mode: personal

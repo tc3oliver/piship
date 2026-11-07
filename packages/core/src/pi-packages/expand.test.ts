@@ -87,6 +87,17 @@ describe("Pi package expansion", () => {
     });
   });
 
+  it("still discovers conventional directories for a pi object that lists no resources", () => {
+    const root = packageRoot({
+      "package.json": JSON.stringify({
+        name: "metadata-only",
+        version: "1.0.0",
+        pi: { changelogPath: "NEWS.md" },
+      }),
+      "skills/demo/SKILL.md": "---\nname: demo\n---\n",
+    });
+    expect(paths(root)).toEqual(["skills:skills/demo/SKILL.md"]);
+  });
   it("uses only the pi manifest when one exists, with its globs and exclusions", () => {
     const root = packageRoot({
       ...CONVENTIONAL,
