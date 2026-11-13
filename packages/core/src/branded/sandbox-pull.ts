@@ -80,7 +80,7 @@ export async function sandboxPull(
   const top = await git(process.cwd(), ["rev-parse", "--show-toplevel"]).catch(
     () => undefined,
   );
-  if (!top || top.code !== 0)
+  if (top?.code !== 0)
     throw failure(
       "sandbox pull must run inside the git work tree the sandbox session was started for",
     );
