@@ -18,7 +18,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.5.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "19d9a9cd6576c011c17fcb318c2ee27079ebf313848702f2aa97b72624975a07",
+    "npmLockSha256": "f1692550c5e683075a16f19144ad4cac7a2f8f5e25577df8299fb9f0f2059e30",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -720,9 +720,9 @@
       },
       {
         "path": "node_modules/jose",
-        "version": "6.2.12",
-        "integrity": "sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==",
-        "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.12.tgz"
+        "version": "6.2.15",
+        "integrity": "sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==",
+        "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.15.tgz"
       },
       {
         "path": "node_modules/json-bigint",
@@ -804,9 +804,9 @@
       },
       {
         "path": "node_modules/openid-client",
-        "version": "6.8.8",
-        "integrity": "sha512-ZsucJA5Ad04Uv7YN4ql+s4GXNmb9uAYQwyJTsJx7CH/MX3JZioLE2pVKi1SC+YrbSLA4Px3Gi30dMjgOZtb6pA==",
-        "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.8.tgz"
+        "version": "6.8.9",
+        "integrity": "sha512-6mXMRNJxDOf6BflEWLXul1UwzLFz++9Ofz1PYwPwwsJsyXBsbfkO+Jo255SW1qnFNLYz4EJWHz42X4OJJrya/g==",
+        "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.9.tgz"
       },
       {
         "path": "node_modules/p-retry",
@@ -901,9 +901,9 @@
       },
       {
         "path": "node_modules/undici",
-        "version": "8.12.3",
-        "integrity": "sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==",
-        "resolved": "https://registry.npmjs.org/undici/-/undici-8.12.3.tgz"
+        "version": "8.12.4",
+        "integrity": "sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==",
+        "resolved": "https://registry.npmjs.org/undici/-/undici-8.12.4.tgz"
       },
       {
         "path": "node_modules/undici-types",
