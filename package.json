@@ -32,10 +32,10 @@
     "@earendil-works/pi-schema": "1.5.0",
     "@earendil-works/pi-telemetry": "1.5.0",
     "@earendil-works/pi-tui": "1.5.0",
-    "undici": "8.12.3"
+    "undici": "8.12.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.4",
+    "@biomejs/biome": "2.6.5",
     "@changesets/cli": "3.0.3",
     "@types/node": "22.20.5",
     "@types/semver": "7.8.0",
