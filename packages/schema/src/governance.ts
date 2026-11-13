@@ -656,6 +656,11 @@ export interface SandboxConfig {
    * to a private or internal host.
    */
   readonly httpTransport?: HttpTransport;
+  /**
+   * piship/v1alpha6, `custom` and `e2b-compatible`: `remote` makes the
+   * remote sandbox directory the workspace. Absent keeps today's behavior.
+   */
+  readonly workspace?: "remote";
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };

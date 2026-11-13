@@ -133,6 +133,14 @@ function parseBackend(
       "sandbox.httpTransport",
       "httpTransport applies only to the custom, e2b-compatible, kubernetes-agent-sandbox providers",
     );
+  if (sandbox.workspace !== undefined) {
+    oneOf(sandbox.workspace, "sandbox.workspace", ["remote"] as const);
+    if (provider !== "custom" && provider !== "e2b-compatible")
+      conflict(
+        "sandbox.workspace",
+        "workspace: remote applies only to the custom and e2b-compatible providers",
+      );
+  }
   if (provider === "native") return {};
   if (!required)
     conflict(
@@ -254,6 +262,9 @@ function parseBackend(
           ),
         }),
     ...(credential === "none" ? {} : { credential }),
+    ...(sandbox.workspace === undefined
+      ? {}
+      : { workspace: "remote" as const }),
     ...(httpTransport === undefined ? {} : { httpTransport }),
   };
 }
@@ -268,7 +279,7 @@ export function parseSandbox(
     "required",
     "provider",
     ...Object.keys(BACKEND_FIELDS),
-    ...(v6 ? ["httpTransport"] : []),
+    ...(v6 ? ["httpTransport", "workspace"] : []),
     "filesystem",
     "network",
     "environment",

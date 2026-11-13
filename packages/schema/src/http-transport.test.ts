@@ -620,3 +620,63 @@ describe("plainHttpPermitted and effectiveHttpTransport", () => {
     expect(effectiveHttpTransport(undefined, true)).toBe("https");
   });
 });
+
+describe("sandbox.workspace", () => {
+  const sandbox = (fields: Json): Json => ({
+    sandbox: { required: true, ...fields },
+  });
+  const e2b = {
+    provider: "e2b-compatible",
+    endpoint: "https://s.acme.example",
+  };
+  const workspace = (fields: Json) =>
+    parseManifest(manifest(sandbox(fields))).governance?.sandbox;
+
+  it("accepts remote for e2b-compatible and custom, and records nothing otherwise", () => {
+    expect(workspace({ ...e2b, workspace: "remote" })).toMatchObject({
+      workspace: "remote",
+    });
+    expect(
+      workspace({
+        provider: "custom",
+        adapter: "./sandbox/acme.mjs",
+        workspace: "remote",
+      }),
+    ).toMatchObject({ workspace: "remote" });
+    expect(workspace(e2b)).not.toHaveProperty("workspace");
+  });
+
+  it("rejects other values and the providers that cannot honor it", () => {
+    rejects(
+      manifest(sandbox({ ...e2b, workspace: "local" })),
+      "sandbox.workspace",
+    );
+    rejects(
+      manifest(sandbox({ workspace: "remote" })),
+      "sandbox.workspace",
+      "e2b-compatible",
+    );
+    rejects(
+      manifest(
+        sandbox({
+          provider: "kubernetes-agent-sandbox",
+          endpoint: "https://k8s.acme.example",
+          router: "https://router.acme.example",
+          template: "pool",
+          workspace: "remote",
+        }),
+      ),
+      "sandbox.workspace",
+    );
+  });
+
+  it("is unknown before piship/v1alpha6", () => {
+    rejects(
+      {
+        ...manifest(sandbox({ ...e2b, workspace: "remote" })),
+        schema: PISHIP_SCHEMA_V1ALPHA5,
+      },
+      "sandbox.workspace",
+    );
+  });
+});
