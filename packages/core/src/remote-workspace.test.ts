@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  crossCheckRemoteWorkspacePatch,
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
@@ -94,11 +95,11 @@ describe("validateRemoteWorkspacePatch", () => {
     const patch = realDiff((dir) =>
       symlinkSync("/etc/passwd", join(dir, "ln")),
     );
-    expect(refusal(patch)).toMatch("mode 120000");
+    expect(refusal(patch)).toMatch("120000");
   });
 
   it("refuses a gitlink", () => {
-    expect(refusal(newFile("sub", "160000"))).toMatch("mode 160000");
+    expect(refusal(newFile("sub", "160000"))).toMatch("160000");
     const change = "diff --git a/x b/x\nold mode 100644\nnew mode 120000\n";
     expect(refusal(change)).toMatch("120000");
   });
@@ -175,6 +176,96 @@ describe("validateRemoteWorkspacePatch", () => {
     );
     expect(big.ok).toBe(false);
     expect(big.refused[0]).toMatch("larger than 10 bytes");
+  });
+});
+
+describe("validateRemoteWorkspacePatch parses like git", () => {
+  const valid = newFile("ok.txt");
+  const plain =
+    "--- /dev/null\n+++ b/.claude/settings.json\n@@ -0,0 +1 @@\n+x\n";
+
+  it("refuses a plain diff appended after a finished hunk", () => {
+    expect(refusal(valid + plain, [".claude"])).toMatch(
+      "not a hunk or a header",
+    );
+    expect(refusal(valid + plain)).toMatch("not a hunk or a header");
+  });
+
+  it("refuses the legacy rename old/new headers into a refused path", () => {
+    const patch =
+      "diff --git a/a.txt b/b.txt\nrename old a.txt\nrename new .git/config\n";
+    expect(refusal(patch)).toMatch(".git");
+    expect(refusal(patch.replace(".git/config", "../x"))).toMatch("'..'");
+  });
+
+  it("refuses any mode that is not exactly 100644 or 100755", () => {
+    expect(refusal(newFile("a", "0120000"))).toMatch("0120000");
+    expect(refusal(newFile("a", "100644 "))).toMatch("not 100644");
+    expect(refusal(newFile("a", "100644\r"))).toMatch("not 100644");
+    expect(refusal(newFile("a", "100664"))).toMatch("not 100644");
+    expect(
+      refusal(
+        newFile("a").replace(
+          "index 0000000..e69de29",
+          "index 0000000..e69de29 120000",
+        ),
+      ),
+    ).toMatch("120000");
+    expect(
+      validateRemoteWorkspacePatch(Buffer.from(newFile("a", "100755"))).ok,
+    ).toBe(true);
+  });
+
+  it("refuses unknown header lines, a lone ---, stray text and overlong hunks", () => {
+    expect(refusal(valid.replace("index", "bogus header\nindex"))).toMatch(
+      "unrecognized header",
+    );
+    expect(refusal("diff --git a/a b/a\n--- a/a\n")).toMatch("without +++");
+    expect(refusal(`${valid}stray\n`)).toMatch("not a hunk");
+    expect(refusal(valid.replace("+x\n", "+x\n+y\n"))).toMatch(
+      /not a hunk|longer/,
+    );
+    expect(refusal(valid.replace("+x\n", "x\n"))).toMatch("inside a hunk");
+  });
+
+  it("reads a hunk line that looks like a header as content, as git does", () => {
+    const content =
+      "diff --git a/f b/f\nindex 1111111..2222222 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1 @@\n--- a/.git/config\n+++ b/.git/config\n";
+    const result = validateRemoteWorkspacePatch(Buffer.from(content));
+    expect(result).toMatchObject({ ok: true, files: ["f"] });
+  });
+});
+
+describe("crossCheckRemoteWorkspacePatch", () => {
+  it("passes what git reports for a benign patch and refuses what it must not", () => {
+    expect(
+      crossCheckRemoteWorkspacePatch(
+        Buffer.from("1\t0\ta.txt\0"),
+        " create mode 100644 a.txt\n",
+      ),
+    ).toEqual([]);
+    expect(
+      crossCheckRemoteWorkspacePatch(Buffer.from("1\t0\t.git/config\0"), "")[0],
+    ).toMatch(".git");
+    expect(
+      crossCheckRemoteWorkspacePatch(
+        Buffer.from(""),
+        " create mode 120000 l\n",
+      )[0],
+    ).toMatch("120000");
+    expect(
+      crossCheckRemoteWorkspacePatch(
+        Buffer.from(""),
+        " rename a => hooks/x (100%)\n",
+        ["hooks"],
+      )[0],
+    ).toMatch("protected");
+    expect(
+      crossCheckRemoteWorkspacePatch(
+        Buffer.from(""),
+        " mode change 100644 => 100777 f\n",
+      )[0],
+    ).toMatch("100777");
   });
 });
 

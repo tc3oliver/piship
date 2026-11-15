@@ -3,11 +3,12 @@
 // validated first, shown, confirmed, and applied with `git apply --3way`,
 // which neither commits nor runs any hook.
 import { execFile } from "node:child_process";
-import { mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
 import {
+  crossCheckRemoteWorkspacePatch,
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
@@ -117,6 +118,32 @@ export async function sandboxPull(
       `The sandbox patch is refused as a whole and nothing was applied: ${result.refused.slice(0, 5).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,
       "Inspect the sandbox session, then run sandbox pull --discard",
     );
+  // git's own reading of the patch must agree with ours.
+  const numstat = await git(
+    root,
+    ["apply", "--numstat", "-z", "-"],
+    checkpoint.patch,
+  );
+  const summary = await git(
+    root,
+    ["apply", "--summary", "-"],
+    checkpoint.patch,
+  );
+  if (numstat.code !== 0 || summary.code !== 0)
+    throw failure(
+      `The sandbox patch does not parse: ${printable(numstat.stderr || summary.stderr).trim()}`,
+      "Run sandbox pull --discard",
+    );
+  const disagreement = crossCheckRemoteWorkspacePatch(
+    numstat.stdout,
+    summary.stdout.toString("latin1"),
+    checkpoint.meta.protectedPaths ?? [],
+  );
+  if (disagreement.length > 0)
+    throw failure(
+      `The sandbox patch is refused as a whole and nothing was applied: ${disagreement.slice(0, 5).join("; ")}`,
+      "Inspect the sandbox session, then run sandbox pull --discard",
+    );
   const stat = await git(root, ["apply", "--stat", "-"], checkpoint.patch);
   if (stat.code !== 0)
     throw failure(
@@ -150,10 +177,26 @@ export async function sandboxPull(
       `git apply failed: ${printable(applied.stderr).trim()}`,
       "The stored changes are kept; fix the working tree and run sandbox pull again, or --discard",
     );
+  // Archive the bytes that were applied. A newer checkpoint written while the
+  // prompt was open stays where it is.
   mkdirSync(paths.applied, { recursive: true, mode: 0o700 });
   const stamp = checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
-  renameSync(paths.patch, join(paths.applied, `${stamp}.patch`));
-  renameSync(paths.meta, join(paths.applied, `${stamp}.json`));
+  writeFileSync(join(paths.applied, `${stamp}.patch`), checkpoint.patch, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    join(paths.applied, `${stamp}.json`),
+    `${JSON.stringify(checkpoint.meta)}\n`,
+    { mode: 0o600 },
+  );
+  const latest = readRemoteWorkspaceCheckpoint(ctx.stateDir, root);
+  if (latest?.patch.equals(checkpoint.patch) !== false) {
+    rmSync(paths.patch, { force: true });
+    rmSync(paths.meta, { force: true });
+  } else
+    ctx.err(
+      "A newer sandbox checkpoint was saved while this one was open; it is still stored for the next sandbox pull.",
+    );
   ctx.out(
     `Applied ${result.files.length} file(s) to ${root}. Nothing was committed.`,
   );
