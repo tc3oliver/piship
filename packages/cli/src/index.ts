@@ -87,6 +87,7 @@ import { formatError, redact } from "@piship/contracts";
 import {
   launchWarnings,
   unknownToolDenials,
+  unmatchablePathRules,
   runtimeVariableUse,
   referencedVariables,
   readManifest,
@@ -1194,7 +1195,11 @@ export async function runCli(
       const progress = progressReporter(output.stderr);
       await downloadSearchToolArchives(target, progress ? { progress } : {});
       const written = lockManifest(target);
-      for (const warning of unknownToolDenials(readManifest(target)))
+      const locked = readManifest(target);
+      for (const warning of [
+        ...unknownToolDenials(locked),
+        ...unmatchablePathRules(locked),
+      ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       output.stdout(
         `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,

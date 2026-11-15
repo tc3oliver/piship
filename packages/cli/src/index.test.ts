@@ -527,6 +527,35 @@ describe("validate", () => {
     );
   });
 
+  it("validate and lock warn, without failing, about a filesystem deny that never matches", async () => {
+    const policy = {
+      policy: {
+        default: "ask",
+        enforced: [
+          {
+            id: "acme.env",
+            action: "filesystem.read",
+            resource: ".env",
+            effect: "deny",
+          },
+        ],
+      },
+    };
+    const warning =
+      "Warning: policy.enforced[0].resource: acme.env (deny filesystem.read) never matches .env: it is relative";
+    const result = await validate(policy);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain(warning);
+    const manifest = join(temp, "piship.yaml");
+    const stderr: string[] = [];
+    const locked = await runCli(["lock", manifest], {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    expect(locked, stderr.join("\n")).toBe(0);
+    expect(stderr.join("\n")).toContain(warning);
+  });
+
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;
