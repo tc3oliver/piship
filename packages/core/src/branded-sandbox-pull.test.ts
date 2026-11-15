@@ -2,10 +2,12 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  symlinkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -16,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandedContext } from "./branded/context.js";
 import { runSandbox } from "./branded/sandbox.js";
 import {
+  readRemoteWorkspacePulled,
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "./remote-workspace.js";
@@ -69,6 +72,7 @@ function checkpoint(
     session?: string;
     createdAt?: string;
     only?: string;
+    commit?: string;
     pull?: { protectedFiles?: string; confirm?: string };
   } = {},
 ): void {
@@ -88,6 +92,7 @@ function checkpoint(
     session: options.session ?? "s",
     baseHead: null,
     files: 2,
+    ...(options.commit ? { checkpointCommit: options.commit } : {}),
     ...(options.createdAt ? { createdAt: options.createdAt } : {}),
     ...(protectedPaths ? { protectedPaths } : {}),
     ...(options.pull ? { pull: options.pull as never } : {}),
@@ -402,6 +407,67 @@ describe("sandbox pull", () => {
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);
+  });
+
+  describe("pulled marker", () => {
+    const commit = "a".repeat(40);
+    it("is left after a successful pull, naming the session's commit", async () => {
+      checkpoint("", undefined, { commit });
+      await runSandbox(ctx, ["pull", "--yes"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBe(commit);
+      expect(readRemoteWorkspacePulled(state, repo, "other")).toBeUndefined();
+    });
+    it("is not left by --discard or by a failed pull", async () => {
+      checkpoint("", undefined, { commit });
+      await runSandbox(ctx, ["pull", "--discard"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBeUndefined();
+      checkpoint(SYMLINK, undefined, { commit, session: "s3" });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow();
+      expect(readRemoteWorkspacePulled(state, repo, "s3")).toBeUndefined();
+    });
+    it("ignores a damaged commit id in the checkpoint", async () => {
+      checkpoint("", undefined, { commit: "not-hex" });
+      await runSandbox(ctx, ["pull", "--yes"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBeUndefined();
+    });
+  });
+
+  describe.skipIf(process.platform === "win32")("host symlinks", () => {
+    it("refuses a patch that retargets a tracked symlink", async () => {
+      symlinkSync("t", join(repo, "link"));
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "link");
+      const patch = Buffer.from(
+        "diff --git a/link b/link\n--- a/link\n+++ b/link\n@@ -1 +1 @@\n-t\n\\ No newline at end of file\n+/etc/hosts\n\\ No newline at end of file\n",
+      );
+      writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+        session: "l",
+        baseHead: null,
+        files: 1,
+      });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+        /never writes through or over a symlink/,
+      );
+      expect(readlinkSync(join(repo, "link"))).toBe("t");
+    });
+
+    it("refuses a new file below an untracked symlinked directory", async () => {
+      const outside = join(temp, "outside");
+      mkdirSync(outside);
+      symlinkSync(outside, join(repo, "d"));
+      const patch = Buffer.from(
+        "diff --git a/d/x b/d/x\nnew file mode 100644\n--- /dev/null\n+++ b/d/x\n@@ -0,0 +1 @@\n+x\n",
+      );
+      writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+        session: "l",
+        baseHead: null,
+        files: 1,
+      });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+        /symbolic link/,
+      );
+      expect(existsSync(join(outside, "x"))).toBe(false);
+    });
   });
 
   describe("parked patches", () => {

@@ -3,7 +3,7 @@
 // sandbox, so it is parsed here and the WHOLE patch is refused when any entry
 // could write outside the project's ordinary files.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "@piship/credentials";
 import { runGit } from "./git-run.js";
@@ -31,6 +31,13 @@ export interface RemoteWorkspaceMeta {
    * host, never by the sandbox. Absent in a checkpoint written before it.
    */
   readonly protectedPaths?: readonly string[];
+  /**
+   * The sandbox commit holding exactly the state this patch was taken from,
+   * recorded by the session. After a successful pull `sandbox pull` leaves a
+   * marker naming it, so the live session can diff from there. Hex; anything
+   * else reads as absent.
+   */
+  readonly checkpointCommit?: string;
   /**
    * How `sandbox pull` treats this checkpoint; the distribution's policy,
    * written by the host. Absent means the usable defaults. A damaged value
@@ -86,6 +93,59 @@ export function remoteWorkspacePaths(
   };
 }
 
+const isCommitId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(value);
+
+/**
+ * The marker `sandbox pull` leaves after a successful pull: which of the
+ * session's own checkpoint commits is now on the host. One file per session.
+ */
+function pulledMarker(stateDir: string, projectRoot: string, session: string) {
+  const key = createHash("sha256").update(session).digest("hex").slice(0, 16);
+  return join(
+    remoteWorkspacePaths(stateDir, projectRoot).dir,
+    `pulled-${key}.json`,
+  );
+}
+
+export function writeRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  pulled: { readonly session: string; readonly checkpointCommit: string },
+): void {
+  writeFileAtomic(
+    pulledMarker(stateDir, projectRoot, pulled.session),
+    `${JSON.stringify(pulled)}\n`,
+    { directoryMode: 0o700 },
+  );
+}
+
+/** The commit a pull of this session's patch left, or undefined. The caller must still know the id. */
+export function readRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  session: string,
+): string | undefined {
+  try {
+    const marker = JSON.parse(
+      readFileSync(pulledMarker(stateDir, projectRoot, session), "utf8"),
+    ) as { session?: unknown; checkpointCommit?: unknown } | null;
+    return marker?.session === session && isCommitId(marker.checkpointCommit)
+      ? marker.checkpointCommit
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  session: string,
+): void {
+  rmSync(pulledMarker(stateDir, projectRoot, session), { force: true });
+}
+
 /** Store the checkpoint atomically: the patch first, then its description. */
 export function writeRemoteWorkspaceCheckpoint(
   stateDir: string,
@@ -98,6 +158,7 @@ export function writeRemoteWorkspaceCheckpoint(
     readonly createdAt?: string;
     readonly protectedPaths?: readonly string[];
     readonly pull?: RemoteWorkspaceMeta["pull"];
+    readonly checkpointCommit?: string;
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
@@ -110,6 +171,9 @@ export function writeRemoteWorkspaceCheckpoint(
     files: info.files,
     ...(info.protectedPaths
       ? { protectedPaths: [...info.protectedPaths] }
+      : {}),
+    ...(info.checkpointCommit
+      ? { checkpointCommit: info.checkpointCommit }
       : {}),
     ...(info.pull ? { pull: info.pull } : {}),
   };
@@ -173,6 +237,9 @@ export function readRemoteWorkspaceCheckpoint(
       meta: {
         ...(meta as RemoteWorkspaceMeta),
         ...(normalized ? { pull: normalized } : {}),
+        checkpointCommit: isCommitId(meta.checkpointCommit)
+          ? meta.checkpointCommit
+          : undefined,
       } as RemoteWorkspaceMeta,
     };
   } catch {
@@ -273,6 +340,9 @@ function summaryPath(token: string): Buffer | undefined {
   return Buffer.from(token, "latin1");
 }
 
+/** Case-insensitive file systems and Unicode compatibility folding (ſ is s) equate more than toLowerCase does. */
+const fold = (text: string) => text.normalize("NFKC").toLowerCase();
+
 function checkPath(
   raw: Buffer,
   protectedPaths: ReadonlySet<string>,
@@ -297,6 +367,9 @@ function checkPath(
     if (byte < 0x20 || byte === 0x7f)
       return refuse("control character in path");
   if (path.includes("\\")) return refuse("backslash in path");
+  // git reads a +++ /dev/null without a deleted-file header as the path dev/null.
+  if (path === "dev/null" || path.startsWith("dev/null/"))
+    return refuse("a path under dev/null");
   if (path.startsWith("/") || /^[A-Za-z]:/.test(path))
     return refuse("absolute path");
   for (const segment of path.split("/")) {
@@ -304,7 +377,8 @@ function checkPath(
       return refuse("empty or '.' path segment");
     if (segment === "..") return refuse("'..' path segment");
     // .git, plus the Windows aliases of it (trailing dots/spaces, 8.3 name).
-    if (/^\.git[. ]*$/i.test(segment) || /^git~\d+$/i.test(segment))
+    const folded = fold(segment);
+    if (/^\.git[. ]*$/.test(folded) || /^git~\d+$/.test(folded))
       return refuseSoft("touches .git");
   }
   for (const segment of path.split("/"))
@@ -312,7 +386,7 @@ function checkPath(
       return refuse(
         "a ~N segment; on Windows it can name a different file by its 8.3 short name",
       );
-  const folded = path.toLowerCase();
+  const folded = fold(path);
   for (const protectedPath of protectedPaths)
     if (folded === protectedPath || folded.startsWith(`${protectedPath}/`))
       return refuseSoft("touches a protected path");
@@ -345,6 +419,9 @@ function scanStructure(lines: readonly string[]): string[] {
   let newLeft = 0;
   let awaitingPlus = false;
   let oldName: string | null | undefined;
+  // The header lines of the current section decide where /dev/null may appear.
+  let sawNew = false;
+  let sawDeleted = false;
   // `--- a/x` or `+++ b/x` as the bare name (quotes kept), null for /dev/null.
   // Git deletes the --- name and writes the +++ name, yet numstat shows only one.
   const diffName = (text: string): string | null | undefined =>
@@ -378,6 +455,8 @@ function scanStructure(lines: readonly string[]): string[] {
     }
     if (line.startsWith("diff --git ")) {
       if (awaitingPlus) refuseLine("a --- line without +++");
+      sawNew = false;
+      sawDeleted = false;
       state = "header";
       awaitingPlus = false;
       continue;
@@ -416,6 +495,13 @@ function scanStructure(lines: readonly string[]): string[] {
           (oldName !== null && newName !== null && oldName !== newName)
         )
           refuseLine("--- and +++ lines that name different files");
+        // Without the matching header git reads /dev/null as the path dev/null
+        // and deletes or writes the other name unreported.
+        else if (
+          (oldName === null && !sawNew) ||
+          (newName === null && !sawDeleted)
+        )
+          refuseLine("/dev/null without a new file or deleted file header");
       }
       awaitingPlus = false;
       state = "between";
@@ -431,6 +517,8 @@ function scanStructure(lines: readonly string[]): string[] {
         line,
       ) ?? /^index [0-9a-f]+\.\.[0-9a-f]+ ([\s\S]*)$/.exec(line);
     if (mode) {
+      if (line.startsWith("new file mode")) sawNew = true;
+      if (line.startsWith("deleted file mode")) sawDeleted = true;
       checkMode(mode[1] as string);
       continue;
     }
@@ -532,7 +620,7 @@ async function validatePatch(
     );
 
   const protectedSet = new Set(
-    protectedPaths.map((p) => p.replace(/\/+$/, "").toLowerCase()),
+    protectedPaths.map((p) => fold(p.replace(/\/+$/, ""))),
   );
   const files = new Set<string>();
   const check = (token: string) => {

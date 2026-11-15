@@ -1,19 +1,23 @@
 // The session side of a remote workspace: the lazy seed, and the checkpoints
 // of the sandbox's work that `sandbox pull` later reviews.
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  linkSync,
   mkdirSync,
   openSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
-  unlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   REMOTE_PATCH_MAX_BYTES,
+  clearRemoteWorkspacePulled,
   type RemoteWorkspaceMeta,
   readRemoteWorkspaceCheckpoint,
+  readRemoteWorkspacePulled,
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "@piship/core";
@@ -30,13 +34,16 @@ import {
 const CHECKPOINT_TIMEOUT_SECONDS = 120;
 const MIB = 1024 * 1024;
 
-/** The diff of everything the sandbox changed since the baseline commit. */
+/**
+ * The diff of everything the sandbox changed since the baseline commit, and
+ * a commit holding exactly the state it was taken from (a later baseline).
+ */
 export async function readSandboxPatch(
   sandbox: SeedSandbox,
   root: string,
   baseline: string,
   maxBytes = REMOTE_PATCH_MAX_BYTES,
-): Promise<Buffer> {
+): Promise<{ patch: Buffer; commit: string }> {
   if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error("no baseline");
   const abort = new AbortController();
   const chunks: Buffer[] = [];
@@ -46,7 +53,7 @@ export async function readSandboxPatch(
     .exec(
       // stderr stays out of the patch; `--no-ext-diff` and `--no-textconv` keep
       // the diff to git's own format.
-      `git add -A 2>/dev/null && git diff --cached --binary --no-color --no-ext-diff --no-textconv --no-renames ${baseline} 2>/dev/null`,
+      `git add -A 2>/dev/null && c=$(git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$(git write-tree)" -p ${baseline} -m piship-checkpoint) && echo "$c" && git diff --binary --no-color --no-ext-diff --no-textconv --no-renames ${baseline} "$c" 2>/dev/null`,
       root,
       {
         onData: (chunk) => {
@@ -74,7 +81,13 @@ export async function readSandboxPatch(
     throw new Error(
       `the sandbox could not list its changes (exit ${result?.exitCode})`,
     );
-  return Buffer.concat(chunks);
+  // The first line is the checkpoint commit; the patch follows it.
+  const output = Buffer.concat(chunks);
+  const end = output.indexOf(10);
+  const commit = output.subarray(0, Math.max(end, 0)).toString("latin1");
+  if (!/^[0-9a-f]{40,64}$/.test(commit))
+    throw new Error("the sandbox could not record its state");
+  return { patch: output.subarray(end + 1), commit };
 }
 
 export interface RemoteWorkspaceOptions {
@@ -119,6 +132,8 @@ export class RemoteWorkspace {
   #told = false;
   /** Where this session's patch went instead of the shared slot. */
   #parked: string | undefined;
+  /** Checkpoint commits this session made: the only ids a pull marker may move the baseline to. */
+  readonly #recorded = new Set<string>();
 
   constructor(options: RemoteWorkspaceOptions) {
     this.#options = options;
@@ -242,12 +257,20 @@ export class RemoteWorkspace {
     this.#dirty = false;
     let release: (() => void) | undefined;
     try {
-      const patch = await readSandboxPatch(
+      // A pull of this session's own patch leaves a marker naming a commit this
+      // session made: from there on only later changes belong in a patch.
+      const pulled = readRemoteWorkspacePulled(stateDir, root, session);
+      if (pulled && this.#recorded.has(pulled)) {
+        seeded.baselineCommit = pulled;
+        clearRemoteWorkspacePulled(stateDir, root, session);
+      }
+      const { patch, commit } = await readSandboxPatch(
         sandbox,
         root,
         seeded.baselineCommit,
         this.#options.maxPatchBytes,
       );
+      this.#recorded.add(commit);
       const files = (patch.toString("latin1").match(/^diff --git /gm) ?? [])
         .length;
       // Another session's unapplied patch is never replaced: its sandbox is
@@ -276,6 +299,7 @@ export class RemoteWorkspace {
         session,
         baseHead: seeded.baseHead,
         files,
+        checkpointCommit: commit,
         protectedPaths: this.#options.protectedPaths(),
         ...(this.#options.pull ? { pull: this.#options.pull } : {}),
       };
@@ -345,7 +369,21 @@ function claimSlot(dir: string): (() => void) | undefined {
     } catch {
       try {
         if (Date.now() - statSync(lock).mtimeMs < 60_000) return undefined;
-        unlinkSync(lock);
+        // Take the stale lock over by renaming it away, never by unlinking its
+        // path: another session may have replaced it with a live one meanwhile.
+        const taken = `${lock}.${randomBytes(6).toString("hex")}`;
+        renameSync(lock, taken);
+        if (Date.now() - statSync(taken).mtimeMs < 60_000) {
+          // It was a live lock after all: put it back if its path is still free.
+          try {
+            linkSync(taken, lock);
+          } catch {
+            // someone claimed the path meanwhile
+          }
+          rmSync(taken, { force: true });
+          return undefined;
+        }
+        rmSync(taken, { force: true });
       } catch {
         // gone meanwhile: claim it on the next attempt
       }

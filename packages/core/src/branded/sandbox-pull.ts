@@ -4,6 +4,7 @@
 // which neither commits nor runs any hook. With the main slot empty, the oldest
 // patch another session parked for the project is pulled the same way.
 import {
+  lstatSync,
   mkdirSync,
   realpathSync,
   rmdirSync,
@@ -20,8 +21,25 @@ import {
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
+  writeRemoteWorkspacePulled,
 } from "../remote-workspace.js";
 import type { BrandedContext } from "./context.js";
+
+/** The first patch path that is, or sits under, a symlink on this machine. */
+function throughSymlink(root: string, files: readonly string[]) {
+  for (const file of files) {
+    let current = root;
+    for (const segment of file.split("/")) {
+      current = join(current, segment);
+      try {
+        if (lstatSync(current).isSymbolicLink()) return file;
+      } catch {
+        break; // not there yet: nothing below it exists either
+      }
+    }
+  }
+  return undefined;
+}
 
 /** Terminal control characters in untrusted text would let a patch rewrite the screen. */
 function printable(text: string): string {
@@ -157,6 +175,13 @@ export async function sandboxPull(
       `The sandbox is gone; the patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
       "POLICY_DENIED",
     );
+  const linked = throughSymlink(root, result.files);
+  if (linked !== undefined)
+    throw failure(
+      `The sandbox patch touches ${printable(linked)}, which is or sits under a symbolic link on this machine. A sandbox patch never writes through or over a symlink, so nothing was applied`,
+      `The patch is stored at ${storedPatch}. Apply it by hand if you trust it, or run ${cmd} --discard`,
+      "POLICY_DENIED",
+    );
   if (result.skipped.length > 0) {
     const n = result.skipped.length;
     ctx.out(
@@ -283,6 +308,11 @@ export async function sandboxPull(
     `${JSON.stringify(checkpoint.meta)}\n`,
     { mode: 0o600 },
   );
+  if (checkpoint.meta.checkpointCommit)
+    writeRemoteWorkspacePulled(ctx.stateDir, root, {
+      session: checkpoint.meta.session,
+      checkpointCommit: checkpoint.meta.checkpointCommit,
+    });
   const latest = readRemoteWorkspaceCheckpoint(sourceState, root);
   if (latest?.patch.equals(checkpoint.patch) !== false) remove();
   else
