@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { markLocalBuild, PI_VERSION, shellArg } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  assertPayloadPackageJson,
   installNext,
   lifecycleCommands,
   optionHelp,
@@ -746,6 +747,68 @@ describe("file system errors", () => {
     });
     return { status, stderr: stderr.join("\n") };
   }
+
+  it.each([
+    "",
+    "null",
+    "[]",
+    "{",
+    '{"schema":"piship-lock/v1"}',
+    '{"schema":"piship-lock/v1","app":5,"runtime":{}}',
+    "\u0000\u0001\u0002 binary",
+  ])(
+    "names a damaged lock file instead of failing inside it: %j",
+    async (content) => {
+      const path = join(temp, "broken.lock");
+      writeFileSync(path, content);
+      const result = await run(["diff", path, path]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("LOCK_INVALID");
+      expect(result.stderr).toContain(path);
+      expect(result.stderr).toContain("Action:");
+      expect(result.stderr).not.toMatch(
+        /Cannot read properties|Unexpected (token|end)|is not valid JSON/,
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "says a resource directory cannot be read, not that it does not exist",
+    async () => {
+      const directory = join(temp, "agent");
+      await runCli(["init", directory], { stdout: () => {}, stderr: () => {} });
+      const resources = join(directory, "resources");
+      chmodSync(resources, 0o000);
+      try {
+        const result = await run(["validate", join(directory, "piship.yaml")]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("cannot be read (EACCES)");
+        expect(result.stderr).not.toContain("does not exist");
+      } finally {
+        chmodSync(resources, 0o755);
+      }
+    },
+  );
+
+  it.each(["", "null", "[]", "{", "\u0001binary"])(
+    "answers a damaged payload package.json (%j) with the repair line before Node can fail on it",
+    (content) => {
+      writeFileSync(join(temp, "package.json"), content);
+      expect(() => assertPayloadPackageJson(temp)).toThrow(
+        expect.objectContaining({
+          code: "INTEGRITY_FAILED",
+          userAction: expect.stringContaining("piship repair"),
+        }),
+      );
+    },
+  );
+
+  it("accepts an intact payload package.json and leaves a missing one to Node", () => {
+    writeFileSync(join(temp, "package.json"), '{"type":"module"}');
+    expect(() => assertPayloadPackageJson(temp)).not.toThrow();
+    rmSync(join(temp, "package.json"));
+    expect(() => assertPayloadPackageJson(temp)).not.toThrow();
+  });
 
   it("names a directory passed as a manifest and the file to pass", async () => {
     for (const command of ["validate", "migrate"]) {

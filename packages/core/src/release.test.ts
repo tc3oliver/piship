@@ -2231,6 +2231,26 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       expect(error.code).toBe("INTEGRITY_FAILED");
       expect(error.message).toMatch(/malformed release metadata/);
     });
+    it.each([
+      ["empty", "", /a file is not valid JSON/],
+      ["null", "null\n", /a required field is missing or has the wrong type/],
+    ])(
+      "release metadata that is %s names the release, not a parser error",
+      async (_name, content, expected) => {
+        const built = await fresh();
+        writeFileSync(join(built.directory, "release.json"), content);
+        writeFileSync(
+          join(built.directory, "checksums.txt"),
+          formatChecksums(built.directory, [...RELEASE_FILES]),
+        );
+        const error = await rejection(verifyRelease(built.directory));
+        expect(error.code).toBe("INTEGRITY_FAILED");
+        expect(error.message).toMatch(expected);
+        expect(error.message).not.toMatch(
+          /Cannot read properties|Unexpected end/,
+        );
+      },
+    );
     it("an SBOM entry removed", async () => {
       const built = await fresh();
       const path = join(built.directory, "sbom.spdx.json");

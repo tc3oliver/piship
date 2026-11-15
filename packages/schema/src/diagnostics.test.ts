@@ -49,6 +49,19 @@ describe("manifest diagnostics", () => {
     );
   });
 
+  it("refuses an alias that refers to itself instead of overflowing the stack", () => {
+    const error = failure(manifest("a: &a [*a]\n"));
+    expect(error.message).toContain("refers to a node that contains it");
+    expect(error.message).not.toContain("call stack");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a device as a manifest instead of reading it",
+    () => {
+      expect(() => readManifest("/dev/null")).toThrow(/Not a regular file/);
+    },
+  );
+
   it("suggests the nearest allowed value for a mistyped one", () => {
     const error = failure(
       manifest(valid.replace("mode: personal", "mode: personnal")),

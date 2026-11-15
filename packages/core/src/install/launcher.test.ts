@@ -40,6 +40,44 @@ import { readInstallReceipt } from "./receipt.js";
 
 useLifecycleHomes();
 
+describe("the launcher when the release's package.json is damaged", () => {
+  it("is valid JavaScript and answers ERR_INVALID_PACKAGE_CONFIG with a repair line", () => {
+    const dir = mkdtempSync(join(tmpdir(), "piship-launcher-syntax-"));
+    try {
+      const file = join(dir, "launch.mjs");
+      const source = launcherSource(ID);
+      writeFileSync(file, source);
+      const check = spawnSync(process.execPath, ["--check", file], {
+        encoding: "utf8",
+      });
+      expect(check.status, check.stderr).toBe(0);
+      expect(source).toContain('error?.code !== "ERR_INVALID_PACKAGE_CONFIG"');
+      expect(source).toContain(`piship repair ${ID} <release archive>`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts nothing and says so: Node's own stack trace never reaches the user", async () => {
+    await installed();
+    const { payload, launcher } = readInstallReceipt(ID);
+    writeFileSync(join(payload, "package.json"), "{ not json");
+    const result = spawnSync(
+      process.execPath,
+      [launcher as string, "version"],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(
+      /^INTEGRITY_FAILED: The installed release of acmepi is damaged: .*package\.json/m,
+    );
+    expect(result.stderr).toContain(`piship repair ${ID}`);
+    expect(result.stderr).not.toMatch(/node:internal|^\s+at /m);
+  });
+});
+
 describe("the launcher's build stamp", () => {
   it("names the build in a comment and in the timing report, with no placeholder left", () => {
     const source = launcherSource(ID);

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readManifest } from "@piship/schema";
@@ -330,6 +330,64 @@ describe("launch integrity verification", () => {
         verifyContents: false,
       }),
     ).toThrow(/manifest and lock mismatch/);
+  });
+  it.each([
+    ["metadata/inventory.json", ""],
+    ["metadata/inventory.json", "null"],
+    ["metadata/inventory.json", "[]"],
+    ["metadata/inventory.json", '{"bin/mypi":5}'],
+    ["metadata/inventory.json", "\u0000\u0001 binary"],
+    ["metadata/target.json", ""],
+    ["metadata/target.json", "null"],
+    ["metadata/target.json", "[]"],
+    ["metadata/target.json", "{"],
+    ["piship.lock", ""],
+    ["piship.lock", "null"],
+    ["piship.lock", "[]"],
+  ])(
+    "reports a damaged %s (%j) as INTEGRITY_FAILED with the file and the repair",
+    (file, content) => {
+      const dir = buildPayload();
+      writeFileSync(join(dir, file), content);
+      for (const verifyContents of [true, false]) {
+        let error: unknown;
+        try {
+          verifyPayloadContents(dir, { requireTarget: true, verifyContents });
+        } catch (caught) {
+          error = caught;
+        }
+        // The inventory is read only for a full verification.
+        if (!verifyContents && file.endsWith("inventory.json")) continue;
+        expect(error, `${file} ${verifyContents}`).toMatchObject({
+          code: "INTEGRITY_FAILED",
+          message: expect.stringContaining(file.replaceAll("/", sep)),
+          userAction: expect.stringContaining("piship repair"),
+        });
+      }
+    },
+  );
+  it.each(["null", "[]", "{", '{"platform":5}', "\u0001\u0002"])(
+    "a launch reports a target.json of %j as INTEGRITY_FAILED, never as a parser or type error",
+    (content) => {
+      const dir = buildPayload();
+      writeFileSync(join(dir, "metadata", "target.json"), content);
+      expect(() => verifyLaunchPayload(dir)).toThrow(
+        expect.objectContaining({
+          code: "INTEGRITY_FAILED",
+          userAction: expect.stringContaining("piship repair"),
+        }),
+      );
+    },
+  );
+  it("reports a missing target.json as INTEGRITY_FAILED, not as a file system error", () => {
+    const dir = buildPayload();
+    rmSync(join(dir, "metadata", "target.json"));
+    expect(() =>
+      verifyPayloadContents(dir, {
+        requireTarget: true,
+        verifyContents: false,
+      }),
+    ).toThrow(/target\.json in .* is missing/);
   });
   it("verifyContents:false still rejects the wrong target", () => {
     const dir = buildPayload();
