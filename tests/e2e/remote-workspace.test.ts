@@ -222,13 +222,14 @@ describe.skipIf(process.platform === "win32")(
       const patch = readFileSync(patchFile);
       expect(patch.toString()).toContain("+ONE");
 
-      // A tampered patch that also writes a git hook is refused as a whole.
+      // A tampered patch that also plants a symlink is refused as a whole.
+      // (A protected path alone is skipped; the unit tests cover that.)
       writeFileSync(
         patchFile,
         Buffer.concat([
           patch,
           Buffer.from(
-            "diff --git a/.git/hooks/pre-commit b/.git/hooks/pre-commit\nnew file mode 100755\n--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+evil\n",
+            "diff --git a/link b/link\nnew file mode 120000\n--- /dev/null\n+++ b/link\n@@ -0,0 +1 @@\n+.git/hooks\n\\ No newline at end of file\n",
           ),
         ]),
       );
@@ -236,9 +237,7 @@ describe.skipIf(process.platform === "win32")(
       expect(refused.status).toBe(1);
       expect(refused.stderr).toMatch(/refused as a whole/);
       expect(readFileSync(edited, "utf8")).toBe("one\ntwo\n");
-      expect(() =>
-        statSync(join(dist.project, ".git", "hooks", "pre-commit")),
-      ).toThrow();
+      expect(existsSync(join(dist.project, "link"))).toBe(false);
 
       // The genuine patch applies, and nothing is committed.
       writeFileSync(patchFile, patch);
@@ -376,9 +375,8 @@ describe.skipIf(process.platform === "win32")(
       expect(s.read("b.txt").toString()).toBe("b\n");
     }, 120000);
 
-    // Bug: `git apply --3way` needs the file in the index, and a repository
-    // with no commits (or any untracked file) has none (sandbox-pull.ts:139).
-    it.fails("round-trips a modified untracked file in a repository with no commits", async () => {
+    // Plain `git apply` needs no index entry; `--3way` alone refused this.
+    it("round-trips a modified untracked file in a repository with no commits", async () => {
       const s = await session({ "a.txt": "a\n" }, "printf 'A\\n' > a.txt", {
         commit: false,
       });
@@ -440,11 +438,9 @@ describe.skipIf(process.platform === "win32")(
       writeFileSync(join(s.project, "a.txt"), local);
       const pulled = await s.pull();
       const now = s.read("a.txt").toString();
-      // `git apply --3way` implies --index, so a dirty file is refused whole:
-      // nothing is merged, and the local edit is kept as it was.
-      expect(pulled.status).toBe(1);
-      expect(pulled.stderr).toMatch(/does not match index/);
-      expect(now).toBe(local);
+      // The hunks do not overlap, so plain `git apply` merges both edits.
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(now).toBe(local.replace("line1\n", "SANDBOX\n"));
     }, 120000);
   },
 );
