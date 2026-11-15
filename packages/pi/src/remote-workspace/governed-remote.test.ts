@@ -21,7 +21,11 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { ManagedFetch } from "@piship/contracts";
-import { remoteWorkspacePaths, resolveLock } from "@piship/core";
+import {
+  remoteWorkspacePaths,
+  resolveLock,
+  writeRemoteWorkspaceCheckpoint,
+} from "@piship/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { governanceHooks } from "../builtins.js";
 import { GovernanceSession } from "../governance-session.js";
@@ -353,6 +357,57 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     expect(stderr.mock.calls.join("")).toContain(
       "The sandbox changed 2 files. Review and apply them with: unit sandbox pull",
     );
+  });
+
+  it("never replaces another session's unapplied patch: parks its own and tells the user", async () => {
+    const { session, workspace, stateDir, tool } = await open();
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const extension = governanceHooks(session);
+    (typeof extension === "function" ? extension : extension.factory)({
+      on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+        handlers.set(event, handler),
+      registerCommand: () => {},
+    } as never);
+    const earlier = Buffer.from("EARLIER SESSION PATCH\n");
+    const slot = writeRemoteWorkspaceCheckpoint(stateDir, workspace, earlier, {
+      session: "earlier",
+      baseHead: null,
+      files: 3,
+    });
+    await tool("write")({ path: "mine.txt", content: "m\n" });
+    await handlers.get("agent_end")?.({}, context());
+    expect(readFileSync(slot.patch)).toEqual(earlier);
+    expect(JSON.parse(readFileSync(slot.meta, "utf8")).session).toBe("earlier");
+    const parked = remoteWorkspacePaths(
+      join(stateDir, "sandbox-workspace-parked", session.sessionId),
+      workspace,
+    );
+    expect(readFileSync(parked.patch, "utf8")).toContain("mine.txt");
+
+    // Once the earlier patch is pulled or discarded, the next checkpoint
+    // takes the slot and the parked copy goes.
+    rmSync(slot.patch);
+    rmSync(slot.meta);
+    await handlers.get("agent_end")?.({}, context());
+    expect(readFileSync(slot.patch, "utf8")).toContain("mine.txt");
+    expect(existsSync(parked.dir)).toBe(false);
+
+    // Blocked again at the end: the closing line says where the work is.
+    writeRemoteWorkspaceCheckpoint(stateDir, workspace, earlier, {
+      session: "earlier-2",
+      baseHead: null,
+      files: 1,
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await session.close();
+    const line = stderr.mock.calls.join("");
+    expect(line).toContain("an earlier session's changes are still waiting");
+    expect(line).toContain("sandbox pull --discard");
+    expect(line).toContain(parked.dir);
+    expect(readFileSync(slot.patch)).toEqual(earlier);
   });
 
   it("never lets a subagent child write the parent's checkpoint", async () => {

@@ -11,6 +11,8 @@ export const SEED_TOTAL_CAP = 200 * 1024 * 1024;
 export const SEED_FILE_CAP = 50 * 1024 * 1024;
 const ARCHIVE = ".piship-seed.tar";
 const EXTRACT_TIMEOUT_SECONDS = 300;
+/** The upload of the whole project may be large: far longer than a file call. */
+const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
 export type SeedSkipReason =
   | "policy"
@@ -49,6 +51,9 @@ function git(root: string, args: string[]): Promise<Buffer> {
 // template without it fails with its name.
 const SCRIPT = [
   'for t in tar git; do command -v $t >/dev/null 2>&1 || { echo "piship-missing-tool:$t"; exit 127; }; done',
+  // The baseline holds exactly the project: a workdir with anything else in
+  // it (a home directory's dotfiles) is refused.
+  `[ -z "$(ls -A | grep -v '^\\.piship-seed\\.tar$')" ] || { echo "piship-workdir-not-empty"; exit 1; }`,
   `tar -xf ${ARCHIVE} && rm -f ${ARCHIVE}`,
   "git init -q",
   "git add -A",
@@ -141,11 +146,10 @@ export async function seedRemoteWorkspace(
     });
   }
 
-  await sandbox.files.write(
-    join(root, ARCHIVE),
-    packTar(entries),
-    options.signal ? { signal: options.signal } : undefined,
-  );
+  await sandbox.files.write(join(root, ARCHIVE), packTar(entries), {
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
   let output = "";
   const result = await sandbox.exec(SCRIPT, root, {
     onData: (chunk) => {
@@ -154,6 +158,10 @@ export async function seedRemoteWorkspace(
     timeout: EXTRACT_TIMEOUT_SECONDS,
     ...(options.signal ? { signal: options.signal } : {}),
   });
+  if (output.includes("piship-workdir-not-empty"))
+    throw new Error(
+      "the sandbox's project directory is not empty, so the remote workspace cannot start from a clean baseline; set sandbox.workdir to a new directory",
+    );
   const missing = /piship-missing-tool:(\w+)/.exec(output);
   if (missing)
     throw new Error(

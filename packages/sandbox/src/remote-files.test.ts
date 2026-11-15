@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxBackend } from "./backend.js";
 import type { SandboxPolicy } from "./profile.js";
-import { E2bCompatibleBackend } from "./remote/e2b.js";
-import { e2bServer } from "./testing/e2b-server.js";
+import { E2bCompatibleBackend, EnvelopeReader } from "./remote/e2b.js";
+import { e2bServer, type StartRequest } from "./testing/e2b-server.js";
 import { closeMockServers, leaks } from "./testing/mock-server.js";
 
 const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox");
@@ -165,6 +165,29 @@ describe("remote workspace file access", () => {
     await expect(activate(bare)).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
     });
+  });
+
+  it("creates the workdir from / before the first command when asked", async () => {
+    const mock = await e2bServer();
+    const sandbox = await activate(
+      new E2bCompatibleBackend({
+        endpoint: mock.url,
+        fetch,
+        envdUrl: () => mock.url,
+        createWorkdir: true,
+      }),
+    );
+    const starts = mock.requests
+      .filter((r) => r.path === "/process.Process/Start")
+      .map(
+        (r) => new EnvelopeReader().push(r.body)[0]?.message as StartRequest,
+      );
+    expect(starts[0]?.process).toMatchObject({
+      cwd: "/",
+      args: ["-l", "-c", "mkdir -p -- '/home/user'"],
+    });
+    expect(starts.length).toBeGreaterThan(1);
+    await sandbox.dispose();
   });
 
   it("has no file access without remoteWorkspace", async () => {

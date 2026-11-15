@@ -45,12 +45,15 @@ const put = (path: string, content: string | Buffer) => {
   writeFileSync(join(project, path), content);
 };
 
+const writes: (number | undefined)[] = [];
+
 /** A sandbox whose "remote" is a local directory and whose exec is real bash. */
 function fakeSandbox(): SeedSandbox {
   return {
     files: {
       read: async (path) => readFileSync(join(remote, path)),
-      write: async (path, data) => {
+      write: async (path, data, options) => {
+        writes.push(options?.timeoutMs);
         expect(path.startsWith(project)).toBe(true);
         writeFileSync(join(remote, path.slice(project.length + 1)), data);
       },
@@ -176,6 +179,26 @@ describe("seedRemoteWorkspace", () => {
       expect(sh(remote, "rev-parse", "HEAD")).toBe(result.baselineCommit);
       expect(sh(remote, "log", "-1", "--format=%s")).toBe("piship-baseline");
       expect(sh(remote, "status", "--porcelain")).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a project directory that already holds files and uploads with a long timeout",
+    async () => {
+      initProject();
+      put("a.txt", "a");
+      writeFileSync(join(remote, ".bashrc"), "template dotfile");
+      writes.length = 0;
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(), project, allowAll),
+      ).rejects.toThrow(/not empty/);
+      expect(writes).toEqual([15 * 60 * 1000]);
+      // The archive left by an earlier attempt does not count.
+      rmSync(join(remote, ".bashrc"));
+      writeFileSync(join(remote, ".piship-seed.tar"), "");
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(), project, allowAll),
+      ).resolves.toMatchObject({ uploaded: ["a.txt"] });
     },
   );
 

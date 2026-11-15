@@ -258,6 +258,7 @@ export class GovernanceSession {
         root: project.root,
         stateDir: options.stateDir,
         session: sessionId,
+        command: options.lock.app.command,
         decide: seedDecision(this),
         protectedPaths: () => {
           const protection = projectProtection(
@@ -1799,11 +1800,8 @@ export class GovernanceSession {
       } finally {
         try {
           // The last checkpoint is taken while the sandbox still exists.
-          const changed = (await this.remote?.finish()) ?? 0;
-          if (changed > 0)
-            process.stderr.write(
-              `The sandbox changed ${changed} ${changed === 1 ? "file" : "files"}. Review and apply them with: ${this.options.lock.app.command} sandbox pull\n`,
-            );
+          const line = await this.remote?.finish();
+          if (line) process.stderr.write(`${line}\n`);
           await this.sandbox.dispose();
         } finally {
           await this.outputStore.dispose();

@@ -191,7 +191,8 @@ export interface ActiveSandboxFiles {
   write(
     path: string,
     data: Buffer,
-    options?: { signal?: AbortSignal },
+    /** `timeoutMs` replaces the 60 s deadline, for a large upload. */
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<void>;
   stat(
     path: string,
@@ -694,7 +695,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
       ? (() => {
           const call = async <T>(
             path: string,
-            options: { signal?: AbortSignal } | undefined,
+            options: { signal?: AbortSignal; timeoutMs?: number } | undefined,
             run: (relativePath: string, signal: AbortSignal) => Promise<T>,
           ): Promise<T> => {
             if (retired || disposed) throw retiredError(report);
@@ -703,13 +704,32 @@ function createActiveSandbox(session: Session): ActiveSandbox {
               throw new Error(
                 "the remote workspace holds only the project; this path is outside it",
               );
-            const deadline = AbortSignal.timeout(FILES_DEADLINE_MS);
-            return run(
-              relativePath,
-              options?.signal
-                ? AbortSignal.any([options.signal, deadline])
-                : deadline,
-            );
+            const timeoutMs = options?.timeoutMs ?? FILES_DEADLINE_MS;
+            const deadline = AbortSignal.timeout(timeoutMs);
+            const signal = options?.signal
+              ? AbortSignal.any([options.signal, deadline])
+              : deadline;
+            // The signal only asks: an adapter that ignores it must not hang
+            // the tool call, so the call is also raced against the deadline.
+            let onAbort: (() => void) | undefined;
+            const expired = new Promise<never>((_, reject) => {
+              onAbort = () =>
+                reject(
+                  deadline.aborted
+                    ? new PiShipError(
+                        "SANDBOX_UNAVAILABLE",
+                        `The ${report.adapter} sandbox backend did not answer a file request within ${Math.ceil(timeoutMs / 1000)} s`,
+                        { component: "sandbox", retryable: true },
+                      )
+                    : new Error("aborted"),
+                );
+              signal.addEventListener("abort", onAbort, { once: true });
+            });
+            try {
+              return await Promise.race([run(relativePath, signal), expired]);
+            } finally {
+              if (onAbort) signal.removeEventListener("abort", onAbort);
+            }
           };
           return {
             read: (path, options) =>
