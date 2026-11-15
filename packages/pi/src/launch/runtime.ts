@@ -204,6 +204,36 @@ export function replacementModel<T>(
   return replacement;
 }
 
+/**
+ * The theme a launch uses. A theme the person chose with `config set` and
+ * mistyped, or one a later release no longer ships, must not stop every
+ * launch: the distribution's theme (or Pi's) is used, with a notice that says
+ * how to fix it. A theme the distribution itself declares that is not
+ * available still fails the launch.
+ */
+export function launchTheme(input: {
+  readonly theme: string | undefined;
+  readonly preferred: boolean;
+  readonly distributionTheme: string | undefined;
+  readonly loaded: readonly (string | undefined)[];
+  readonly command: string;
+}): { readonly theme: string | undefined; readonly notice?: string } {
+  const names = ["dark", "light", ...input.loaded.filter((name) => !!name)];
+  const available = (name: string | undefined) => !name || names.includes(name);
+  if (!available(input.theme) && input.preferred) {
+    const fallback = available(input.distributionTheme)
+      ? input.distributionTheme
+      : undefined;
+    return {
+      theme: fallback,
+      notice: `Notice: theme ${input.theme} (your preference) is not available, so ${fallback ?? "Pi's default theme"} is used. Choose one of ${names.join(", ")} with ${input.command} config set theme <name>, or run ${input.command} config unset theme.`,
+    };
+  }
+  if (!available(input.theme))
+    throw new Error(`Declared theme is unavailable: ${input.theme}`);
+  return { theme: input.theme };
+}
+
 async function startRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
@@ -235,7 +265,7 @@ async function startRuntime(
     ? runtimeIntegrityExtension(gov, enforcedRuntime(gov, activeWorkflow(gov)))
     : null;
   const cacheWarming = cacheWarmingSetting(gov);
-  const theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
+  let theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
   const thinkingLevel = activated?.config.values.thinkingLevel;
   const context =
     activated && access ? access.enterpriseContext(activated) : null;
@@ -415,12 +445,19 @@ async function startRuntime(
       gov.exposure = table;
       gov.piExtensions = () => resourceLoader.getExtensions().extensions;
     }
-    if (
-      theme &&
-      !["dark", "light"].includes(theme) &&
-      !resourceLoader.getThemes().themes.some((item) => item.name === theme)
-    )
-      throw new Error(`Declared theme is unavailable: ${theme}`);
+    const chosen = launchTheme({
+      theme,
+      preferred:
+        activated?.config.entries.some(
+          (entry) =>
+            entry.key === "theme" && entry.source === "user-preference",
+        ) ?? false,
+      distributionTheme: ctx.metadata.app.theme,
+      loaded: resourceLoader.getThemes().themes.map((item) => item.name),
+      command: ctx.metadata.app.command,
+    });
+    if (chosen.notice) ctx.err(chosen.notice);
+    theme = chosen.theme;
     let model: Model | undefined;
     if (activated?.selectedModel) {
       const [provider, ...rest] =
