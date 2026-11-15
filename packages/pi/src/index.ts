@@ -15,9 +15,9 @@ import {
   runLogin,
   runLogout,
   runRollback,
-  runUninstall,
   runSandbox,
   runtimeStateDirectory,
+  runUninstall,
   runUpdate,
   sessionAutoApproveTarget,
   yoloRefusal,
@@ -34,6 +34,12 @@ import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import {
+  deferredDownloadNotice,
+  deferredToolDownloads,
+  installSearchTools,
+  searchToolProblemNotice,
+} from "./launch/search-tools.js";
+import {
   isSubagentChild,
   launchOutput,
   parseSubagentChild,
@@ -44,12 +50,6 @@ import {
   authenticateSubagentChild,
   type SubagentParent,
 } from "./launch/subagent-owner.js";
-import {
-  deferredDownloadNotice,
-  deferredToolDownloads,
-  installSearchTools,
-  searchToolProblemNotice,
-} from "./launch/search-tools.js";
 
 export {
   type GovernedRuntime,
@@ -316,6 +316,10 @@ export async function launchPiDistribution(
             ? "\n  sandbox login | sandbox logout"
             : ""
         }${
+          metadata.governance.manifest.sandbox.workspace === "remote"
+            ? "\n  sandbox pull [--diff] [--yes] | --discard"
+            : ""
+        }${
           metadata.deployment.mode === "personal"
             ? "\n  config trust list | config trust forget [<path>|--all]"
             : ""
@@ -403,8 +407,8 @@ export async function launchPiDistribution(
     if (command === "uninstall") return runUninstall(ctx, rest);
     if (command === "config") return runConfig(ctx, rest);
     // Every sandbox subcommand goes to the runner, which refuses anything
-    // but login and logout without echoing the command line: a mistyped one
-    // may hold the secret.
+    // but login, logout and pull without echoing the command line: a
+    // mistyped one may hold the secret.
     if (command === "sandbox") return runSandbox(ctx, rest);
     if (command === "policy") return runPolicy(ctx, rest);
     if (command === "auto") return runAuto(ctx, rest);

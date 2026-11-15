@@ -17,13 +17,14 @@ import {
 import { describeUserAuto, describeYolo } from "@piship/core";
 import type { ToolExposure } from "@piship/schema";
 import { CODEMODE_TOOL, widerExposure } from "./governance/exposure.js";
+import { remoteWorkdir } from "./governance/sandbox.js";
 import type { GovernanceSession } from "./governance-session.js";
-import { grantCommand } from "./grant-command.js";
 import {
   governedBashOperations,
   planRefusal,
   uiChannel,
 } from "./governed-tools.js";
+import { grantCommand } from "./grant-command.js";
 
 export const DEFAULT_PLAN_PROMPT =
   "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available: do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
@@ -236,6 +237,17 @@ async function decideToolCall(
   };
 }
 
+/** What the model must know when the workspace is a remote sandbox. */
+export function remoteWorkspaceSection(gov: GovernanceSession): string {
+  const { workdir, user } = gov.manifest.sandbox;
+  const dir = workdir ?? remoteWorkdir(user ?? "user");
+  return `Remote workspace: the project lives in a remote sandbox at ${dir}; file tools and bash act there, and paths printed by commands there correspond to the project root shown as cwd. The user's machine is not changed until they run \`${gov.options.lock.app.command} sandbox pull\`. Ignored files (dependencies, .env) and files the policy withheld were not uploaded, so dependencies may need installing. Git history in the sandbox is a single baseline commit: do not rely on git log or git blame, and do not commit expecting it to reach the user. Edits the user makes on their machine during this session are not visible to you.${
+    gov.options.subagent
+      ? " You are a subagent: your file changes are discarded when you finish, so report findings or patch text instead of editing files."
+      : " Changes made by subagents are discarded."
+  }`;
+}
+
 /** Tool-call policy, `!` shell containment, and model request audit. */
 export function governanceHooks(gov: GovernanceSession): InlineExtension {
   return {
@@ -244,6 +256,8 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
       pi.on("session_start", (_event, ctx) => {
         attach(gov, ctx);
         showAuto(gov, ctx);
+        const waiting = gov.remote?.waitingNotice();
+        if (waiting) gov.notice(waiting);
         if (gov.yolo && ctx.hasUI)
           ctx.ui.notify(
             `${describeYolo(gov.options.lock.deployment.mode)}; /auto off ends it`,
@@ -329,7 +343,18 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
           detail: { action: "tool.execute", ...call.detail, error },
         });
       });
-      pi.on("agent_end", () => calls.clear());
+      // Model-facing, and present only in a remote workspace.
+      pi.on("before_agent_start", (event) => {
+        if (gov.remote)
+          event.systemPromptOptions.sections.piship_remote_workspace =
+            remoteWorkspaceSection(gov);
+      });
+      pi.on("agent_end", async () => {
+        calls.clear();
+        // A remote workspace's changes are saved after every agent turn;
+        // a failed save is a notice and never fails the turn.
+        await gov.remote?.checkpoint();
+      });
       pi.on("tool_call", async (event, ctx) => {
         const tool = event.toolName;
         const call = calls.get(event.toolCallId);

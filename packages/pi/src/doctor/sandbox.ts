@@ -19,6 +19,7 @@ import type { GovernanceManifest } from "@piship/schema";
 import { resolveTemplate } from "@piship/schema";
 import type { LaunchContext } from "../launch/context.js";
 import type { DoctorData } from "./data.js";
+import { remoteWorkspaceLines } from "./remote-workspace.js";
 import type { DoctorSection } from "./report.js";
 
 const ISOLATION_TEXT = {
@@ -250,6 +251,7 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
     out.info("summary", inspection.containment);
     for (const warning of report.warnings) out.warn("sandbox", warning);
   }
+  if (governance.remote) remoteWorkspaceLines(governance.remote, out);
   if (governance.sandboxCredential)
     sandboxCredentialLines(data, governance.sandboxCredential, out);
 }

@@ -656,6 +656,23 @@ export interface SandboxConfig {
    * to a private or internal host.
    */
   readonly httpTransport?: HttpTransport;
+  /**
+   * piship/v1alpha6, `custom` and `e2b-compatible`: `remote` makes the
+   * remote sandbox directory the workspace. Absent keeps today's behavior.
+   */
+  readonly workspace?: "remote";
+  /**
+   * With `workspace: remote`: the seed's size limits (defaults 200 and 50
+   * MiB) and how `sandbox pull` treats protected files and confirmation
+   * (defaults `skip` and `optional`).
+   */
+  readonly remote?: {
+    readonly seed?: { maxTotalMiB?: number; maxFileMiB?: number };
+    readonly pull?: {
+      protectedFiles?: "skip" | "refuse";
+      confirm?: "optional" | "required";
+    };
+  };
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };

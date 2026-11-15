@@ -113,13 +113,20 @@ function checkInstance(
     typeof instance.exec !== "function" ||
     typeof instance.dispose !== "function" ||
     (instance.wrap !== undefined && typeof instance.wrap !== "function") ||
-    (instance.epoch !== undefined && typeof instance.epoch !== "function")
+    (instance.epoch !== undefined && typeof instance.epoch !== "function") ||
+    (instance.files !== undefined &&
+      (typeof instance.files !== "object" ||
+        instance.files === null ||
+        typeof instance.files.read !== "function" ||
+        typeof instance.files.write !== "function" ||
+        typeof instance.files.stat !== "function"))
   )
     throw invalid("prepare() must return an object with exec() and dispose()");
   const exec = instance.exec.bind(instance);
   const dispose = instance.dispose.bind(instance);
   const wrap = instance.wrap?.bind(instance);
   const epoch = instance.epoch?.bind(instance);
+  const files = instance.files;
   const disposeMs = deadlines.disposeMs ?? CUSTOM_DISPOSE_TIMEOUT_MS;
   const notify =
     deadlines.notify ??
@@ -150,6 +157,15 @@ function checkInstance(
       });
     },
     ...(wrap ? { wrap: (command) => wrap(command) } : {}),
+    ...(files
+      ? {
+          files: {
+            read: (path, options) => files.read(path, options),
+            write: (path, data, options) => files.write(path, data, options),
+            stat: (path, options) => files.stat(path, options),
+          },
+        }
+      : {}),
     ...(epoch
       ? {
           epoch: () => {

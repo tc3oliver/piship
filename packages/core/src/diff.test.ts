@@ -504,6 +504,46 @@ describe("diffLocks", () => {
     expect(report.changes).toHaveLength(3);
   });
 
+  it("flags remote workspace and its pull policy by direction", () => {
+    const after = clone(base);
+    const sandbox = after.governance.manifest.sandbox as Record<
+      string,
+      unknown
+    >;
+    sandbox.workspace = "remote";
+    sandbox.remote = {
+      seed: { maxTotalMiB: 500 },
+      pull: { protectedFiles: "refuse", confirm: "required" },
+    };
+    const changes = diffLocks(base, after).changes;
+    const by = (item: string) => changes.find((c) => c.item === item);
+    expect(by("sandbox workspace")).toMatchObject({
+      risk: "high",
+      after: "remote",
+    });
+    expect(by("sandbox remote.seed.maxTotalMiB")).toMatchObject({
+      risk: "medium",
+      after: "500",
+    });
+    expect(by("sandbox remote.pull.protectedFiles")).toMatchObject({
+      risk: "low",
+      after: "refuse",
+    });
+    expect(by("sandbox remote.pull.confirm")).toMatchObject({
+      risk: "low",
+      after: "required",
+    });
+    expect(changes).toHaveLength(4);
+    const back = diffLocks(after, base).changes;
+    expect(
+      back.find((c) => c.item === "sandbox remote.pull.confirm"),
+    ).toMatchObject({ risk: "medium", after: "optional" });
+    expect(back.find((c) => c.item === "sandbox workspace")).toMatchObject({
+      risk: "medium",
+      after: "local",
+    });
+  });
+
   it("flags a sandbox that no longer fails closed", () => {
     const after = clone(base);
     after.governance.manifest.sandbox.required = false;

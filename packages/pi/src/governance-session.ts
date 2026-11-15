@@ -15,6 +15,7 @@ import {
 import {
   type ApprovalChannel,
   type AuditEventType,
+  duringStartup,
   formatError,
   PiShipError,
   type PolicyAction,
@@ -22,7 +23,6 @@ import {
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
-  duringStartup,
   resolveDecision,
   startupMark,
 } from "@piship/contracts";
@@ -48,10 +48,10 @@ import {
   grantCovers,
   isPathAction,
   isProjectConfigPath,
-  projectConfigLinkSources,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
+  projectConfigLinkSources,
   type TaskGrant,
   validateGrant,
 } from "@piship/policy";
@@ -64,10 +64,6 @@ import {
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
-import {
-  revokePublishedSubagentGrant,
-  type SubagentGrantBinding,
-} from "./launch/subagent-owner.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
@@ -87,6 +83,12 @@ import type {
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
 import { sandboxBackend } from "./governance/sandbox.js";
+import { seedDecision } from "./governed-tools.js";
+import {
+  revokePublishedSubagentGrant,
+  type SubagentGrantBinding,
+} from "./launch/subagent-owner.js";
+import { RemoteWorkspace } from "./remote-workspace/checkpoint.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 export { terminalApproval } from "./governance/approval.js";
@@ -140,7 +142,13 @@ interface DeferredToolAsk {
   /** The call's audit detail (source, parent, exposure). */
   readonly detail: Readonly<Record<string, string>>;
 }
-const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
+// `remote` is declared and effective together, so it never compares weaker.
+const WORKSPACE_STRENGTH = {
+  snapshot: 0,
+  synchronized: 1,
+  shared: 2,
+  remote: 2,
+} as const;
 
 /** The longest a task grant may last unless `policy.taskGrants` sets a cap. */
 const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
@@ -243,7 +251,63 @@ export class GovernanceSession {
       options.lock.deployment.mode,
     );
     this.#yolo = options.yolo === true;
+    const files = sandbox.files;
+    if (files)
+      this.remote = new RemoteWorkspace({
+        sandbox: { exec: sandbox.exec, files },
+        root: project.root,
+        stateDir: options.stateDir,
+        session: sessionId,
+        command: options.lock.app.command,
+        decide: seedDecision(this),
+        protectedPaths: () => {
+          const protection = projectProtection(
+            options,
+            project,
+            sandbox.profile.homeDir,
+          );
+          return [...protection.files, ...protection.directories].flatMap(
+            (path) => {
+              const inside = relative(project.root, path).split(sep).join("/");
+              return inside === "" ||
+                inside.startsWith("..") ||
+                isAbsolute(inside)
+                ? []
+                : [inside];
+            },
+          );
+        },
+        seeded: (result) => {
+          const skipped = result.skipped.filter(
+            (item) => item.reason === "policy",
+          ).length;
+          this.emit("tool.allowed", {
+            resource: "sandbox-seed",
+            decision: "allowed",
+            policy: this.policyId,
+            enforcement: "control-plane",
+            detail: {
+              action: "filesystem.read",
+              uploaded: result.uploaded.length,
+              skipped: result.skipped.length,
+              policySkipped: skipped,
+            },
+          });
+        },
+        warn: (message) => this.#notice(message),
+        notify: (message) => this.#notice(message),
+        ...(this.manifest.sandbox.remote?.seed
+          ? { seedLimits: this.manifest.sandbox.remote.seed }
+          : {}),
+        ...(this.manifest.sandbox.remote?.pull
+          ? { pull: this.manifest.sandbox.remote.pull }
+          : {}),
+        checkpoints: options.subagent === undefined,
+      });
   }
+
+  /** Set with `sandbox.workspace: remote`: the sandbox holds the project. */
+  readonly remote: RemoteWorkspace | undefined;
 
   /**
    * Opens the session. The paths it resolves while it sets up (the sandbox
@@ -1742,6 +1806,9 @@ export class GovernanceSession {
         await this.mcp?.close();
       } finally {
         try {
+          // The last checkpoint is taken while the sandbox still exists.
+          const line = await this.remote?.finish();
+          if (line) process.stderr.write(`${line}\n`);
           await this.sandbox.dispose();
         } finally {
           await this.outputStore.dispose();

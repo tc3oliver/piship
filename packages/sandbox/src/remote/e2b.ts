@@ -2,6 +2,7 @@
 // envd process service (data plane). Any service that implements that API,
 // such as E2B or CubeSandbox, works through this one compatibility layer.
 import { randomBytes } from "node:crypto";
+import { redact } from "@piship/contracts";
 import type { AdapterAvailability } from "../adapter.js";
 import {
   HOST_FILESYSTEM_ISOLATION,
@@ -10,6 +11,7 @@ import {
   type SandboxExecIO,
   type SandboxExecRequest,
   type SandboxExecResult,
+  type SandboxFiles,
   type SandboxInstance,
   type SandboxPrepareRequest,
 } from "../backend.js";
@@ -20,6 +22,7 @@ import {
   type RemoteBackendOptions,
   readJson,
   remoteDirectory,
+  shellQuote,
   trimSlashes,
 } from "./http.js";
 
@@ -36,6 +39,11 @@ export interface E2bCompatibleOptions extends RemoteBackendOptions {
    * `user`, as E2B templates expect; CubeSandbox runs commands as `root`.
    */
   readonly user?: string;
+  /**
+   * Create `workdir` in the sandbox before the first command, for a workdir
+   * the template does not have (a remote workspace's project directory).
+   */
+  readonly createWorkdir?: boolean;
   /** Test seam: the envd base URL for a created sandbox. */
   readonly envdUrl?: (sandbox: {
     readonly sandboxId: string;
@@ -48,6 +56,7 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const SANDBOX_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
 const DOMAIN = /^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
 const SIGNAL_TIMEOUT_MS = 5000;
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 // A remote VM: the host's files are out of reach, but PiShip's path rules
 // are not mapped into it, so no filesystem-* plane is claimed. The network
@@ -67,6 +76,8 @@ interface CreatedSandbox {
   readonly sandboxId: string;
   readonly accessToken: string | undefined;
   readonly envd: string;
+  /** When the timeout was last renewed (ms); the file path renews only when it is stale. */
+  renewedAt: number;
 }
 
 /** Connect envelope: flags byte, 4-byte big-endian length, JSON payload. */
@@ -150,15 +161,40 @@ export class E2bCompatibleBackend implements SandboxBackend {
   }: SandboxPrepareRequest): Promise<SandboxInstance> {
     const created = await this.#create(profile.network, signal);
     const workdir = this.#options.workdir ?? "/home/user";
+    if (this.#options.createWorkdir)
+      await this.#makeWorkdir(created, workdir).catch(async (error) => {
+        await this.#control(
+          `sandboxes/${created.sandboxId}`,
+          { method: "DELETE" },
+          true,
+        )
+          .then((response) => response.body?.cancel())
+          .catch(() => undefined);
+        throw error;
+      });
     let disposed = false;
+    // A remote workspace holds the only copy of the project, so an idle
+    // session must not lose it: renew four times per lifetime, quietly.
+    const keepalive = this.#options.createWorkdir
+      ? setInterval(
+          () =>
+            void this.#renew(created, AbortSignal.timeout(30_000)).catch(
+              () => undefined,
+            ),
+          Math.max(1000, this.#lifetime() * 250),
+        )
+      : undefined;
+    keepalive?.unref();
     return {
       exec: (request, io) => {
         if (disposed) throw new Error("the sandbox was disposed");
         return this.#exec(created, workdir, request, io);
       },
+      files: this.#files(created, workdir, () => disposed),
       dispose: async () => {
         if (disposed) return;
         disposed = true;
+        clearInterval(keepalive);
         try {
           const response = await this.#control(
             `sandboxes/${created.sandboxId}`,
@@ -236,7 +272,45 @@ export class E2bCompatibleBackend implements SandboxBackend {
     const envd =
       this.#options.envdUrl?.({ sandboxId, domain }) ??
       `${this.#endpoint.protocol}//${ENVD_PORT}-${sandboxId}.${domain}`;
-    return { sandboxId, accessToken, envd: trimSlashes(envd) };
+    return {
+      sandboxId,
+      accessToken,
+      envd: trimSlashes(envd),
+      renewedAt: Date.now(),
+    };
+  }
+
+  async #makeWorkdir(sandbox: CreatedSandbox, workdir: string): Promise<void> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 30_000);
+    let stderr = "";
+    try {
+      // From `/`: the directory does not exist yet to run in.
+      const result = await this.#stream(
+        sandbox,
+        "/",
+        {
+          command: `mkdir -p -- ${shellQuote(workdir)}`,
+          cwd: "/",
+          workspacePath: undefined,
+          env: {},
+        },
+        {
+          signal: abort.signal,
+          onStdout: () => {},
+          onStderr: (chunk) => {
+            stderr += chunk.toString("utf8");
+          },
+        },
+        `piship-${randomBytes(8).toString("hex")}`,
+      );
+      if (result.exitCode !== 0)
+        throw new Error(
+          `creating the workspace directory failed: ${redact(stderr).slice(0, 200)}`,
+        );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #lifetime(): number {
@@ -255,28 +329,193 @@ export class E2bCompatibleBackend implements SandboxBackend {
     return headers;
   }
 
-  async #exec(
+  /**
+   * Keep the sandbox alive while it is used; an expired one fails here. A file
+   * operation passes `throttled`: it renews only once the last renewal is a
+   * tenth of the lifetime old (at most a minute), so the timeout never nears
+   * its end while a burst of file calls costs one control-plane request.
+   * Every command renews.
+   */
+  async #renew(
     sandbox: CreatedSandbox,
-    workdir: string,
-    request: SandboxExecRequest,
-    io: SandboxExecIO,
-  ): Promise<SandboxExecResult> {
-    // Keep the sandbox alive while it is used; an expired one fails here.
+    signal: AbortSignal,
+    throttled = false,
+  ): Promise<void> {
+    if (
+      throttled &&
+      Date.now() - sandbox.renewedAt < Math.min(60_000, this.#lifetime() * 100)
+    )
+      return;
     const renewed = await this.#control(
       `sandboxes/${sandbox.sandboxId}/timeout`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ timeout: this.#lifetime() }),
-        signal: io.signal,
+        signal,
       },
       true,
     );
-    if (!renewed.ok)
-      throw new Error(
-        `the sandbox is no longer available: ${await describeFailure(renewed)}`,
+    if (!renewed.ok) {
+      const gone = renewed.status === 404 || renewed.status === 410;
+      throw Object.assign(
+        new Error(
+          gone
+            ? `the sandbox expired or was lost: ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`
+            : `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`,
+        ),
+        // The session says what to do next: only it knows its command name.
+        gone ? { code: "SANDBOX_GONE" } : {},
       );
+    }
     await renewed.body?.cancel().catch(() => undefined);
+    sandbox.renewedAt = Date.now();
+  }
+
+  #basic(): string {
+    return `Basic ${Buffer.from(`${this.#options.user ?? "user"}:`).toString("base64")}`;
+  }
+
+  /**
+   * File access over envd: `GET`/`POST /files` for content (multipart upload
+   * creates parent directories) and the Filesystem `Stat` RPC. envd's own
+   * credentials only (access token, Basic user); the control-plane key never
+   * goes here, and no secret is placed in a URL.
+   */
+  #files(
+    sandbox: CreatedSandbox,
+    workdir: string,
+    isDisposed: () => boolean,
+  ): SandboxFiles {
+    const user = this.#options.user ?? "user";
+    const request = async <T>(
+      path: string,
+      signal: AbortSignal,
+      call: (absolute: string, headers: Headers) => Promise<T>,
+    ): Promise<T> => {
+      if (isDisposed()) throw new Error("the sandbox was disposed");
+      if (!path || path === "." || path.includes("\0"))
+        throw new Error("the path is not a workspace file");
+      const absolute = remoteDirectory(workdir, path);
+      await this.#renew(sandbox, signal, true);
+      const headers = this.#envdHeaders(sandbox, "application/json");
+      headers.set("Authorization", this.#basic());
+      return call(absolute, headers);
+    };
+    const filesUrl = (absolute: string) =>
+      `${sandbox.envd}/files?${new URLSearchParams({ path: absolute, username: user })}`;
+    return {
+      read: (path, { signal }) =>
+        request(path, signal, async (absolute, headers) => {
+          headers.delete("Content-Type");
+          const response = await this.#options.fetch(filesUrl(absolute), {
+            method: "GET",
+            headers,
+            signal,
+          });
+          if (response.status === 404) {
+            await response.body?.cancel().catch(() => undefined);
+            throw Object.assign(new Error("no such file in the sandbox"), {
+              code: "ENOENT",
+            });
+          }
+          if (!response.ok)
+            throw new Error(
+              `reading the file failed: ${await describeFailure(response)}`,
+            );
+          // Content-Encoding changes what Content-Length counts: compare only
+          // a body that arrives as sent.
+          const declared = response.headers.get("content-encoding")
+            ? NaN
+            : Number(response.headers.get("content-length") ?? NaN);
+          if (declared > MAX_FILE_BYTES) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new Error("the file is too large");
+          }
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of (response.body ??
+            []) as AsyncIterable<Uint8Array>) {
+            size += chunk.byteLength;
+            if (size > MAX_FILE_BYTES) {
+              await response.body?.cancel().catch(() => undefined);
+              throw new Error("the file is too large");
+            }
+            chunks.push(Buffer.from(chunk));
+          }
+          if (Number.isInteger(declared) && size !== declared)
+            throw new Error(
+              `the sandbox sent ${size} of the ${declared} bytes it announced for the file`,
+            );
+          return Buffer.concat(chunks);
+        }),
+      write: (path, data, { signal }) =>
+        request(path, signal, async (absolute, headers) => {
+          // Built by hand: the managed fetch sends a FormData body as text.
+          const boundary = `piship-${randomBytes(12).toString("hex")}`;
+          headers.set(
+            "Content-Type",
+            `multipart/form-data; boundary=${boundary}`,
+          );
+          const body = Buffer.concat([
+            Buffer.from(
+              `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="file"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+            ),
+            data,
+            Buffer.from(`\r\n--${boundary}--\r\n`),
+          ]);
+          const response = await this.#options.fetch(filesUrl(absolute), {
+            method: "POST",
+            headers,
+            body,
+            signal,
+          });
+          if (!response.ok)
+            throw new Error(
+              `writing the file failed: ${await describeFailure(response)}`,
+            );
+          await response.body?.cancel().catch(() => undefined);
+        }),
+      stat: (path, { signal }) =>
+        request(path, signal, async (absolute, headers) => {
+          const response = await this.#options.fetch(
+            `${sandbox.envd}/filesystem.Filesystem/Stat`,
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ path: absolute }),
+              signal,
+            },
+          );
+          if (response.status === 404) {
+            await response.body?.cancel().catch(() => undefined);
+            return undefined;
+          }
+          if (!response.ok)
+            throw new Error(
+              `checking the file failed: ${await describeFailure(response)}`,
+            );
+          const entry = record(record(await readJson(response)).entry);
+          return {
+            type:
+              entry.type === "FILE_TYPE_FILE"
+                ? ("file" as const)
+                : entry.type === "FILE_TYPE_DIRECTORY"
+                  ? ("directory" as const)
+                  : ("other" as const),
+            size: Number(entry.size ?? 0),
+          };
+        }),
+    };
+  }
+
+  async #exec(
+    sandbox: CreatedSandbox,
+    workdir: string,
+    request: SandboxExecRequest,
+    io: SandboxExecIO,
+  ): Promise<SandboxExecResult> {
+    await this.#renew(sandbox, io.signal);
     // The tag lets PiShip kill the command even before its pid is known.
     const tag = `piship-${randomBytes(8).toString("hex")}`;
     const kill = () => void this.#kill(sandbox, tag);
@@ -297,10 +536,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
   ): Promise<SandboxExecResult> {
     const headers = this.#envdHeaders(sandbox, "application/connect+json");
     headers.set("Keepalive-Ping-Interval", "50");
-    headers.set(
-      "Authorization",
-      `Basic ${Buffer.from(`${this.#options.user ?? "user"}:`).toString("base64")}`,
-    );
+    headers.set("Authorization", this.#basic());
     const response = await this.#options.fetch(
       `${sandbox.envd}/process.Process/Start`,
       {

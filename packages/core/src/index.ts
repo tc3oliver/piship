@@ -28,6 +28,7 @@ export { canonicalJson } from "./digest.js";
 export { checkEnforceability, checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
 export * from "./install/index.js";
+export * from "./remote-workspace.js";
 export * from "./store/index.js";
 export { raiseThreadpool } from "./threadpool.js";
 export { pishipCommand } from "./invocation.js";

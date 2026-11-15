@@ -63,12 +63,13 @@ export type GitControlProtectionState =
   | "not-applicable";
 
 export interface WorkspaceReport {
-  readonly declared: WorkspaceMode;
+  /** `remote`: the sandbox holds the only live copy; nothing is shared or synchronized. */
+  readonly declared: WorkspaceMode | "remote";
   /**
    * What the evidence supports; never stronger than declared. `snapshot`
    * until a shared or synchronized workspace has been verified.
    */
-  readonly effective: WorkspaceMode;
+  readonly effective: WorkspaceMode | "remote";
   readonly verification: WorkspaceVerification;
   readonly hostToSandbox?: Propagation;
   readonly sandboxToHost?: Propagation;
@@ -1023,6 +1024,8 @@ export async function verifyWorkspace(
 /** The workspace sentence of the containment line, for enforced remote backends. */
 export function describeWorkspace(report: WorkspaceReport): string {
   const declared = report.declared;
+  if (declared === "remote")
+    return "Workspace: remote (the sandbox holds the only live copy of the project; the host working tree changes only when you pull the result).";
   switch (report.verification) {
     case "not-required":
       return declared === "snapshot"

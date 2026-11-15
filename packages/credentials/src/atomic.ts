@@ -77,7 +77,7 @@ export interface AtomicWriteOptions {
  */
 export function writeFileAtomic(
   path: string,
-  content: string,
+  content: string | Buffer,
   options: AtomicWriteOptions = {},
 ): void {
   const directory = dirname(path);
@@ -92,7 +92,11 @@ export function writeFileAtomic(
   try {
     const fd = openSync(temporary, "wx", 0o600);
     try {
-      writeFully(fd, Buffer.from(content, "utf8"), path);
+      writeFully(
+        fd,
+        typeof content === "string" ? Buffer.from(content, "utf8") : content,
+        path,
+      );
       fsyncSync(fd);
     } finally {
       closeSync(fd);

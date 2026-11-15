@@ -21,11 +21,15 @@ export interface E2bScript {
   /** The envd user the sandbox accepts; others are refused. Default `user`. */
   user?: string;
   create?: number;
+  /** Set to true once the sandbox has expired: its timeout endpoint answers 404. */
+  gone?: boolean;
   /**
    * The API key the control plane requires; a request without it gets 401
    * with a body that echoes what it was sent, as some services do.
    */
   apiKey?: string;
+  /** The sandbox's files by absolute path; served and updated over envd. */
+  files?: Map<string, Buffer>;
   /** Control paths answered 401 once before the key is accepted. */
   rejectOnce?: readonly string[];
   /** Stdout and exit code for a command; `hang` keeps the stream open. */
@@ -35,6 +39,23 @@ export interface E2bScript {
     hang?: boolean;
     streamError?: string;
   };
+}
+
+/** The content of the one `file` part of a multipart body. */
+function multipartFile(
+  body: Buffer,
+  contentType: string | undefined,
+): Buffer | undefined {
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/.exec(contentType ?? "");
+  const mark = Buffer.from(`--${boundary?.[1] ?? boundary?.[2] ?? "\0"}`);
+  const start = body.indexOf(mark);
+  const headerEnd = body.indexOf("\r\n\r\n", start);
+  const end = body.indexOf(
+    Buffer.concat([Buffer.from("\r\n"), mark]),
+    headerEnd,
+  );
+  if (start < 0 || headerEnd < 0 || end < 0) return undefined;
+  return body.subarray(headerEnd + 4, end);
 }
 
 export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
@@ -71,9 +92,90 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
             }),
       );
     }
+    if (path === "/sandboxes/sbx1/timeout" && script.gone) {
+      response.statusCode = 404;
+      response.setHeader("Content-Type", "application/json");
+      return void response.end('{"code":404,"message":"sandbox not found"}');
+    }
     if (path === "/sandboxes/sbx1/timeout" || path === "/sandboxes/sbx1") {
       response.statusCode = 204;
       return void response.end();
+    }
+    if (path === "/files" || path === "/filesystem.Filesystem/Stat") {
+      // envd: access token, Basic `<user>:`, and (for /files) the username.
+      const user = script.user ?? "user";
+      const expected = `Basic ${Buffer.from(`${user}:`).toString("base64")}`;
+      const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+      if (
+        request.headers["x-access-token"] !== "envd-token-1" ||
+        request.headers.authorization !== expected ||
+        (path === "/files" && query.get("username") !== user)
+      ) {
+        response.statusCode = 401;
+        return void response.end('{"code":"unauthenticated"}');
+      }
+      script.files ??= new Map();
+      const store = script.files;
+      let target = query.get("path");
+      if (path !== "/files")
+        target =
+          (JSON.parse(request.body.toString()) as { path?: string }).path ??
+          null;
+      if (!target?.startsWith("/home/user/") || target.includes("..")) {
+        response.statusCode = 400;
+        return void response.end('{"code":"invalid_argument"}');
+      }
+      if (path === "/files" && request.method === "POST") {
+        const content = multipartFile(
+          request.body,
+          request.headers["content-type"],
+        );
+        if (!content) {
+          response.statusCode = 400;
+          return void response.end();
+        }
+        store.set(target, content);
+        response.setHeader("Content-Type", "application/json");
+        return void response.end(
+          JSON.stringify([{ path: target, type: "file" }]),
+        );
+      }
+      const found = store.get(target);
+      const directory = [...store.keys()].some((key) =>
+        key.startsWith(`${target}/`),
+      );
+      if (path === "/files") {
+        if (!found) {
+          response.statusCode = 404;
+          return void response.end('{"code":404,"message":"file not found"}');
+        }
+        return void response.end(found);
+      }
+      if (!found && !directory) {
+        response.statusCode = 404;
+        response.setHeader("Content-Type", "application/json");
+        return void response.end(
+          '{"code":"not_found","message":"no such file"}',
+        );
+      }
+      response.setHeader("Content-Type", "application/json");
+      return void response.end(
+        JSON.stringify({
+          entry: found
+            ? {
+                name: "f",
+                type: "FILE_TYPE_FILE",
+                path: target,
+                size: String(found.length),
+              }
+            : {
+                name: "d",
+                type: "FILE_TYPE_DIRECTORY",
+                path: target,
+                size: "4096",
+              },
+        }),
+      );
     }
     if (path === "/process.Process/SendSignal") {
       for (const open of hung) open.end(connectEnvelope({}, 0x02));

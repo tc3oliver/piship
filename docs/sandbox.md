@@ -45,7 +45,7 @@ sandbox:
   provider: e2b-compatible
   endpoint: ${SANDBOX_ENDPOINT}   # E2B API URL, or a CubeSandbox API URL
   template: piship-workspace      # default: base
-  workdir: /home/user/repo        # default: /home/user
+  workdir: /home/user/repo        # default: /home/user (a remote workspace: /home/<user>/workspace)
   credential: stored              # default: none; see Credentials below
 ```
 
@@ -58,9 +58,11 @@ sandbox:
   provider: e2b-compatible
   endpoint: ${CUBE_API_URL}       # the CubeSandbox API URL
   template: piship-workspace
-  workdir: /root/repo
   user: root                      # CubeSandbox; E2B keeps the default, user
+  workspace: remote               # the project goes into /root/workspace, which PiShip creates empty
 ```
+
+Without `workspace: remote`, the template or image must already hold the code, so set `workdir` to the directory that holds it (for example `/root/repo`). With `workspace: remote` leave `workdir` unset, or point it at a directory the template leaves empty: the seed refuses a project directory that already holds files.
 
 ```yaml
 variables: [KUBE_API_URL, SANDBOX_ROUTER_URL]
@@ -92,8 +94,9 @@ sandbox:
 | `httpTransport` | remote and `custom` with an `endpoint` | piship/v1alpha6: `https` forces HTTPS-only; `http-allowed` (the default) also accepts plain HTTP to a private or internal host for `endpoint` and `router` (and an e2b-compatible backend's command host `<port>-<id>.<domain>` on port 80 under the endpoint's domain, matched by name; an IP-literal endpoint cannot reach it over plain HTTP). Always https with `credential: runtime`; otherwise commands, output, files, and a `stored` credential then travel unencrypted ([security](security.md#plain-http-to-internal-endpoints)) |
 | `namespace` | `kubernetes-agent-sandbox` | Namespace of the SandboxClaims |
 | `template` | `e2b-compatible`, `kubernetes-agent-sandbox` | E2B template ID, or the SandboxWarmPool name |
-| `workdir` | `e2b-compatible`, `kubernetes-agent-sandbox` | Absolute remote directory that maps to the workspace |
-| `user` | `e2b-compatible` | The sandbox user commands run as (envd's `Authorization: Basic <user>:`). Default `user`, as E2B expects; CubeSandbox needs `root`. The default `workdir` stays `/home/user`, so set `workdir` together with `user` (for example `/root/repo`) |
+| `workdir` | `e2b-compatible`, `kubernetes-agent-sandbox` | Absolute remote directory that maps to the workspace. Default `/home/user`; with `workspace: remote` and `e2b-compatible`, `/home/<user>/workspace` (`/root/workspace` for `root`), created empty |
+| `user` | `e2b-compatible` | The sandbox user commands run as (envd's `Authorization: Basic <user>:`). Default `user`, as E2B expects; CubeSandbox needs `root`. Without `workspace: remote` the default `workdir` stays `/home/user`, so set `workdir` together with `user` (for example `/root/repo`); with it, the default follows the user |
+| `workspace` | `e2b-compatible` and `custom` | piship/v1alpha6: `remote` makes the sandbox hold the only live copy of the project; the host working tree changes only through `<command> sandbox pull` ([Remote workspace](#remote-workspace)). Omitted keeps today's behavior. `native` and `kubernetes-agent-sandbox` fail `validate` |
 | `credential` | remote and `custom` | `none` (default), `runtime` (the inference runtime credential, only on its origin), or `stored` (the sandbox credential stored with `sandbox login`, bound to the user and the endpoint origins; needs `endpoint`); see [Credentials](#credentials) |
 
 Fields that do not apply to the chosen provider are rejected. There is no field for an API key: secrets are never written in `piship.yaml`, and runtime references cannot name secret-looking variables. A release whose manifest uses `credential: stored` can be installed by `update` only from a release that already knows the value: adopt it one release after the PiShip upgrade.
@@ -175,7 +178,7 @@ session end: instance.dispose()
 
 - **Policy and approvals.** Every `bash` and `!` command is decided as `shell.execute` before any backend sees it. File tools (`read`, `write`, `edit`) always run in the Pi process under PiShip's governed file access.
 - **Environment.** A backend receives one command, its working directory, and the environment PiShip approved: the `sandbox.environment.allow` list, with credential-looking names always removed. A remote backend additionally never receives host-bound variables (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `PWD`); its own environment provides them. Nothing else is sent when a sandbox is created: no environment, no files, and no credential other than the declared control-plane credential.
-- **Filesystem.** PiShip does not upload or sync the workspace. A remote backend runs commands in `workdir` plus the command's path relative to the workspace, and refuses a working directory outside the workspace. The template, image, or volume must provide the code. Local file tools and remote commands therefore see different copies unless the backend mounts or syncs the workspace, which it declares and PiShip verifies ([Workspace](#workspace)). The remote sandbox does not apply `sandbox.filesystem` path rules; they keep governing the local file tools.
+- **Filesystem.** Without `workspace: remote`, PiShip does not upload or sync the workspace (with it, see [Remote workspace](#remote-workspace)). A remote backend runs commands in `workdir` plus the command's path relative to the workspace, and refuses a working directory outside the workspace. The template, image, or volume must provide the code. Local file tools and remote commands therefore see different copies unless the backend mounts or syncs the workspace, which it declares and PiShip verifies ([Workspace](#workspace)). The remote sandbox does not apply `sandbox.filesystem` path rules; they keep governing the local file tools.
 - **Credentials.** A backend receives a credential only as `sandbox.credential` declares it (`runtime` or `stored`) or from its own adapter module, and only for the origins that credential may reach ([Credentials](#credentials)). It is read per request, never placed in a command's environment, and scrubbed from any error that echoes it. E2B's per-sandbox envd access token is used only for that sandbox's data plane and never leaves the process.
 - **Timeout and cancellation.** PiShip starts the timer and listens to the user's cancel. On either, it aborts the signal it passed to the backend, stops forwarding output, and reports `timeout` or `aborted` whatever the backend returns afterwards. A backend that does not settle within five seconds is retired: its instance is disposed, and later commands in that session fail with `SANDBOX_UNAVAILABLE`. Native commands get SIGTERM, then SIGKILL of the whole process group after one second; disposing a native instance stops a command still running the same way and returns once it is gone (for two seconds at most), so nothing runs in the session temp directory the activation removes next. E2B commands get `SendSignal(SIGKILL)` for the command's tagged process, which works even before its pid is known; background processes it started in the sandbox are removed when the sandbox is. The Kubernetes runtime API cannot stop a running command, so a cancelled command retires its claim: the next command gets a fresh sandbox, and the retired claim is deleted once no other command still running in it needs it. A cancellation belongs to its own command: parallel commands that share the claim keep running in it, and the claim stays renewed until the last of them ends; a command cancelled while it waits for a claim to become ready stops waiting, and the claim is still created for the commands that wait with it (only disposing the session cancels its creation). If that DELETE fails, the claim's `shutdownTime` still removes it (see below); a failed cleanup is not logged and never exposes the command, environment, or credential.
 - **Windows child processes.** Windows has no native sandbox adapter, but a child PiShip spawns itself (an MCP stdio server, for one) runs inside a kill-on-close Job Object, which bounds its process lifetime and isolates nothing. Three limits of that start-up path are known and not fixed in v0.7: a child that writes the startup-failure marker to its own stderr has that output dropped and its exit reported as a startup failure; the C# helper is compiled once per machine and kept, but a child started where it cannot be (no compiler, or a failed check) waits for a compile at each start, which adds latency; and the request carrying the child's command and approved environment travels in one environment variable, so one larger than Windows allows in a variable (documented as 32,767 characters; not measured here) cannot start the child ([security](security.md#limits)).
@@ -283,6 +286,115 @@ Pi's file tools (`read`, `write`, `edit`) always work on this host's files; only
 | `snapshot` (default) | Anything else: the sandbox sees a copy at best | a template, an image, a `git clone`, a one-time upload | Never |
 
 A local backend is `shared` by construction and needs no check. The built-in `e2b-compatible` and `kubernetes-agent-sandbox` backends declare `snapshot`: PiShip does not know what their template or warm pool mounts. A company that mounts the developer's workspace into its sandbox uses a custom adapter and declares `shared`. PiShip does not implement a sync engine.
+
+### Remote workspace
+
+Short version: the sandbox holds the project while the agent works, and you bring the result back with one command.
+
+#### Quick start
+
+1. **Declare it.** The sandbox must be required, and the manifest must be `piship/v1` (or `piship/v1alpha6`):
+
+   ```yaml
+   variables: [SANDBOX_ENDPOINT]
+   sandbox:
+     required: true
+     provider: e2b-compatible      # E2B, or CubeSandbox (add user: root)
+     endpoint: ${SANDBOX_ENDPOINT}
+     template: my-project-template
+     workspace: remote
+     credential: stored
+   ```
+
+   Store the sandbox key once. It is read from a prompt or from standard input, never from a flag:
+
+   ```sh
+   acme sandbox login
+   ```
+
+2. **Build the template.** The sandbox template needs `git` and `tar`, and whatever your project builds and tests with (Node, Python, a compiler). Leave the project directory empty: PiShip uploads the project into `/home/<user>/workspace` itself. Dependencies go one of two ways:
+   - Install them in the template, in a directory outside the project (a global npm prefix, a virtualenv or cache under the home directory). This works with the default network setting.
+   - Install them at run time. That needs `sandbox.network.mode: allow`. With the default `deny`, `npm install` and `pip install` fail inside the sandbox.
+
+   Ignored files are not uploaded, so `node_modules` and `.env` from your machine never reach the sandbox.
+
+3. **Check it.** `doctor` creates a sandbox and tells you what a session would otherwise find out the hard way:
+
+   ```sh
+   acme doctor
+   ```
+
+   Look at the Sandbox group: the file API, `tar`, `git`, an empty project directory, the network mode, and whether an earlier patch is waiting. Each failing row says what to change.
+
+4. **Work.** Start a session in a git repository (remote workspace needs git). The first file tool or command uploads the project. Edit in the session as usual. When it ends, PiShip prints a line like this one:
+
+   ```text
+   3 files changed in the sandbox; run acme sandbox pull to bring them to this machine
+   ```
+
+   Then look at the changes, apply them, and commit:
+
+   ```sh
+   acme sandbox pull            # shows a summary and asks y/N
+   acme sandbox pull --diff     # also prints the full diff
+   git diff                     # the changes are in your working tree, not staged
+   git commit -am "..."
+   ```
+
+   `sandbox pull` never commits and never stages (unless it needs a 3-way merge, see below). It works with uncommitted changes of your own.
+
+5. **When something goes wrong.**
+   - *The sandbox expired or the session crashed.* Everything up to the end of the last agent turn is already saved on this machine. Run `acme sandbox pull`, then start a new session. A new session starts from your files on disk, so pull first.
+   - *An earlier patch is still waiting.* A new session says so when it starts. Run `acme sandbox pull` first. If several sessions left patches, each `sandbox pull` takes the next one; run it again until it says nothing is waiting.
+   - *The patch does not fit your files.* Pull tries a plain apply first and falls back to a 3-way merge. A 3-way merge stages the patch's files and can leave conflict markers: resolve them and `git add` the files. If git cannot apply the patch at all, nothing changes and the patch stays stored: commit or stash your edits to those files and run pull again.
+   - *You do not want the changes.* `acme sandbox pull --discard` drops the next waiting patch.
+
+The rest of this section explains how it works and what it does not do.
+
+`sandbox.workspace: remote` (piship/v1alpha6, `e2b-compatible` and `custom` providers) changes who holds the files. The sandbox holds the only live copy of the project. The harness (Pi and PiShip's governance, credentials, and audit) stays on this host. `read`, `write`, and `edit` are decided by the same policy as without it, then performed in the sandbox through the backend's file API; the host working tree is not touched during the session. The work comes back as a patch that you review and apply with `<command> sandbox pull`. The backend must expose `files` (read, write, stat); activation fails closed when the backend is local or its instance has no `files`. The shared and synchronized workspace check does not apply, and `doctor` shows `Workspace: remote (the sandbox holds the only live copy of the project; the host working tree changes only when you pull the result).` The Sandbox group of `doctor` also checks the file API, `tar`, `git`, an empty project directory, and the network mode in the sandbox it opens, and lists any patch still waiting on this machine.
+
+The flow:
+
+1. **Activation** uploads nothing.
+2. **Seed**, lazily before the first file tool or command that reaches the sandbox (a Plan-mode session that never touches the sandbox uploads nothing). PiShip lists `git ls-files -co --exclude-standard -z` at the project root; a project that is not a git work tree fails closed, because remote workspace needs git. Each file is decided as `filesystem.read` without prompting: `allow` uploads it, `deny` and `ask` skip it (counted and audited, never prompted). Symlinks, files outside the workspace, and anything under `.git/` are skipped. A file over the per-file cap (50 MiB) stays on this host and the session continues with one notice; a project over the total cap (200 MiB) fails with a message that says to add the large directories to `.gitignore`. Both caps can be changed with `sandbox.remote.seed` (`maxTotalMiB`, `maxFileMiB`, positive integers up to 4096 and 1024), and `sandbox.remote.pull` (`protectedFiles: skip | refuse`, `confirm: optional | required`; defaults `skip` and `optional`) is recorded in each checkpoint for `sandbox pull`. A seed that fails for a reason a retry cannot cure (the cap, a missing tool, a non-empty directory) is remembered and fails the same way at once; a seed that died halfway is cleaned and redone on the next call. A progress line shows the number of files and MiB uploaded. The files go as one in-memory tar (no new dependency; mode 0644 or 0755 from the host executable bit, 0644 on Windows), extracted in the sandbox, and a git baseline commit is made there. The template needs `tar` and `git`; a missing one fails with an error naming it. With an e2b-compatible backend and no `sandbox.workdir`, the project goes into `/home/<user>/workspace` (`/root/workspace` for `root`), which PiShip creates, so the baseline never holds the home directory's dotfiles; the seed refuses a project directory that already holds other files.
+3. **File tools** keep `gatePath`, policy, approvals, and audit. After the decision the operation goes to the sandbox instead of the host. Host-only guards (the no-follow open and the hard-link check) are not applied to sandbox paths. A path outside the workspace is refused: the remote workspace holds only the project.
+4. **Checkpoint** after every agent turn in which a remote write or command ran, and always at session end: PiShip runs `git add -A && git diff --cached --binary --no-color --no-ext-diff --no-textconv --no-renames <baseline>` in the sandbox (no rename detection, so a rename is a delete and an add, and no diff driver or textconv program of the sandbox's runs) and stores the result, atomically with mode 0600, at `<state>/sandbox-workspace/<projectKey>/latest.patch`, with `latest.json` (session, project root, baseline `HEAD`, time, file count, and the protected paths `sandbox pull` refuses) beside it. `projectKey` is the first 16 hex digits of the SHA-256 of the project root's real path. The patch is capped at 64 MiB; over it, that checkpoint fails with a warning and the earlier one is kept. A failed checkpoint never fails the turn and warns once, and another session's unapplied patch is never replaced: while one waits, this session's changes are saved under `<state>/sandbox-workspace-parked/<session>/` and the session end says so. Run `<command> sandbox pull` once for each waiting patch; each run takes the next one. A new session also says at its start that earlier changes are waiting, and it starts from your host files, not from them. When the patch is not empty the session ends with `N files changed in the sandbox; run <command> sandbox pull to bring them to this machine`.
+
+`<command> sandbox pull` reads the latest checkpoint of the project at the git top-level of the current directory and:
+
+- validates the patch ([rules](#patch-rules)). A malformed patch, a symlink, a gitlink, or a rename is refused whole: nothing is applied;
+- skips files under protected paths (`.git`, hooks, git config, and the others in [Protected git paths](#protected-git-paths)), lists them, and applies the rest. A distribution can set `sandbox.remote.pull.protectedFiles: refuse` to refuse the whole patch instead;
+- lists one line per file (the full path with control and bidi characters shown as `?`, created, deleted or changed, a mode change, and `+added -removed`; at most 50 lines, then `and N more; use --diff`) and one summary line: how many files apply cleanly to your working tree, or that the patch needs a 3-way merge. The full diff is printed only with `--diff` (terminal control characters are replaced by `?`);
+- asks one `y/N` question, skipped by `--yes`. Without a terminal it refuses unless `--yes` is given. A distribution can set `sandbox.remote.pull.confirm: required`, which refuses `--yes`, so the terminal prompt is the only way;
+- applies the patch with plain `git apply` first: it changes the working tree only, stages nothing, and works with uncommitted changes of your own. Only if the patch did not fit from the start does it use `git apply --3way`, which stages the files it touches and can write conflict markers. It never commits, and `git apply` runs no hook. On success the patch moves to `applied/` next to it; if it cannot be applied, nothing changes and the patch stays stored, so you can fix the tree and run it again. Before writing, pull refuses a path whose file or parent is a directory, a file, or a symlink where the patch needs something else; if a write still fails halfway, the files the patch names are put back from a copy taken just before, and the message says whether the tree was untouched or restored.
+
+When the 3-way merge conflicts, git has already written conflict markers and applied and staged the patch's other files. The patch stays stored, but do not pull it again: resolve the markers, `git add` those files, then run `sandbox pull --discard`. When your branch has moved since the session started, one line says so and the patch is applied to the current tree. A successful pull leaves a marker naming the sandbox commit the patch was taken from; the live session moves its baseline there at its next checkpoint (only to a commit it recorded itself), so a later pull holds just the changes made after this one. `--discard` leaves no marker.
+
+A session that finds an earlier session's patch still waiting saves its own patch beside it (parked), so nothing is overwritten. Running `sandbox pull` again picks up the next one and says how many are left.
+
+`sandbox pull --discard` drops the next waiting patch. With no stored patch it says so; with a patch recorded for a different project root it refuses and names both.
+
+#### Patch rules
+
+The patch comes from a sandbox that may be compromised, so it is untrusted input. Git's own parser decides which paths the patch touches: PiShip runs `git apply --numstat -z` and `git apply --summary` on it (nothing is applied) and checks every path git reports. A line scan covers what git's report omits: the patch must be well formed, so a hunk ends exactly where its `@@` counts say and no plain `---`/`+++` diff can follow it, every header line must be one git writes, and every mode, including the one on the `index` line, must be exactly `100644` or `100755`. It refuses the whole patch when any entry:
+
+- has an absolute path, a drive-letter path, a `..` or empty segment, a backslash, or a NUL or other control character;
+- touches `.git` in any segment, in any case (also `.git.` and `GIT~1`), or a protected path. The checkpoint's `latest.json` lists the project's protected git files and directories, workspace-relative and written by the host (hooks, config, `info`, `modules`, `worktrees`, and the others in [Protected git paths](#protected-git-paths)); a checkpoint without the list refuses `.git` only. A segment ending in a dot or a space is refused (Windows drops them, so `.claude.` would land in `.claude`), and so is a patch that would skip more than 200 protected files. Any other path segment ending in `~N` is refused, because on Windows it can be the 8.3 short name of another file. By default such files alone do not refuse the patch: they are skipped and listed, and the rest is applied if it passes every other rule. With `sandbox.remote.pull.protectedFiles: refuse`, any such file refuses the whole patch;
+- has a mode other than `100644` or `100755` on either side (so no symlink `120000` or gitlink `160000`);
+- uses `/dev/null` as a name without the matching `new file mode` or `deleted file mode` header (git would delete the other name and create a file named `dev/null`);
+- names a path that is, or sits under, a symbolic link on this machine, checked at pull time (a sandbox patch never writes through or over a symlink);
+- has a rename or copy header (the checkpoint is made with `--no-renames`, so an honest patch has none), or a `---` name that differs from its `+++` name (git deletes the first and writes the second, while its report shows one);
+- is not a git diff at all, or is larger than 64 MiB.
+
+#### Limits
+
+- No live sync. The host working tree, and so your IDE, shows the sandbox's changes only after `sandbox pull`. In the other direction, edits you make on this machine during a session are not visible to the agent: it works on the copy uploaded at the start.
+- Pi's own reads that are not tool calls read the host: `AGENTS.md` and other instruction files, and `@file` mentions in your prompt. The agent sees their current host content, which can differ from the sandbox copy.
+- A subagent works in its own sandbox, and its changes are not returned: only the main session's changes are saved for `sandbox pull`.
+- `kubernetes-agent-sandbox` and `native` are not supported.
+- A file the policy denies to read, or asks about, is not uploaded; the session says how many were left out. If the agent later creates a file at such a path with `write`, it shows up as a new file in the patch, and pulling it can conflict with your original. A withheld file the agent reads after you approve the read is uploaded then, and is a change only if the agent edits it.
+- Changes to files outside git's view (ignored files) do not come back, and dependencies installed in the sandbox are lost with it.
+- On Windows, the tar uses LF paths and mode 0644. Line endings are those of the host files; if the sandbox is Linux and you check out CRLF, set `* text=auto` in `.gitattributes` so the patch does not rewrite whole files. The end-to-end tests of remote workspace do not run on Windows yet, so a Windows host has no end-to-end evidence.
 
 ### Protected git paths
 

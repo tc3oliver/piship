@@ -335,6 +335,15 @@ function sandboxFetch(
 }
 
 /** The declared backend, or undefined for the native OS sandbox. */
+/**
+ * The project directory of a remote workspace with no `sandbox.workdir`: a
+ * directory of its own, so the seed's baseline holds the project and not the
+ * home directory's dotfiles and caches.
+ */
+export function remoteWorkdir(user: string): string {
+  return `${user === "root" ? "/root" : `/home/${user}`}/workspace`;
+}
+
 export async function sandboxBackend(
   governance: GovernanceOptions,
 ): Promise<SandboxBackend | undefined> {
@@ -376,6 +385,14 @@ export async function sandboxBackend(
           endpoint: endpoint ?? "",
           ...(config.template ? { template: config.template } : {}),
           ...(config.user ? { user: config.user } : {}),
+          ...(config.workspace === "remote"
+            ? {
+                createWorkdir: true,
+                ...(config.workdir
+                  ? {}
+                  : { workdir: remoteWorkdir(config.user ?? "user") }),
+              }
+            : {}),
         });
       case "kubernetes-agent-sandbox":
         return new KubernetesAgentSandboxBackend({

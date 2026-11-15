@@ -49,8 +49,14 @@ import {
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
+import { waitingChanges } from "../remote-workspace/checkpoint.js";
 import { type OrphanedTask, takeOrphanedTasks } from "../task-records.js";
 import { type AuditSinkTarget, auditSinkTargets } from "./audit.js";
+import {
+  probeRemoteWorkspace,
+  type RemoteWorkspaceData,
+  type RemoteWorkspaceProbe,
+} from "./remote-workspace.js";
 import {
   type SandboxCredentialData,
   sandboxCredentialData,
@@ -263,6 +269,8 @@ export interface GovernanceData {
   /** The containment report's isolation kind; `none` when nothing is enforced. */
   readonly isolation?: SandboxIsolation;
   readonly workspace: WorkspaceData;
+  /** The remote-workspace checks, with `sandbox.workspace: remote`. */
+  readonly remote?: RemoteWorkspaceData;
   /** The stored sandbox credential, when the manifest declares one. */
   readonly sandboxCredential?: SandboxCredentialData;
   /** Undefined when the governed session did not open. */
@@ -629,6 +637,7 @@ async function collectSession(
     | "runtimeError"
   > & {
     audit: Omit<AuditData, "targets">;
+    remoteProbe?: RemoteWorkspaceProbe;
   }
 > {
   let session: GovernanceSession | null = null;
@@ -637,6 +646,7 @@ async function collectSession(
   let exposureError: string | undefined;
   let runtimeError: string | undefined;
   let sessionError: string | undefined;
+  let remoteProbe: RemoteWorkspaceProbe | undefined;
   let openError: string | undefined;
   let closeError: string | undefined;
   let status: AuditStatus | undefined;
@@ -644,6 +654,12 @@ async function collectSession(
     session = await openGovernance(ctx, prepared, false);
     if (session) {
       mcp = session.mcpReports;
+      // The sandbox this session already activated serves the checks.
+      if (session.remote)
+        remoteProbe = await probeRemoteWorkspace(
+          session.sandbox,
+          session.project.root,
+        );
       await session.audit.flush();
       // As at launch, with the MCP tools started: a managed Codemode that
       // reaches a tool decided only by the default fails here as it would.
@@ -682,6 +698,7 @@ async function collectSession(
     ...(runtimeError ? { runtimeError } : {}),
     ...(sessionError ? { sessionError } : {}),
     ...(shutdownError ? { shutdownError } : {}),
+    ...(remoteProbe ? { remoteProbe } : {}),
     audit: {
       ...(status ? { status } : {}),
       ...(openError ? { openError } : {}),
@@ -741,6 +758,24 @@ export async function collectDoctorData(
       ...(activated ? { activated } : {}),
       ...(access?.workload ? { workload: true } : {}),
     });
+    const { remoteProbe, ...sessionData } = session;
+    const remote: RemoteWorkspaceData | undefined =
+      manifest.sandbox?.workspace === "remote"
+        ? {
+            ...(remoteProbe ? { probe: remoteProbe } : {}),
+            network:
+              inspection?.sandbox.network ?? manifest.sandbox.network.mode,
+            ...(inspection
+              ? {
+                  waiting: waitingChanges(
+                    ctx.stateDir,
+                    inspection.project.root,
+                  ),
+                }
+              : {}),
+            command: ctx.metadata.app.command,
+          }
+        : undefined;
     governance = {
       manifest,
       ...(inspection ? { inspection } : {}),
@@ -749,8 +784,9 @@ export async function collectDoctorData(
         ? { isolation: sandboxIsolation(inspection.sandbox) }
         : {}),
       workspace: workspaceData(inspection),
+      ...(remote ? { remote } : {}),
       ...(sandboxCredential ? { sandboxCredential } : {}),
-      ...session,
+      ...sessionData,
       audit: {
         ...session.audit,
         targets: auditSinkTargets(ctx, manifest),

@@ -21,6 +21,12 @@ export interface SandboxPolicy {
   };
   readonly network: { readonly mode: "deny" | "allow" };
   readonly environment: { readonly allow: readonly string[] };
+  /**
+   * The sandbox holds the only live copy of the workspace and file tools
+   * reach it through `ActiveSandbox.files`. Activation fails closed on a
+   * backend that cannot provide that.
+   */
+  readonly remoteWorkspace?: boolean;
 }
 
 export interface ProfileContext {
