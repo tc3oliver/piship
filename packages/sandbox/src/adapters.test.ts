@@ -43,8 +43,10 @@ const command = {
 };
 const seams = {
   exists: (path: string) => path !== "/missing",
-  isDir: (path: string) => !/(\.netrc|id_rsa|docker\.sock)$/.test(path),
+  isDir: (path: string) =>
+    !/(\.netrc|id_rsa|docker\.sock|system_bus_socket)$/.test(path),
   escapePaths: [],
+  resolverPaths: [],
 };
 
 describe.skipIf(!posix)("bubblewrap arguments", () => {
@@ -270,6 +272,29 @@ describe.skipIf(!posix)("bubblewrap arguments", () => {
     });
     expect(args).toContain("/run/user/1000");
     expect(args).not.toContain("/work/ws/docker.sock");
+  });
+
+  // A network namespace does not block a filesystem socket, and the host's
+  // resolvers turn a name lookup into a DNS query that leaves the machine.
+  it("hides the host's name resolution sockets when the network is denied", () => {
+    const resolverPaths = [
+      "/run/systemd/resolve",
+      "/run/dbus/system_bus_socket",
+    ];
+    const denied = bubblewrapArgs(profile(), command, {
+      ...seams,
+      resolverPaths,
+    }).join(" ");
+    expect(denied).toContain(
+      "--tmpfs /run/systemd/resolve --remount-ro /run/systemd/resolve",
+    );
+    expect(denied).toContain("--ro-bind /dev/null /run/dbus/system_bus_socket");
+    const allowed = bubblewrapArgs(profile({ network: "allow" }), command, {
+      ...seams,
+      resolverPaths,
+    });
+    expect(allowed).not.toContain("/run/systemd/resolve");
+    expect(allowed).not.toContain("/run/dbus/system_bus_socket");
   });
 });
 

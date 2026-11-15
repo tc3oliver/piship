@@ -1,7 +1,7 @@
 // Boundary tests against the real OS sandbox of this platform (bubblewrap on
 // Linux, sandbox-exec on macOS). They are gated on the adapter platform, not
 // silently skipped: with PISHIP_REQUIRE_SANDBOX=1 an unavailable adapter fails.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -777,6 +777,28 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         expect(listener.hits()).toBe(0);
       } finally {
         listener.server.close();
+      }
+    });
+
+    // A network namespace does not block a filesystem socket: a host
+    // resolver reached through one would carry a name lookup off the machine.
+    it("refuses the host's name resolution sockets with the network denied", async () => {
+      const sockets = [
+        "/run/systemd/resolve/io.systemd.Resolve",
+        "/run/dbus/system_bus_socket",
+      ].filter((path) => existsSync(path) && statSync(path).isSocket());
+      const connect = `const s=require("node:net").connect(process.argv[1]);s.on("connect",()=>{console.log("connected");process.exit(0)});s.on("error",(e)=>{console.log("refused "+e.code);process.exit(2)})`;
+      writeFileSync(join(ws, "unix.js"), connect);
+      for (const path of sockets) {
+        // Reachable outside, so a refusal inside is the sandbox's.
+        const host = spawnSync(node, ["-e", connect, path], {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        if (!host.stdout.includes("connected")) continue;
+        const inside = await run(sandbox, `"${node}" unix.js ${path}`);
+        expect(inside.output, path).not.toContain("connected");
+        expect(inside.exitCode, inside.output).toBe(2);
       }
     });
 

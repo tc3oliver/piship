@@ -58,6 +58,21 @@ export function hostEscapePaths(
   return paths;
 }
 
+/**
+ * Host sockets that resolve names, and so carry data off the machine as DNS
+ * queries: systemd-resolved (varlink, and the system bus that also reaches
+ * it), nscd, and Avahi. A network namespace does not block a filesystem
+ * socket, so with the network denied they are hidden too.
+ */
+export const NAME_RESOLUTION_SOCKETS: readonly string[] = [
+  "/run/systemd/resolve",
+  "/run/dbus/system_bus_socket",
+  "/var/run/dbus/system_bus_socket",
+  "/run/nscd",
+  "/var/run/nscd",
+  "/run/avahi-daemon",
+];
+
 interface PlanOptions {
   readonly features?: BubblewrapFeatures;
   /** Test seam: path existence check. */
@@ -66,6 +81,8 @@ interface PlanOptions {
   readonly isDir?: (path: string) => boolean;
   /** Test seam: extra hidden host paths (defaults to hostEscapePaths()). */
   readonly escapePaths?: readonly string[];
+  /** Test seam: hidden with the network denied (defaults to NAME_RESOLUTION_SOCKETS). */
+  readonly resolverPaths?: readonly string[];
 }
 
 function byDepth(paths: readonly string[]): string[] {
@@ -123,7 +140,12 @@ export function bubblewrapArgs(
       args.push("--tmpfs", path, "--remount-ro", path);
   }
 
-  const escapes = (options.escapePaths ?? hostEscapePaths())
+  const escapes = [
+    ...(options.escapePaths ?? hostEscapePaths()),
+    ...(profile.network === "deny"
+      ? (options.resolverPaths ?? NAME_RESOLUTION_SOCKETS)
+      : []),
+  ]
     .map(realpathNearest)
     .filter(
       (path) =>
