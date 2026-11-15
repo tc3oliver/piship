@@ -1,14 +1,15 @@
 export {
-  activateSandbox,
   type ActivationContext,
   type ActiveSandbox,
+  type ActiveSandboxFiles,
+  activateSandbox,
   type ContainmentLevel,
   type ContainmentReport,
   type ContainmentVerification,
   describeContainment,
-  type NetworkDenialReport,
   HOST_BOUND_VARIABLES,
   INJECTED_VARIABLES,
+  type NetworkDenialReport,
   platformInjectedVariables,
   SANDBOX_READY_MARKER,
   type SandboxExecOptions,
@@ -41,6 +42,7 @@ export {
   type SandboxExecIO,
   type SandboxExecRequest,
   type SandboxExecResult,
+  type SandboxFiles,
   type SandboxGuarantee,
   type SandboxInstance,
   type SandboxNetworkProbe,
@@ -59,6 +61,13 @@ export {
   hostEscapePaths,
   MODERN_BUBBLEWRAP,
 } from "./bubblewrap.js";
+export {
+  CUSTOM_DISPOSE_TIMEOUT_MS,
+  CUSTOM_PREPARE_TIMEOUT_MS,
+  type CustomBackendContext,
+  type CustomBackendDeadlines,
+  customBackend,
+} from "./custom.js";
 export {
   CACHE_VARIABLES,
   filterEnvironment,
@@ -98,6 +107,18 @@ export {
   type SandboxProfile,
 } from "./profile.js";
 export {
+  connectEnvelope,
+  E2bCompatibleBackend,
+  type E2bCompatibleOptions,
+  EnvelopeReader,
+} from "./remote/e2b.js";
+export type { RemoteBackendOptions } from "./remote/http.js";
+export {
+  KubernetesAgentSandboxBackend,
+  type KubernetesAgentSandboxOptions,
+  runtimeCommand,
+} from "./remote/kubernetes.js";
+export {
   SANDBOX_EXEC,
   SeatbeltAdapter,
   sbplString,
@@ -118,22 +139,3 @@ export {
   type WorkspaceReport,
   type WorkspaceVerification,
 } from "./workspace.js";
-export {
-  CUSTOM_DISPOSE_TIMEOUT_MS,
-  CUSTOM_PREPARE_TIMEOUT_MS,
-  type CustomBackendContext,
-  type CustomBackendDeadlines,
-  customBackend,
-} from "./custom.js";
-export {
-  connectEnvelope,
-  E2bCompatibleBackend,
-  type E2bCompatibleOptions,
-  EnvelopeReader,
-} from "./remote/e2b.js";
-export type { RemoteBackendOptions } from "./remote/http.js";
-export {
-  KubernetesAgentSandboxBackend,
-  type KubernetesAgentSandboxOptions,
-  runtimeCommand,
-} from "./remote/kubernetes.js";

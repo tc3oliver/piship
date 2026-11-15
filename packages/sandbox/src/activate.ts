@@ -4,7 +4,7 @@
 // owns the environment, timeout, and cancellation of every command. A
 // required sandbox never falls back.
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { constants as osConstants, homedir, tmpdir } from "node:os";
+import { homedir, constants as osConstants, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import {
   createTemporaryDirectory,
@@ -24,11 +24,11 @@ import {
   HOST_FILESYSTEM_ISOLATION,
   networkProbe,
   PATH_POLICY_PLANES,
-  type SandboxGuarantee,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecRequest,
   type SandboxExecResult,
+  type SandboxGuarantee,
   type SandboxInstance,
   type SandboxNetworkProbe,
   type SandboxProvider,
@@ -182,6 +182,25 @@ export interface SandboxExecOptions {
   };
 }
 
+/**
+ * File access to a remote workspace, by host absolute path. A path outside
+ * the workspace is refused; each call has a 60 s deadline.
+ */
+export interface ActiveSandboxFiles {
+  read(path: string, options?: { signal?: AbortSignal }): Promise<Buffer>;
+  write(
+    path: string,
+    data: Buffer,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
+  stat(
+    path: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<
+    { type: "file" | "directory" | "other"; size: number } | undefined
+  >;
+}
+
 export interface ActiveSandbox {
   readonly report: ContainmentReport;
   readonly profile: SandboxProfile;
@@ -207,6 +226,8 @@ export interface ActiveSandbox {
     cwd: string,
     options: SandboxExecOptions,
   ): Promise<{ exitCode: number | null }>;
+  /** Set only with `remoteWorkspace`: the sandbox's files, by host path. */
+  readonly files?: ActiveSandboxFiles;
   /** The live workspace report, updated after each verification. */
   workspace(): WorkspaceReport | undefined;
   /** Called with each new workspace report a verification produces. */
@@ -315,6 +336,8 @@ function workspacePath(workspace: string, cwd: string): string | undefined {
 
 const ABANDONED = Symbol("abandoned");
 
+const FILES_DEADLINE_MS = 60_000;
+
 /** The default for `ActivationContext.settleMs`. */
 const DEFAULT_SETTLE_MS = 5000;
 
@@ -417,6 +440,7 @@ interface Session {
   readonly platform: NodeJS.Platform;
   readonly ownedTmp: TemporaryDirectory | undefined;
   readonly settleMs: number;
+  readonly remoteWorkspace?: boolean;
   /** The validated workspace declaration; set when enforced. */
   readonly declaration?: SandboxWorkspaceDeclaration;
   readonly projectOrigin: "company" | "external" | "unknown";
@@ -544,6 +568,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
   // result expires or the backend reports a new environment.
   const declaration = session.declaration;
   const verifies =
+    !session.remoteWorkspace &&
     enforced &&
     session.capabilities?.isolation === "remote" &&
     declaration !== undefined &&
@@ -663,6 +688,45 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     }
     if (unsafe) throw unsafe;
   };
+  const sandboxFiles = instance?.files;
+  const files: ActiveSandboxFiles | undefined =
+    session.remoteWorkspace && enforced && sandboxFiles
+      ? (() => {
+          const call = async <T>(
+            path: string,
+            options: { signal?: AbortSignal } | undefined,
+            run: (relativePath: string, signal: AbortSignal) => Promise<T>,
+          ): Promise<T> => {
+            if (retired || disposed) throw retiredError(report);
+            const relativePath = workspacePath(profile.workspace, path);
+            if (relativePath === undefined || relativePath === ".")
+              throw new Error(
+                "the remote workspace holds only the project; this path is outside it",
+              );
+            const deadline = AbortSignal.timeout(FILES_DEADLINE_MS);
+            return run(
+              relativePath,
+              options?.signal
+                ? AbortSignal.any([options.signal, deadline])
+                : deadline,
+            );
+          };
+          return {
+            read: (path, options) =>
+              call(path, options, (p, signal) =>
+                sandboxFiles.read(p, { signal }),
+              ),
+            write: (path, data, options) =>
+              call(path, options, (p, signal) =>
+                sandboxFiles.write(p, data, { signal }),
+              ),
+            stat: (path, options) =>
+              call(path, options, (p, signal) =>
+                sandboxFiles.stat(p, { signal }),
+              ),
+          };
+        })()
+      : undefined;
   const exec: ActiveSandbox["exec"] = async (command, cwd, options) => {
     if (options.signal?.aborted) throw new Error("aborted");
     const remote = session.capabilities?.isolation === "remote";
@@ -763,6 +827,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     profile,
     wrap,
     exec,
+    ...(files ? { files } : {}),
     workspace: () => workspace,
     onWorkspaceReport: (listener) => {
       listeners.push(listener);
@@ -1078,6 +1143,7 @@ export async function activateSandbox(
       platform,
       ownedTmp,
       settleMs,
+      ...(config.remoteWorkspace ? { remoteWorkspace: true } : {}),
       projectOrigin: ctx.projectOrigin ?? ("unknown" as const),
       now: ctx.now ?? Date.now,
       monotonic: ctx.monotonic ?? (() => performance.now()),
@@ -1138,6 +1204,10 @@ export async function activateSandbox(
       return await fail(
         `the ${backend.id} sandbox backend cannot enforce this policy: ${mismatch}`,
       );
+    if (config.remoteWorkspace && capabilities.isolation === "local")
+      return await fail(
+        `the ${backend.id} sandbox backend runs on this host, so it has no remote workspace`,
+      );
     // Valid here: capabilityMismatch rejects a malformed declaration.
     const declared = workspaceDeclaration(capabilities);
     const declaration =
@@ -1151,6 +1221,10 @@ export async function activateSandbox(
         `the ${backend.id} sandbox backend could not prepare a sandbox: ${message(error)}`,
       );
     }
+    if (config.remoteWorkspace && typeof instance.files?.read !== "function")
+      return await fail(
+        `the ${backend.id} sandbox backend offers no file access, which a remote workspace needs`,
+      );
     const session = { ...base, capabilities, declaration };
     const live =
       capabilities.isolation === "local" && typeof instance.wrap === "function";
@@ -1306,7 +1380,15 @@ export async function activateSandbox(
                     isolator,
                   ),
               )
-            : initialWorkspaceReport(declaration),
+            : config.remoteWorkspace
+              ? {
+                  declared: "remote",
+                  effective: "remote",
+                  verification: "not-required",
+                  gitControlProtection: "not-applicable",
+                  complete: true,
+                }
+              : initialWorkspaceReport(declaration),
       },
     });
   } catch (error) {

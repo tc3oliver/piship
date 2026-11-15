@@ -15,6 +15,7 @@ import {
 import {
   type ApprovalChannel,
   type AuditEventType,
+  duringStartup,
   formatError,
   PiShipError,
   type PolicyAction,
@@ -22,7 +23,6 @@ import {
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
-  duringStartup,
   resolveDecision,
   startupMark,
 } from "@piship/contracts";
@@ -48,10 +48,10 @@ import {
   grantCovers,
   isPathAction,
   isProjectConfigPath,
-  projectConfigLinkSources,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
+  projectConfigLinkSources,
   type TaskGrant,
   validateGrant,
 } from "@piship/policy";
@@ -64,10 +64,6 @@ import {
 } from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
-import {
-  revokePublishedSubagentGrant,
-  type SubagentGrantBinding,
-} from "./launch/subagent-owner.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
@@ -87,6 +83,10 @@ import type {
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
 import { sandboxBackend } from "./governance/sandbox.js";
+import {
+  revokePublishedSubagentGrant,
+  type SubagentGrantBinding,
+} from "./launch/subagent-owner.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 export { terminalApproval } from "./governance/approval.js";
@@ -140,7 +140,13 @@ interface DeferredToolAsk {
   /** The call's audit detail (source, parent, exposure). */
   readonly detail: Readonly<Record<string, string>>;
 }
-const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
+// `remote` is declared and effective together, so it never compares weaker.
+const WORKSPACE_STRENGTH = {
+  snapshot: 0,
+  synchronized: 1,
+  shared: 2,
+  remote: 2,
+} as const;
 
 /** The longest a task grant may last unless `policy.taskGrants` sets a cap. */
 const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
