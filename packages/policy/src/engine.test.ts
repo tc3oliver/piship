@@ -1,4 +1,11 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1036,3 +1043,62 @@ describe("path rules where the filesystem folds case", () => {
     ).toBe("ask");
   });
 });
+
+// A requested path is symlink-resolved, so a rule naming a path through a
+// link (`/etc` is `/private/etc` on macOS) matched nothing. A deny or ask now
+// also matches the real location of its literal prefix; an allow does not,
+// since a link the workspace plants could widen it.
+describe.skipIf(process.platform === "win32")(
+  "absolute rules through a symlink",
+  () => {
+    const real = join(base, "real");
+    const link = join(base, "link");
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, "hosts"), "x\n");
+    symlinkSync(real, link);
+    const read = (resource: string, rules: PolicyRule[], fallback = "allow") =>
+      engine({
+        policy: makePolicy({
+          default: fallback as PolicyEffect,
+          enforced: rules,
+        }),
+      }).evaluate({ action: "filesystem.read", resource }).effect;
+
+    it("denies and asks through the link's real location", () => {
+      const deny = [rule("etc", "filesystem.read", `${link}/**`, "deny")];
+      expect(read(join(link, "hosts"), deny)).toBe("deny");
+      expect(read(join(real, "hosts"), deny)).toBe("deny");
+      expect(read(join(link, "new"), deny)).toBe("deny");
+      expect(
+        read(join(link, "hosts"), [
+          rule("one", "filesystem.read", `${link}/hosts`, "ask"),
+        ]),
+      ).toBe("ask");
+    });
+
+    it("keeps a missing prefix, and allow rules, as written", () => {
+      const missing = join(base, "missing");
+      expect(
+        read(join(missing, "x"), [
+          rule("gone", "filesystem.read", `${missing}/**`, "deny"),
+        ]),
+      ).toBe("deny");
+      expect(
+        read(
+          join(link, "hosts"),
+          [rule("ok", "filesystem.read", `${link}/**`, "allow")],
+          "ask",
+        ),
+      ).toBe("ask");
+    });
+
+    it.skipIf(process.platform !== "darwin")(
+      "denies /private/etc/hosts for a deny on /etc/** on macOS",
+      () => {
+        const deny = [rule("etc", "filesystem.read", "/etc/**", "deny")];
+        expect(read("/etc/hosts", deny)).toBe("deny");
+        expect(read("/private/etc/hosts", deny)).toBe("deny");
+      },
+    );
+  },
+);

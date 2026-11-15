@@ -202,6 +202,35 @@ export function normalizePathResource(
   return toPosixPath(resolveSegments(absolute, 0));
 }
 
+/**
+ * An absolute pattern with its literal leading segments (those before the
+ * first `*`) symlink-resolved as a requested path is, so `/etc/**` also
+ * reads as `/private/etc/**` on macOS; undefined when that changes nothing.
+ * A prefix with a `.`, `..`, or empty segment is left alone: such a pattern
+ * matches no decided path, and `validate` says so.
+ */
+export function resolvedPathPattern(
+  pattern: string,
+  context: Pick<PathTokenContext, "workspaceRoot">,
+): string | undefined {
+  const segments = pattern.split("/");
+  const glob = segments.findIndex((segment) => segment.includes("*"));
+  const literal = glob < 0 ? segments : segments.slice(0, glob);
+  const prefix = literal.join("/");
+  if (
+    !isAbsolute(prefix) ||
+    literal
+      .slice(1)
+      .some((segment) => segment === "" || segment === "." || segment === "..")
+  )
+    return undefined;
+  const resolved = [
+    normalizePathResource(prefix, context),
+    ...(glob < 0 ? [] : segments.slice(glob)),
+  ].join("/");
+  return resolved === pattern ? undefined : resolved;
+}
+
 /** Normalize the context directories themselves (realpath, POSIX separators). */
 export function normalizeTokenContext(
   context: PathTokenContext,
