@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandedContext } from "./branded/context.js";
 import { runSandbox } from "./branded/sandbox.js";
 import {
+  readRemoteWorkspacePulled,
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "./remote-workspace.js";
@@ -71,6 +72,7 @@ function checkpoint(
     session?: string;
     createdAt?: string;
     only?: string;
+    commit?: string;
     pull?: { protectedFiles?: string; confirm?: string };
   } = {},
 ): void {
@@ -90,6 +92,7 @@ function checkpoint(
     session: options.session ?? "s",
     baseHead: null,
     files: 2,
+    ...(options.commit ? { checkpointCommit: options.commit } : {}),
     ...(options.createdAt ? { createdAt: options.createdAt } : {}),
     ...(protectedPaths ? { protectedPaths } : {}),
     ...(options.pull ? { pull: options.pull as never } : {}),
@@ -404,6 +407,29 @@ describe("sandbox pull", () => {
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);
+  });
+
+  describe("pulled marker", () => {
+    const commit = "a".repeat(40);
+    it("is left after a successful pull, naming the session's commit", async () => {
+      checkpoint("", undefined, { commit });
+      await runSandbox(ctx, ["pull", "--yes"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBe(commit);
+      expect(readRemoteWorkspacePulled(state, repo, "other")).toBeUndefined();
+    });
+    it("is not left by --discard or by a failed pull", async () => {
+      checkpoint("", undefined, { commit });
+      await runSandbox(ctx, ["pull", "--discard"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBeUndefined();
+      checkpoint(SYMLINK, undefined, { commit, session: "s3" });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow();
+      expect(readRemoteWorkspacePulled(state, repo, "s3")).toBeUndefined();
+    });
+    it("ignores a damaged commit id in the checkpoint", async () => {
+      checkpoint("", undefined, { commit: "not-hex" });
+      await runSandbox(ctx, ["pull", "--yes"]);
+      expect(readRemoteWorkspacePulled(state, repo, "s")).toBeUndefined();
+    });
   });
 
   describe.skipIf(process.platform === "win32")("host symlinks", () => {

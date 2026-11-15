@@ -3,14 +3,20 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { remoteWorkspacePaths } from "@piship/core";
+import {
+  readRemoteWorkspaceCheckpoint,
+  remoteWorkspacePaths,
+  writeRemoteWorkspacePulled,
+} from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RemoteWorkspace } from "./checkpoint.js";
 import type { SeedSandbox } from "./seed.js";
@@ -20,6 +26,7 @@ let project: string;
 let remote: string;
 let state: string;
 let diffs: number;
+let lastDiff: string;
 let patch: string;
 let failWrites: number;
 const warnings: string[] = [];
@@ -46,6 +53,9 @@ const initProject = () => {
   writeFileSync(join(project, "a.txt"), "a");
 };
 
+/** The checkpoint commit the fake sandbox reports for its nth patch read. */
+const commitId = (n: number) => n.toString(16).padStart(40, "0");
+
 /** The remote is a local directory; the patch read answers from `patch`. */
 const sandbox: SeedSandbox = {
   files: {
@@ -58,9 +68,10 @@ const sandbox: SeedSandbox = {
   },
   exec: (command, _cwd, options) =>
     new Promise((resolve) => {
-      if (command.includes("git diff --cached")) {
+      if (command.includes("commit-tree")) {
         diffs++;
-        options.onData(Buffer.from(patch));
+        lastDiff = command;
+        options.onData(Buffer.from(`${commitId(diffs)}\n${patch}`));
         return resolve({ exitCode: 0 });
       }
       const child = spawn("/bin/bash", ["-c", command], { cwd: remote });
@@ -223,5 +234,69 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     await ws.checkpoint(true);
     expect(readFileSync(slot().patch, "utf8")).toBe(patch);
     expect(existsSync(lock)).toBe(false);
+  });
+
+  it("records the checkpoint commit and diffs from it after its own patch was pulled", async () => {
+    initProject();
+    const ws = workspace("s6");
+    await ws.ensureSeeded();
+    patch = diff("a.txt");
+    await ws.checkpoint(true);
+    const first = commitId(1);
+    expect(readRemoteWorkspaceCheckpoint(state, project)?.meta).toMatchObject({
+      checkpointCommit: first,
+    });
+    // `sandbox pull` applied that patch and left its marker.
+    writeRemoteWorkspacePulled(state, project, {
+      session: "s6",
+      checkpointCommit: first,
+    });
+    await ws.checkpoint(true);
+    expect(lastDiff).toContain(`-p ${first}`);
+    expect(lastDiff).toContain(`${first} "$c"`);
+    expect(
+      readRemoteWorkspaceCheckpoint(state, project)?.meta.checkpointCommit,
+    ).toBe(commitId(2));
+    // The marker was used up: the baseline stays where it moved.
+    await ws.checkpoint(true);
+    expect(lastDiff).toContain(`-p ${first}`);
+  });
+
+  it("never moves the baseline to a commit it did not record", async () => {
+    initProject();
+    const ws = workspace("s7");
+    await ws.ensureSeeded();
+    patch = diff("a.txt");
+    await ws.checkpoint(true);
+    const foreign = "f".repeat(40);
+    writeRemoteWorkspacePulled(state, project, {
+      session: "s7",
+      checkpointCommit: foreign,
+    });
+    await ws.checkpoint(true);
+    expect(lastDiff).not.toContain(foreign);
+  });
+
+  it("leaves a fresh lock alone and takes a stale one over without leftovers", async () => {
+    initProject();
+    const ws = workspace("s8");
+    await ws.ensureSeeded();
+    patch = diff("a.txt");
+    const lock = `${slot().dir}.lock`;
+    mkdirSync(join(state, "sandbox-workspace"), { recursive: true });
+    writeFileSync(lock, "");
+    await ws.checkpoint(true);
+    expect(existsSync(lock)).toBe(true);
+    expect(existsSync(slot().patch)).toBe(false);
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    await ws.checkpoint(true);
+    expect(existsSync(slot().patch)).toBe(true);
+    expect(existsSync(lock)).toBe(false);
+    expect(
+      readdirSync(join(state, "sandbox-workspace")).filter((n) =>
+        n.includes(".lock"),
+      ),
+    ).toEqual([]);
   });
 });

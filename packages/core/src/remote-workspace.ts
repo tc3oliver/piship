@@ -3,7 +3,7 @@
 // sandbox, so it is parsed here and the WHOLE patch is refused when any entry
 // could write outside the project's ordinary files.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "@piship/credentials";
 import { runGit } from "./git-run.js";
@@ -31,6 +31,13 @@ export interface RemoteWorkspaceMeta {
    * host, never by the sandbox. Absent in a checkpoint written before it.
    */
   readonly protectedPaths?: readonly string[];
+  /**
+   * The sandbox commit holding exactly the state this patch was taken from,
+   * recorded by the session. After a successful pull `sandbox pull` leaves a
+   * marker naming it, so the live session can diff from there. Hex; anything
+   * else reads as absent.
+   */
+  readonly checkpointCommit?: string;
   /**
    * How `sandbox pull` treats this checkpoint; the distribution's policy,
    * written by the host. Absent means the usable defaults. A damaged value
@@ -86,6 +93,59 @@ export function remoteWorkspacePaths(
   };
 }
 
+const isCommitId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(value);
+
+/**
+ * The marker `sandbox pull` leaves after a successful pull: which of the
+ * session's own checkpoint commits is now on the host. One file per session.
+ */
+function pulledMarker(stateDir: string, projectRoot: string, session: string) {
+  const key = createHash("sha256").update(session).digest("hex").slice(0, 16);
+  return join(
+    remoteWorkspacePaths(stateDir, projectRoot).dir,
+    `pulled-${key}.json`,
+  );
+}
+
+export function writeRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  pulled: { readonly session: string; readonly checkpointCommit: string },
+): void {
+  writeFileAtomic(
+    pulledMarker(stateDir, projectRoot, pulled.session),
+    `${JSON.stringify(pulled)}\n`,
+    { directoryMode: 0o700 },
+  );
+}
+
+/** The commit a pull of this session's patch left, or undefined. The caller must still know the id. */
+export function readRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  session: string,
+): string | undefined {
+  try {
+    const marker = JSON.parse(
+      readFileSync(pulledMarker(stateDir, projectRoot, session), "utf8"),
+    ) as { session?: unknown; checkpointCommit?: unknown } | null;
+    return marker?.session === session && isCommitId(marker.checkpointCommit)
+      ? marker.checkpointCommit
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearRemoteWorkspacePulled(
+  stateDir: string,
+  projectRoot: string,
+  session: string,
+): void {
+  rmSync(pulledMarker(stateDir, projectRoot, session), { force: true });
+}
+
 /** Store the checkpoint atomically: the patch first, then its description. */
 export function writeRemoteWorkspaceCheckpoint(
   stateDir: string,
@@ -98,6 +158,7 @@ export function writeRemoteWorkspaceCheckpoint(
     readonly createdAt?: string;
     readonly protectedPaths?: readonly string[];
     readonly pull?: RemoteWorkspaceMeta["pull"];
+    readonly checkpointCommit?: string;
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
@@ -110,6 +171,9 @@ export function writeRemoteWorkspaceCheckpoint(
     files: info.files,
     ...(info.protectedPaths
       ? { protectedPaths: [...info.protectedPaths] }
+      : {}),
+    ...(info.checkpointCommit
+      ? { checkpointCommit: info.checkpointCommit }
       : {}),
     ...(info.pull ? { pull: info.pull } : {}),
   };
@@ -173,6 +237,9 @@ export function readRemoteWorkspaceCheckpoint(
       meta: {
         ...(meta as RemoteWorkspaceMeta),
         ...(normalized ? { pull: normalized } : {}),
+        checkpointCommit: isCommitId(meta.checkpointCommit)
+          ? meta.checkpointCommit
+          : undefined,
       } as RemoteWorkspaceMeta,
     };
   } catch {

@@ -21,6 +21,7 @@ import {
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
+  writeRemoteWorkspacePulled,
 } from "../remote-workspace.js";
 import type { BrandedContext } from "./context.js";
 
@@ -307,6 +308,11 @@ export async function sandboxPull(
     `${JSON.stringify(checkpoint.meta)}\n`,
     { mode: 0o600 },
   );
+  if (checkpoint.meta.checkpointCommit)
+    writeRemoteWorkspacePulled(ctx.stateDir, root, {
+      session: checkpoint.meta.session,
+      checkpointCommit: checkpoint.meta.checkpointCommit,
+    });
   const latest = readRemoteWorkspaceCheckpoint(sourceState, root);
   if (latest?.patch.equals(checkpoint.patch) !== false) remove();
   else
