@@ -572,6 +572,16 @@ function unmatchablePath(pattern: string): string | undefined {
   const rest = token ? pattern.slice(token.length) : pattern;
   if (/^(?:[A-Za-z]:)?\\/.test(pattern))
     return `it uses \\ separators, and a decided path uses /; write ${pattern.replace(/\\/g, "/")}`;
+  // `*` never matches `/` or `:`, so a pattern that starts with a single
+  // `*` cannot match the empty segment before an absolute path's first `/`
+  // (or a drive), unless that segment is `*` itself, which matches only at
+  // the filesystem root.
+  const first = pattern.split("/")[0] as string;
+  if (!token && first.startsWith("*") && !first.startsWith("**")) {
+    if (first !== "*" || !pattern.includes("/"))
+      return `a leading ${first} never matches the / a decided path starts with; write **/${pattern} for any directory`;
+    return `only at the filesystem root (as ${pattern.slice(1)}): a leading * never matches a /; write *${pattern} for any directory`;
+  }
   if (!token && !/^(?:\/|\*|[A-Za-z]:\/)/.test(pattern))
     return `it is relative, and a decided path is absolute; write workspace/${pattern.replace(/^(?:\.\/)+/, "")} for the project, or **/${pattern.replace(/^(?:\.\/)+/, "")} for any directory`;
   // Segments after the root or token: a leading `//` (a UNC share) is fine.
@@ -611,7 +621,9 @@ export function unmatchablePathRules(
         ? [
             {
               path: `policy.${list}[${index}].resource`,
-              message: `${rule.id} (${rule.effect} ${rule.action}) never matches ${rule.resource}: ${why}`,
+              message: why.startsWith("only at the filesystem root")
+                ? `${rule.id} (${rule.effect} ${rule.action}) matches ${rule.resource} ${why}`
+                : `${rule.id} (${rule.effect} ${rule.action}) never matches ${rule.resource}: ${why}`,
             },
           ]
         : [];

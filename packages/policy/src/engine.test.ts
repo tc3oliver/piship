@@ -1102,3 +1102,42 @@ describe.skipIf(process.platform === "win32")(
     );
   },
 );
+
+// A rule matched only through a widened form (another case, a resolved link)
+// must never shadow a stricter rule of its layer that matches as written.
+describe("widened matches only tighten", () => {
+  const read = (resource: string, defaults: PolicyRule[]) =>
+    engine({
+      policy: makePolicy({ default: "allow", defaults }, "personal"),
+    }).evaluate({ action: "filesystem.read", resource }).effect;
+
+  it("keeps a later exact deny over an earlier case-folded ask", () => {
+    const keychains = join(base, "home", "Library", "Keychains");
+    mkdirSync(keychains, { recursive: true });
+    writeFileSync(join(keychains, "login.keychain-db"), "x\n");
+    expect(
+      read(join(keychains, "login.keychain-db"), [
+        rule("lib", "filesystem.*", "~/library/**", "ask"),
+        rule("keys", "filesystem.*", "~/Library/Keychains/**", "deny"),
+      ]),
+    ).toBe("deny");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a later exact deny over an earlier ask reached through a planted link",
+    () => {
+      const ssh = join(base, "home", "shadow-ssh");
+      mkdirSync(ssh, { recursive: true });
+      writeFileSync(join(ssh, "id"), "x\n");
+      const build = join(base, "work", "build");
+      mkdirSync(join(base, "work"), { recursive: true });
+      symlinkSync(ssh, build);
+      expect(
+        read(join(build, "id"), [
+          rule("build", "filesystem.*", "workspace/build/**", "ask"),
+          rule("ssh", "filesystem.*", "~/shadow-ssh/**", "deny"),
+        ]),
+      ).toBe("deny");
+    },
+  );
+});
