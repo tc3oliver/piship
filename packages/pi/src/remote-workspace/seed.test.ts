@@ -1,6 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
+  ftruncateSync,
+  openSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -48,7 +51,7 @@ const put = (path: string, content: string | Buffer) => {
 const writes: (number | undefined)[] = [];
 
 /** A sandbox whose "remote" is a local directory and whose exec is real bash. */
-function fakeSandbox(): SeedSandbox {
+function fakeSandbox(path = process.env.PATH ?? ""): SeedSandbox {
   return {
     files: {
       read: async (path) => readFileSync(join(remote, path)),
@@ -61,7 +64,10 @@ function fakeSandbox(): SeedSandbox {
     },
     exec: (command, _cwd, options) =>
       new Promise((resolve) => {
-        const child = spawn("bash", ["-c", command], { cwd: remote });
+        const child = spawn("/bin/bash", ["-c", command], {
+          cwd: remote,
+          env: { ...process.env, PATH: path },
+        });
         child.stdout.on("data", options.onData);
         child.stderr.on("data", options.onData);
         child.on("close", (exitCode) => resolve({ exitCode }));
@@ -108,18 +114,35 @@ describe("seedRemoteWorkspace", () => {
     ).rejects.toThrow(/git work tree/);
   });
 
-  it("rejects a file over the single-file cap and the total cap", async () => {
+  it("rejects a file over the single-file cap", async () => {
     initProject();
     put("big.bin", Buffer.alloc(0));
     // A sparse file reaches the cap without writing it.
-    execFileSync("truncate", [
-      "-s",
-      String(SEED_FILE_CAP + 1),
-      join(project, "big.bin"),
-    ]);
+    const fd = openSync(join(project, "big.bin"), "r+");
+    ftruncateSync(fd, SEED_FILE_CAP + 1);
+    closeSync(fd);
     await expect(
       seedRemoteWorkspace(fakeSandbox(), project, allowAll),
     ).rejects.toThrow(/single-file cap/);
+  });
+
+  it("rejects a project over the total cap, counting only what policy allows", async () => {
+    initProject();
+    put("a.bin", Buffer.alloc(1024));
+    put("b.bin", Buffer.alloc(1024));
+    const caps = { totalCap: 1500, fileCap: 2048 };
+    await expect(
+      seedRemoteWorkspace(fakeSandbox(), project, allowAll, { caps }),
+    ).rejects.toThrow(/1500 bytes total cap/);
+    // A skipped file does not count towards it.
+    await expect(
+      seedRemoteWorkspace(
+        fakeSandbox(),
+        project,
+        async (path) => (path.endsWith("b.bin") ? "skip" : "allow"),
+        { caps },
+      ),
+    ).resolves.toMatchObject({ uploaded: ["a.bin"] });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -202,19 +225,24 @@ describe("seedRemoteWorkspace", () => {
     },
   );
 
-  it("names a missing tool in the sandbox", async () => {
-    initProject();
-    put("a.txt", "a");
-    const sandbox = fakeSandbox();
-    const failing: SeedSandbox = {
-      ...sandbox,
-      exec: async (_c, _d, options) => {
-        options.onData(Buffer.from("piship-missing-tool:tar\n"));
-        return { exitCode: 127 };
-      },
-    };
-    await expect(
-      seedRemoteWorkspace(failing, project, allowAll),
-    ).rejects.toThrow(/no tar/);
-  });
+  it.skipIf(process.platform === "win32")(
+    "names the tool the sandbox lacks, running the real script",
+    async () => {
+      initProject();
+      put("a.txt", "a");
+      // A PATH with ls, grep, rm and tar, but no git.
+      const bin = join(base, "bin");
+      mkdirSync(bin);
+      for (const tool of ["ls", "grep", "rm", "tar"])
+        symlinkSync(
+          execFileSync("sh", ["-c", `command -v ${tool}`], {
+            encoding: "utf8",
+          }).trim(),
+          join(bin, tool),
+        );
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(bin), project, allowAll),
+      ).rejects.toThrow(/no git/);
+    },
+  );
 });

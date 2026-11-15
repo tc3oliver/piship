@@ -177,6 +177,7 @@ async function open(options: { subagent?: boolean } = {}) {
       "  default: deny",
       "  defaults:",
       '    - { id: nosecret, action: filesystem.read, resource: "workspace/secret.env", effect: deny }',
+      '    - { id: nowrite, action: filesystem.write, resource: "workspace/locked.txt", effect: deny }',
       '    - { id: askfile, action: filesystem.read, resource: "workspace/ask.txt", effect: ask }',
       '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
       '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: allow }',
@@ -270,20 +271,25 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
   it("never lets a denied or asked-and-refused path reach the sandbox files", async () => {
     const { tool } = await open();
     await tool("read")({ path: "notes.txt" });
-    const before = log().files.length;
+    expect(log().files.length).toBeGreaterThan(0);
+    // Denied read, asked-and-refused read (the answer is "no"), denied write,
+    // and a path outside the project: each refused.
     await expect(tool("read")({ path: "secret.env" })).rejects.toThrow(
       /not allowed/,
     );
-    await expect(
-      tool("write")({ path: "secret.env", content: "x" }, context()),
-    ).resolves.toBeDefined(); // write is allowed by policy; read is denied
-    // ask.txt: the user's answer is "no" (select returns undefined)
     await expect(tool("read")({ path: "ask.txt" })).rejects.toThrow();
+    await expect(
+      tool("write")({ path: "locked.txt", content: "x" }),
+    ).rejects.toThrow(/not allowed/);
     await expect(tool("read")({ path: "/etc/hosts" })).rejects.toThrow();
-    expect(fileCalls("secret.env").filter((e) => e.op === "read")).toEqual([]);
-    expect(fileCalls("ask.txt")).toEqual([]);
-    expect(log().files.some((entry) => entry.path.includes("etc"))).toBe(false);
-    expect(log().files.length).toBeGreaterThanOrEqual(before);
+    // No file call of any kind named any of them.
+    for (const name of ["secret.env", "ask.txt", "locked.txt"])
+      expect(fileCalls(name)).toEqual([]);
+    expect(
+      log().files.filter(
+        (entry) => entry.path.includes("etc") || entry.path.includes("hosts"),
+      ),
+    ).toEqual([]);
   });
 
   it("writes and edits in the sandbox, not on the host", async () => {
