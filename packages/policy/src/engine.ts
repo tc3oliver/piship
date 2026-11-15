@@ -520,7 +520,18 @@ export class PolicyEngine {
       : request.resource;
   }
 
-  #matches(entry: LayerRule, action: string, resource: string): boolean {
+  /**
+   * Whether `entry` covers `resource`. `widened` (the default) also lets a
+   * deny or ask match in another case where the filesystem folds case, and at
+   * the real location of its literal prefix; `#firstMatch` uses those forms
+   * only to tighten.
+   */
+  #matches(
+    entry: LayerRule,
+    action: string,
+    resource: string,
+    widened = true,
+  ): boolean {
     // A pack's contained rule stands in for a prompt only where the sandbox
     // contains the command or the path; without it the next rule decides.
     if (
@@ -552,21 +563,30 @@ export class PolicyEngine {
     // A deny or ask also covers its path in any case where the filesystem
     // folds case; an allow never widens that way.
     const fold =
-      FOLDS_CASE && isPathAction(action) && entry.rule.effect !== "allow";
+      widened &&
+      FOLDS_CASE &&
+      isPathAction(action) &&
+      entry.rule.effect !== "allow";
     // A deny or ask also matches the real location its literal prefix names
     // (`/etc/**` is `/private/etc/**` on macOS), as a requested path does.
     return (
       matchGlob(pattern, resource, fold) ||
-      (isPathAction(action) &&
+      (widened &&
+        isPathAction(action) &&
         entry.resolvedPathPattern !== undefined &&
         matchGlob(entry.resolvedPathPattern, resource, fold))
     );
   }
 
   /**
-   * The first rule of `layer` that matches; with `source`, the first of that
-   * source's rules only. Team and project rules share a layer but are matched
-   * separately, so a team `ask` never hides a project `deny`.
+   * The rule of `layer` that counts: the first that matches; with `source`,
+   * the first of that source's rules only. Team and project rules share a
+   * layer but are matched separately, so a team `ask` never hides a project
+   * `deny`. A rule matched only through a widened form (another case, a
+   * resolved link) never shadows a stricter rule that matches as written:
+   * the first of each kind is found and the stricter counts, so widening can
+   * only tighten (`ask ~/library/**` ahead of `deny ~/Library/Keychains/**`,
+   * or an `ask` reached through a link the workspace planted).
    */
   #firstMatch(
     layer: PolicyLayer,
@@ -574,11 +594,19 @@ export class PolicyEngine {
     resource: string,
     source?: string,
   ): LayerRule | undefined {
-    return this.#layers[layer].find(
-      (entry) =>
-        (source === undefined || entry.source === source) &&
-        this.#matches(entry, action, resource),
+    const entries = this.#layers[layer].filter(
+      (entry) => source === undefined || entry.source === source,
     );
+    const exact = entries.find((entry) =>
+      this.#matches(entry, action, resource, false),
+    );
+    const widened = entries.find((entry) =>
+      this.#matches(entry, action, resource),
+    );
+    if (!exact || !widened) return exact ?? widened;
+    return STRICTNESS[widened.rule.effect] > STRICTNESS[exact.rule.effect]
+      ? widened
+      : exact;
   }
 
   /**
@@ -814,8 +842,17 @@ export class PolicyEngine {
             });
           continue;
         }
-        const first = !matched.has(entry.source);
-        matched.add(entry.source);
+        // The rule that counts for its source, as `#firstMatch` picks it.
+        const first =
+          !matched.has(entry.source) &&
+          entry ===
+            this.#firstMatch(
+              layer,
+              request.action,
+              resource,
+              layer === "team-project" ? entry.source : undefined,
+            );
+        if (first) matched.add(entry.source);
         matches.push({
           layer,
           source: entry.source,

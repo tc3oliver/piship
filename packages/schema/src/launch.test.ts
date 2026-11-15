@@ -553,6 +553,16 @@ describe("filesystem rules that can never match", () => {
       ["workspace/a/../.env", /a \. or \.\. segment/],
       ["workspace/./.env", /a \. or \.\. segment/],
       ["~//.ssh/**", /an empty segment/],
+      ["*", /a leading \* never matches.*write \*\*\/\* for/],
+      [
+        "*.env",
+        /never matches \*\.env: a leading \*\.env never matches.*write \*\*\/\*\.env/,
+      ],
+      ["*.secret/**", /a leading \*\.secret never matches/],
+      [
+        "*/secrets/**",
+        /matches \*\/secrets\/\*\* only at the filesystem root \(as \/secrets\/\*\*\).*write \*\*\/secrets\/\*\*/,
+      ],
       [
         "C:\\Users\\me\\.ssh\\**",
         /uses \\ separators.*C:\/Users\/me\/\.ssh\/\*\*/,
@@ -569,7 +579,6 @@ describe("filesystem rules that can never match", () => {
     for (const resource of [
       "**",
       "**/.env",
-      "*",
       "~",
       "~/",
       "~/.ssh",
