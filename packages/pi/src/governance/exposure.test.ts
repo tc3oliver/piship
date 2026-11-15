@@ -1,16 +1,19 @@
 import { BUILTIN_DEFAULT_RULE } from "@piship/policy";
-import type { ToolExposureRule } from "@piship/schema";
+import { KNOWN_TOOLS, type ToolExposureRule } from "@piship/schema";
 import { describe, expect, it } from "vitest";
 import type { GovernanceSession } from "../governance-session.js";
 import {
   buildExposureTable,
+  CODEMODE_TOOL,
   DEFAULT_EXPOSURE_CONFIG,
   type ExposureConfig,
   type ExtensionToolInfo,
   exposureConfigOf,
   exposureExtensions,
   mcpToolExposure,
+  PISHIP_TOOLS,
   TASK_TOOLS,
+  TOOL_SEARCH_TOOL,
   UNGOVERNED_PI_BASE_TOOLS,
 } from "./exposure.js";
 
@@ -312,5 +315,21 @@ describe("session tool exposure table", () => {
     );
     expect(table.codemodeOn).toBe(false);
     expect(table.excluded()).toContain("codemode");
+  });
+});
+
+describe("the tool names validate knows", () => {
+  // @piship/schema warns about a denied tool outside its copy of these
+  // lists; a tool added here without it would be warned about wrongly.
+  it("are exactly the session's built-in, PiShip, task, Codemode, and tool search tools", () => {
+    expect([...KNOWN_TOOLS].sort()).toEqual(
+      [
+        ...PISHIP_TOOLS,
+        ...TASK_TOOLS,
+        ...UNGOVERNED_PI_BASE_TOOLS,
+        CODEMODE_TOOL,
+        TOOL_SEARCH_TOOL,
+      ].sort(),
+    );
   });
 });

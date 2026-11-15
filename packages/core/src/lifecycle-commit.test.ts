@@ -199,7 +199,11 @@ describe.runIf(HOST_EVIDENCED)(
       const update = brandedContext();
       injectFault(MARKER, { op: "write", code: "ENOSPC" });
       await runUpdate(update.ctx, []);
-      expect(update.out.at(-1)).toMatch(/^Updated AcmePi 1\.0\.0 -> 1\.1\.0 /);
+      // This context grafts the demo's governance onto the release, so a
+      // governance summary may follow the Updated line.
+      expect(update.out).toContainEqual(
+        expect.stringMatching(/^Updated AcmePi 1\.0\.0 -> 1\.1\.0 /),
+      );
       expect(update.err).toEqual([
         expect.stringMatching(
           /^Notice: 1\.1\.0 is active, but its state marker/,

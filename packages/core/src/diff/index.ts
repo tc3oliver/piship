@@ -170,3 +170,45 @@ export function formatDiff(report: DiffReport): string {
   }
   return `${lines.join("\n")}\n`;
 }
+
+/** Areas whose changes a person using the command notices. */
+const USER_AREAS: ReadonlySet<string> = new Set([
+  "policy",
+  "tools",
+  "mcp",
+  "sandbox",
+  "models",
+]);
+
+/**
+ * What an update changes for the person using the command: policy, tool
+ * exposure, MCP servers, the sandbox, and models, one line each with the
+ * diff's reason, at most `limit` lines. Empty when nothing of that changed.
+ */
+export function formatGovernanceSummary(
+  report: DiffReport,
+  command: string,
+  limit = 8,
+): string {
+  const changes = report.changes.filter((change) =>
+    USER_AREAS.has(change.area),
+  );
+  if (changes.length === 0) return "";
+  const shown = changes.length > limit ? limit - 1 : changes.length;
+  const lines = changes.slice(0, shown).map((change) => {
+    const values =
+      change.before !== undefined && change.after !== undefined
+        ? ` (${change.before} -> ${change.after})`
+        : change.before !== undefined || change.after !== undefined
+          ? ` (${change.before ?? change.after})`
+          : "";
+    return `  ${change.kind} ${change.item}${values}: ${change.reason}`;
+  });
+  if (changes.length > shown)
+    lines.push(
+      `  and ${changes.length - shown} more; run ${command} policy explain <action> <resource> to see how a rule applies`,
+    );
+  return [`What changes for you in ${report.after.version}:`, ...lines].join(
+    "\n",
+  );
+}
