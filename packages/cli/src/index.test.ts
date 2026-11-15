@@ -22,6 +22,7 @@ import {
   runCli,
   runtimeCacheLine,
   simpleUsage,
+  stagingNotice,
 } from "./index.js";
 
 const ID = "mypi";
@@ -1754,5 +1755,24 @@ describe("publishSteps", () => {
     expect(
       publishSteps("candidate", [], "2026-11-18T00:00:00.000Z", now),
     ).toContain("Sign candidate again by now:");
+  });
+});
+
+describe("stagingNotice", () => {
+  const found = { count: 2, directory: "/work/dist", attempted: false };
+  it("tells build and release to run again with --reclaim-staging", () => {
+    expect(stagingNotice(found)).toContain(
+      "2 abandoned staging directories of killed runs in /work/dist. They are not removed unless you ask",
+    );
+    expect(stagingNotice(found)).toContain(
+      "run again with --reclaim-staging to remove them.",
+    );
+  });
+  it("names the build command for dev and test, which take no --reclaim-staging", () => {
+    expect(
+      stagingNotice(found, "run piship build a/piship.yaml --reclaim-staging"),
+    ).toContain(
+      "; run piship build a/piship.yaml --reclaim-staging to remove them.",
+    );
   });
 });

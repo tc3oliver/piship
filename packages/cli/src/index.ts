@@ -688,11 +688,15 @@ export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
   return `runtime cache: ${cache.status} (${placed.join(", ")})`;
 }
 
-function stagingNotice(found: AbandonedStaging): string {
+/** `reclaim`: the command that removes them, for one without --reclaim-staging. */
+export function stagingNotice(
+  found: AbandonedStaging,
+  reclaim = "run again with --reclaim-staging",
+): string {
   const what = `${found.count} abandoned staging ${found.count === 1 ? "directory" : "directories"} of killed runs in ${found.directory}`;
   return found.attempted
     ? `${what} could not be removed; check its permissions.`
-    : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; run again with --reclaim-staging to remove them.`;
+    : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; ${reclaim} to remove them.`;
 }
 function purgeReport(purged: PurgeResult, output: CliOutput): string {
   if (purged.notRevoked)
@@ -1329,10 +1333,19 @@ export async function runCli(
       await prepareLock(target, manifest, output);
       await downloadLockedSearchTools(requireCurrentLock(target));
       // Local iteration: the supply-chain gates run on build and release.
+      const progress = progressReporter(output.stderr);
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,
         runtimeCache: true,
-        abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+        // dev and test take no --reclaim-staging; build does.
+        abandonedStaging: (found) =>
+          output.stderr(
+            stagingNotice(
+              found,
+              `run ${pishipCommand()} build ${shellArg(target)} --reclaim-staging`,
+            ),
+          ),
+        ...(progress ? { progress } : {}),
       });
       markLocalBuild(artifact);
       const lock = requireCurrentLock(target);
