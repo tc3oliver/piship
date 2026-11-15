@@ -221,6 +221,7 @@ export class RemoteWorkspace {
         {
           mode,
           progress: this.#options.notify,
+          ...(signal ? { signal } : {}),
           caps: {
             totalCap:
               (this.#options.seedLimits?.maxTotalMiB ?? SEED_TOTAL_CAP / MIB) *
@@ -238,7 +239,8 @@ export class RemoteWorkspace {
     this.#seed ??= (
       restored
         ? seed("overlay").catch(async (error: unknown) => {
-            if (error instanceof SeedRefused) throw error;
+            // Cancelled: the snapshot is still good, and the next call overlays it again.
+            if (error instanceof SeedRefused || signal?.aborted) throw error;
             restored = false;
             await cache?.discard();
             this.#options.notify(CACHE_NOTICE_OVERLAY);
@@ -265,6 +267,10 @@ export class RemoteWorkspace {
       },
       (error: unknown) => {
         if (!(error instanceof SeedRefused)) this.#seed = undefined;
+        if (signal?.aborted)
+          throw new Error(
+            "The upload to the sandbox was cancelled before it finished; it runs again on the next tool call.",
+          );
         throw error;
       },
     );

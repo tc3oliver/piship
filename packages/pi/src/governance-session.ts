@@ -1031,6 +1031,7 @@ export class GovernanceSession {
   >();
   readonly #toolCall = new AsyncLocalStorage<{
     ask?: DeferredToolAsk | undefined;
+    signal?: AbortSignal | undefined;
   }>();
 
   /**
@@ -1065,7 +1066,12 @@ export class GovernanceSession {
    * The ask is evaluated here, not taken from the hook, so it holds even for
    * a call whose ID the hook did not see; only the audit detail is looked up.
    */
-  withToolCall<T>(callId: string, tool: string, run: () => T): T {
+  withToolCall<T>(
+    callId: string,
+    tool: string,
+    run: () => T,
+    signal?: AbortSignal,
+  ): T {
     const detail = this.#deferredDetail.get(callId) ?? {};
     this.#deferredDetail.delete(callId);
     const decision = this.resourceTools.has(tool)
@@ -1074,9 +1080,19 @@ export class GovernanceSession {
     // Only an ask is carried: a deny was already blocked by the tool_call
     // hook, which Pi runs before every execute, top-level and nested.
     return this.#toolCall.run(
-      decision?.effect === "ask" ? { ask: { tool, decision, detail } } : {},
+      decision?.effect === "ask"
+        ? { ask: { tool, decision, detail }, signal }
+        : { signal },
       run,
     );
+  }
+
+  /**
+   * The current tool call's abort signal (Esc), for work its file operations
+   * start that Pi does not hand a signal to, such as a remote workspace's seed.
+   */
+  toolSignal(): AbortSignal | undefined {
+    return this.#toolCall.getStore()?.signal;
   }
 
   /**
