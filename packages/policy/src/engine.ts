@@ -23,6 +23,7 @@ import {
   normalizePathResource,
   normalizeTokenContext,
   type PathTokenContext,
+  resolvedPathPattern,
 } from "./glob.js";
 import { seamPlane } from "./seams.js";
 import { chainSegments } from "./shell-words.js";
@@ -393,6 +394,12 @@ interface LayerRule {
   readonly source: string;
   /** Resource pattern with path tokens expanded, for filesystem actions. */
   readonly pathPattern: string;
+  /**
+   * A deny or ask pattern's literal prefix symlink-resolved, matched besides
+   * `pathPattern`. Never for an allow: a link the workspace plants
+   * (`vendor -> ~`) would widen it.
+   */
+  readonly resolvedPathPattern?: string;
 }
 
 export interface RuleMatch {
@@ -443,12 +450,20 @@ export class PolicyEngine {
       layer: PolicyLayer,
       source: string,
     ): LayerRule[] =>
-      rules.map((rule) => ({
-        rule: normalizeRuleAction(rule),
-        layer,
-        source,
-        pathPattern: expandPathTokens(rule.resource, this.context),
-      }));
+      rules.map((rule) => {
+        const pathPattern = expandPathTokens(rule.resource, this.context);
+        const resolved =
+          rule.effect === "allow"
+            ? undefined
+            : resolvedPathPattern(pathPattern, this.context);
+        return {
+          rule: normalizeRuleAction(rule),
+          layer,
+          source,
+          pathPattern,
+          ...(resolved === undefined ? {} : { resolvedPathPattern: resolved }),
+        };
+      });
     const narrowing = (
       rules: readonly PolicyRule[],
       source: string,
@@ -536,10 +551,15 @@ export class PolicyEngine {
     }
     // A deny or ask also covers its path in any case where the filesystem
     // folds case; an allow never widens that way.
-    return matchGlob(
-      pattern,
-      resource,
-      FOLDS_CASE && isPathAction(action) && entry.rule.effect !== "allow",
+    const fold =
+      FOLDS_CASE && isPathAction(action) && entry.rule.effect !== "allow";
+    // A deny or ask also matches the real location its literal prefix names
+    // (`/etc/**` is `/private/etc/**` on macOS), as a requested path does.
+    return (
+      matchGlob(pattern, resource, fold) ||
+      (isPathAction(action) &&
+        entry.resolvedPathPattern !== undefined &&
+        matchGlob(entry.resolvedPathPattern, resource, fold))
     );
   }
 
