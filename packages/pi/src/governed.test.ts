@@ -303,6 +303,22 @@ describe("governed built-in tools", () => {
     expect(outcome).toMatch(/rejected: .*(rule secrets|changed while)/);
   });
 
+  it("returns a host image as an image, as Pi's read tool does", async () => {
+    const { session, workspace } = await open();
+    writeFileSync(
+      join(workspace, "pic.png"),
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    const read = tool(governedTools(session, workspace), "read");
+    const result = (await run(read, { path: "pic.png" })) as {
+      content: { type: string }[];
+    };
+    expect(result.content.map((block) => block.type)).toContain("image");
+  });
+
   it("never writes through a directory swapped for a symlink after the decision", async () => {
     const { session, workspace, home } = await open();
     writeFileSync(join(home, ".ssh", "authorized_keys"), "keys-canary\n");

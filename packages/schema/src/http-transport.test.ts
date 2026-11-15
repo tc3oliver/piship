@@ -699,6 +699,78 @@ describe("sandbox.workspace", () => {
       );
   });
 
+  it("accepts remote refresh, setup and setupTimeoutSeconds, and rejects bad values", () => {
+    const remote = {
+      refresh: "off",
+      setup: "npm ci",
+      setupTimeoutSeconds: 1200,
+    };
+    expect(workspace({ ...e2b, workspace: "remote", remote })).toMatchObject({
+      remote,
+    });
+    for (const [bad, field] of [
+      [{ refresh: "sometimes" }, "sandbox.remote.refresh"],
+      [{ setup: "" }, "sandbox.remote.setup"],
+      [{ setup: 5 }, "sandbox.remote.setup"],
+      [{ setupTimeoutSeconds: 0 }, "sandbox.remote.setupTimeoutSeconds"],
+      [{ setupTimeoutSeconds: 100000 }, "sandbox.remote.setupTimeoutSeconds"],
+    ] as const)
+      rejects(
+        manifest(sandbox({ ...e2b, workspace: "remote", remote: bad })),
+        field,
+      );
+  });
+
+  it("accepts remote cache and cacheKeyFiles, and rejects bad values", () => {
+    const remote = {
+      setup: "npm ci",
+      cache: "off",
+      cacheKeyFiles: ["package-lock.json", "apps/web/pnpm-lock.yaml"],
+    };
+    expect(workspace({ ...e2b, workspace: "remote", remote })).toMatchObject({
+      remote,
+    });
+    for (const [bad, field] of [
+      [{ cache: "memory" }, "sandbox.remote.cache"],
+      [{ cacheKeyFiles: "package-lock.json" }, "sandbox.remote.cacheKeyFiles"],
+      [{ cacheKeyFiles: [5] }, "sandbox.remote.cacheKeyFiles[0]"],
+      [{ cacheKeyFiles: ["/etc/passwd"] }, "sandbox.remote.cacheKeyFiles[0]"],
+      [{ cacheKeyFiles: ["../x"] }, "sandbox.remote.cacheKeyFiles[0]"],
+      [{ cacheKeyFiles: ["a//b"] }, "sandbox.remote.cacheKeyFiles[0]"],
+      [{ cacheKeyFiles: ["a\\b"] }, "sandbox.remote.cacheKeyFiles[0]"],
+      [
+        { cacheKeyFiles: Array.from({ length: 33 }, (_, i) => `f${i}`) },
+        "sandbox.remote.cacheKeyFiles",
+      ],
+    ] as const)
+      rejects(
+        manifest(sandbox({ ...e2b, workspace: "remote", remote: bad })),
+        field,
+      );
+  });
+
+  it("accepts sandbox.lifetimeSeconds on e2b-compatible, bounded and gated", () => {
+    expect(workspace({ ...e2b, lifetimeSeconds: 7200 })).toMatchObject({
+      lifetimeSeconds: 7200,
+    });
+    for (const bad of [0, 1.5, 100000, "1h"])
+      rejects(
+        manifest(sandbox({ ...e2b, lifetimeSeconds: bad })),
+        "sandbox.lifetimeSeconds",
+      );
+    rejects(
+      manifest(sandbox({ required: false, lifetimeSeconds: 60 })),
+      "sandbox.lifetimeSeconds",
+    );
+    rejects(
+      {
+        ...manifest(sandbox({ ...e2b, lifetimeSeconds: 60 })),
+        schema: PISHIP_SCHEMA_V1ALPHA5,
+      },
+      "sandbox.lifetimeSeconds",
+    );
+  });
+
   it("is unknown before piship/v1alpha6", () => {
     rejects(
       {

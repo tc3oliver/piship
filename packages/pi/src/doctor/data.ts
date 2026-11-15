@@ -49,6 +49,7 @@ import {
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
+import { describeCache } from "../remote-workspace/cache.js";
 import { waitingChanges } from "../remote-workspace/checkpoint.js";
 import { type OrphanedTask, takeOrphanedTasks } from "../task-records.js";
 import { type AuditSinkTarget, auditSinkTargets } from "./audit.js";
@@ -651,7 +652,7 @@ async function collectSession(
   let closeError: string | undefined;
   let status: AuditStatus | undefined;
   try {
-    session = await openGovernance(ctx, prepared, false);
+    session = await openGovernance(ctx, prepared, false, false);
     if (session) {
       mcp = session.mcpReports;
       // The sandbox this session already activated serves the checks.
@@ -774,6 +775,20 @@ export async function collectDoctorData(
                 }
               : {}),
             command: ctx.metadata.app.command,
+            cache: describeCache(
+              manifest.sandbox,
+              ctx.stateDir,
+              inspection?.project.root,
+            ),
+            ...(manifest.sandbox.remote?.setup
+              ? {
+                  setup: {
+                    command: manifest.sandbox.remote.setup,
+                    timeoutSeconds:
+                      manifest.sandbox.remote.setupTimeoutSeconds ?? 900,
+                  },
+                }
+              : {}),
           }
         : undefined;
     governance = {

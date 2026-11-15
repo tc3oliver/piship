@@ -672,7 +672,27 @@ export interface SandboxConfig {
       protectedFiles?: "skip" | "refuse";
       confirm?: "optional" | "required";
     };
+    /** `auto` (default) sends host edits made during the session to the sandbox at each turn; `off` keeps the seed-time copy. */
+    refresh?: "auto" | "off";
+    /** A shell command run once in the sandbox project directory after the seed, such as `npm ci`. */
+    setup?: string;
+    /** How long `setup` may run, in seconds (default 900, at most 7200). */
+    setupTimeoutSeconds?: number;
+    /**
+     * `snapshot` saves the sandbox after a successful `setup`, before the
+     * agent acts, and starts later sessions from it; `off` never does.
+     * Default: `snapshot` with a `setup` on the e2b-compatible provider.
+     */
+    cache?: "snapshot" | "off";
+    /** Workspace-relative files whose content keys the cache (default: the common lock files). */
+    cacheKeyFiles?: readonly string[];
   };
+  /**
+   * piship/v1alpha6, `e2b-compatible` and `kubernetes-agent-sandbox`: how long
+   * the sandbox lives, in seconds (default 3600, at most 86400); it is renewed
+   * while the session uses it.
+   */
+  readonly lifetimeSeconds?: number;
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };

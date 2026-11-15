@@ -317,7 +317,7 @@ export async function launchPiDistribution(
             : ""
         }${
           metadata.governance.manifest.sandbox.workspace === "remote"
-            ? "\n  sandbox pull [--diff] [--yes] | --discard"
+            ? "\n  sandbox pull [--diff] [--yes] [--branch [<name>]] | --discard"
             : ""
         }${
           metadata.deployment.mode === "personal"

@@ -61,6 +61,7 @@ import { remoteWorkdir } from "./governance/sandbox.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
+import { sniffImage } from "./image-sniff.js";
 import { skipExplanation } from "./remote-workspace/seed.js";
 import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
@@ -771,7 +772,9 @@ export function governedBashOperations(
     options: ExecOptions,
   ): Promise<{ exitCode: number | null }> => {
     if (gov.sandbox.report.level === "enforced")
-      return (gov.remote?.ensureSeeded() ?? Promise.resolve()).then(() => {
+      return (
+        gov.remote?.ensureSeeded(options.signal) ?? Promise.resolve()
+      ).then(() => {
         const running = gov.sandbox.exec(command, cwd, {
           onData: options.onData,
           ...(options.signal ? { signal: options.signal } : {}),
@@ -1243,11 +1246,24 @@ export function governedTools(
     await gatePath(gov, "filesystem.read", absolute(path), tool);
     await access(path, constants.R_OK);
   };
+  const sniffed = new Map<string, Buffer>();
   const tools: ToolDefinition[] = [
     createReadToolDefinition(cwd, {
       operations: {
-        readFile: (path) => read(path, "read"),
+        readFile: (path) => {
+          const held = sniffed.get(path);
+          sniffed.delete(path);
+          return held ? Promise.resolve(held) : read(path, "read");
+        },
         access: (path) => exists(path, "read"),
+        // Pi detects from a host path, which a sandbox file lacks, and
+        // opening a host path again would skip the governed open (a FIFO
+        // would block): sniff the bytes read here and hand them to readFile.
+        detectImageMimeType: async (path) => {
+          const data = await read(path, "read");
+          sniffed.set(path, data);
+          return sniffImage(data);
+        },
       },
     }) as ToolDefinition,
     createWriteToolDefinition(cwd, {

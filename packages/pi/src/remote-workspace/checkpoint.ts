@@ -13,14 +13,17 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  REMOTE_PATCH_MAX_BYTES,
   clearRemoteWorkspacePulled,
+  REMOTE_PATCH_MAX_BYTES,
   type RemoteWorkspaceMeta,
   readRemoteWorkspaceCheckpoint,
   readRemoteWorkspacePulled,
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "@piship/core";
+import { CACHE_NOTICE_OVERLAY, type SetupCache } from "./cache.js";
+import { printable } from "./printable.js";
+import { HostRefresh, foldBaseline, run } from "./refresh.js";
 import {
   SEED_FILE_CAP,
   SEED_TOTAL_CAP,
@@ -32,6 +35,7 @@ import {
 } from "./seed.js";
 
 const CHECKPOINT_TIMEOUT_SECONDS = 120;
+const SETUP_HEARTBEAT_MS = 60_000;
 const MIB = 1024 * 1024;
 
 /**
@@ -111,6 +115,19 @@ export interface RemoteWorkspaceOptions {
   readonly seedLimits?: { maxTotalMiB?: number; maxFileMiB?: number };
   /** `sandbox.remote.pull`, recorded verbatim in the checkpoint for `sandbox pull`. */
   readonly pull?: RemoteWorkspaceMeta["pull"];
+  /** `sandbox.remote.refresh`: false (`off`) keeps the seed-time copy of host files. */
+  readonly refresh?: boolean;
+  /** `sandbox.remote.setup`: run once in the sandbox after the seed. */
+  readonly setup?: { command: string; timeoutSeconds: number };
+  /**
+   * The setup cache, with `snapshot` the sandbox offers: a restored sandbox
+   * is overlaid instead of seeded and runs no setup; after a successful
+   * setup and before anything else runs, the sandbox is saved.
+   */
+  readonly cache?: SetupCache;
+  readonly snapshot?: () => Promise<{ id: string }>;
+  /** Tests only: how often a running setup says so. */
+  readonly setupHeartbeatMs?: number;
   /** Tests only: a smaller checkpoint cap. */
   readonly maxPatchBytes?: number;
   /**
@@ -120,16 +137,32 @@ export interface RemoteWorkspaceOptions {
   readonly checkpoints: boolean;
 }
 
+/** What the seed upload produced, before the setup command and the snapshot. */
+interface SeedStage {
+  readonly result: SeedResult;
+  readonly host: HostRefresh | undefined;
+  /** The sandbox started from the cache and the overlay held. */
+  readonly restored: boolean;
+}
+
 export class RemoteWorkspace {
   readonly #options: RemoteWorkspaceOptions;
-  #seed: Promise<SeedResult> | undefined;
+  #seed: Promise<SeedStage> | undefined;
+  /** The seed's setup and snapshot step, memoized until it succeeds or fails for good. */
+  #ready: Promise<void> | undefined;
   #seeded: SeedResult | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #changed = 0;
   /** Set when something ran that may have changed the sandbox since the last checkpoint. */
   #dirty = false;
   #warned = false;
+  #refreshWarned = false;
   #told = false;
+  #host: HostRefresh | undefined;
+  #setupFailure: string | undefined;
+  /** The setup ran in an earlier session and its output came back with the snapshot. */
+  #setupRestored = false;
+  #touched = false;
   /** Where this session's patch went instead of the shared slot. */
   #parked: string | undefined;
   /** Checkpoint commits this session made: the only ids a pull marker may move the baseline to. */
@@ -144,9 +177,25 @@ export class RemoteWorkspace {
     return this.#seeded?.lookup;
   }
 
+  /** Why the setup command failed, for the model; undefined when it ran well or was not set. */
+  get setupFailure(): string | undefined {
+    return this.#setupFailure;
+  }
+
+  /** True when this session's setup output came from the cache, so the setup did not run. */
+  get setupRestored(): boolean {
+    return this.#setupRestored;
+  }
+
+  /** True once a file or command ran that may have changed the sandbox. */
+  get touched(): boolean {
+    return this.#touched;
+  }
+
   /** Run something that may change the sandbox; a checkpoint follows it. Marked again at its end, as a task may outlive the turn. */
   track<T>(work: Promise<T>): Promise<T> {
     this.#dirty = true;
+    this.#touched = true;
     return work.finally(() => {
       this.#dirty = true;
     });
@@ -157,54 +206,254 @@ export class RemoteWorkspace {
    * retries on the next call; one a retry cannot cure (a cap, a missing tool)
    * is remembered and fails the same way at once.
    */
-  async ensureSeeded(): Promise<void> {
-    this.#seed ??= seedRemoteWorkspace(
-      this.#options.sandbox,
-      this.#options.root,
-      this.#options.decide,
-      {
-        progress: this.#options.notify,
-        caps: {
-          totalCap:
-            (this.#options.seedLimits?.maxTotalMiB ?? SEED_TOTAL_CAP / MIB) *
-            MIB,
-          fileCap:
-            (this.#options.seedLimits?.maxFileMiB ?? SEED_FILE_CAP / MIB) * MIB,
+  async ensureSeeded(signal?: AbortSignal): Promise<void> {
+    const startedAt = Date.now();
+    const { cache } = this.#options;
+    if (cache?.pendingNotice) {
+      this.#options.notify(cache.pendingNotice);
+      cache.pendingNotice = undefined;
+    }
+    const seed = (mode: "fresh" | "overlay" | "reset") =>
+      seedRemoteWorkspace(
+        this.#options.sandbox,
+        this.#options.root,
+        this.#options.decide,
+        {
+          mode,
+          progress: this.#options.notify,
+          caps: {
+            totalCap:
+              (this.#options.seedLimits?.maxTotalMiB ?? SEED_TOTAL_CAP / MIB) *
+              MIB,
+            fileCap:
+              (this.#options.seedLimits?.maxFileMiB ?? SEED_FILE_CAP / MIB) *
+              MIB,
+          },
         },
-      },
+      );
+    // A snapshot of this host's own earlier seed holds the project already:
+    // lay the current files over it. Should that fail, the sandbox is cleaned
+    // and seeded as usual, and the setup runs again.
+    let restored = cache?.restored === true;
+    this.#seed ??= (
+      restored
+        ? seed("overlay").catch(async (error: unknown) => {
+            if (error instanceof SeedRefused) throw error;
+            restored = false;
+            await cache?.discard();
+            this.#options.notify(CACHE_NOTICE_OVERLAY);
+            return seed("reset");
+          })
+        : seed("fresh")
     ).then(
-      (result) => {
-        this.#seeded = result;
+      async (result) => {
         this.#options.seeded(result);
-        this.#dirty = false;
-        const policy = result.skipped.filter(
-          (item) => item.reason === "policy",
-        ).length;
-        const large = result.skipped.filter(
-          (item) => item.reason === "too-large",
-        ).length;
-        const left = [
-          ...(policy ? [`${policy} by policy`] : []),
-          ...(large ? [`${large} over the per-file size cap`] : []),
-        ];
-        if (left.length) {
-          const total = policy + result.uploaded.length;
-          this.#options.notify(
-            `Left out of the sandbox: ${left.join(", ")}.${
-              policy * 2 > total
-                ? ` Policy withheld ${policy} of ${total} project files, so the agent will not see most of the project.`
-                : ""
-            }`,
-          );
-        }
-        return result;
+        const fileCap =
+          (this.#options.seedLimits?.maxFileMiB ?? SEED_FILE_CAP / MIB) * MIB;
+        const host =
+          this.#options.refresh !== false
+            ? await HostRefresh.snapshot(
+                this.#options.sandbox,
+                this.#options.root,
+                this.#options.decide,
+                fileCap,
+                result,
+                startedAt,
+              ).catch(() => undefined)
+            : undefined;
+        return { result, host, restored };
       },
       (error: unknown) => {
         if (!(error instanceof SeedRefused)) this.#seed = undefined;
         throw error;
       },
     );
-    await this.#seed;
+    const uploaded = await this.#seed;
+    // The setup and the snapshot are part of the seed: until they are done the
+    // workspace is not `seeded`, so no checkpoint or refresh sees it half made.
+    // A cancelled setup is forgotten, and the next call runs it again.
+    this.#ready ??= this.#finishSeed(uploaded, signal).catch(
+      (error: unknown) => {
+        this.#ready = undefined;
+        throw error;
+      },
+    );
+    await this.#ready;
+  }
+
+  async #finishSeed(
+    { result, host, restored }: SeedStage,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const { cache } = this.#options;
+    if (restored) this.#setupRestored = true;
+    else {
+      await this.#setup(result, signal);
+      // Before anything the agent does reaches the sandbox: the snapshot
+      // holds only the uploaded files and the setup command's output. A
+      // sandbox that fell back from a snapshot is not saved again.
+      const { setup, snapshot } = this.#options;
+      if (
+        cache?.active &&
+        cache.restored !== true &&
+        setup &&
+        snapshot &&
+        !this.#setupFailure &&
+        !this.#touched &&
+        !cache.unsupported()
+      )
+        await cache.save(snapshot, {
+          notify: this.#options.notify,
+          warn: this.#options.warn,
+        });
+    }
+    this.#dirty = false;
+    this.#host = host;
+    this.#seeded = result;
+    const policy = result.skipped.filter(
+      (item) => item.reason === "policy",
+    ).length;
+    const large = result.skipped.filter(
+      (item) => item.reason === "too-large",
+    ).length;
+    const left = [
+      ...(policy ? [`${policy} by policy`] : []),
+      ...(large ? [`${large} over the per-file size cap`] : []),
+    ];
+    if (left.length) {
+      const total = policy + result.uploaded.length;
+      this.#options.notify(
+        `Left out of the sandbox: ${left.join(", ")}.${
+          policy * 2 > total
+            ? ` Policy withheld ${policy} of ${total} project files, so the agent will not see most of the project.`
+            : ""
+        }`,
+      );
+    }
+  }
+
+  /**
+   * The setup command, once, right after the seed. Its changes to tracked
+   * files are folded into the baseline, so the patch holds only the agent's
+   * work. A failure is a notice and a line for the model, never a failed session.
+   */
+  async #setup(
+    result: SeedResult,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const setup = this.#options.setup;
+    if (!setup) return;
+    const { sandbox, root, notify, warn } = this.#options;
+    notify(`Running setup in the sandbox: ${setup.command}`);
+    let tail = "";
+    let problem: string | undefined;
+    const startedAt = Date.now();
+    const every = this.#options.setupHeartbeatMs ?? SETUP_HEARTBEAT_MS;
+    // A long setup would otherwise look like a hang.
+    const heartbeat = setInterval(() => {
+      const minutes = Math.round((Date.now() - startedAt) / 60_000);
+      notify(
+        `Still running setup in the sandbox (${minutes} min): ${printable(setup.command)}`,
+      );
+    }, every);
+    heartbeat.unref();
+    try {
+      const done = await run(
+        sandbox,
+        root,
+        setup.command,
+        setup.timeoutSeconds,
+        signal,
+      );
+      tail = printable(done.output.trim().split("\n").slice(-10).join("\n"));
+      if (done.exitCode === null)
+        problem = `timed out after ${setup.timeoutSeconds} seconds; raise sandbox.remote.setupTimeoutSeconds`;
+      else if (done.exitCode !== 0) problem = `exit ${done.exitCode}`;
+    } catch (error) {
+      problem = printable(
+        String((error as Error)?.message ?? error).slice(0, 200),
+      );
+    } finally {
+      clearInterval(heartbeat);
+    }
+    if (signal?.aborted)
+      throw new Error(
+        "The sandbox setup was cancelled before it finished; it is not saved and runs again on the next tool call.",
+      );
+    if (problem) {
+      this.#setupFailure = `${setup.command} (${problem})`;
+      warn(
+        `Setup failed in the sandbox: ${setup.command} (${problem}).${tail ? `\n${tail}\n` : " "}The session continues without it; ask the agent to run \`${setup.command}\` and read its output, or fix sandbox.remote.setup.`,
+      );
+    }
+    try {
+      const status = await run(sandbox, root, "git status --porcelain");
+      const changed = status.output.split("\n").filter(Boolean);
+      if (status.exitCode !== 0 || changed.length === 0) return;
+      result.baselineCommit = await foldBaseline(
+        sandbox,
+        root,
+        result.baselineCommit,
+        undefined,
+      );
+      notify(
+        `Setup changed ${changed.length} ${changed.length === 1 ? "file" : "files"} tracked by git in the sandbox (${printable(changed[0]?.slice(3) ?? "")}${changed.length > 1 ? ", ..." : ""}); they count as the starting project and will not appear in sandbox pull.`,
+      );
+    } catch {
+      // The patch then also lists setup's file changes; sandbox pull shows them for review.
+    }
+  }
+
+  /**
+   * At the start of a turn: send what changed on this machine to the sandbox.
+   * Returns a line for the model when it did. Never throws.
+   */
+  refresh(): Promise<string | undefined> {
+    const next = this.#queue.then(async () => {
+      // Not while the seed's setup is still running: it moves the baseline too.
+      const host = this.#seeded ? this.#host : undefined;
+      if (!host) return undefined;
+      try {
+        const { sent, conflicts } = await host.run();
+        this.#refreshWarned = false;
+        const { command, notify } = this.#options;
+        if (sent.length)
+          notify(
+            `Sent ${sent.length} ${sent.length === 1 ? "file" : "files"} you changed on this machine to the sandbox`,
+          );
+        if (conflicts.length <= 3)
+          for (const path of conflicts)
+            notify(
+              `${printable(path)} changed on this machine and in the sandbox; the sandbox copy is kept. \`${command} sandbox pull\` will merge or flag it.`,
+            );
+        else
+          notify(
+            `${conflicts.length} files changed on this machine and in the sandbox (${printable(conflicts.slice(0, 3).join(", "))}, ...); the sandbox copies are kept. \`${command} sandbox pull\` will merge or flag them.`,
+          );
+        const lines = [
+          ...(sent.length
+            ? [
+                `The user changed these files on their machine since your last turn and they were copied into the sandbox: ${printable(sent.slice(0, 20).join(", "))}${sent.length > 20 ? ", ..." : ""}. Read them again before relying on earlier output.`,
+              ]
+            : []),
+          ...(conflicts.length
+            ? [
+                `The user also changed ${printable(conflicts.slice(0, 20).join(", "))} on their machine, but you changed it in the sandbox too, so your copy was kept.`,
+              ]
+            : []),
+        ];
+        return lines.length ? lines.join(" ") : undefined;
+      } catch (error) {
+        if (!this.#refreshWarned)
+          this.#options.warn(
+            `Edits you made on this machine could not be sent to the sandbox this time (${printable(String((error as Error)?.message ?? error).slice(0, 200))}); the agent may see older copies. The next turn tries again.`,
+          );
+        this.#refreshWarned = true;
+        return undefined;
+      }
+    });
+    this.#queue = next;
+    return next;
   }
 
   /**
@@ -320,7 +569,7 @@ export class RemoteWorkspace {
       // Once: the earlier checkpoint is kept, and a failure that persists would repeat every turn.
       if (!this.#warned)
         this.#options.warn(
-          `The sandbox's changes could not be saved this time (${String((error as Error)?.message ?? error).slice(0, 200)}). The last saved copy is kept and the next turn tries again.`,
+          `The sandbox's changes could not be saved this time (${printable(String((error as Error)?.message ?? error).slice(0, 200))}). The last saved copy is kept and the next turn tries again.`,
         );
       this.#warned = true;
     } finally {

@@ -55,6 +55,7 @@ describe.skipIf(process.platform === "win32")("probeRemoteWorkspace", () => {
     expect(await probeRemoteWorkspace(local(), dir)).toEqual({
       files: true,
       tar: true,
+      gzip: true,
       git: true,
       directory: "empty",
     });
@@ -114,6 +115,7 @@ describe("remoteWorkspaceLines", () => {
   const good = {
     files: true,
     tar: true,
+    gzip: true,
     git: true,
     directory: "empty",
   } as const;
@@ -128,6 +130,7 @@ describe("remoteWorkspaceLines", () => {
     expect(lines).toEqual([
       "ok remote file API: the backend exposes read, write and stat",
       "ok remote tar: tar found in the sandbox",
+      "ok remote gzip: gzip found in the sandbox",
       "ok remote git: git found in the sandbox",
       "ok remote directory: the project directory is empty",
       expect.stringMatching(
@@ -141,7 +144,13 @@ describe("remoteWorkspaceLines", () => {
     const lines = render({
       ...base,
       network: "allow",
-      probe: { ...good, tar: false, git: false, directory: "not-empty" },
+      probe: {
+        ...good,
+        tar: false,
+        gzip: false,
+        git: false,
+        directory: "not-empty",
+      },
     });
     expect(lines).toContain(
       "bad remote tar: tar is not in the sandbox; use a template that includes it",
@@ -161,6 +170,34 @@ describe("remoteWorkspaceLines", () => {
         probe: { ...good, files: false, error: "no file API" },
       })[0],
     ).toMatch(/^bad remote file API: no file API; use a sandbox backend/);
+  });
+
+  it("shows the setup command without running it, and warns when the network is denied", () => {
+    const setup = { command: "npm ci", timeoutSeconds: 900 };
+    expect(render({ ...base, network: "allow", setup, probe: good })).toContain(
+      "info remote setup: npm ci (runs once after the upload, up to 900 s)",
+    );
+    expect(render({ ...base, setup, probe: good })).toContainEqual(
+      expect.stringMatching(
+        /^warn remote setup: npm ci .*network is denied, so an install will fail: set sandbox\.network\.mode: allow/,
+      ),
+    );
+  });
+
+  it("shows this project's setup cache state as one row", () => {
+    expect(
+      render({
+        ...base,
+        probe: good,
+        cache:
+          "no snapshot yet; the first session saves one after the setup command",
+      }),
+    ).toContain(
+      "info remote setup cache: no snapshot yet; the first session saves one after the setup command",
+    );
+    expect(render({ ...base, probe: good }).join("\n")).not.toContain(
+      "setup cache",
+    );
   });
 
   it("names the waiting patch and its pull command, and says when nothing was checked", () => {

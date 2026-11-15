@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readUserRules } from "./engine.js";
+import { filesystemPolicyDigest, readUserRules } from "./engine.js";
 
 let state: string;
 beforeEach(() => {
@@ -47,5 +47,46 @@ describe("the user policy file", () => {
       ]),
     );
     expect(readUserRules(state).map((rule) => rule.id)).toEqual(["no-push"]);
+  });
+});
+
+describe("filesystemPolicyDigest", () => {
+  const options = (mode = "personal") =>
+    ({
+      stateDir: state,
+      distributionDir: state,
+      lock: {
+        deployment: { mode },
+        governance: { manifest: { policy: { enforced: [], defaults: [] } } },
+      },
+    }) as never;
+  const write = (rules: unknown[]) =>
+    writeFileSync(join(state, "config", "policy.json"), JSON.stringify(rules));
+
+  it("changes with a filesystem rule, not with an unrelated one", async () => {
+    const none = await filesystemPolicyDigest(options(), []);
+    write([
+      {
+        id: "p",
+        action: "shell.execute",
+        resource: "git push",
+        effect: "deny",
+      },
+    ]);
+    expect(await filesystemPolicyDigest(options(), [])).toBe(none);
+    write([
+      {
+        id: "r",
+        action: "filesystem.read",
+        resource: "**/.env",
+        effect: "deny",
+      },
+    ]);
+    const denied = await filesystemPolicyDigest(options(), []);
+    expect(denied).not.toBe(none);
+    expect(await filesystemPolicyDigest(options(), [])).toBe(denied);
+    expect(await filesystemPolicyDigest(options("managed"), [])).not.toBe(
+      denied,
+    );
   });
 });

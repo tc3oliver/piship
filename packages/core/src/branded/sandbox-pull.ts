@@ -3,6 +3,7 @@
 // validated first, shown, confirmed, and applied with `git apply --3way`,
 // which neither commits nor runs any hook. With the main slot empty, the oldest
 // patch another session parked for the project is pulled the same way.
+// `--branch` applies it in a new git worktree on a new branch instead, and commits there.
 import {
   chmodSync,
   existsSync,
@@ -14,7 +15,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
 import { runGit as git } from "../git-run.js";
@@ -170,20 +171,52 @@ async function confirm(question: string): Promise<boolean> {
   });
 }
 
+function usage(command: string): string {
+  return [
+    `Usage: ${command} sandbox pull [--diff] [--yes] [--branch [<name>]]`,
+    `       ${command} sandbox pull --discard`,
+    "  --diff           also print the full diff before asking",
+    "  --yes            apply without the y/N question",
+    "  --branch [name]  apply on a new branch in a new git worktree and commit there; your checkout is not touched (default name sandbox/<session>)",
+    "  --discard        drop the stored changes without applying them",
+  ].join("\n");
+}
+
+/** A path as a shell would need it written. */
+const shellPath = (path: string) =>
+  /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
+
 export async function sandboxPull(
   ctx: BrandedContext,
   flags: readonly string[],
 ): Promise<void> {
-  const yes = flags.includes("--yes");
-  const discard = flags.includes("--discard");
-  const showDiff = flags.includes("--diff");
-  if (
-    flags.some((f) => f !== "--yes" && f !== "--discard" && f !== "--diff") ||
-    (discard && (yes || showDiff))
-  )
+  const command = ctx.metadata.app.command;
+  if (flags.includes("--help") || flags.includes("-h")) {
+    ctx.out(usage(command));
+    return;
+  }
+  let yes = false;
+  let discard = false;
+  let showDiff = false;
+  let branch: string | true | undefined;
+  let unknown = false;
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (flag === "--yes") yes = true;
+    else if (flag === "--discard") discard = true;
+    else if (flag === "--diff") showDiff = true;
+    else if (flag === "--branch") {
+      const next = flags[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        branch = next;
+        i++;
+      } else branch = true;
+    } else unknown = true;
+  }
+  if (unknown || (discard && (yes || showDiff || branch !== undefined)))
     throw failure(
-      "Usage: sandbox pull [--diff] [--yes] or sandbox pull --discard",
-      `Run ${ctx.metadata.app.command} sandbox pull with --discard alone, or with --diff and --yes`,
+      `${unknown ? "That option is not recognised. " : "--discard cannot be combined with other options. "}${usage(command)}`,
+      `Run ${command} sandbox pull --help, or ${command} sandbox pull --discard alone`,
     );
   const top = await git(process.cwd(), ["rev-parse", "--show-toplevel"]).catch(
     () => undefined,
@@ -252,7 +285,7 @@ export async function sandboxPull(
   )
     throw failure(
       `The stored sandbox changes belong to ${checkpoint.meta.projectRoot}, not ${root}`,
-      `Run ${cmd} inside that project, or ${cmd} --discard`,
+      `Run cd ${shellPath(checkpoint.meta.projectRoot)} && ${cmd} to pull them there, or ${cmd} --discard to drop them`,
     );
   const policy = checkpoint.meta.pull;
   const interactiveOnly = policy?.confirm === "required";
@@ -285,10 +318,10 @@ export async function sandboxPull(
       `The sandbox is gone; the patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
       "POLICY_DENIED",
     );
-  const problem = pathProblem(root, result.files);
-  if (problem) {
+  // A path on this machine the patch cannot be written over, named with the next step.
+  const refusePath = (problem: NonNullable<ReturnType<typeof pathProblem>>) => {
     const name = printable(problem.path);
-    throw failure(
+    return failure(
       problem.why === "symlink"
         ? `The sandbox patch touches ${name}, which is or sits under a symbolic link on this machine. A sandbox patch never writes through or over a symlink, so nothing was applied`
         : problem.why === "directory"
@@ -299,7 +332,10 @@ export async function sandboxPull(
         : `Move or remove ${problem.why === "directory" ? "that directory" : "that file"}, then run ${cmd} again. The stored patch is at ${storedPatch}`,
       "POLICY_DENIED",
     );
-  }
+  };
+  const problem =
+    branch === undefined ? pathProblem(root, result.files) : undefined;
+  if (problem) throw refusePath(problem);
   if (result.skipped.length > 0) {
     const n = result.skipped.length;
     ctx.out(
@@ -316,7 +352,7 @@ export async function sandboxPull(
     .toString("utf8")
     .trim();
   const base = checkpoint.meta.baseHead;
-  if (base && head && base !== head)
+  if (branch === undefined && base && head && base !== head)
     ctx.out(
       `Your branch has moved since the session started (${base.slice(0, 7)} -> ${head.slice(0, 7)}); the patch is applied to the current tree.`,
     );
@@ -336,143 +372,357 @@ export async function sandboxPull(
       `  and ${changes.length - LISTED} more; use ${cmd} --diff to see them`,
     );
   if (showDiff) ctx.out(printable(checkpoint.patch.toString("utf8")));
-  else
-    ctx.out(
-      `The full diff is not shown; run ${cmd} --diff to review it before applying.`,
-    );
-  // What will happen, before the one prompt: plain apply touches only the work tree;
-  // --3way merges against the index, stages what it writes, and may leave conflict markers.
-  const apply = (extra: readonly string[]) =>
-    git(
-      root,
-      ["apply", "--whitespace=nowarn", ...extra, ...result.excludeArgs, "-"],
-      checkpoint.patch,
-    );
-  // Why git could not apply: a stale or edited tree is cured by committing; anything else is shown as git said it.
-  const cannot = (stderr: string, what: string) => {
-    const shown = printable(stderr).trim();
-    const edited = [...stderr.matchAll(/error: (.+?): does not match index/g)]
-      .map((m) => printable(m[1] ?? ""))
-      .join(", ");
-    return failure(
-      `${what}: ${shown}`,
-      /does not match index|patch does not apply|does not exist in index|already exists in working directory/.test(
-        stderr,
-      )
-        ? `Commit or stash your edits to ${edited || "the files the patch names"}, then run ${cmd} again (it then merges 3-way; conflicts get markers). The stored patch is at ${storedPatch}`
-        : `The stored patch is at ${storedPatch}; run ${cmd} --discard to drop it`,
-      "SANDBOX_UNAVAILABLE",
+  else ctx.out(`The full diff is not shown; run ${cmd} --diff to see it.`);
+
+  // --branch: a new branch in a new worktree, so the checkout in `root` is never written.
+  let target = root;
+  // Set only once `git worktree add` succeeded: cleanup never touches what this command did not make.
+  let created: { path: string; name: string; start: string } | undefined;
+  let finished = false;
+  const sessionId =
+    checkpoint.meta.session.replace(/[^0-9A-Za-z._-]/g, "").slice(0, 8) ||
+    checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
+  const cmdBranch =
+    typeof branch === "string"
+      ? `${cmd} --branch ${shellPath(branch)}`
+      : `${cmd} --branch`;
+  // No hook and no fsmonitor in any git command of this flow. The user's own clean/smudge
+  // filters stay, as in a normal pull: they are the user's git configuration.
+  const quiet = [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+  ];
+  const bgit = (cwd: string, args: readonly string[], input?: Buffer) =>
+    git(cwd, [...quiet, ...args], input);
+  const abandon = async () => {
+    if (!created) return;
+    const { path, name, start } = created;
+    created = undefined;
+    const removed = await bgit(root, [
+      "worktree",
+      "remove",
+      "--force",
+      path,
+    ]).catch(() => undefined);
+    if (removed?.code !== 0) {
+      // git made this directory a moment ago; it is ours to remove.
+      rmSync(path, { recursive: true, force: true });
+      await bgit(root, ["worktree", "prune"]).catch(() => undefined);
+    }
+    // Delete the ref only while it still points where this command put it.
+    await bgit(root, ["update-ref", "-d", `refs/heads/${name}`, start]).catch(
+      () => undefined,
     );
   };
-  const plainCheck = await apply(["--check"]);
-  let threeWay = false;
-  if (plainCheck.code === 0)
-    ctx.out(
-      `${result.files.length} file(s) apply cleanly to your working tree.`,
-    );
-  else {
-    const merge = await apply(["--3way", "--check"]);
-    const conflicts = [
-      ...merge.stderr.matchAll(/Applied patch to '(.*)' with conflicts/g),
-    ].map((m) => printable(m[1] ?? ""));
-    if (merge.code !== 0)
-      throw cannot(
-        merge.stderr,
-        "The sandbox patch cannot be applied to your working tree, and nothing was changed",
-      );
-    threeWay = true;
-    ctx.out(
-      conflicts.length > 0
-        ? `The patch needs a 3-way merge and will conflict in: ${conflicts.join(", ")}. Conflict markers will be written there, and git will stage the patch's files.`
-        : "The patch needs a 3-way merge against your index; git will stage the patch's files.",
-    );
-  }
-  if (!yes) {
-    if (!process.stdin.isTTY)
+  if (branch !== undefined) {
+    const name = typeof branch === "string" ? branch : `sandbox/${sessionId}`;
+    // `--branch` expands `@{-1}` and `@{u}` to another branch's name; accept only a name it echoes back.
+    const valid = await git(root, ["check-ref-format", "--branch", name]);
+    if (
+      valid.code !== 0 ||
+      valid.stdout.toString("utf8").trim() !== name ||
+      name.includes("@{") ||
+      name.startsWith("-") ||
+      name === "HEAD" ||
+      name === "@" ||
+      Buffer.byteLength(name) > 200
+    )
       throw failure(
-        "sandbox pull needs confirmation and there is no terminal",
-        interactiveOnly
-          ? `Run ${cmd} in a terminal`
-          : `Review the changes, then run ${cmd} --yes`,
+        `${printable(name)} is not a valid branch name, so nothing was created`,
+        `Run ${cmd} --branch <name> with a name git accepts (see git check-ref-format), or ${cmd} --branch for the default`,
       );
     if (
-      !(await confirm(
-        `Apply ${result.files.length} file(s) to ${root}? [y/N] `,
-      ))
-    ) {
-      ctx.out("Nothing was applied; the changes are still stored.");
-      return;
-    }
-  }
-  // The work tree may have changed during the prompt. Plain apply when the patch still fits
-  // (git checks, then writes: a failed write is undone from the snapshot, never retried as a
-  // merge); --3way only when it does not fit.
-  const again = pathProblem(root, result.files);
-  if (again)
-    throw failure(
-      `${printable(again.path)} changed on this machine while you were deciding, so nothing was applied`,
-      `Run ${cmd} again`,
-    );
-  const snapshot = takeSnapshot(root, result.files);
-  const fits = (await apply(["--check"])).code === 0;
-  threeWay = !fits;
-  const applied = await apply(fits ? [] : ["--3way"]);
-  if (applied.code !== 0) {
-    // --3way conflicts leave markers in the file, an unmerged index entry, and the rest of
-    // the patch applied and staged. Running pull again cannot work.
-    const conflicted = fits
-      ? []
-      : (
-          await git(root, ["diff", "--name-only", "--diff-filter=U", "-z"])
-        ).stdout
-          .toString("utf8")
-          .split("\0")
-          .filter(Boolean);
-    if (conflicted.length > 0)
+      (
+        await git(root, [
+          "show-ref",
+          "--verify",
+          "--quiet",
+          `refs/heads/${name}`,
+        ])
+      ).code === 0
+    )
       throw failure(
-        `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file(s): ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
-        `Resolve the conflict markers and git add those files. Do not run pull again: the patch is already applied. The stored copy is kept; run ${cmd} --discard when you are done`,
+        `The branch ${printable(name)} already exists, so nothing was created`,
+        `Run ${cmd} --branch <another name>. The stored patch is at ${storedPatch}`,
+      );
+    const path = join(
+      dirname(root),
+      `${basename(root)}-sandbox-${name.replace(/^sandbox\//, "").replace(/[^0-9A-Za-z._-]+/g, "-")}`,
+    );
+    let present = true;
+    try {
+      lstatSync(path);
+    } catch {
+      present = false;
+    }
+    if (present)
+      throw failure(
+        `${path} already exists, so no worktree was created`,
+        `Run ${cmd} --branch <another name>, or remove that directory first`,
+      );
+    const baseKnown =
+      !!base &&
+      (await git(root, ["cat-file", "-e", `${base}^{commit}`])).code === 0;
+    const start = baseKnown ? base : head;
+    if (!start)
+      throw failure(
+        "This repository has no commit yet, so there is nothing to branch from",
+        `Make a first commit, or run ${cmd} without --branch`,
+      );
+    const startLabel = baseKnown
+      ? `${start.slice(0, 7)}, the commit the session started from`
+      : base
+        ? `your current HEAD ${start.slice(0, 7)} (the session's starting commit ${base.slice(0, 7)} is not in this repository)`
+        : `your current HEAD ${start.slice(0, 7)}`;
+    const added = await bgit(root, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      name,
+      path,
+      start,
+    ]);
+    if (added.code !== 0)
+      throw failure(
+        `git could not create the worktree: ${printable(added.stderr).trim()}`,
+        `Nothing was changed. Fix that, or run ${cmd} without --branch`,
         "SANDBOX_UNAVAILABLE",
       );
-    // Not a conflict: git may have written some files before failing. Say what is true.
-    const untouched = matchesSnapshot(root, snapshot);
-    const restored = untouched || restoreSnapshot(root, snapshot);
-    throw cannot(
-      applied.stderr,
-      untouched
-        ? "The patch could not be applied and nothing was changed"
-        : restored
-          ? "The patch could not be written completely; the files it names were put back exactly as they were, so nothing was changed"
-          : `The patch could not be written completely and some of ${[...snapshot.files.keys()].slice(0, 5).map(printable).join(", ")} could not be put back; check git status`,
-    );
+    created = {
+      path,
+      name,
+      start: (await git(root, ["rev-parse", `refs/heads/${name}`])).stdout
+        .toString("utf8")
+        .trim(),
+    };
+    target = realpathSync.native(path);
+    ctx.out(`Created branch ${name} in ${target} from ${startLabel}.`);
   }
-  // Archive the bytes that were applied. A newer checkpoint written while the
-  // prompt was open stays where it is.
-  mkdirSync(paths.applied, { recursive: true, mode: 0o700 });
-  const stamp = checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
-  writeFileSync(join(paths.applied, `${stamp}.patch`), checkpoint.patch, {
-    mode: 0o600,
-  });
-  writeFileSync(
-    join(paths.applied, `${stamp}.json`),
-    `${JSON.stringify(checkpoint.meta)}\n`,
-    { mode: 0o600 },
-  );
-  if (checkpoint.meta.checkpointCommit)
-    writeRemoteWorkspacePulled(ctx.stateDir, root, {
-      session: checkpoint.meta.session,
-      checkpointCommit: checkpoint.meta.checkpointCommit,
+  try {
+    if (branch !== undefined) {
+      const again = pathProblem(target, result.files);
+      if (again) throw refusePath(again);
+    }
+    // What will happen, before the one prompt: plain apply touches only the work tree;
+    // --3way merges against the index, stages what it writes, and may leave conflict markers.
+    const apply = (extra: readonly string[]) =>
+      (branch === undefined ? git : bgit)(
+        target,
+        ["apply", "--whitespace=nowarn", ...extra, ...result.excludeArgs, "-"],
+        checkpoint.patch,
+      );
+    // Why git could not apply: a stale or edited tree is cured by committing; anything else is shown as git said it.
+    const cannot = (stderr: string, what: string) => {
+      const shown = printable(stderr).trim();
+      if (branch !== undefined)
+        return failure(
+          `The sandbox patch does not fit a clean checkout of the branch's starting commit, so no branch or worktree was kept: ${shown}`,
+          `The session started from your working tree, which held edits that are not in that commit. Run ${cmd} without --branch to apply the patch to your working tree, or commit your work and run ${cmdBranch} again. The stored patch is at ${storedPatch}`,
+          "SANDBOX_UNAVAILABLE",
+        );
+      const edited = [...stderr.matchAll(/error: (.+?): does not match index/g)]
+        .map((m) => printable(m[1] ?? ""))
+        .join(", ");
+      return failure(
+        `${what}: ${shown}`,
+        /does not match index|patch does not apply|does not exist in index|already exists in working directory/.test(
+          stderr,
+        )
+          ? `Commit or stash your edits to ${edited || "the files the patch names"}, then run ${cmd} again (it then merges 3-way; conflicts get markers). The stored patch is at ${storedPatch}`
+          : `The stored patch is at ${storedPatch}; run ${cmd} --discard to drop it`,
+        "SANDBOX_UNAVAILABLE",
+      );
+    };
+    const where =
+      branch === undefined ? "your working tree" : "the new worktree";
+    const plainCheck = await apply(["--check"]);
+    let threeWay = false;
+    if (plainCheck.code === 0)
+      ctx.out(`${result.files.length} file(s) apply cleanly to ${where}.`);
+    else {
+      const merge = await apply(["--3way", "--check"]);
+      const conflicts = [
+        ...merge.stderr.matchAll(/Applied patch to '(.*)' with conflicts/g),
+      ].map((m) => printable(m[1] ?? ""));
+      if (merge.code !== 0)
+        throw cannot(
+          merge.stderr,
+          "The sandbox patch cannot be applied to your working tree, and nothing was changed",
+        );
+      threeWay = true;
+      ctx.out(
+        conflicts.length > 0
+          ? `The patch needs a 3-way merge and will conflict in: ${conflicts.join(", ")}. Conflict markers will be written there, and git will stage the patch's files.`
+          : "The patch needs a 3-way merge against your index; git will stage the patch's files.",
+      );
+    }
+    if (!yes) {
+      if (!process.stdin.isTTY)
+        throw failure(
+          "sandbox pull needs confirmation and there is no terminal",
+          interactiveOnly
+            ? `Run ${cmdBranch} in a terminal`
+            : `Review the changes, then run ${cmdBranch} --yes`,
+        );
+      if (
+        !(await confirm(
+          branch === undefined
+            ? `Apply ${result.files.length} file(s) to ${root}? [y/N] `
+            : `Commit ${result.files.length} file(s) on branch ${created?.name} in ${target}? [y/N] `,
+        ))
+      ) {
+        await abandon();
+        finished = true;
+        ctx.out(
+          `Nothing was applied${branch === undefined ? "" : " and the new branch and worktree were removed"}; the changes are still stored. Run ${cmdBranch} again to apply them, or ${cmd} --discard to drop them.`,
+        );
+        return;
+      }
+    }
+    // The work tree may have changed during the prompt. Plain apply when the patch still fits
+    // (git checks, then writes: a failed write is undone from the snapshot, never retried as a
+    // merge); --3way only when it does not fit.
+    const again = pathProblem(target, result.files);
+    if (again)
+      throw failure(
+        `${printable(again.path)} changed on this machine while you were deciding, so nothing was applied`,
+        `Run ${cmdBranch} again`,
+      );
+    const snapshot = takeSnapshot(target, result.files);
+    const fits = (await apply(["--check"])).code === 0;
+    threeWay = !fits;
+    const applied = await apply(fits ? [] : ["--3way"]);
+    if (applied.code !== 0) {
+      // --3way conflicts leave markers in the file, an unmerged index entry, and the rest of
+      // the patch applied and staged. Running pull again cannot work.
+      const conflicted =
+        fits || branch !== undefined
+          ? []
+          : (
+              await git(target, [
+                "diff",
+                "--name-only",
+                "--diff-filter=U",
+                "-z",
+              ])
+            ).stdout
+              .toString("utf8")
+              .split("\0")
+              .filter(Boolean);
+      if (conflicted.length > 0)
+        throw failure(
+          `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file(s): ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
+          `Resolve the conflict markers and git add those files. Do not run pull again: the patch is already applied. The stored copy is kept; run ${cmd} --discard when you are done`,
+          "SANDBOX_UNAVAILABLE",
+        );
+      // Not a conflict: git may have written some files before failing. Say what is true.
+      const untouched = matchesSnapshot(target, snapshot);
+      const restored = untouched || restoreSnapshot(target, snapshot);
+      throw cannot(
+        applied.stderr,
+        untouched
+          ? "The patch could not be applied and nothing was changed"
+          : restored
+            ? "The patch could not be written completely; the files it names were put back exactly as they were, so nothing was changed"
+            : `The patch could not be written completely and some of ${[...snapshot.files.keys()].slice(0, 5).map(printable).join(", ")} could not be put back; check git status`,
+      );
+    }
+    // --branch: commit the result so the branch is usable; no hook, and the user's own signing config applies.
+    let committed: string | undefined;
+    let notCommitted: string | undefined;
+    if (created) {
+      // Exactly the patch's validated paths, forced past ignore rules, never read as pathspec magic.
+      const literal = [
+        "--literal-pathspecs",
+        "add",
+        "-A",
+        "-f",
+        "--",
+        ...result.files,
+      ];
+      const staged = await bgit(target, literal);
+      const commit =
+        staged.code === 0
+          ? await bgit(target, [
+              "commit",
+              "--no-verify",
+              "-q",
+              "-m",
+              `sandbox: changes from session ${sessionId}`,
+            ])
+          : staged;
+      const left =
+        commit.code === 0
+          ? (
+              await bgit(target, [
+                "--literal-pathspecs",
+                "status",
+                "--porcelain",
+                "-z",
+                "--",
+                ...result.files,
+              ])
+            ).stdout.toString("utf8")
+          : "";
+      if (commit.code === 0 && left === "")
+        committed = (
+          await bgit(target, ["rev-parse", "--short", "HEAD"])
+        ).stdout
+          .toString("utf8")
+          .trim();
+      else if (commit.code === 0)
+        notCommitted = "some of the patch's files are not in the commit";
+      else
+        notCommitted =
+          printable(commit.stderr).trim().split("\n")[0] || "git commit failed";
+    }
+    finished = true;
+    // Archive the bytes that were applied. A newer checkpoint written while the
+    // prompt was open stays where it is.
+    mkdirSync(paths.applied, { recursive: true, mode: 0o700 });
+    const stamp = checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
+    writeFileSync(join(paths.applied, `${stamp}.patch`), checkpoint.patch, {
+      mode: 0o600,
     });
-  const latest = readRemoteWorkspaceCheckpoint(sourceState, root);
-  if (latest?.patch.equals(checkpoint.patch) !== false) remove();
-  else
-    ctx.err(
-      `A newer sandbox checkpoint was saved while this one was open; it is still stored for the next ${cmd}.`,
+    writeFileSync(
+      join(paths.applied, `${stamp}.json`),
+      `${JSON.stringify(checkpoint.meta)}\n`,
+      { mode: 0o600 },
     );
-  ctx.out(
-    threeWay
-      ? `Applied ${result.files.length} file(s) to ${root} with a 3-way merge; git staged them. Nothing was committed.`
-      : `Applied ${result.files.length} file(s) to ${root}. They are changed in the working tree only: nothing was staged or committed.`,
-  );
-  others();
+    if (checkpoint.meta.checkpointCommit)
+      writeRemoteWorkspacePulled(ctx.stateDir, root, {
+        session: checkpoint.meta.session,
+        checkpointCommit: checkpoint.meta.checkpointCommit,
+      });
+    const latest = readRemoteWorkspaceCheckpoint(sourceState, root);
+    if (latest?.patch.equals(checkpoint.patch) !== false) remove();
+    else
+      ctx.err(
+        `A newer sandbox checkpoint was saved while this one was open; it is still stored for the next ${cmd}.`,
+      );
+    if (created) {
+      const dir = shellPath(target);
+      ctx.out(
+        `Applied ${result.files.length} file(s) in ${target} on branch ${created.name}${threeWay ? " with a 3-way merge" : ""}. ${
+          committed
+            ? `Committed as ${committed}; your own checkout was not touched.`
+            : `They are staged but not committed (${notCommitted}). Fix that (for example set user.name and user.email), then run git -C ${dir} commit; your own checkout was not touched.`
+        }`,
+      );
+      ctx.out(
+        `Next: git -C ${dir} log -1 to look at it, git merge ${shellPath(created.name)} to take it, or git worktree remove ${dir} && git branch -D ${shellPath(created.name)} to throw it away.`,
+      );
+    } else
+      ctx.out(
+        threeWay
+          ? `Applied ${result.files.length} file(s) to ${root} with a 3-way merge; git staged them. Nothing was committed.`
+          : `Applied ${result.files.length} file(s) to ${root}. They are changed in the working tree only: nothing was staged or committed.`,
+      );
+    others();
+  } finally {
+    if (!finished) await abandon();
+  }
 }

@@ -1,10 +1,13 @@
 // Seeds a remote workspace: the project's files, filtered by policy, go into
-// the sandbox as one tar, which is extracted and committed as a baseline the
+// the sandbox as tar.gz parts, which are extracted and committed as a baseline the
 // session's changes are later diffed against.
 import { execFile } from "node:child_process";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { promisify } from "node:util";
+import { gzip as gzipCallback } from "node:zlib";
 import type { ActiveSandbox } from "@piship/sandbox";
+import { printable } from "./printable.js";
 import { packTar, type TarEntry } from "./tar.js";
 
 export const SEED_TOTAL_CAP = 200 * 1024 * 1024;
@@ -12,9 +15,23 @@ export const SEED_FILE_CAP = 50 * 1024 * 1024;
 export const ARCHIVE = ".piship-seed.tar";
 /** Written before the extract, removed once the baseline is committed: it marks a seed of ours that did not finish. */
 export const MARKER = ".piship-seed.started";
+/** The uploaded paths, NUL separated: an overlay removes what is not on this list. */
+export const KEEP = ".piship-seed.keep";
+/** Sent inside the last part: the uploaded paths as JSON, which the finish moves into `.git`, out of the baseline and every patch. */
+export const UPLOADED = ".piship-seed.uploaded";
+/** Sent inside the last part of an overlay: what the snapshot's seed uploaded and this one does not, NUL separated. */
+export const DROP = ".piship-seed.drop";
+/** Where the snapshot keeps the list of uploaded paths, made before any agent acted. */
+const LIST = ".git/piship-uploaded.json";
+export const RESERVED = new Set([ARCHIVE, MARKER, KEEP, UPLOADED, DROP]);
 const EXTRACT_TIMEOUT_SECONDS = 300;
 /** The upload of the whole project may be large: far longer than a file call. */
 const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+/** Uncompressed bytes (files and tar headers) in one uploaded part; a larger file is a part of its own. */
+const PART_BYTES = 32 * 1024 * 1024;
+/** Files inspected or read at once. */
+const CONCURRENCY = 32;
+const gzip = promisify(gzipCallback);
 
 export type SeedSkipReason =
   | "policy"
@@ -58,23 +75,106 @@ function git(root: string, args: string[]): Promise<Buffer> {
   });
 }
 
-// The extract and baseline, as specified; each tool is checked first so a
+/**
+ * How the project reaches the sandbox. `fresh`: into an empty directory.
+ * `overlay`: over the tree a snapshot of this host's own earlier seed holds
+ * (the project, its `.git`, and the setup command's ignored output): the
+ * files are extracted over it, what is not uploaded and not ignored is
+ * removed, and the baseline is made anew. `reset`: clean an overlay that
+ * failed, then seed as `fresh`.
+ */
+export type SeedMode = "fresh" | "overlay" | "reset";
+
+// The extract and baseline, as specified: PREPARE runs with the first part,
+// EXTRACT with each, FINISH with the last. Each tool is checked first so a
 // template without it fails with its name.
-const SCRIPT = [
-  'for t in tar git; do command -v $t >/dev/null 2>&1 || { echo "piship-missing-tool:$t"; exit 127; }; done',
-  // Our own unfinished seed (the marker) is cleaned and redone.
-  `if [ -e ${MARKER} ]; then find . -mindepth 1 -maxdepth 1 ! -name ${ARCHIVE} ! -name ${MARKER} -exec rm -rf -- {} +; fi`,
-  // The baseline holds exactly the project: a workdir with anything else in
-  // it (a home directory's dotfiles) is refused.
-  `[ -z "$(ls -A | grep -v -e '^\\.piship-seed\\.tar$' -e '^\\.piship-seed\\.started$')" ] || { echo "piship-workdir-not-empty"; exit 1; }`,
-  `: > ${MARKER}`,
-  `tar -xf ${ARCHIVE} && rm -f ${ARCHIVE}`,
+const CLEAN = `find . -mindepth 1 -maxdepth 1 ! -name ${ARCHIVE} ! -name ${MARKER} -exec rm -rf -- {} +`;
+const TOOLS =
+  'for t in tar gzip git; do command -v $t >/dev/null 2>&1 || { echo "piship-missing-tool:$t"; exit 127; }; done';
+const prepare = (mode: SeedMode) =>
+  mode === "overlay"
+    ? [TOOLS, `: > ${MARKER}`]
+    : [
+        TOOLS,
+        // Our own unfinished seed (the marker) is cleaned and redone.
+        mode === "reset" ? CLEAN : `if [ -e ${MARKER} ]; then ${CLEAN}; fi`,
+        // The baseline holds exactly the project: a workdir with anything else in
+        // it (a home directory's dotfiles) is refused.
+        `[ -z "$(ls -A | grep -v -e '^\\.piship-seed\\.tar$' -e '^\\.piship-seed\\.started$')" ] || { echo "piship-workdir-not-empty"; exit 1; }`,
+        `: > ${MARKER}`,
+      ];
+const EXTRACT = `tar -xzf ${ARCHIVE} && rm -f ${ARCHIVE}`;
+// Two temporary indexes, one of the uploaded paths and one of every file git
+// would add: the second minus the first is what is neither uploaded nor
+// ignored, which the project no longer has.
+const REMOVE_STALE = [
+  // What the snapshot's seed uploaded and this one does not, whatever .gitignore says.
+  `xargs -0 rm -f -- < ${DROP}`,
+  `rm -f ${DROP}`,
+  'idx="$(git rev-parse --git-dir)/piship-keep.idx"',
+  'export GIT_INDEX_FILE="$idx"',
+  'rm -f "$idx"',
+  `git update-index --add -z --stdin < ${KEEP}`,
+  'keep="$(git write-tree)"',
+  'rm -f "$idx"',
+  `git add -A -- . ':(exclude)${MARKER}' ':(exclude)${KEEP}' ':(exclude)${UPLOADED}'`,
+  'all="$(git write-tree)"',
+  'rm -f "$idx"',
+  "unset GIT_INDEX_FILE",
+  // GNU xargs runs rm once with no operands, which is a no-op with -f.
+  'git diff-tree -r --name-only --diff-filter=A -z "$keep" "$all" | xargs -0 rm -f --',
+];
+const finish = (mode: SeedMode) => [
+  ...(mode === "overlay" ? [...REMOVE_STALE, "rm -rf .git"] : []),
   "git init -q",
-  `git add -A -- . ':(exclude)${MARKER}'`,
+  `mv ${UPLOADED} ${LIST}`,
+  `git add -A -- . ':(exclude)${MARKER}' ':(exclude)${KEEP}'`,
   "git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit -q --allow-empty -m piship-baseline",
-  `rm -f ${MARKER}`,
+  `rm -f ${MARKER} ${KEEP}`,
   "git rev-parse HEAD",
-].join(" && ");
+];
+
+/** A path the seed could have uploaded: anything else in a list from the sandbox is not trusted. */
+function uploadable(path: unknown): path is string {
+  if (typeof path !== "string" || path.includes("\0")) return false;
+  const segments = path.split("/");
+  return !(
+    RESERVED.has(path) ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    segments.some(
+      (s) => s === ".." || s === "." || s === "" || s.toLowerCase() === ".git",
+    )
+  );
+}
+
+/**
+ * The paths the snapshot's seed uploaded, or undefined when the list is
+ * missing or malformed: the overlay then cannot tell what is stale, and the
+ * sandbox is reset instead of trusted in part.
+ */
+async function readUploadedList(
+  sandbox: SeedSandbox,
+  root: string,
+  signal: AbortSignal | undefined,
+): Promise<string[] | undefined> {
+  try {
+    const data = await sandbox.files.read(
+      join(root, ...LIST.split("/")),
+      signal ? { signal } : {},
+    );
+    const value = JSON.parse(data.toString("utf8")) as {
+      version?: unknown;
+      paths?: unknown;
+    } | null;
+    if (value?.version !== 1 || !Array.isArray(value.paths)) return undefined;
+    return value.paths.every(uploadable)
+      ? (value.paths as string[])
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
@@ -119,9 +219,12 @@ export async function seedRemoteWorkspace(
     caps?: { totalCap: number; fileCap: number };
     /** One line before the upload, which can take a while. */
     progress?: (message: string) => void;
+    /** Where the project goes; default `fresh`. */
+    mode?: SeedMode;
   } = {},
 ): Promise<SeedResult> {
   const root = await realpath(projectRoot);
+  const mode = options.mode ?? "fresh";
   let listing: Buffer;
   try {
     listing = await git(root, ["ls-files", "-co", "--exclude-standard", "-z"]);
@@ -130,6 +233,14 @@ export async function seedRemoteWorkspace(
       "a remote workspace needs the project to be a git work tree, and git could not list its files; run git init in the project, then try again",
     );
   }
+  const previous =
+    mode === "overlay"
+      ? await readUploadedList(sandbox, root, options.signal)
+      : undefined;
+  if (mode === "overlay" && !previous)
+    throw new Error(
+      "the cached sandbox does not say what it was seeded with, so it cannot be overlaid",
+    );
   const baseHead = await git(root, ["rev-parse", "HEAD"])
     .then((out) => out.toString("utf8").trim() || null)
     .catch(() => null);
@@ -151,102 +262,187 @@ export async function seedRemoteWorkspace(
 
   const totalCap = options.caps?.totalCap ?? SEED_TOTAL_CAP;
   const fileCap = options.caps?.fileCap ?? SEED_FILE_CAP;
-  const entries: TarEntry[] = [];
   const skipped: { path: string; reason: SeedSkipReason }[] = [];
-  let total = 0;
-  const seen = new Set<string>();
-  for (const path of listing.toString("utf8").split("\0")) {
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
-    const skip = (reason: SeedSkipReason) => skipped.push({ path, reason });
+  interface Candidate {
+    path: string;
+    absolute: string;
+    mode: number;
+    size: number;
+  }
+  // Decide one listed path: a file to upload, a reason to leave it out, or
+  // nothing (tracked but deleted).
+  const inspect = async (
+    path: string,
+  ): Promise<Candidate | SeedSkipReason | undefined> => {
     const segments = path.split("/");
-    if (segments.some((s) => s.toLowerCase() === ".git")) {
-      skip("git");
-      continue;
-    }
-    if (path === ARCHIVE || path === MARKER) {
-      skip("reserved");
-      continue;
-    }
+    if (segments.some((s) => s.toLowerCase() === ".git")) return "git";
+    if (RESERVED.has(path)) return "reserved";
     if (
       path.startsWith("/") ||
       path.includes("\\") ||
       segments.some((s) => s === ".." || s === "." || s === "")
-    ) {
-      skip("outside");
-      continue;
-    }
+    )
+      return "outside";
     const absolute = join(root, ...segments);
     const info = await lstat(absolute).catch(() => undefined);
-    if (!info) continue; // tracked but deleted
-    if (info.isSymbolicLink()) {
-      skip("symlink");
-      continue;
-    }
-    if (!info.isFile()) {
-      skip("not-file"); // a directory, such as a submodule
-      continue;
-    }
+    if (!info) return undefined; // tracked but deleted
+    if (info.isSymbolicLink()) return "symlink";
+    if (!info.isFile()) return "not-file"; // a directory, such as a submodule
     // A symlinked directory on the way would lead outside the project.
     const real = await realpath(absolute).catch(() => undefined);
     if (
       real === undefined ||
       relative(root, real).split(sep).join("/") !== path
-    ) {
-      skip("outside");
-      continue;
-    }
-    if ((await decide(absolute)) !== "allow") {
-      skip("policy");
-      continue;
-    }
-    if (info.size > fileCap) {
-      skip("too-large");
-      continue;
-    }
-    total += info.size;
-    if (total > totalCap)
-      throw new SeedRefused(
-        `the files uploaded to the sandbox (those git tracks or does not ignore, and policy allows) are over the ${size(totalCap)} total cap of the remote workspace seed; add the large directories to .gitignore, then try again`,
-      );
-    const data = await readFile(absolute);
-    entries.push({
-      path,
-      mode: modeOf(path, info),
-      data,
+    )
+      return "outside";
+    if ((await decide(absolute)) !== "allow") return "policy";
+    if (info.size > fileCap) return "too-large";
+    return { path, absolute, mode: modeOf(path, info), size: info.size };
+  };
+  // Only metadata is held here; the bytes are read part by part below.
+  const files: Candidate[] = [];
+  let total = 0;
+  const paths = [...new Set(listing.toString("utf8").split("\0"))].filter(
+    Boolean,
+  );
+  for (let at = 0; at < paths.length; at += CONCURRENCY) {
+    const batch = paths.slice(at, at + CONCURRENCY);
+    const found = await Promise.all(batch.map(inspect));
+    found.forEach((item, i) => {
+      if (typeof item === "string")
+        skipped.push({ path: batch[i] as string, reason: item });
+      else if (item) files.push(item);
     });
+    for (const item of found) {
+      if (typeof item !== "object") continue;
+      total += item.size;
+      if (total > totalCap)
+        throw new SeedRefused(
+          `the files uploaded to the sandbox (those git tracks or does not ignore, and policy allows) are over the ${size(totalCap)} total cap of the remote workspace seed; add the large directories to .gitignore, then try again`,
+        );
+    }
   }
 
-  const sizeOf = entries.reduce((n, e) => n + e.data.length, 0);
-  options.progress?.(
-    `Uploading ${entries.length} files (${(sizeOf / 1024 / 1024).toFixed(1)} MiB) to the sandbox`,
-  );
-  await sandbox.files.write(join(root, ARCHIVE), packTar(entries), {
-    timeoutMs: UPLOAD_TIMEOUT_MS,
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
-  let output = "";
-  const result = await sandbox.exec(SCRIPT, root, {
-    onData: (chunk) => {
-      output += chunk.toString("utf8");
-    },
-    timeout: EXTRACT_TIMEOUT_SECONDS,
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
-  if (output.includes("piship-workdir-not-empty"))
-    throw new SeedRefused(
-      "the sandbox's project directory is not empty, so the remote workspace cannot start from a clean baseline; set sandbox.workdir to a new directory",
+  // Several tar.gz parts of bounded size, uploaded and extracted one after
+  // another, so memory is about one part and not the project.
+  const parts: Candidate[][] = [[]];
+  let partBytes = 0;
+  for (const file of files) {
+    const weight = file.size + 512; // the tar header counts
+    const current = parts.at(-1) as Candidate[];
+    if (current.length && partBytes + weight > PART_BYTES) {
+      parts.push([]);
+      partBytes = 0;
+    }
+    (parts.at(-1) as Candidate[]).push(file);
+    partBytes += weight;
+  }
+  const mib = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  const uploaded: string[] = [];
+  let sent = 0;
+  let commit = "";
+  for (const [index, part] of parts.entries()) {
+    const entries: TarEntry[] = [];
+    for (let at = 0; at < part.length; at += CONCURRENCY) {
+      const batch = await Promise.all(
+        part.slice(at, at + CONCURRENCY).map(async (file) => {
+          try {
+            return {
+              path: file.path,
+              mode: file.mode,
+              data: await readFile(file.absolute),
+            };
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT")
+              return undefined; // deleted since it was listed
+            throw error;
+          }
+        }),
+      );
+      for (const entry of batch) if (entry) entries.push(entry);
+    }
+    const last = index === parts.length - 1;
+    const partPaths = entries.map((entry) => entry.path);
+    const now = [...uploaded, ...partPaths];
+    if (last) {
+      const keep = new Set(now);
+      const drop = (previous ?? []).filter((path) => !keep.has(path));
+      entries.push(
+        {
+          path: UPLOADED,
+          mode: 0o600,
+          data: Buffer.from(JSON.stringify({ version: 1, paths: now })),
+        },
+        ...(mode === "overlay"
+          ? [
+              {
+                path: DROP,
+                mode: 0o600,
+                data: Buffer.from(drop.map((path) => `${path}\0`).join("")),
+              },
+            ]
+          : []),
+      );
+    }
+    let packed: Buffer;
+    try {
+      packed = packTar(entries);
+    } catch (error) {
+      // The same files pack the same way: a retry cannot cure it.
+      throw new SeedRefused(
+        `the project's files cannot be packed for the sandbox (${(error as Error).message})`,
+      );
+    }
+    await sandbox.files.write(
+      join(root, ARCHIVE),
+      await gzip(packed, { level: 1 }),
+      {
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
     );
-  const missing = /piship-missing-tool:(\w+)/.exec(output);
-  if (missing)
-    throw new SeedRefused(
-      `the sandbox has no ${missing[1]}, which a remote workspace needs; use a template that includes tar and git`,
+    if (last && mode === "overlay")
+      await sandbox.files.write(
+        join(root, KEEP),
+        Buffer.from(now.map((path) => `${path}\0`).join(""), "utf8"),
+        options.signal ? { signal: options.signal } : {},
+      );
+    let output = "";
+    const result = await sandbox.exec(
+      [
+        ...(index === 0 ? prepare(mode) : []),
+        EXTRACT,
+        ...(last ? finish(mode) : []),
+      ].join(" && "),
+      root,
+      {
+        onData: (chunk) => {
+          output += chunk.toString("utf8");
+        },
+        timeout: EXTRACT_TIMEOUT_SECONDS,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
     );
-  const commit = output.trim().split(/\s+/).at(-1) ?? "";
-  if (result.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(commit))
-    throw new Error(
-      `seeding the sandbox failed (exit ${result.exitCode}): ${output.trim().slice(-300)}`,
+    if (output.includes("piship-workdir-not-empty"))
+      throw new SeedRefused(
+        "the sandbox's project directory is not empty, so the remote workspace cannot start from a clean baseline; set sandbox.workdir to a new directory",
+      );
+    const missing = /piship-missing-tool:(\w+)/.exec(output);
+    if (missing)
+      throw new SeedRefused(
+        `the sandbox has no ${missing[1]}, which a remote workspace needs; use a template that includes tar, gzip and git`,
+      );
+    commit = output.trim().split(/\s+/).at(-1) ?? "";
+    if (result.exitCode !== 0 || (last && !/^[0-9a-f]{40,64}$/.test(commit)))
+      throw new Error(
+        `seeding the sandbox failed (exit ${result.exitCode}): ${printable(output.trim().slice(-300))}`,
+      );
+    uploaded.push(...partPaths);
+    sent += part.reduce((n, file) => n + file.size, 0);
+    options.progress?.(
+      `Uploading to the sandbox: ${index + 1}/${parts.length} parts, ${mib(sent)} of ${mib(total)} MiB`,
     );
+  }
   const reasons = new Map(skipped.map((item) => [item.path, item.reason]));
   const relativeOf = (hostPath: string) =>
     relative(root, hostPath).split(sep).join("/");
@@ -317,7 +513,7 @@ export async function seedRemoteWorkspace(
   const seeded: SeedResult = {
     baseHead,
     baselineCommit: commit,
-    uploaded: entries.map((entry) => entry.path),
+    uploaded,
     skipped,
     lookup,
   };

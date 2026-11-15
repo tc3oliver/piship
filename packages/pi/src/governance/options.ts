@@ -91,6 +91,8 @@ export interface GovernanceOptions {
   /** Receives sandbox credential lifecycle events (purpose sandbox). */
   readonly onSandboxCredentialEvent?: (event: AccessEvent) => void;
   readonly homeDir?: string;
+  /** False for a session that only inspects the sandbox (doctor): it must start from the template, not a snapshot. */
+  readonly sandboxCache?: false;
   /**
    * `--yolo`: approve asks for this session only, without storing anything.
    * A managed distribution must allow auto-approval (`policy.userAuto`);

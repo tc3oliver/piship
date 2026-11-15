@@ -84,6 +84,7 @@ const BACKEND_FIELDS: Readonly<
   workdir: ["e2b-compatible", "kubernetes-agent-sandbox"],
   user: ["e2b-compatible"],
   credential: ["custom", "e2b-compatible", "kubernetes-agent-sandbox"],
+  lifetimeSeconds: ["e2b-compatible", "kubernetes-agent-sandbox"],
 };
 const KUBERNETES_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const TEMPLATE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
@@ -108,9 +109,39 @@ function remoteWorkdir(value: unknown, path: string): string {
   return item;
 }
 
+/** `sandbox.remote.cacheKeyFiles`: relative `/` paths, a bounded number. */
+function cacheKeyFiles(value: unknown): readonly string[] {
+  const path = "sandbox.remote.cacheKeyFiles";
+  const files = list(value, path, (entry, at) => {
+    const file = plainString(entry, at, 256);
+    if (
+      file.startsWith("/") ||
+      file.includes("\\") ||
+      file
+        .split("/")
+        .some((segment) => !segment || segment === "." || segment === "..")
+    )
+      unsafe(
+        at,
+        "Use a path inside the project, with / separators and no . or .. segments",
+      );
+    return file;
+  });
+  if (files.length > 32) fail(path, "Use at most 32 files");
+  return files;
+}
+
 /** `sandbox.remote`: only the keys that were set are kept. */
 function parseRemote(value: unknown): NonNullable<SandboxConfig["remote"]> {
-  const remote = optionalRecord(value, "sandbox.remote", ["seed", "pull"]);
+  const remote = optionalRecord(value, "sandbox.remote", [
+    "seed",
+    "pull",
+    "refresh",
+    "setup",
+    "setupTimeoutSeconds",
+    "cache",
+    "cacheKeyFiles",
+  ]);
   const seed = optionalRecord(remote.seed, "sandbox.remote.seed", [
     "maxTotalMiB",
     "maxFileMiB",
@@ -145,6 +176,38 @@ function parseRemote(value: unknown): NonNullable<SandboxConfig["remote"]> {
   return {
     ...(Object.keys(seedOut).length ? { seed: seedOut } : {}),
     ...(Object.keys(pullOut).length ? { pull: pullOut } : {}),
+    ...(remote.refresh === undefined
+      ? {}
+      : {
+          refresh: oneOf(remote.refresh, "sandbox.remote.refresh", [
+            "auto",
+            "off",
+          ] as const),
+        }),
+    ...(remote.setup === undefined
+      ? {}
+      : { setup: plainString(remote.setup, "sandbox.remote.setup", 2048) }),
+    ...(remote.setupTimeoutSeconds === undefined
+      ? {}
+      : {
+          setupTimeoutSeconds: positiveInteger(
+            remote.setupTimeoutSeconds,
+            "sandbox.remote.setupTimeoutSeconds",
+            900,
+            7200,
+          ),
+        }),
+    ...(remote.cache === undefined
+      ? {}
+      : {
+          cache: oneOf(remote.cache, "sandbox.remote.cache", [
+            "snapshot",
+            "off",
+          ] as const),
+        }),
+    ...(remote.cacheKeyFiles === undefined
+      ? {}
+      : { cacheKeyFiles: cacheKeyFiles(remote.cacheKeyFiles) }),
   };
 }
 
@@ -295,6 +358,16 @@ function parseBackend(
     ...(sandbox.workdir === undefined
       ? {}
       : { workdir: remoteWorkdir(sandbox.workdir, "sandbox.workdir") }),
+    ...(sandbox.lifetimeSeconds === undefined
+      ? {}
+      : {
+          lifetimeSeconds: positiveInteger(
+            sandbox.lifetimeSeconds,
+            "sandbox.lifetimeSeconds",
+            3600,
+            86400,
+          ),
+        }),
     ...(sandbox.user === undefined
       ? {}
       : {
@@ -324,7 +397,9 @@ export function parseSandbox(
   const sandbox = optionalRecord(value, "sandbox", [
     "required",
     "provider",
-    ...Object.keys(BACKEND_FIELDS),
+    ...Object.keys(BACKEND_FIELDS).filter(
+      (key) => v6 || key !== "lifetimeSeconds",
+    ),
     ...(v6 ? ["httpTransport", "workspace", "remote"] : []),
     "filesystem",
     "network",
