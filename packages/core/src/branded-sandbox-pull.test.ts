@@ -122,7 +122,7 @@ describe("sandbox pull", () => {
   it("shows the diff only with --diff", async () => {
     checkpoint();
     await runSandbox(ctx, ["pull", "--yes"]);
-    expect(out.join("\n")).toMatch("run sandbox pull --diff");
+    expect(out.join("\n")).toMatch("run demo sandbox pull --diff");
     expect(out.join("\n")).not.toContain("+three");
   });
 
@@ -142,6 +142,105 @@ describe("sandbox pull", () => {
     const paths = remoteWorkspacePaths(state, repo);
     expect(existsSync(paths.patch)).toBe(false);
     expect(readdirSync(paths.applied)).toHaveLength(2);
+    // The plain apply touches the work tree only.
+    expect(git(repo, "diff", "--cached", "--name-only").toString()).toBe("");
+    expect(out.join("\n")).toMatch("nothing was staged or committed");
+  });
+
+  /** A modification of `file` (committed as `before` in a clone) the way a sandbox would send it. */
+  function modification(file: string, before: string, after: string): Buffer {
+    const clone = join(temp, `mod-${file}`);
+    git(temp, "clone", "-q", repo, clone);
+    writeFileSync(join(clone, file), before);
+    git(clone, "add", "-A");
+    git(clone, "commit", "-q", "--allow-empty", "-m", "seed");
+    writeFileSync(join(clone, file), after);
+    git(clone, "add", "-A");
+    return git(clone, "diff", "--cached", "--binary", "HEAD");
+  }
+  const lines = (n: number, edits: Record<number, string> = {}) =>
+    Array.from({ length: n }, (_, i) => edits[i + 1] ?? `line${i + 1}`)
+      .join("\n")
+      .concat("\n");
+  const store = (patch: Buffer) =>
+    writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+      session: "m",
+      baseHead: null,
+      files: 1,
+    });
+
+  it("keeps an unstaged host edit in the same file and stages nothing", async () => {
+    writeFileSync(join(repo, "big.txt"), lines(40));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "big");
+    store(modification("big.txt", lines(40), lines(40, { 35: "SANDBOX" })));
+    writeFileSync(join(repo, "big.txt"), lines(40, { 2: "MINE" }));
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(readFileSync(join(repo, "big.txt"), "utf8")).toBe(
+      lines(40, { 2: "MINE", 35: "SANDBOX" }),
+    );
+    expect(git(repo, "diff", "--cached", "--name-only").toString()).toBe("");
+    expect(out.join("\n")).toMatch("apply cleanly");
+  });
+
+  it("applies an edit to a seeded file that is untracked on the host", async () => {
+    store(modification("seed.txt", "s1\ns2\n", "s1\nS2\n"));
+    writeFileSync(join(repo, "seed.txt"), "s1\ns2\n");
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(readFileSync(join(repo, "seed.txt"), "utf8")).toBe("s1\nS2\n");
+    expect(git(repo, "diff", "--cached", "--name-only").toString()).toBe("");
+  });
+
+  it("changes nothing and keeps the user's content when an unstaged edit overlaps", async () => {
+    checkpoint();
+    writeFileSync(join(repo, "a.txt"), "one\nmine\n");
+    const failed = await runSandbox(ctx, ["pull", "--yes"]).then(
+      () => undefined,
+      (error: Error & { userAction?: string; code?: string }) => error,
+    );
+    expect(failed?.message).toMatch(/nothing was changed/);
+    expect(failed?.userAction).toMatch(/demo sandbox pull again/);
+    expect(failed?.userAction).toContain("latest.patch");
+    expect(failed).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\nmine\n");
+    expect(existsSync(join(repo, "b.txt"))).toBe(false);
+    expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);
+  });
+
+  it("says before the prompt that a staged overlap will conflict", async () => {
+    checkpoint();
+    writeFileSync(join(repo, "a.txt"), "one\nmine\n");
+    git(repo, "add", "a.txt");
+    await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+      /conflicts/,
+    );
+    expect(out.join("\n")).toMatch(
+      "needs a 3-way merge and will conflict in: a.txt",
+    );
+  });
+
+  it("says when the branch moved since the session started", async () => {
+    checkpoint();
+    const clone = remoteWorkspacePaths(state, repo);
+    const meta = JSON.parse(readFileSync(clone.meta, "utf8"));
+    writeFileSync(
+      clone.meta,
+      JSON.stringify({ ...meta, baseHead: "abc1234deadbeef" }),
+    );
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(out.join("\n")).toMatch(
+      /Your branch has moved since the session started \(abc1234 -> [0-9a-f]{7}\)/,
+    );
+  });
+
+  it("refuses with the stored patch path and a policy code", async () => {
+    checkpoint(SYMLINK);
+    const failed = await runSandbox(ctx, ["pull", "--yes"]).then(
+      () => undefined,
+      (error: Error & { userAction?: string }) => error,
+    );
+    expect(failed).toMatchObject({ code: "POLICY_DENIED" });
+    expect(failed?.userAction).toContain("latest.patch");
   });
 
   it("refuses without a terminal and without --yes, leaving the tree alone", async () => {
@@ -285,11 +384,9 @@ describe("sandbox pull", () => {
       () => undefined,
       (error: Error & { userAction?: string }) => error,
     );
-    expect(failed?.message).toMatch(
-      /applied with conflicts in 1 file\(s\): a\.txt/,
-    );
+    expect(failed?.message).toMatch(/conflicts in 1 file\(s\): a\.txt/);
     expect(failed?.message).toMatch(/other files are applied and staged/);
-    expect(failed?.userAction).toMatch(/Do not run sandbox pull again/);
+    expect(failed?.userAction).toMatch(/Do not run pull again/);
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toContain("<<<<<<<");
     expect(readFileSync(join(repo, "b.txt"), "utf8")).toBe("new\n");
     const paths = remoteWorkspacePaths(state, repo);
@@ -301,7 +398,7 @@ describe("sandbox pull", () => {
     checkpoint();
     writeFileSync(join(repo, "b.txt"), "in the way\n");
     await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
-      /nothing was applied/,
+      /nothing was changed/,
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);

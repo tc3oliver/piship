@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  normalizeProjectRoot,
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
@@ -318,5 +319,22 @@ describe("remote workspace checkpoint", () => {
     expect(
       readRemoteWorkspaceCheckpoint(state, join(temp, "other")),
     ).toBeUndefined();
+  });
+});
+
+describe("normalizeProjectRoot", () => {
+  it("makes the two Windows spellings of a root one", () => {
+    expect(normalizeProjectRoot("C:\\Users\\me\\proj", "win32")).toBe(
+      "c:/Users/me/proj",
+    );
+    expect(normalizeProjectRoot("c:/Users/me/proj", "win32")).toBe(
+      "c:/Users/me/proj",
+    );
+  });
+  it("leaves other platforms alone", () => {
+    expect(normalizeProjectRoot("/Users/Me/proj", "darwin")).toBe(
+      "/Users/Me/proj",
+    );
+    expect(normalizeProjectRoot("/a\\b", "linux")).toBe("/a\\b");
   });
 });

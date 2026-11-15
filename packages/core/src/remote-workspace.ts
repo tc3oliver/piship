@@ -44,11 +44,27 @@ export interface RemoteWorkspaceMeta {
   };
 }
 
+/**
+ * One spelling of a project root for the project key and for comparing roots:
+ * the session (its cwd) and `sandbox pull` (git's top-level) reach the same
+ * directory by different strings. On Windows the separators become `/` and the
+ * drive letter lower case; elsewhere the path is unchanged.
+ */
+export function normalizeProjectRoot(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") return path;
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
+}
+
 function realOrResolved(path: string): string {
   try {
-    return realpathSync(path);
+    return normalizeProjectRoot(realpathSync.native(path));
   } catch {
-    return resolve(path);
+    return normalizeProjectRoot(resolve(path));
   }
 }
 
