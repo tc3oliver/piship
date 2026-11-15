@@ -260,10 +260,10 @@ describe.runIf(HOST_EVIDENCED)(
       await installed();
       const tree = join(appsDir(), "1.0.0");
       const placed = join(tree, "node_modules", "alpha", "package.json");
-      const stats = lstatSync(placed);
-      if (stats.nlink > 1) {
+      const stats = lstatSync(placed, { bigint: true });
+      if (stats.nlink > 1n) {
         const object = objects().find(
-          (path) => lstatSync(path).ino === stats.ino,
+          (path) => lstatSync(path, { bigint: true }).ino === stats.ino,
         );
         expect(object).toBeDefined();
         if (process.platform !== "win32" && process.getuid?.() !== 0) {

@@ -164,8 +164,8 @@ describe("the file store", () => {
       );
       // The placed file belongs to its installation: it is not read-only.
       expect(statSync(a).mode & 0o200).not.toBe(0);
-      expect(lstatSync(a).ino).not.toBe(
-        lstatSync(objectOf(store, "original")).ino,
+      expect(lstatSync(a, { bigint: true }).ino).not.toBe(
+        lstatSync(objectOf(store, "original"), { bigint: true }).ino,
       );
     },
   );
@@ -194,7 +194,9 @@ describe("the file store", () => {
     await place(next, c, "shipped bytes");
     expect(readFileSync(c, "utf8")).toBe("shipped bytes");
     expect(next.counts.repaired).toBe(1);
-    expect(lstatSync(c).ino).not.toBe(lstatSync(a).ino);
+    expect(lstatSync(c, { bigint: true }).ino).not.toBe(
+      lstatSync(a, { bigint: true }).ino,
+    );
     expect(verifyStore({ root }).damaged).toEqual([]);
   });
 
