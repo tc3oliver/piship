@@ -295,6 +295,13 @@ export class GovernanceSession {
           });
         },
         warn: (message) => this.#notice(message),
+        notify: (message) => this.#notice(message),
+        ...(this.manifest.sandbox.remote?.seed
+          ? { seedLimits: this.manifest.sandbox.remote.seed }
+          : {}),
+        ...(this.manifest.sandbox.remote?.pull
+          ? { pull: this.manifest.sandbox.remote.pull }
+          : {}),
         checkpoints: options.subagent === undefined,
       });
   }

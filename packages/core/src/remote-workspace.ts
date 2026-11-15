@@ -112,6 +112,7 @@ export function writeRemoteWorkspaceCheckpoint(
     ...(info.protectedPaths
       ? { protectedPaths: [...info.protectedPaths] }
       : {}),
+    ...(info.pull ? { pull: info.pull } : {}),
   };
   writeFileAtomic(paths.patch, patch, { directoryMode: 0o700 });
   writeFileAtomic(paths.meta, `${JSON.stringify(meta)}\n`, {

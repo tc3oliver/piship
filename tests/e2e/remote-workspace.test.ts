@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -11,9 +12,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
@@ -147,6 +148,16 @@ function build(services: Services) {
     expect(done.status, done.stderr).toBe(0);
   }
   const command = launcher(join(temp, "dist", "acmecode"), "acmecode");
+  const runIn = (
+    cwd: string,
+    args: string[],
+    extra: NodeJS.ProcessEnv = {},
+  ): Promise<Result> =>
+    branded(command, args, {
+      cwd,
+      env: { ...env, ...extra },
+      approve: (url) => services.approve(url),
+    });
   const project = join(temp, "project");
   mkdirSync(project, { recursive: true });
   const git = (...args: string[]) => {
@@ -166,11 +177,8 @@ function build(services: Services) {
     state: join(temp, "state", "acmecode"),
     project,
     run: (args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Result> =>
-      branded(command, args, {
-        cwd: project,
-        env: { ...env, ...extra },
-        approve: (url) => services.approve(url),
-      }),
+      runIn(project, args, extra),
+    runIn,
   };
 }
 
@@ -243,5 +251,200 @@ describe.skipIf(process.platform === "win32")(
       });
       expect(log.stdout.trim().split("\n")).toHaveLength(1);
     }, 600000);
+  },
+);
+
+// Round trips: a change made in the sandbox is what the host tree holds after
+// `sandbox pull`. One built distribution serves every case; each case gets its
+// own project and its own "remote" directory.
+describe.skipIf(process.platform === "win32")(
+  "remote workspace round trips",
+  () => {
+    let services: Services;
+    let dist: ReturnType<typeof build>;
+    let cases = 0;
+    beforeAll(async () => {
+      services = await startLocalServices();
+      dist = build(services);
+      temporary.splice(temporary.indexOf(dist.temp), 1);
+      const login = await dist.run(["login"], {
+        RW_REMOTE_DIR: join(dist.temp, "login-remote"),
+      });
+      expect(login.status, login.stderr).toBe(0);
+    }, 300000);
+    afterAll(async () => {
+      await services.close();
+      rmSync(dist.temp, { recursive: true, force: true });
+    }, 60000);
+
+    /** A fresh git project holding `files`, a sandbox that runs `command`, and the pull. */
+    async function session(
+      files: Record<string, string | Buffer>,
+      command: string,
+      options: { commit?: boolean; modes?: Record<string, number> } = {},
+    ) {
+      const dir = join(dist.temp, `case-${++cases}`);
+      const project = join(dir, "project");
+      const remote = join(dir, "remote");
+      mkdirSync(project, { recursive: true });
+      mkdirSync(remote);
+      const git = (...args: string[]) => {
+        const done = spawnSync(
+          "git",
+          ["-c", "user.name=t", "-c", "user.email=t@invalid", ...args],
+          { cwd: project, encoding: "utf8" },
+        );
+        expect(done.status, done.stderr).toBe(0);
+      };
+      git("init", "-q");
+      for (const [name, data] of Object.entries(files)) {
+        mkdirSync(dirname(join(project, name)), { recursive: true });
+        writeFileSync(join(project, name), data, {
+          mode: options.modes?.[name] ?? 0o644,
+        });
+      }
+      if (options.commit !== false) {
+        git("add", "-A");
+        git("commit", "-q", "--allow-empty", "-m", "base");
+      }
+      const env = { RW_REMOTE_DIR: remote };
+      services.knobs.gatewayMode = "script";
+      services.knobs.toolScript = [{ name: "bash", arguments: { command } }];
+      const launched = await dist.runIn(project, ["--smoke-model"], env);
+      expect(launched.status, launched.stderr).toBe(0);
+      return {
+        project,
+        remote,
+        launched,
+        read: (name: string) => readFileSync(join(project, name)),
+        pull: () => dist.runIn(project, ["sandbox", "pull", "--yes"], env),
+      };
+    }
+    const bytes = (...values: number[]) => Buffer.from(values);
+
+    it("round-trips a created and a modified binary file", async () => {
+      const s = await session(
+        { "mod.bin": bytes(1, 2, 3) },
+        "printf '\\000\\377\\001\\376' > new.bin && printf '\\377\\000\\377\\000\\010' > mod.bin",
+      );
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(s.read("new.bin").equals(bytes(0, 255, 1, 254))).toBe(true);
+      expect(s.read("mod.bin").equals(bytes(255, 0, 255, 0, 8))).toBe(true);
+    }, 120000);
+
+    it("round-trips a deleted file", async () => {
+      const s = await session({ "a.txt": "a\n", "b.txt": "b\n" }, "rm a.txt");
+      expect((await s.pull()).status).toBe(0);
+      expect(existsSync(join(s.project, "a.txt"))).toBe(false);
+      expect(s.read("b.txt").toString()).toBe("b\n");
+    }, 120000);
+
+    it("round-trips a rename as a delete and an add", async () => {
+      const s = await session({ "old.txt": "same\n" }, "mv old.txt new.txt");
+      expect((await s.pull()).status).toBe(0);
+      expect(existsSync(join(s.project, "old.txt"))).toBe(false);
+      expect(s.read("new.txt").toString()).toBe("same\n");
+    }, 120000);
+
+    it("round-trips an added executable bit", async () => {
+      const s = await session({ "run.sh": "#!/bin/sh\n" }, "chmod +x run.sh");
+      expect(statSync(join(s.project, "run.sh")).mode & 0o111).toBe(0);
+      expect((await s.pull()).status).toBe(0);
+      expect(statSync(join(s.project, "run.sh")).mode & 0o111).not.toBe(0);
+    }, 120000);
+
+    it("round-trips unicode and space-containing names byte for byte", async () => {
+      const s = await session(
+        { "a.txt": "a\n" },
+        "mkdir -p 目錄 && printf 'héllo\\n世界 \\360\\237\\230\\200\\n' > '目錄/檔 案.txt' && printf 'e' > '😀.txt'",
+      );
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(
+        s
+          .read(join("目錄", "檔 案.txt"))
+          .equals(Buffer.from("héllo\n世界 😀\n")),
+      ).toBe(true);
+      expect(s.read("😀.txt").toString()).toBe("e");
+    }, 120000);
+
+    it("round-trips a new file into a repository with no commits", async () => {
+      const s = await session({}, "printf 'b\\n' > b.txt", { commit: false });
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(s.read("b.txt").toString()).toBe("b\n");
+    }, 120000);
+
+    // Bug: `git apply --3way` needs the file in the index, and a repository
+    // with no commits (or any untracked file) has none (sandbox-pull.ts:139).
+    it.fails("round-trips a modified untracked file in a repository with no commits", async () => {
+      const s = await session({ "a.txt": "a\n" }, "printf 'A\\n' > a.txt", {
+        commit: false,
+      });
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(s.read("a.txt").toString()).toBe("A\n");
+    }, 120000);
+
+    it("round-trips an empty repository whose only change is a nested directory", async () => {
+      const s = await session(
+        {},
+        "mkdir -p deep/er/still && printf 'x\\n' > deep/er/still/f.txt",
+        { commit: false },
+      );
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(s.read("deep/er/still/f.txt").toString()).toBe("x\n");
+    }, 120000);
+
+    it("leaves a file skipped by policy at seed time untouched", async () => {
+      const s = await session(
+        { "a.txt": "a\n", ".env": "secret\n" },
+        "ls -A; printf 'A\\n' > a.txt",
+      );
+      // Not uploaded, so the sandbox never had it.
+      expect(existsSync(join(s.remote, ".env"))).toBe(false);
+      expect((await s.pull()).status).toBe(0);
+      expect(s.read("a.txt").toString()).toBe("A\n");
+      expect(s.read(".env").toString()).toBe("secret\n");
+    }, 120000);
+
+    it("reports nothing to apply when the sandbox changed nothing", async () => {
+      const s = await session({ "a.txt": "a\n" }, "cat a.txt");
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(pulled.stdout).toMatch(/no changes/);
+      expect(s.read("a.txt").toString()).toBe("a\n");
+    }, 120000);
+
+    it("keeps an uncommitted local edit to a different file", async () => {
+      const s = await session(
+        { "a.txt": "a\n", "b.txt": "b\n" },
+        "printf 'A\\n' > a.txt",
+      );
+      writeFileSync(join(s.project, "b.txt"), "local\n");
+      const pulled = await s.pull();
+      expect(pulled.status, pulled.stderr).toBe(0);
+      expect(s.read("a.txt").toString()).toBe("A\n");
+      expect(s.read("b.txt").toString()).toBe("local\n");
+    }, 120000);
+
+    it("never loses an uncommitted local edit to the same file", async () => {
+      const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}\n`);
+      const s = await session(
+        { "a.txt": lines.join("") },
+        "sed 's/^line1$/SANDBOX/' a.txt > t && mv t a.txt",
+      );
+      const local = lines.map((l, i) => (i === 11 ? "LOCAL\n" : l)).join("");
+      writeFileSync(join(s.project, "a.txt"), local);
+      const pulled = await s.pull();
+      const now = s.read("a.txt").toString();
+      // `git apply --3way` implies --index, so a dirty file is refused whole:
+      // nothing is merged, and the local edit is kept as it was.
+      expect(pulled.status).toBe(1);
+      expect(pulled.stderr).toMatch(/does not match index/);
+      expect(now).toBe(local);
+    }, 120000);
   },
 );

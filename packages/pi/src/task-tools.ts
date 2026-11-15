@@ -150,7 +150,8 @@ export function taskTools(
         const refusal = planRefusal(gov, "task_start");
         if (refusal) throw blocked(refusal);
         const input = params as { command: string; timeout?: number };
-        if (gov.sandbox.report.isolation === "remote")
+        // A remote workspace runs tasks in its sandbox (seeded first, checkpointed).
+        if (gov.sandbox.report.isolation === "remote" && !gov.remote)
           throw blocked(
             `Background tasks run on this machine; the ${gov.sandbox.report.adapter} sandbox backend runs commands elsewhere. Use bash instead.`,
           );
@@ -172,22 +173,30 @@ export function taskTools(
         let started: string;
         try {
           started = tasks.start(
-            (command, options) =>
-              gov.sandbox.exec(command, spawn.cwd, {
-                onData: options.onData,
-                signal: options.signal,
-                timeout: options.timeout,
-                // The sandbox narrows an environment it contains; an
-                // uncontained task is narrowed as the bash tool narrows it.
-                ...(enforced
-                  ? spawn.env
-                    ? { env: spawn.env }
-                    : {}
-                  : { env: uncontainedEnvironment(spawn.env, "bash") }),
-                ...(!enforced && platform === "win32"
-                  ? { shell: getShellConfig() }
-                  : {}),
-              }),
+            (command, options) => {
+              // A remote workspace is seeded before its first command, and a
+              // task that changes it is checkpointed.
+              const run = (
+                gov.remote?.ensureSeeded() ?? Promise.resolve()
+              ).then(() =>
+                gov.sandbox.exec(command, spawn.cwd, {
+                  onData: options.onData,
+                  signal: options.signal,
+                  timeout: options.timeout,
+                  // The sandbox narrows an environment it contains; an
+                  // uncontained task is narrowed as the bash tool narrows it.
+                  ...(enforced
+                    ? spawn.env
+                      ? { env: spawn.env }
+                      : {}
+                    : { env: uncontainedEnvironment(spawn.env, "bash") }),
+                  ...(!enforced && platform === "win32"
+                    ? { shell: getShellConfig() }
+                    : {}),
+                }),
+              );
+              return gov.remote?.track(run) ?? run;
+            },
             spawn.command,
             input.timeout,
           );

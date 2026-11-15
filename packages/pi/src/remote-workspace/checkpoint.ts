@@ -1,26 +1,40 @@
 // The session side of a remote workspace: the lazy seed, and the checkpoints
 // of the sandbox's work that `sandbox pull` later reviews.
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   REMOTE_PATCH_MAX_BYTES,
+  type RemoteWorkspaceMeta,
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "@piship/core";
 import {
+  SEED_FILE_CAP,
+  SEED_TOTAL_CAP,
+  SeedRefused,
   type SeedResult,
   type SeedSandbox,
   seedRemoteWorkspace,
 } from "./seed.js";
 
 const CHECKPOINT_TIMEOUT_SECONDS = 120;
+const MIB = 1024 * 1024;
 
 /** The diff of everything the sandbox changed since the baseline commit. */
 export async function readSandboxPatch(
   sandbox: SeedSandbox,
   root: string,
   baseline: string,
+  maxBytes = REMOTE_PATCH_MAX_BYTES,
 ): Promise<Buffer> {
   if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error("no baseline");
   const abort = new AbortController();
@@ -36,7 +50,7 @@ export async function readSandboxPatch(
       {
         onData: (chunk) => {
           size += chunk.length;
-          if (size > REMOTE_PATCH_MAX_BYTES) {
+          if (size > maxBytes) {
             tooLarge = true;
             abort.abort();
             return;
@@ -53,7 +67,7 @@ export async function readSandboxPatch(
     });
   if (tooLarge)
     throw new Error(
-      `the sandbox's changes are over the ${REMOTE_PATCH_MAX_BYTES / 1024 / 1024} MiB checkpoint cap`,
+      `the sandbox's changes are over the ${maxBytes / 1024 / 1024} MiB checkpoint cap; delete large generated files in the sandbox or list them in its .gitignore`,
     );
   if (result?.exitCode !== 0)
     throw new Error(
@@ -77,6 +91,14 @@ export interface RemoteWorkspaceOptions {
   /** Called once per successful seed. */
   readonly seeded: (result: SeedResult) => void;
   readonly warn: (message: string) => void;
+  /** An informational line, such as the seed's progress. */
+  readonly notify: (message: string) => void;
+  /** `sandbox.remote.seed`: limits in MiB; the defaults apply to what is absent. */
+  readonly seedLimits?: { maxTotalMiB?: number; maxFileMiB?: number };
+  /** `sandbox.remote.pull`, recorded verbatim in the checkpoint for `sandbox pull`. */
+  readonly pull?: RemoteWorkspaceMeta["pull"];
+  /** Tests only: a smaller checkpoint cap. */
+  readonly maxPatchBytes?: number;
   /**
    * False for a subagent child: its sandbox is its own, and its checkpoint
    * would replace the parent session's `latest.patch`.
@@ -90,6 +112,10 @@ export class RemoteWorkspace {
   #seeded: SeedResult | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #changed = 0;
+  /** Set when something ran that may have changed the sandbox since the last checkpoint. */
+  #dirty = false;
+  #warned = false;
+  #told = false;
   /** Where this session's patch went instead of the shared slot. */
   #parked: string | undefined;
 
@@ -97,29 +123,72 @@ export class RemoteWorkspace {
     this.#options = options;
   }
 
-  /** Seed once, before the first file tool or command; a failure retries on the next call. */
+  /** Run something that may change the sandbox; a checkpoint follows it. Marked again at its end, as a task may outlive the turn. */
+  track<T>(work: Promise<T>): Promise<T> {
+    this.#dirty = true;
+    return work.finally(() => {
+      this.#dirty = true;
+    });
+  }
+
+  /**
+   * Seed once, before the first file tool or command. A transient failure
+   * retries on the next call; one a retry cannot cure (a cap, a missing tool)
+   * is remembered and fails the same way at once.
+   */
   async ensureSeeded(): Promise<void> {
     this.#seed ??= seedRemoteWorkspace(
       this.#options.sandbox,
       this.#options.root,
       this.#options.decide,
+      {
+        progress: this.#options.notify,
+        caps: {
+          totalCap:
+            (this.#options.seedLimits?.maxTotalMiB ?? SEED_TOTAL_CAP / MIB) *
+            MIB,
+          fileCap:
+            (this.#options.seedLimits?.maxFileMiB ?? SEED_FILE_CAP / MIB) * MIB,
+        },
+      },
     ).then(
       (result) => {
         this.#seeded = result;
         this.#options.seeded(result);
+        this.#dirty = false;
+        const left = new Map<string, number>();
+        for (const { reason } of result.skipped)
+          if (reason === "policy" || reason === "too-large")
+            left.set(reason, (left.get(reason) ?? 0) + 1);
+        if (left.size)
+          this.#options.notify(
+            `Left out of the sandbox: ${[...left]
+              .map(([reason, n]) =>
+                reason === "policy"
+                  ? `${n} by policy`
+                  : `${n} over the per-file size cap`,
+              )
+              .join(", ")}.`,
+          );
         return result;
       },
       (error: unknown) => {
-        this.#seed = undefined;
+        if (!(error instanceof SeedRefused)) this.#seed = undefined;
         throw error;
       },
     );
     await this.#seed;
   }
 
-  /** Store the sandbox's patch. Never throws: a failed checkpoint keeps the earlier one. */
-  checkpoint(): Promise<void> {
-    const next = this.#queue.then(() => this.#take());
+  /**
+   * Store the sandbox's patch. Never throws: a failed checkpoint keeps the
+   * earlier one. Unless `always`, nothing is taken when nothing ran since the
+   * last one.
+   */
+  checkpoint(always = false): Promise<void> {
+    const next = this.#queue.then(() =>
+      always || this.#dirty ? this.#take() : undefined,
+    );
     this.#queue = next;
     return next;
   }
@@ -129,43 +198,89 @@ export class RemoteWorkspace {
    * files, naming where they were saved.
    */
   async finish(): Promise<string | undefined> {
-    await this.checkpoint();
+    await this.checkpoint(true);
     const changed = this.#changed;
     if (changed === 0) return undefined;
     const files = `${changed} ${changed === 1 ? "file" : "files"}`;
-    const { command, root, stateDir } = this.#options;
+    const { command } = this.#options;
     if (this.#parked)
-      return `The sandbox changed ${files}, but an earlier session's changes are still waiting to be applied, so these were saved in ${this.#parked} instead. Run ${command} sandbox pull (or sandbox pull --discard) for the earlier changes first, then move latest.patch and latest.json from that directory into ${remoteWorkspacePaths(stateDir, root).dir}.`;
-    return `The sandbox changed ${files}. Review and apply them with: ${command} sandbox pull`;
+      return `${files} changed in the sandbox. An earlier session's changes are waiting too; run ${command} sandbox pull once for each.`;
+    return `${files} changed in the sandbox; run ${command} sandbox pull to bring them to this machine`;
+  }
+
+  /**
+   * Once per session: a notice when an earlier session left changes
+   * unapplied for this project (the shared slot or a parked copy). This
+   * session starts from the host files, so they are not in the sandbox.
+   */
+  waitingNotice(): string | undefined {
+    if (this.#told || !this.#options.checkpoints) return undefined;
+    this.#told = true;
+    const { stateDir, root, command } = this.#options;
+    const parkedDir = join(stateDir, "sandbox-workspace-parked");
+    const states = [stateDir];
+    try {
+      for (const name of readdirSync(parkedDir))
+        states.push(join(parkedDir, name));
+    } catch {
+      // none parked
+    }
+    let files = 0;
+    let latest = "";
+    for (const state of states) {
+      const kept = readRemoteWorkspaceCheckpoint(state, root);
+      if (!kept || kept.patch.length === 0) continue;
+      files += kept.meta.files;
+      if (kept.meta.createdAt > latest) latest = kept.meta.createdAt;
+    }
+    if (files === 0) return undefined;
+    const when = latest.slice(0, 16).replace("T", " ");
+    return `Earlier sandbox changes to ${files} ${files === 1 ? "file" : "files"} (saved ${when} UTC) are still waiting. Run ${command} sandbox pull first; this session starts from your host files.`;
   }
 
   async #take(): Promise<void> {
     const seeded = this.#seeded;
     if (!seeded || !this.#options.checkpoints) return; // the sandbox was never used: nothing to bring back
     const { sandbox, root, stateDir, session } = this.#options;
+    this.#dirty = false;
+    let release: (() => void) | undefined;
     try {
       const patch = await readSandboxPatch(
         sandbox,
         root,
         seeded.baselineCommit,
+        this.#options.maxPatchBytes,
       );
       const files = (patch.toString("latin1").match(/^diff --git /gm) ?? [])
         .length;
       // Another session's unapplied patch is never replaced: its sandbox is
       // gone, so it could not be made again. This session's patch is parked
       // beside it, in the same layout, until that one is pulled or discarded.
+      // The slot is claimed first: a session that cannot claim it parks.
+      release = claimSlot(remoteWorkspacePaths(stateDir, root).dir);
       const kept = readRemoteWorkspaceCheckpoint(stateDir, root);
       const blocked =
-        kept !== undefined &&
-        kept.meta.session !== session &&
-        kept.patch.length > 0;
-      if (blocked && patch.length === 0) return;
+        !release ||
+        (kept !== undefined &&
+          kept.meta.session !== session &&
+          kept.patch.length > 0);
       const parkedState = join(stateDir, "sandbox-workspace-parked", session);
+      if (blocked && patch.length === 0) {
+        // The agent undid its changes: a parked patch would apply what is gone.
+        rmSync(remoteWorkspacePaths(parkedState, root).dir, {
+          recursive: true,
+          force: true,
+        });
+        this.#parked = undefined;
+        this.#changed = 0;
+        return;
+      }
       const info = {
         session,
         baseHead: seeded.baseHead,
         files,
         protectedPaths: this.#options.protectedPaths(),
+        ...(this.#options.pull ? { pull: this.#options.pull } : {}),
       };
       if (blocked) {
         this.#parked = remoteWorkspacePaths(parkedState, root).dir;
@@ -178,10 +293,40 @@ export class RemoteWorkspace {
         }
       }
       this.#changed = files;
+      this.#warned = false;
     } catch (error) {
-      this.#options.warn(
-        `The sandbox's changes could not be saved this time: ${String((error as Error)?.message ?? error).slice(0, 200)}`,
-      );
+      this.#dirty = true; // the next turn tries again
+      // Once: the earlier checkpoint is kept, and a failure that persists would repeat every turn.
+      if (!this.#warned)
+        this.#options.warn(
+          `The sandbox's changes could not be saved this time (${String((error as Error)?.message ?? error).slice(0, 200)}). The last saved copy is kept and the next turn tries again.`,
+        );
+      this.#warned = true;
+    } finally {
+      release?.();
     }
   }
+}
+
+/**
+ * Claim the shared checkpoint slot across processes with an exclusive-create
+ * file beside it; a lock older than a minute is a crashed holder's.
+ */
+function claimSlot(dir: string): (() => void) | undefined {
+  const lock = `${dir}.lock`;
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      return () => rmSync(lock, { force: true });
+    } catch {
+      try {
+        if (Date.now() - statSync(lock).mtimeMs < 60_000) return undefined;
+        unlinkSync(lock);
+      } catch {
+        // gone meanwhile: claim it on the next attempt
+      }
+    }
+  }
+  return undefined;
 }
