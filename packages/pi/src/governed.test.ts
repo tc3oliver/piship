@@ -2486,6 +2486,28 @@ describe("governed shell output persistence", () => {
     );
   });
 
+  // As with a real file stream, the error arrives on a later turn, here only
+  // when the output is flushed, after every write has been accepted.
+  it("contains ENOSPC that arrives only when the output file is flushed", async () => {
+    await containsFullDisk(
+      () =>
+        new Writable({
+          write(_chunk, _encoding, callback) {
+            setImmediate(callback);
+          },
+          final(callback) {
+            setImmediate(() =>
+              callback(
+                Object.assign(new Error("ENOSPC: no space left on device"), {
+                  code: "ENOSPC",
+                }),
+              ),
+            );
+          },
+        }),
+    );
+  });
+
   // A real kernel ENOSPC: every write to /dev/full fails with it.
   it.skipIf(process.platform !== "linux" || !existsSync("/dev/full"))(
     "contains a real ENOSPC from /dev/full",
