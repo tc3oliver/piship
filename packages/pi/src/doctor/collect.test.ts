@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuditStatus } from "@piship/audit";
 import { PiShipError } from "@piship/contracts";
+import { writeRemoteWorkspaceCheckpoint } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../../tests/helpers/x509.js";
 import type { LaunchContext } from "../launch/context.js";
@@ -77,7 +78,7 @@ afterEach(() => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-function context(): LaunchContext {
+function context(sandbox?: object): LaunchContext {
   return {
     metadata: {
       schema: "piship-lock/v1alpha4",
@@ -94,6 +95,7 @@ function context(): LaunchContext {
         manifest: {
           policy: { default: "deny", enforced: [], defaults: [] },
           capabilities: [],
+          ...(sandbox ? { sandbox } : {}),
           mcp: { servers: [] },
           audit: {
             sinks: [
@@ -138,6 +140,64 @@ describe("collectDoctorData", () => {
     expect(output).not.toContain("q-5512");
     for (const name of ["Distribution", "Policy", "Sandbox", "Network"])
       expect(output).toContain(`\n${name}\n`);
+  });
+
+  it("checks the remote workspace on the session's own sandbox and shows a waiting patch", async () => {
+    const commands: string[] = [];
+    session.open.mockImplementation(async () => ({
+      mcpReports: [],
+      audit: { flush: async () => undefined, status: () => lostStatus },
+      close: session.close,
+      remote: {},
+      project: { root: "/work/acme" },
+      sandbox: {
+        files: { stat: async () => ({ type: "directory", size: 0 }) },
+        exec: async (
+          command: string,
+          _cwd: string,
+          options: { onData(chunk: Buffer): void },
+        ) => {
+          commands.push(command);
+          options.onData(
+            Buffer.from(
+              "piship-have:tar\npiship-missing:git\npiship-dir:empty\n",
+            ),
+          );
+          return { exitCode: 0 };
+        },
+      },
+    }));
+    session.close.mockResolvedValue(lostStatus);
+    writeRemoteWorkspaceCheckpoint(
+      join(temp, "state"),
+      "/work/acme",
+      Buffer.from("diff --git a/a b/a\n"),
+      {
+        session: "s1",
+        baseHead: null,
+        files: 2,
+        createdAt: "2026-11-14T10:20:30.000Z",
+      },
+    );
+    const data = await collectDoctorData(
+      context({ workspace: "remote", network: { mode: "deny" } }),
+    );
+    expect(commands).toHaveLength(1);
+    const output = renderDoctor(data).render();
+    expect(output).toContain(
+      `  ✓ ${"remote tar".padEnd(20)} tar found in the sandbox`,
+    );
+    expect(output).toContain(
+      `  ✗ ${"remote git".padEnd(20)} git is not in the sandbox; use a template that includes it`,
+    );
+    expect(output).toContain(
+      `  ! ${"waiting patch".padEnd(20)} 2 files in 1 unapplied sandbox patch (latest saved 2026-11-14 10:20 UTC); run acmecode sandbox pull`,
+    );
+    // Without sandbox.workspace: remote none of it shows.
+    session.open.mockClear();
+    expect(
+      renderDoctor(await collectDoctorData(context())).render(),
+    ).not.toContain("remote tar");
   });
 
   it("reports a cleanup failure at session end apart from audit", async () => {
