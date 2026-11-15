@@ -294,6 +294,7 @@ export class GovernanceSession {
           });
         },
         warn: (message) => this.#notice(message),
+        checkpoints: options.subagent === undefined,
       });
   }
 

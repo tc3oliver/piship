@@ -137,7 +137,7 @@ function context(prompts: string[] = []): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-async function open() {
+async function open(options: { subagent?: boolean } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-rw-")));
   roots.push(root);
   log();
@@ -208,6 +208,7 @@ async function open() {
     }) as unknown as ManagedFetch,
     resolveTemplate: (_key, template) => template,
     homeDir: join(root, "home"),
+    ...(options.subagent ? { subagent: { parentSession: "parent" } } : {}),
   });
   sessions.push(session);
   const tools = governedTools(session, workspace);
@@ -352,6 +353,20 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     expect(stderr.mock.calls.join("")).toContain(
       "The sandbox changed 2 files. Review and apply them with: unit sandbox pull",
     );
+  });
+
+  it("never lets a subagent child write the parent's checkpoint", async () => {
+    const { session, workspace, stateDir, tool } = await open({
+      subagent: true,
+    });
+    await tool("write")({ path: "child.txt", content: "c\n" });
+    await session.remote?.checkpoint();
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await session.close();
+    const paths = remoteWorkspacePaths(stateDir, workspace);
+    expect(existsSync(paths.patch)).toBe(false);
+    expect(existsSync(paths.meta)).toBe(false);
+    expect(stderr.mock.calls.join("")).not.toContain("sandbox pull");
   });
 
   it("takes no checkpoint when the sandbox was never used", async () => {

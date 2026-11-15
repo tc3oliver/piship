@@ -319,6 +319,7 @@ The patch comes from a sandbox that may be compromised, so it is untrusted input
 
 - No live sync: the host working tree, and so your IDE, shows the sandbox's changes only after `sandbox pull`.
 - Pi's own reads that are not tool calls (loading `AGENTS.md`, `@`-mentions) read the host copy.
+- A subagent works in its own sandbox, and its changes are not returned: only the main session's changes are saved for `sandbox pull`.
 - `kubernetes-agent-sandbox` and `native` are not supported.
 - A file the policy denies to read, or asks about, is not in the sandbox. Changes to files outside git's view (ignored files) do not come back.
 - On Windows, the tar uses LF paths and mode 0644. Line endings are those of the host files; if the sandbox is Linux and you check out CRLF, set `* text=auto` in `.gitattributes` so the patch does not rewrite whole files.

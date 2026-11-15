@@ -72,6 +72,11 @@ export interface RemoteWorkspaceOptions {
   /** Called once per successful seed. */
   readonly seeded: (result: SeedResult) => void;
   readonly warn: (message: string) => void;
+  /**
+   * False for a subagent child: its sandbox is its own, and its checkpoint
+   * would replace the parent session's `latest.patch`.
+   */
+  readonly checkpoints: boolean;
 }
 
 export class RemoteWorkspace {
@@ -120,7 +125,7 @@ export class RemoteWorkspace {
 
   async #take(): Promise<void> {
     const seeded = this.#seeded;
-    if (!seeded) return; // the sandbox was never used: nothing to bring back
+    if (!seeded || !this.#options.checkpoints) return; // the sandbox was never used: nothing to bring back
     const { sandbox, root, stateDir, session } = this.#options;
     try {
       const patch = await readSandboxPatch(
