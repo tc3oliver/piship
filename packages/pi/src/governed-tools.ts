@@ -184,6 +184,32 @@ function approvalOptions(
 
 class BlockedError extends Error {}
 
+/** Told to the model after a policy refusal, so it does not loop on it. */
+const NO_RETRY =
+  "Do not retry it or work around the rule; tell the user what was blocked.";
+
+/**
+ * Why `subject` (`This command`, `filesystem.write <path>`, a tool name) did
+ * not run: the user's own answer to a prompt, or the policy and rule that
+ * refused it with who can change that rule. Unless the user ran it (a `!`
+ * command), it also tells the model not to try again.
+ */
+export function policyRefusal(
+  gov: GovernanceSession,
+  decision: ResolvedDecision,
+  subject: string,
+  model = true,
+): string {
+  const asked = `${decision.policyId} rule ${decision.ruleId} asks for approval`;
+  if (decision.approval === "denied")
+    return model
+      ? `${subject} was declined by the user (${asked}). Do not retry it unless the user asks; ask how they want to proceed.`
+      : `${subject} was declined (${asked}).`;
+  if (decision.approval === "cancelled")
+    return `${subject} did not run: the approval prompt was dismissed (${asked}).${model ? " Do not retry it unless the user asks." : ""}`;
+  return `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
+}
+
 export function blocked(message: string): BlockedError {
   return new BlockedError(redact(message));
 }
@@ -338,11 +364,13 @@ export async function gatePath(
       detail: { action, path: classOf },
     });
     throw blocked(
-      builtin === STATE_RULE
-        ? `${path} is in the distribution state directory, which tools never read or write.`
-        : builtin === CLAUDE_CONFIG_RULE
-          ? `${path} controls executable project configuration; managed tools may not change it or its ancestors.`
-          : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
+      `${
+        builtin === STATE_RULE
+          ? `${path} is in the distribution state directory, which tools never read or write.`
+          : builtin === CLAUDE_CONFIG_RULE
+            ? `${path} controls executable project configuration; managed tools may not change it or its ancestors.`
+            : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`
+      } ${NO_RETRY}`,
     );
   }
   if (gov.sandbox.report.level === "enforced") {
@@ -371,8 +399,8 @@ export async function gatePath(
       });
       throw blocked(
         hidden
-          ? `${path} is outside what this distribution lets tools read. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.read.deny")}`
-          : `${path} is outside the directories this distribution lets tools write. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.write.allow")}`,
+          ? `${path} is outside what this distribution lets tools read. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.read.deny")} ${NO_RETRY}`
+          : `${path} is outside the directories this distribution lets tools write. ${manifestChange(gov.options.lock.deployment.mode, "sandbox.filesystem.write.allow")} ${NO_RETRY}`,
       );
     }
   }
@@ -388,9 +416,7 @@ export async function gatePath(
     },
   );
   if (decision.outcome !== "allow")
-    throw blocked(
-      `${action} ${path} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}`,
-    );
+    throw blocked(policyRefusal(gov, decision, `${action} ${path}`));
   return real;
 }
 
@@ -685,7 +711,8 @@ export async function gateCommand(
       gov.currentChannel(),
       events,
     );
-    if (push.outcome !== "allow") return refusal(gov, push);
+    if (push.outcome !== "allow")
+      return policyRefusal(gov, push, "This command", source === "bash");
   }
   const decision = await gov.decide(
     "shell.execute",
@@ -694,11 +721,7 @@ export async function gateCommand(
     events,
   );
   if (decision.outcome === "allow") return undefined;
-  return refusal(gov, decision);
-}
-
-function refusal(gov: GovernanceSession, decision: ResolvedDecision): string {
-  return `This command is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}`;
+  return policyRefusal(gov, decision, "This command", source === "bash");
 }
 
 type ExecOptions = Parameters<BashOperations["exec"]>[2];
