@@ -560,6 +560,66 @@ export function unknownToolDenials(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * Why a filesystem rule pattern can never match a decided path, which is
+ * absolute (`/...` or `C:/...`), symlink-resolved, with `/` separators and no
+ * `.`, `..`, empty, or trailing segment; undefined when it can. Path tokens
+ * (`workspace`, `~`, `tmp`) expand to such a path.
+ */
+function unmatchablePath(pattern: string): string | undefined {
+  const token = ["workspace", "~", "tmp"].find(
+    (name) => pattern === name || pattern.startsWith(`${name}/`),
+  );
+  const rest = token ? pattern.slice(token.length) : pattern;
+  if (/^(?:[A-Za-z]:)?\\/.test(pattern))
+    return `it uses \\ separators, and a decided path uses /; write ${pattern.replace(/\\/g, "/")}`;
+  if (!token && !/^(?:\/|\*|[A-Za-z]:\/)/.test(pattern))
+    return `it is relative, and a decided path is absolute; write workspace/${pattern.replace(/^(?:\.\/)+/, "")} for the project, or **/${pattern.replace(/^(?:\.\/)+/, "")} for any directory`;
+  // Segments after the root or token: a leading `//` (a UNC share) is fine.
+  const segments = (token ? rest : rest.replace(/^\/\/(?=[^/])/, "/"))
+    .split("/")
+    .slice(1);
+  if (segments.some((segment) => segment === "." || segment === ".."))
+    return "it has a . or .. segment, and a decided path is normalized; remove the segment";
+  const trailing = segments.length > 1 && segments.at(-1) === "";
+  if (trailing && !/^[A-Za-z]:\/$/.test(pattern))
+    return `it ends with /, and a decided path does not; write ${pattern}** to cover the directory and everything in it`;
+  if (segments.slice(0, -1).some((segment) => segment === ""))
+    return "it has an empty segment (//), and a decided path does not; remove the extra /";
+  return undefined;
+}
+
+/**
+ * A filesystem `deny` or `ask` whose pattern no decided path can match: the
+ * administrator believes something is denied or asked for, and nothing is.
+ */
+export function unmatchablePathRules(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  return (["enforced", "defaults"] as const).flatMap((list) =>
+    policy[list].flatMap((rule, index) => {
+      if (
+        rule.effect === "allow" ||
+        !["filesystem.read", "filesystem.write", "filesystem.*"].includes(
+          rule.action,
+        )
+      )
+        return [];
+      const why = unmatchablePath(rule.resource);
+      return why
+        ? [
+            {
+              path: `policy.${list}[${index}].resource`,
+              message: `${rule.id} (${rule.effect} ${rule.action}) never matches ${rule.resource}: ${why}`,
+            },
+          ]
+        : [];
+    }),
+  );
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -568,6 +628,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
     ...unusedVariables(manifest),
     ...unknownToolDenials(manifest),
+    ...unmatchablePathRules(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

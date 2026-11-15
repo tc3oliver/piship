@@ -524,3 +524,69 @@ describe("tool.execute denials", () => {
     expect(denials("mcp__other__drop")).toHaveLength(1);
   });
 });
+
+describe("filesystem rules that can never match", () => {
+  const paths = (
+    resource: string,
+    effect = "deny",
+    action = "filesystem.read",
+  ) =>
+    warnings(
+      managed({
+        policy: {
+          default: "ask",
+          enforced: [{ id: "acme.path", action, resource, effect }],
+        },
+      }),
+    ).filter((warning) => warning.path === "policy.enforced[0].resource");
+
+  it("warns, without failing, about patterns no decided path can match", () => {
+    const cases: readonly (readonly [string, RegExp])[] = [
+      [
+        ".env",
+        /never matches \.env: it is relative.*workspace\/\.env.*\*\*\/\.env/,
+      ],
+      ["./.env", /it is relative.*write workspace\/\.env for/],
+      ["src/secrets/**", /it is relative/],
+      ["~/.ssh/", /it ends with \/.*write ~\/\.ssh\/\*\*/],
+      ["/etc/secrets/", /it ends with \//],
+      ["workspace/a/../.env", /a \. or \.\. segment/],
+      ["workspace/./.env", /a \. or \.\. segment/],
+      ["~//.ssh/**", /an empty segment/],
+      [
+        "C:\\Users\\me\\.ssh\\**",
+        /uses \\ separators.*C:\/Users\/me\/\.ssh\/\*\*/,
+      ],
+    ];
+    for (const [resource, message] of cases)
+      expect(paths(resource), resource).toEqual([
+        expect.objectContaining({ message: expect.stringMatching(message) }),
+      ]);
+    expect(paths(".env", "ask", "filesystem.*")).toHaveLength(1);
+  });
+
+  it("accepts every pattern a decided path can match, and ignores allow rules", () => {
+    for (const resource of [
+      "**",
+      "**/.env",
+      "*",
+      "~",
+      "~/",
+      "~/.ssh",
+      "~/.ssh/**",
+      "workspace",
+      "workspace/",
+      "workspace/.env",
+      "workspace/**/node_modules/**",
+      "tmp/**",
+      "/",
+      "/etc/passwd",
+      "//server/share/**",
+      "C:/",
+      "C:/Users/**",
+    ])
+      expect(paths(resource), resource).toEqual([]);
+    expect(paths(".env", "allow")).toEqual([]);
+    expect(paths(".env", "deny", "skill.load")).toEqual([]);
+  });
+});
