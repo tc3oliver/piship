@@ -1252,6 +1252,115 @@ policy:
     expect(error.message).toMatch(
       /Release gate vulnerability: the dependency scan returned no npm audit v2 report/,
     );
+    expect(error.userAction).toMatch(/^Restore npm and registry access/);
+  });
+
+  it("vulnerability: names npm's error summary when the scan gives one", async () => {
+    const { path } = project();
+    const error = await rejection(
+      build(path, {
+        scanner: () => ({ error: { summary: "registry\nsays\tno" } }),
+      }),
+    );
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.message).toMatch(/no npm audit v2 report: registry says no$/);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "vulnerability: an npm audit the registry refuses fails with npm's stderr and an action",
+    async () => {
+      // npm prints a non-report JSON body on stdout and the reason on stderr.
+      const stub = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import { createServer } from "node:http";
+const server = createServer((request, response) => {
+  request.resume().on("end", () => {
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "boom" }));
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(server.address().port));`,
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      try {
+        const port = await new Promise<string>((done, fail) => {
+          stub.stdout.once("data", (chunk) => done(String(chunk).trim()));
+          stub.once("error", fail);
+        });
+        const dir = mkdtempSync(join(tmpdir(), "piship-audit-"));
+        roots.push(dir);
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            name: "x",
+            version: "1.0.0",
+            dependencies: { a: "1.0.0" },
+          }),
+        );
+        writeFileSync(
+          join(dir, "package-lock.json"),
+          JSON.stringify({
+            name: "x",
+            version: "1.0.0",
+            lockfileVersion: 3,
+            requires: true,
+            packages: {
+              "": { name: "x", version: "1.0.0", dependencies: { a: "1.0.0" } },
+              "node_modules/a": { version: "1.0.0" },
+            },
+          }),
+        );
+        const error = await rejection(
+          npmAuditScanner(dir, `http://127.0.0.1:${port}/`),
+        );
+        expect(error.code).toBe("UPDATE_FAILED");
+        expect(error.message).toMatch(
+          /^Release gate vulnerability: the dependency scan returned no npm audit v2 report: .*500/,
+        );
+        expect(error.message).not.toMatch(/\n/);
+        expect(error.userAction).toMatch(/^Restore npm and registry access/);
+      } finally {
+        stub.kill();
+      }
+    },
+  );
+
+  it("refuses a manifest-only gate before any scan starts", async () => {
+    const { path } = project({ managed: true, resources: COMPANY_RESOURCES });
+    const started: string[] = [];
+    const error = await rejection(
+      build(path, {
+        assemble: (...args) => {
+          started.push("assemble");
+          return fakeAssemble(...args);
+        },
+        scanner: () => {
+          started.push("npm audit");
+          return cleanScanner();
+        },
+        signatureAuditor: () => {
+          started.push("signatures");
+          return cleanSignatures();
+        },
+      }),
+    );
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toMatch(/Release gate trust/);
+    expect(started).toEqual([]);
+  });
+
+  it("announces each registry scan before it starts", async () => {
+    const { path } = project();
+    const steps: string[] = [];
+    await build(path, { progress: (step) => steps.push(step) });
+    expect(steps).toEqual([
+      "Scanning dependencies with npm audit",
+      "Checking registry signatures with npm audit signatures (up to 5 minutes)",
+    ]);
   });
 
   it("vulnerability: a throwing scanner fails the build", async () => {
@@ -3235,6 +3344,7 @@ describe("release stages", () => {
       timeout: 100,
     });
     expect(slow.status).toBeNull();
+    expect(slow.stderr).toBe("timed out after 0.1 s");
     // Two commands overlap: each waits for the other's marker to exist, so
     // they only finish if both are running at once.
     const rendezvous =

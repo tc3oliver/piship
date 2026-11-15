@@ -1344,6 +1344,7 @@ async function runLifecycle(
       cache: !flags.has("--rebuild"),
       reclaimStaging: flags.has("--reclaim-staging"),
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+      progress: progressReporter(output.stderr),
     });
     output.stdout(
       `Built qualified release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
@@ -1357,6 +1358,7 @@ async function runLifecycle(
       cache: !flags.has("--rebuild"),
       reclaimStaging: flags.has("--reclaim-staging"),
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+      progress: progressReporter(output.stderr),
     });
     output.stdout(
       `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThis local build is unsigned: publish it with verified provenance before calling it a release.`,

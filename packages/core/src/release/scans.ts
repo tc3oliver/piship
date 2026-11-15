@@ -16,6 +16,48 @@ import { gate, runCommand } from "./shared.js";
 
 const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
 
+/** A short single-line excerpt of npm's output for a gate message. */
+const excerpt = (text: string) =>
+  text
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300) || "no output";
+
+const SCAN_ACTION =
+  "Restore npm and registry access for the build; releases are not produced without a scan";
+
+/** The audit gave no v2 report: fail closed, with npm's own words. */
+const noAuditReport = (detail: string) =>
+  gate(
+    "UPDATE_FAILED",
+    "vulnerability",
+    `the dependency scan returned no npm audit v2 report: ${excerpt(detail)}`,
+    SCAN_ACTION,
+  );
+
+function isAuditReport(value: unknown): boolean {
+  const report = value as {
+    auditReportVersion?: unknown;
+    vulnerabilities?: unknown;
+  };
+  return (
+    !!report &&
+    typeof report === "object" &&
+    report.auditReportVersion === 2 &&
+    !!report.vulnerabilities &&
+    typeof report.vulnerabilities === "object" &&
+    !Array.isArray(report.vulnerabilities)
+  );
+}
+
+/** npm's `{"error": {"summary": ...}}` text, when it gave one. */
+function npmErrorSummary(value: unknown): string | undefined {
+  const summary = (value as { error?: { summary?: unknown } } | null)?.error
+    ?.summary;
+  return typeof summary === "string" && summary.trim() ? summary : undefined;
+}
+
 /**
  * `npm audit` over the npm lock in `lockDirectory` (registry access
  * required): the payload's, or a Pi package's against its `registry`.
@@ -38,19 +80,33 @@ export async function npmAuditScanner(
     cwd: lockDirectory,
     maxBuffer: 64 * 1024 * 1024,
   });
+  let parsed: unknown;
   try {
-    return JSON.parse(result.stdout);
+    parsed = JSON.parse(result.stdout);
   } catch {
     throw gate(
       "UPDATE_FAILED",
       "vulnerability",
-      `the dependency scan did not run: ${(result.stderr || "no output").trim().slice(0, 300)}`,
-      "Restore registry access for the build; releases are not produced without a scan",
+      `the dependency scan did not run: ${excerpt(result.stderr)}`,
+      SCAN_ACTION,
     );
   }
+  if (!isAuditReport(parsed))
+    throw noAuditReport(
+      npmErrorSummary(parsed) ?? (result.stderr || result.stdout),
+    );
+  return parsed;
 }
 
 const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
+
+/** The scans wait on the registry for minutes and print nothing meanwhile. */
+export function announceScans(progress?: (step: string) => void): void {
+  progress?.("Scanning dependencies with npm audit");
+  progress?.(
+    "Checking registry signatures with npm audit signatures (up to 5 minutes)",
+  );
+}
 
 /**
  * Run `run` with the manifests of PiShip's workspace packages in
@@ -190,7 +246,7 @@ export function evaluateSignatures(result: CommandResult): SignatureReport {
   throw gate(
     "UPDATE_FAILED",
     "signature",
-    `the registry signature check returned no report: ${(result.stderr || result.stdout || "no output").trim().slice(0, 300)}`,
+    `the registry signature check returned no report: ${excerpt(result.stderr || result.stdout)}`,
     "Restore npm and registry access for the build; releases are not produced from an unreadable signature check",
   );
 }
@@ -201,27 +257,14 @@ export function evaluateVulnerabilities(
   policy: ReleaseManifest["vulnerabilities"],
   now: Date,
 ): VulnerabilityReport {
+  if (!isAuditReport(audit))
+    throw noAuditReport(npmErrorSummary(audit) ?? "the scanner gave no report");
   const value = audit as {
-    auditReportVersion?: unknown;
-    vulnerabilities?: Record<
+    vulnerabilities: Record<
       string,
       { severity?: string; via?: readonly unknown[] }
     >;
-    error?: unknown;
   };
-  if (
-    !value ||
-    typeof value !== "object" ||
-    value.auditReportVersion !== 2 ||
-    !value.vulnerabilities ||
-    typeof value.vulnerabilities !== "object" ||
-    Array.isArray(value.vulnerabilities)
-  )
-    throw gate(
-      "UPDATE_FAILED",
-      "vulnerability",
-      "the dependency scan returned no npm audit v2 report",
-    );
   const threshold = SEVERITY_ORDER.indexOf(policy.failOn);
   const today = now.toISOString().slice(0, 10);
   const allowed = new Map(
