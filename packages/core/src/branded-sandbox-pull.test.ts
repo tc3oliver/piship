@@ -24,6 +24,11 @@ import {
   writeRemoteWorkspaceCheckpoint,
 } from "./remote-workspace.js";
 
+// Git for Windows turns LF into CRLF in the work tree by default; these tests compare bytes.
+process.env.GIT_CONFIG_COUNT = "1";
+process.env.GIT_CONFIG_KEY_0 = "core.autocrlf";
+process.env.GIT_CONFIG_VALUE_0 = "false";
+
 let temp: string;
 let repo: string;
 let state: string;
@@ -287,38 +292,42 @@ describe("sandbox pull", () => {
     expect(out.join("\n")).toMatch("Skipped 1 protected file: .git/config");
   });
 
-  it("matches glob characters in a protected path literally", async () => {
-    // Protecting "b[1].txt" must not skip "b1.txt", and "a*" style names must not widen.
-    const clone = join(temp, "glob");
-    git(temp, "clone", "-q", repo, clone);
-    for (const name of [
-      "b[1].txt",
-      "b1.txt",
-      "q?.txt",
-      "qz.txt",
-      "star*.txt",
-      "starx.txt",
-    ])
-      writeFileSync(join(clone, name), "n\n");
-    git(clone, "add", "-A");
-    writeRemoteWorkspaceCheckpoint(
-      state,
-      repo,
-      git(clone, "diff", "--cached", "--binary", "HEAD"),
-      {
-        session: "g",
-        baseHead: null,
-        files: 6,
-        protectedPaths: ["b[1].txt", "q?.txt", "star*.txt"],
-      },
-    );
-    await runSandbox(ctx, ["pull", "--yes"]);
-    for (const name of ["b1.txt", "qz.txt", "starx.txt"])
-      expect(existsSync(join(repo, name))).toBe(true);
-    for (const name of ["b[1].txt", "q?.txt", "star*.txt"])
-      expect(existsSync(join(repo, name))).toBe(false);
-    expect(out.join("\n")).toMatch("Skipped 3 protected files");
-  });
+  // NTFS has no file names with ? or *.
+  it.skipIf(process.platform === "win32")(
+    "matches glob characters in a protected path literally",
+    async () => {
+      // Protecting "b[1].txt" must not skip "b1.txt", and "a*" style names must not widen.
+      const clone = join(temp, "glob");
+      git(temp, "clone", "-q", repo, clone);
+      for (const name of [
+        "b[1].txt",
+        "b1.txt",
+        "q?.txt",
+        "qz.txt",
+        "star*.txt",
+        "starx.txt",
+      ])
+        writeFileSync(join(clone, name), "n\n");
+      git(clone, "add", "-A");
+      writeRemoteWorkspaceCheckpoint(
+        state,
+        repo,
+        git(clone, "diff", "--cached", "--binary", "HEAD"),
+        {
+          session: "g",
+          baseHead: null,
+          files: 6,
+          protectedPaths: ["b[1].txt", "q?.txt", "star*.txt"],
+        },
+      );
+      await runSandbox(ctx, ["pull", "--yes"]);
+      for (const name of ["b1.txt", "qz.txt", "starx.txt"])
+        expect(existsSync(join(repo, name))).toBe(true);
+      for (const name of ["b[1].txt", "q?.txt", "star*.txt"])
+        expect(existsSync(join(repo, name))).toBe(false);
+      expect(out.join("\n")).toMatch("Skipped 3 protected files");
+    },
+  );
 
   it("refuses a rename outright, applying nothing", async () => {
     writeRemoteWorkspaceCheckpoint(

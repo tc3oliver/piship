@@ -21,6 +21,11 @@ import {
   writeRemoteWorkspaceCheckpoint,
 } from "./remote-workspace.js";
 
+// Git for Windows turns LF into CRLF in the work tree by default; these tests compare bytes.
+process.env.GIT_CONFIG_COUNT = "1";
+process.env.GIT_CONFIG_KEY_0 = "core.autocrlf";
+process.env.GIT_CONFIG_VALUE_0 = "false";
+
 const prompt = vi.hoisted(() => ({ during: () => {} }));
 vi.mock("node:readline", async (original) => {
   const actual = await original<typeof import("node:readline")>();

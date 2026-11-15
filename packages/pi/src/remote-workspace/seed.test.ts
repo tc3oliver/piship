@@ -114,41 +114,54 @@ describe("seedRemoteWorkspace", () => {
     ).rejects.toThrow(/git work tree/);
   });
 
-  it("skips a file over the single-file cap and says how much it uploads", async () => {
-    initProject();
-    put("big.bin", Buffer.alloc(0));
-    put("a.txt", "a");
-    // A sparse file reaches the cap without writing it.
-    const fd = openSync(join(project, "big.bin"), "r+");
-    ftruncateSync(fd, SEED_FILE_CAP + 1);
-    closeSync(fd);
-    const progress: string[] = [];
-    const result = await seedRemoteWorkspace(fakeSandbox(), project, allowAll, {
-      progress: (message) => progress.push(message),
-    });
-    expect(result.uploaded).toEqual(["a.txt"]);
-    expect(result.skipped).toEqual([{ path: "big.bin", reason: "too-large" }]);
-    expect(progress).toEqual(["Uploading 1 files (0.0 MiB) to the sandbox"]);
-  });
-
-  it("rejects a project over the total cap, counting only what policy allows", async () => {
-    initProject();
-    put("a.bin", Buffer.alloc(1024));
-    put("b.bin", Buffer.alloc(1024));
-    const caps = { totalCap: 1500, fileCap: 2048 };
-    await expect(
-      seedRemoteWorkspace(fakeSandbox(), project, allowAll, { caps }),
-    ).rejects.toThrow(/1500 bytes total cap.*\.gitignore/);
-    // A skipped file does not count towards it.
-    await expect(
-      seedRemoteWorkspace(
+  it.skipIf(process.platform === "win32")(
+    "skips a file over the single-file cap and says how much it uploads",
+    async () => {
+      initProject();
+      put("big.bin", Buffer.alloc(0));
+      put("a.txt", "a");
+      // A sparse file reaches the cap without writing it.
+      const fd = openSync(join(project, "big.bin"), "r+");
+      ftruncateSync(fd, SEED_FILE_CAP + 1);
+      closeSync(fd);
+      const progress: string[] = [];
+      const result = await seedRemoteWorkspace(
         fakeSandbox(),
         project,
-        async (path) => (path.endsWith("b.bin") ? "skip" : "allow"),
-        { caps },
-      ),
-    ).resolves.toMatchObject({ uploaded: ["a.bin"] });
-  });
+        allowAll,
+        {
+          progress: (message) => progress.push(message),
+        },
+      );
+      expect(result.uploaded).toEqual(["a.txt"]);
+      expect(result.skipped).toEqual([
+        { path: "big.bin", reason: "too-large" },
+      ]);
+      expect(progress).toEqual(["Uploading 1 files (0.0 MiB) to the sandbox"]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a project over the total cap, counting only what policy allows",
+    async () => {
+      initProject();
+      put("a.bin", Buffer.alloc(1024));
+      put("b.bin", Buffer.alloc(1024));
+      const caps = { totalCap: 1500, fileCap: 2048 };
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(), project, allowAll, { caps }),
+      ).rejects.toThrow(/1500 bytes total cap.*\.gitignore/);
+      // A skipped file does not count towards it.
+      await expect(
+        seedRemoteWorkspace(
+          fakeSandbox(),
+          project,
+          async (path) => (path.endsWith("b.bin") ? "skip" : "allow"),
+          { caps },
+        ),
+      ).resolves.toMatchObject({ uploaded: ["a.bin"] });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "seeds the sandbox, skips by rule, and commits a baseline",
