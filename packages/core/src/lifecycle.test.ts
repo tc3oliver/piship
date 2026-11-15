@@ -899,7 +899,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
     const collision = await rejection(installDistribution(a.archive));
     expect(collision.message).toBe(
-      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to replace it with this artifact in one step, run the install again with --replace (state is kept); or run piship uninstall acmepi and install again. acmepi update --from <signed update source> only upgrades to a newer version",
+      "Install collision for acmepi/acmepi: 1.0.0 is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; or run piship uninstall acmepi and install again. acmepi update --from <signed update source> only upgrades to a newer version",
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -3852,6 +3852,9 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       ),
     ).toBe(false);
     expect(treeHash(stateDir())).toEqual(state);
+    expect(() => readInstallReceipt(ID)).toThrow(
+      /No PiShip installation recorded for \S+\. (Installed: .+|No distribution is installed)\./,
+    );
     expect(() => readInstallReceipt(ID)).toThrow(
       /No PiShip installation recorded/,
     );

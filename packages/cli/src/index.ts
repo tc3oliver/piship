@@ -401,7 +401,7 @@ async function lockFor(target: string): Promise<DistributionLock> {
   if (existsSync(path) && existsSync(join(path, "release.json")))
     return (await verifyRelease(path)).lock;
   if (existsSync(path)) return verifyPayload(path);
-  return verifyPayload(readInstallReceipt(target).payload);
+  return verifyPayload(installedReceipt(target).payload);
 }
 const allowedOptions: Record<string, readonly string[]> = {
   build: [
@@ -532,7 +532,20 @@ function runLauncherLive(
 function artifactFor(target: string): string {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isDirectory()) return path;
-  return readInstallReceipt(target).payload;
+  return installedReceipt(target).payload;
+}
+/** A target that is not an existing path is an installed id: say so when it is neither. */
+function installedReceipt(target: string) {
+  try {
+    return readInstallReceipt(target);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("No PiShip installation recorded")
+    )
+      error.message = `${error.message} ${target} is not an existing path either; pass an installed id, or a manifest, payload directory, or archive.`;
+    throw error;
+  }
 }
 /** The options of `init`: `--personal`, `--managed`, and `--id <id>`. */
 function parseInitOptions(

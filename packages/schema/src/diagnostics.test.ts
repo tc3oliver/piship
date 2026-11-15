@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { expectedOneOf } from "./suggest.js";
 import {
   ManifestError,
   migrateManifestSource,
@@ -45,6 +46,24 @@ describe("manifest diagnostics", () => {
     const error = failure(manifest(valid.replace("mode: personal", "mode: x")));
     expect(error.message).toContain(
       "invalid field at deployment.mode (line 10, column 9)",
+    );
+  });
+
+  it("suggests the nearest allowed value for a mistyped one", () => {
+    const error = failure(
+      manifest(valid.replace("mode: personal", "mode: personnal")),
+    );
+    expect(error.message).toContain(
+      "Expected personal; did you mean personal?",
+    );
+    expect(expectedOneOf("alow", ["allow", "ask", "deny"])).toBe(
+      "Expected allow, ask, deny; did you mean allow?",
+    );
+    expect(expectedOneOf("never", ["allow", "ask", "deny"])).toBe(
+      "Expected allow, ask, deny",
+    );
+    expect(expectedOneOf(3, ["allow", "ask", "deny"])).toBe(
+      "Expected allow, ask, deny",
     );
   });
 

@@ -1055,6 +1055,27 @@ describe("init", () => {
     );
   });
 
+  it("keeps the build output out of git", async () => {
+    const directory = join(temp, "ignored");
+    await runCli(["init", directory], { stdout: () => {}, stderr: () => {} });
+    expect(readFileSync(join(directory, ".gitignore"), "utf8")).toBe("dist/\n");
+  });
+
+  it("puts a missing resource at its line in the manifest", async () => {
+    const directory = join(temp, "located");
+    await runCli(["init", directory], { stdout: () => {}, stderr: () => {} });
+    rmSync(join(directory, "resources", "AGENTS.md"));
+    const stderr: string[] = [];
+    const status = await runCli(["validate", join(directory, "piship.yaml")], {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    expect(status).toBe(1);
+    expect(stderr.join("\n")).toMatch(
+      /missing resource at resources\.instructions \(line \d+, column \d+\)/,
+    );
+  });
+
   it("names the real command when it runs from bin.js", async () => {
     const original = process.argv[1];
     process.argv[1] = join(temp, "my dir", "bin.js");

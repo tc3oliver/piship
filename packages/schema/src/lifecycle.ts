@@ -9,6 +9,7 @@ import {
   hasRuntimeReference,
   referencedVariables,
 } from "./variables.js";
+import { expectedOneOf } from "./suggest.js";
 import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 
 /** Top-level manifest sections added by piship/v1alpha4 (kept by v1alpha5). */
@@ -236,7 +237,7 @@ function oneOf<T extends string>(
     typeof value !== "string" ||
     !(allowed as readonly string[]).includes(value)
   )
-    fail(path, `Expected ${allowed.join(", ")}`);
+    fail(path, expectedOneOf(value, allowed));
   return value as T;
 }
 

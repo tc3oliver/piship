@@ -586,6 +586,14 @@ describe("the launch", () => {
     expect(error?.message).not.toContain("canary-task");
   });
 
+  it("names a mistyped command as one, without echoing what follows it", async () => {
+    delete process.env.PI_CODE_SUBAGENT;
+    const error = await failure(["polcy", "explain", "canary-secret"]);
+    expect(error?.message).toBe(
+      "Unknown command: polcy. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
+    );
+  });
+
   it("is unchanged under the marker when the arguments are not a child's", async () => {
     process.env.PI_CODE_SUBAGENT = "1";
     const error = await failure(["-p", "hi"]);

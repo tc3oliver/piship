@@ -414,7 +414,7 @@ export async function installDistribution(
           } catch {}
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}; ${active} is already installed. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; to replace it with this artifact in one step, run the install again with --replace (state is kept); or run piship uninstall ${id} and install again. ${command} update --from <signed update source> only upgrades to a newer version`
+              ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; or run piship uninstall ${id} and install again. ${command} update --from <signed update source> only upgrades to a newer version`
               : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
         }

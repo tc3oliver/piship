@@ -243,6 +243,20 @@ function recordedHome(
   return other && other !== home ? other : undefined;
 }
 
+/** Which distributions are installed, for the error that names one that is not. */
+function installedSummary(): string {
+  try {
+    const ids = readdirSync(join(installHome(), "receipts"))
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.slice(0, -".json".length));
+    return ids.length
+      ? `Installed: ${ids.join(", ")}.`
+      : "No distribution is installed.";
+  } catch {
+    return "No distribution is installed.";
+  }
+}
+
 /**
  * Read and validate an install receipt; paths must be the owned ones. A
  * receipt that cannot be read, or fails a check, is a CONFIG_INVALID error
@@ -253,7 +267,9 @@ function recordedHome(
 export function readInstallReceipt(id: string): InstallReceipt {
   const path = receiptPath(id);
   if (!existsSync(path))
-    throw new Error(`No PiShip installation recorded for ${id}`);
+    throw new Error(
+      `No PiShip installation recorded for ${id}. ${installedSummary()}`,
+    );
   const fail = (check: string, mismatch?: [string, string]) =>
     new PiShipError(
       "CONFIG_INVALID",

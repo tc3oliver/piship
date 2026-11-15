@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { type Manifest, ManifestError } from "@piship/schema";
+import { locateInSource, type Manifest, ManifestError } from "@piship/schema";
 import { hash } from "./digest.js";
 import type { LockedResource } from "./lock-schema.js";
 
@@ -74,6 +74,24 @@ function declaredRoots(
   return output;
 }
 export function resolveResources(
+  manifest: Manifest,
+  manifestPath: string,
+): LockedResource[] {
+  try {
+    return resolveResourceFiles(manifest, manifestPath);
+  } catch (error) {
+    // A problem found here has no position yet; the manifest text has one.
+    if (!(error instanceof ManifestError) || error.position) throw error;
+    let source: string;
+    try {
+      source = readFileSync(manifestPath, "utf8");
+    } catch {
+      throw error;
+    }
+    throw locateInSource(error, source);
+  }
+}
+function resolveResourceFiles(
   manifest: Manifest,
   manifestPath: string,
 ): LockedResource[] {

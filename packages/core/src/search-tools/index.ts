@@ -194,6 +194,32 @@ export interface SearchToolDownloadOptions {
 }
 
 /**
+ * A network failure while locking names its cause too: the search tools are
+ * the only thing `piship lock` downloads for a personal distribution, and a
+ * manifest can do without them.
+ */
+function withSearchToolsAction(error: PiShipError): PiShipError {
+  const action = [
+    error.userAction,
+    "The download is for the bundled fd and rg (runtime.searchTools). To lock without it, remove runtime.searchTools from piship.yaml and https://github.com from release.sources; Pi then needs fd and rg on PATH",
+  ]
+    .filter(Boolean)
+    .join(". ");
+  return new PiShipError(error.code, error.message, {
+    retryable: error.retryable,
+    ...(error.retryAfterMs === undefined
+      ? {}
+      : { retryAfterMs: error.retryAfterMs }),
+    userAction: action,
+    ...(error.component ? { component: error.component } : {}),
+    ...(error.sanitizedDetail
+      ? { sanitizedDetail: error.sanitizedDetail }
+      : {}),
+    cause: error,
+  });
+}
+
+/**
  * GET an upstream archive. Redirects are followed only over https to
  * GitHub's release asset hosts; the body is size-limited.
  */
@@ -217,7 +243,12 @@ async function download(
         `Search tool download refused ${target.protocol}//${target.host}: only https to the upstream release host and its asset storage is followed`,
         { component: "lock" },
       );
-    const response = await fetcher(target, { redirect: "manual", signal });
+    let response: Response;
+    try {
+      response = await fetcher(target, { redirect: "manual", signal });
+    } catch (error) {
+      throw error instanceof PiShipError ? withSearchToolsAction(error) : error;
+    }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel().catch(() => {});
       const location = response.headers.get("location");
