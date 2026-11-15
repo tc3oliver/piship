@@ -293,7 +293,18 @@ export function repairStateMarker(id: string, lock: DistributionLock): void {
         marker.pi !== lock.runtime.version
       : existsSync(join(stateDir, STATE_MARKER_FILE))
   )
-    writeStateMarker(stateDir, lock);
+    try {
+      writeStateMarker(stateDir, lock);
+    } catch (error) {
+      // A full or failing disk must not block the update or rollback that
+      // needs it: without the stale marker the check uses the active
+      // release, as for a missing one. Only when that fails too is it fatal.
+      try {
+        rmSync(join(stateDir, STATE_MARKER_FILE), { force: true });
+      } catch {
+        throw error;
+      }
+    }
 }
 
 /**

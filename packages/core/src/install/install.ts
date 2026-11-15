@@ -23,6 +23,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { readStateMarker, STATE_MARKER_SCHEMA } from "../migration.js";
+import { markActivated } from "../update/state.js";
 import { verifyRelease } from "../release/index.js";
 import { assertFreeSpace, extractionNeed } from "./free-space.js";
 import { openInstallStore } from "../store/policy.js";
@@ -530,6 +531,13 @@ export async function installDistribution(
           // The state belongs to this install now: installing again after an
           // uninstall must adopt it explicitly.
           rmSync(testStateMarker({ value: id }), { force: true });
+          // Without a marker, the state this install's sessions write would
+          // read as someone else's after an uninstall, and installing again
+          // would ask for --use-existing-state. A marker an earlier
+          // activation wrote is kept: it records the release that last wrote
+          // the state. Best effort, as after an update.
+          const state = runtimeStateDirectory({ value: id });
+          if (!readStateMarker(state)) markActivated(state, lock);
           return receipt;
         } catch (error) {
           if (!existsSync(receiptPath(id))) {

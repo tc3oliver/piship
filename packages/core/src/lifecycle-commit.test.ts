@@ -136,6 +136,20 @@ describe.runIf(HOST_EVIDENCED)(
       },
     );
 
+    it("rolls back on a full disk when the marker names another release", async () => {
+      const { opts } = await installed();
+      await updateDistribution(ID, opts);
+      // An earlier activation could not write its marker: it names 1.0.0.
+      const stale = JSON.parse(readFileSync(markerFile(), "utf8"));
+      write(markerFile(), JSON.stringify({ ...stale, version: "1.0.0" }));
+      injectFault(MARKER, { op: "write", code: "ENOSPC" });
+      await rollbackDistribution(ID, { runCheck: fakeRun });
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+      clearFaults();
+      await updateDistribution(ID, opts);
+      expect(readStateMarker(stateDir())?.version).toBe("1.1.0");
+    });
+
     it("keeps the recovery of a process killed right after the commit", async () => {
       const { opts } = await installed();
       await rejection(
@@ -147,7 +161,8 @@ describe.runIf(HOST_EVIDENCED)(
         }),
       );
       expect(readInstallReceipt(ID).active).toBe("1.1.0");
-      expect(readStateMarker(stateDir())).toBeNull();
+      // The marker still names the release the install activated.
+      expect(readStateMarker(stateDir())?.version).toBe("1.0.0");
       await updateDistribution(ID, opts);
       expect(readStateMarker(stateDir())?.version).toBe("1.1.0");
     });
