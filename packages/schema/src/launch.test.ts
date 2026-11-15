@@ -481,3 +481,46 @@ describe("runtimeVariableUse", () => {
     });
   });
 });
+
+describe("tool.execute denials", () => {
+  const governed = (resource: string, effect: string): Json => ({
+    policy: {
+      default: "ask",
+      enforced: [{ id: "acme.tool", action: "tool.execute", resource, effect }],
+    },
+    mcp: {
+      mode: "allowlist",
+      servers: {
+        docs: {
+          transport: "streamable-http",
+          url: "https://mcp.acme.example/docs",
+        },
+      },
+    },
+  });
+  const denials = (resource: string, effect = "deny") =>
+    warnings(managed(governed(resource, effect))).filter(
+      (warning) => warning.path === "policy.enforced[0].resource",
+    );
+  it("warns, without failing, about a tool that is not built in or declared", () => {
+    expect(denials("web_fetch")).toEqual([
+      expect.objectContaining({
+        message: expect.stringMatching(
+          /acme\.tool denies tool web_fetch.*only known at run time/,
+        ),
+      }),
+    ]);
+  });
+  it("knows Pi's, PiShip's, and a declared MCP server's tools, globs, and other effects", () => {
+    for (const resource of [
+      "bash",
+      "grep",
+      "codemode",
+      "mcp__docs__drop",
+      "web_*",
+    ])
+      expect(denials(resource)).toEqual([]);
+    expect(denials("web_fetch", "allow")).toEqual([]);
+    expect(denials("mcp__other__drop")).toHaveLength(1);
+  });
+});
