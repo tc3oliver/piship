@@ -76,6 +76,8 @@ interface CreatedSandbox {
   readonly sandboxId: string;
   readonly accessToken: string | undefined;
   readonly envd: string;
+  /** When the timeout was last renewed (ms); the file path renews only when it is stale. */
+  renewedAt: number;
 }
 
 /** Connect envelope: flags byte, 4-byte big-endian length, JSON payload. */
@@ -257,7 +259,12 @@ export class E2bCompatibleBackend implements SandboxBackend {
     const envd =
       this.#options.envdUrl?.({ sandboxId, domain }) ??
       `${this.#endpoint.protocol}//${ENVD_PORT}-${sandboxId}.${domain}`;
-    return { sandboxId, accessToken, envd: trimSlashes(envd) };
+    return {
+      sandboxId,
+      accessToken,
+      envd: trimSlashes(envd),
+      renewedAt: Date.now(),
+    };
   }
 
   async #makeWorkdir(sandbox: CreatedSandbox, workdir: string): Promise<void> {
@@ -309,8 +316,23 @@ export class E2bCompatibleBackend implements SandboxBackend {
     return headers;
   }
 
-  /** Keep the sandbox alive while it is used; an expired one fails here. */
-  async #renew(sandbox: CreatedSandbox, signal: AbortSignal): Promise<void> {
+  /**
+   * Keep the sandbox alive while it is used; an expired one fails here. A file
+   * operation passes `throttled`: it renews only once the last renewal is a
+   * tenth of the lifetime old (at most a minute), so the timeout never nears
+   * its end while a burst of file calls costs one control-plane request.
+   * Every command renews.
+   */
+  async #renew(
+    sandbox: CreatedSandbox,
+    signal: AbortSignal,
+    throttled = false,
+  ): Promise<void> {
+    if (
+      throttled &&
+      Date.now() - sandbox.renewedAt < Math.min(60_000, this.#lifetime() * 100)
+    )
+      return;
     const renewed = await this.#control(
       `sandboxes/${sandbox.sandboxId}/timeout`,
       {
@@ -323,9 +345,10 @@ export class E2bCompatibleBackend implements SandboxBackend {
     );
     if (!renewed.ok)
       throw new Error(
-        `the sandbox is no longer available: ${await describeFailure(renewed)}`,
+        `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`,
       );
     await renewed.body?.cancel().catch(() => undefined);
+    sandbox.renewedAt = Date.now();
   }
 
   #basic(): string {
@@ -353,7 +376,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
       if (!path || path === "." || path.includes("\0"))
         throw new Error("the path is not a workspace file");
       const absolute = remoteDirectory(workdir, path);
-      await this.#renew(sandbox, signal);
+      await this.#renew(sandbox, signal, true);
       const headers = this.#envdHeaders(sandbox, "application/json");
       headers.set("Authorization", this.#basic());
       return call(absolute, headers);
@@ -379,6 +402,15 @@ export class E2bCompatibleBackend implements SandboxBackend {
             throw new Error(
               `reading the file failed: ${await describeFailure(response)}`,
             );
+          // Content-Encoding changes what Content-Length counts: compare only
+          // a body that arrives as sent.
+          const declared = response.headers.get("content-encoding")
+            ? NaN
+            : Number(response.headers.get("content-length") ?? NaN);
+          if (declared > MAX_FILE_BYTES) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new Error("the file is too large");
+          }
           const chunks: Buffer[] = [];
           let size = 0;
           for await (const chunk of (response.body ??
@@ -390,6 +422,10 @@ export class E2bCompatibleBackend implements SandboxBackend {
             }
             chunks.push(Buffer.from(chunk));
           }
+          if (Number.isInteger(declared) && size !== declared)
+            throw new Error(
+              `the sandbox sent ${size} of the ${declared} bytes it announced for the file`,
+            );
           return Buffer.concat(chunks);
         }),
       write: (path, data, { signal }) =>

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxBackend } from "./backend.js";
 import type { SandboxPolicy } from "./profile.js";
@@ -71,6 +71,86 @@ describe("remote workspace file access", () => {
     await expect(
       sandbox.files?.read(join(workspace, "none")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+    await sandbox.dispose();
+  });
+
+  it("renews the timeout for file calls at most once a minute, and for every command", async () => {
+    const mock = await e2bServer({ files: new Map() });
+    const sandbox = await activate(backend(mock.url));
+    const renewals = () =>
+      mock.requests.filter((r) => r.path === "/sandboxes/sbx1/timeout").length;
+    const path = join(workspace, "sub", "a.txt");
+    const before = renewals();
+    for (let i = 0; i < 3; i++)
+      await sandbox.files?.write(path, Buffer.from("x"));
+    expect(renewals()).toBe(before);
+    await sandbox.exec("true", workspace, { onData: () => {} });
+    expect(renewals()).toBe(before + 1);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 61_000);
+      await sandbox.files?.read(path);
+      await sandbox.files?.read(path);
+      expect(renewals()).toBe(before + 2);
+    } finally {
+      vi.useRealTimers();
+    }
+    await sandbox.dispose();
+  });
+
+  it("fails a read shorter than its Content-Length and refuses an oversized announcement", async () => {
+    const mock = await e2bServer({
+      files: new Map([["/home/user/a", Buffer.from("abc")]]),
+    });
+    const announce: { length?: string; encoding?: string } = {};
+    const lying: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      if (
+        !String(input).includes("/files?") ||
+        init?.method !== "GET" ||
+        !response.ok
+      )
+        return response;
+      return new Response(Buffer.from("abc"), {
+        headers: {
+          "content-length": announce.length ?? "3",
+          ...(announce.encoding
+            ? { "content-encoding": announce.encoding }
+            : {}),
+        },
+      });
+    };
+    const sandbox = await activate(
+      new E2bCompatibleBackend({
+        endpoint: mock.url,
+        fetch: lying,
+        envdUrl: () => mock.url,
+      }),
+    );
+    const path = join(workspace, "a");
+    expect(await sandbox.files?.read(path)).toEqual(Buffer.from("abc"));
+    announce.length = "10";
+    await expect(sandbox.files?.read(path)).rejects.toThrow(
+      /3 of the 10 bytes/,
+    );
+    announce.encoding = "gzip"; // the length then counts the compressed body
+    expect(await sandbox.files?.read(path)).toEqual(Buffer.from("abc"));
+    delete announce.encoding;
+    announce.length = String(101 * 1024 * 1024);
+    await expect(sandbox.files?.read(path)).rejects.toThrow(/too large/);
+    await sandbox.dispose();
+  });
+
+  it("rejects at once when the caller's signal is already aborted", async () => {
+    const mock = await e2bServer({ files: new Map() });
+    const sandbox = await activate(backend(mock.url));
+    const before = mock.requests.length;
+    await expect(
+      sandbox.files?.read(join(workspace, "sub", "a"), {
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toThrow(/aborted/);
+    expect(mock.requests.length).toBe(before);
     await sandbox.dispose();
   });
 

@@ -16,6 +16,7 @@ import {
   oneOf,
   optionalRecord,
   plainString,
+  positiveInteger,
   referenceUrl,
   unsafe,
 } from "./fields.js";
@@ -107,6 +108,46 @@ function remoteWorkdir(value: unknown, path: string): string {
   return item;
 }
 
+/** `sandbox.remote`: only the keys that were set are kept. */
+function parseRemote(value: unknown): NonNullable<SandboxConfig["remote"]> {
+  const remote = optionalRecord(value, "sandbox.remote", ["seed", "pull"]);
+  const seed = optionalRecord(remote.seed, "sandbox.remote.seed", [
+    "maxTotalMiB",
+    "maxFileMiB",
+  ]);
+  const pull = optionalRecord(remote.pull, "sandbox.remote.pull", [
+    "protectedFiles",
+    "confirm",
+  ]);
+  const limit = (key: string, max: number) =>
+    seed[key] === undefined
+      ? {}
+      : {
+          [key]: positiveInteger(
+            seed[key],
+            `sandbox.remote.seed.${key}`,
+            1,
+            max,
+          ),
+        };
+  const choice = <T extends string>(key: string, values: readonly T[]) =>
+    pull[key] === undefined
+      ? {}
+      : { [key]: oneOf(pull[key], `sandbox.remote.pull.${key}`, values) };
+  const seedOut = {
+    ...limit("maxTotalMiB", 4096),
+    ...limit("maxFileMiB", 1024),
+  };
+  const pullOut = {
+    ...choice("protectedFiles", ["skip", "refuse"] as const),
+    ...choice("confirm", ["optional", "required"] as const),
+  };
+  return {
+    ...(Object.keys(seedOut).length ? { seed: seedOut } : {}),
+    ...(Object.keys(pullOut).length ? { pull: pullOut } : {}),
+  };
+}
+
 /** The backend fields, validated for the provider; empty for native. */
 function parseBackend(
   sandbox: Readonly<Record<string, unknown>>,
@@ -141,6 +182,8 @@ function parseBackend(
         "workspace: remote applies only to the custom and e2b-compatible providers",
       );
   }
+  if (sandbox.remote !== undefined && sandbox.workspace !== "remote")
+    conflict("sandbox.remote", "remote applies only with workspace: remote");
   if (provider === "native") return {};
   if (!required)
     conflict(
@@ -265,6 +308,9 @@ function parseBackend(
     ...(sandbox.workspace === undefined
       ? {}
       : { workspace: "remote" as const }),
+    ...(sandbox.remote === undefined
+      ? {}
+      : { remote: parseRemote(sandbox.remote) }),
     ...(httpTransport === undefined ? {} : { httpTransport }),
   };
 }
@@ -279,7 +325,7 @@ export function parseSandbox(
     "required",
     "provider",
     ...Object.keys(BACKEND_FIELDS),
-    ...(v6 ? ["httpTransport", "workspace"] : []),
+    ...(v6 ? ["httpTransport", "workspace", "remote"] : []),
     "filesystem",
     "network",
     "environment",

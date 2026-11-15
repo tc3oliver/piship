@@ -10,6 +10,8 @@ import { packTar, type TarEntry } from "./tar.js";
 export const SEED_TOTAL_CAP = 200 * 1024 * 1024;
 export const SEED_FILE_CAP = 50 * 1024 * 1024;
 const ARCHIVE = ".piship-seed.tar";
+/** Written before the extract, removed once the baseline is committed: it marks a seed of ours that did not finish. */
+const MARKER = ".piship-seed.started";
 const EXTRACT_TIMEOUT_SECONDS = 300;
 /** The upload of the whole project may be large: far longer than a file call. */
 const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -20,7 +22,11 @@ export type SeedSkipReason =
   | "git"
   | "outside"
   | "not-file"
-  | "reserved";
+  | "reserved"
+  | "too-large";
+
+/** A seed failure a retry cannot cure: it is remembered and not repeated. */
+export class SeedRefused extends Error {}
 
 export interface SeedResult {
   /** The host's HEAD, or null before the first commit. */
@@ -51,13 +57,17 @@ function git(root: string, args: string[]): Promise<Buffer> {
 // template without it fails with its name.
 const SCRIPT = [
   'for t in tar git; do command -v $t >/dev/null 2>&1 || { echo "piship-missing-tool:$t"; exit 127; }; done',
+  // Our own unfinished seed (the marker) is cleaned and redone.
+  `if [ -e ${MARKER} ]; then find . -mindepth 1 -maxdepth 1 ! -name ${ARCHIVE} ! -name ${MARKER} -exec rm -rf -- {} +; fi`,
   // The baseline holds exactly the project: a workdir with anything else in
   // it (a home directory's dotfiles) is refused.
-  `[ -z "$(ls -A | grep -v '^\\.piship-seed\\.tar$')" ] || { echo "piship-workdir-not-empty"; exit 1; }`,
+  `[ -z "$(ls -A | grep -v -e '^\\.piship-seed\\.tar$' -e '^\\.piship-seed\\.started$')" ] || { echo "piship-workdir-not-empty"; exit 1; }`,
+  `: > ${MARKER}`,
   `tar -xf ${ARCHIVE} && rm -f ${ARCHIVE}`,
   "git init -q",
-  "git add -A",
+  `git add -A -- . ':(exclude)${MARKER}'`,
   "git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit -q --allow-empty -m piship-baseline",
+  `rm -f ${MARKER}`,
   "git rev-parse HEAD",
 ].join(" && ");
 
@@ -70,8 +80,10 @@ export async function seedRemoteWorkspace(
   decide: (absolutePath: string) => Promise<"allow" | "skip">,
   options: {
     signal?: AbortSignal;
-    /** Tests only: smaller caps than the documented ones. */
+    /** Smaller or larger caps than the documented defaults (the manifest sets them, in bytes here). */
     caps?: { totalCap: number; fileCap: number };
+    /** One line before the upload, which can take a while. */
+    progress?: (message: string) => void;
   } = {},
 ): Promise<SeedResult> {
   const root = await realpath(projectRoot);
@@ -79,8 +91,8 @@ export async function seedRemoteWorkspace(
   try {
     listing = await git(root, ["ls-files", "-co", "--exclude-standard", "-z"]);
   } catch {
-    throw new Error(
-      "a remote workspace needs the project to be a git work tree, and git could not list its files",
+    throw new SeedRefused(
+      "a remote workspace needs the project to be a git work tree, and git could not list its files; run git init in the project, then try again",
     );
   }
   const baseHead = await git(root, ["rev-parse", "HEAD"])
@@ -102,7 +114,7 @@ export async function seedRemoteWorkspace(
       skip("git");
       continue;
     }
-    if (path === ARCHIVE) {
+    if (path === ARCHIVE || path === MARKER) {
       skip("reserved");
       continue;
     }
@@ -138,14 +150,14 @@ export async function seedRemoteWorkspace(
       skip("policy");
       continue;
     }
-    if (info.size > fileCap)
-      throw new Error(
-        `${path} is larger than the ${size(fileCap)} single-file cap of the remote workspace seed`,
-      );
+    if (info.size > fileCap) {
+      skip("too-large");
+      continue;
+    }
     total += info.size;
     if (total > totalCap)
-      throw new Error(
-        `the project is larger than the ${size(totalCap)} total cap of the remote workspace seed`,
+      throw new SeedRefused(
+        `the files uploaded to the sandbox (those git tracks or does not ignore, and policy allows) are over the ${size(totalCap)} total cap of the remote workspace seed; add the large directories to .gitignore, then try again`,
       );
     const data = await readFile(absolute);
     entries.push({
@@ -155,6 +167,10 @@ export async function seedRemoteWorkspace(
     });
   }
 
+  const sizeOf = entries.reduce((n, e) => n + e.data.length, 0);
+  options.progress?.(
+    `Uploading ${entries.length} files (${(sizeOf / 1024 / 1024).toFixed(1)} MiB) to the sandbox`,
+  );
   await sandbox.files.write(join(root, ARCHIVE), packTar(entries), {
     timeoutMs: UPLOAD_TIMEOUT_MS,
     ...(options.signal ? { signal: options.signal } : {}),
@@ -168,12 +184,12 @@ export async function seedRemoteWorkspace(
     ...(options.signal ? { signal: options.signal } : {}),
   });
   if (output.includes("piship-workdir-not-empty"))
-    throw new Error(
+    throw new SeedRefused(
       "the sandbox's project directory is not empty, so the remote workspace cannot start from a clean baseline; set sandbox.workdir to a new directory",
     );
   const missing = /piship-missing-tool:(\w+)/.exec(output);
   if (missing)
-    throw new Error(
+    throw new SeedRefused(
       `the sandbox has no ${missing[1]}, which a remote workspace needs; use a template that includes tar and git`,
     );
   const commit = output.trim().split(/\s+/).at(-1) ?? "";
