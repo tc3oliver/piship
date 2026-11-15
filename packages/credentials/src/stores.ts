@@ -645,7 +645,9 @@ export class RestrictedFileSecretStore implements SecretStore {
       unavailable(
         this.description,
         `cannot read ${path}: ${detail}`,
-        `Give your user owner-only access to ${this.directory} and its files (chmod 700 on the directory, 600 on the files), or remove an entry that is not a valid secret file and sign in again. If chmod has no effect, the file system ignores POSIX permissions (WSL /mnt/c, an SMB or NFS share, exFAT): set PISHIP_STATE_HOME to a directory on a local disk`,
+        this.#platform === "win32"
+          ? `Make sure only your user can read and write ${this.directory} and its files (right-click the folder, Properties, Security), or remove an entry that is not a valid secret file and sign in again. If it is on a network share or a drive without NTFS permissions, set PISHIP_STATE_HOME to a folder on a local NTFS disk`
+          : `Give your user owner-only access to ${this.directory} and its files (chmod 700 on the directory, 600 on the files), or remove an entry that is not a valid secret file and sign in again. If chmod has no effect, the file system ignores POSIX permissions (WSL /mnt/c, an SMB or NFS share, exFAT): set PISHIP_STATE_HOME to a directory on a local disk`,
       );
     const code = (error: unknown) =>
       (error as NodeJS.ErrnoException).code ?? (error as Error).message;

@@ -76,6 +76,24 @@ describe("pathHint", () => {
         "win32",
       ),
     ).toBeUndefined();
+    // The same folder written with forward slashes.
+    expect(
+      pathHint(
+        "C:/Users/a/bin",
+        { Path: "C:\\Windows;C:\\Users\\a\\bin\\" },
+        "win32",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("escapes a Windows path for a PowerShell string and names the shell to use", () => {
+    const hint = pathHint(
+      "C:\\Users\\a$b\\bin",
+      { Path: "C:\\Windows" },
+      "win32",
+    );
+    expect(hint).toContain('+ ";C:\\Users\\a`$b\\bin", "User")');
+    expect(hint).toContain("type powershell first in cmd.exe");
   });
 
   it("prints an executable line for the user's shell", () => {

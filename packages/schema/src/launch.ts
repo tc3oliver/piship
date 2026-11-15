@@ -506,6 +506,60 @@ function unusedVariables(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * Tools a session has before any extension loads: Pi's built-in tools
+ * (PiShip governs read, write, edit, and bash and excludes the rest),
+ * PiShip's own, and the Codemode and tool search tools. Kept beside
+ * PISHIP_TOOLS and UNGOVERNED_PI_BASE_TOOLS in packages/pi, which this
+ * package cannot import.
+ */
+const KNOWN_TOOLS = new Set([
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "grep",
+  "find",
+  "ls",
+  "powershell",
+  "ask_user",
+  "task_start",
+  "task_output",
+  "task_stop",
+  "codemode",
+  "tool_search",
+]);
+
+/**
+ * A `tool.execute` deny naming one tool that is not built in and not a tool
+ * of a declared MCP server matches nothing PiShip knows of: an extension
+ * may register that name at run time, or it is a typo and blocks nothing.
+ */
+export function unknownToolDenials(manifest: Manifest): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  const mcp = manifest.governance?.mcp;
+  const servers = !mcp || mcp.mode === "off" ? [] : mcp.servers;
+  const named = (resource: string) =>
+    KNOWN_TOOLS.has(resource) ||
+    servers.some((server) => resource.startsWith(`mcp__${server.id}__`));
+  return (["enforced", "defaults"] as const).flatMap((list) =>
+    policy[list].flatMap((rule, index) =>
+      rule.action === "tool.execute" &&
+      rule.effect === "deny" &&
+      !/[*?[\]{}]/.test(rule.resource) &&
+      !named(rule.resource)
+        ? [
+            {
+              path: `policy.${list}[${index}].resource`,
+              message: `${rule.id} denies tool ${rule.resource}, which is not a Pi or PiShip tool or a tool of a declared MCP server (mcp__<server>__<tool>). An extension tool is only known at run time, so this deny matches it if an extension registers that exact name; otherwise it blocks nothing`,
+            },
+          ]
+        : [],
+    ),
+  );
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -513,6 +567,7 @@ function unusedVariables(manifest: Manifest): ValidationDiagnostic[] {
 export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
     ...unusedVariables(manifest),
+    ...unknownToolDenials(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

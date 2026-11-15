@@ -5,7 +5,7 @@ import {
   spawnSync,
 } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   binHome,
   buildDistribution,
@@ -86,6 +86,7 @@ import {
 import { formatError, redact } from "@piship/contracts";
 import {
   launchWarnings,
+  unknownToolDenials,
   runtimeVariableUse,
   referencedVariables,
   readManifest,
@@ -558,6 +559,32 @@ async function pemSigners(
   return signers;
 }
 /** A lock from a manifest, lock file, payload, release, archive, or installed id. */
+/**
+ * What to upload after sign-channel, in the order the trust root page gives,
+ * and when to sign again: a week before the metadata expires, or at once
+ * when less is left.
+ */
+export function publishSteps(
+  channel: string,
+  artifacts: readonly string[],
+  expires: string,
+  now = new Date(),
+): string {
+  const expiry = new Date(expires);
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const by =
+    expiry.getTime() - now.getTime() > week
+      ? new Date(expiry.getTime() - week).toISOString().slice(0, 10)
+      : "now";
+  return [
+    "Next: publish the channel directory to the update source in this order:",
+    `  1. the archives this run added: ${artifacts.map((item) => basename(item)).join(", ")}`,
+    `  2. ${channel}.json.sig and ${channel}.json together`,
+    "Remove an older archive only after no published channel lists it.",
+    `Sign ${channel} again by ${by}: clients refuse it after ${expires}.`,
+  ].join("\n");
+}
+
 async function lockFor(target: string): Promise<DistributionLock> {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isFile()) {
@@ -1166,7 +1193,12 @@ export async function runCli(
     } else if (command === "lock") {
       const progress = progressReporter(output.stderr);
       await downloadSearchToolArchives(target, progress ? { progress } : {});
-      output.stdout(`Wrote ${lockManifest(target)}`);
+      const written = lockManifest(target);
+      for (const warning of unknownToolDenials(readManifest(target)))
+        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+      output.stdout(
+        `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
+      );
     } else if (command === "build") {
       const progress = progressReporter(output.stderr);
       await downloadLockedSearchTools(
@@ -1259,13 +1291,17 @@ export async function runCli(
       if (result.status !== 0) {
         // The branded "Run <command> login" names a command not installed
         // yet; the test state signs in through the built one.
-        const signIn = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
+        const hint = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
           result.stderr,
         )
           ? `\nThis build is not installed: sign in to the test state with ${shellArg(join(artifact, "bin", process.platform === "win32" ? `${lock.app.command}.cmd` : lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
-          : "";
+          : // The branded "Ask your administrator" speaks to users; whoever
+            // runs this test build is the one who chooses the values.
+            /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)
+            ? `\nFor this test build, set them in this shell (staging values will do), then run ${pishipCommand()} ${command} ${shellArg(target)} again. ${pishipCommand()} validate ${shellArg(target)} lists them.`
+            : "";
         throw new Error(
-          `Pi launch failed: ${result.stderr || result.status}${signIn}`,
+          `Pi launch failed: ${result.stderr || result.status}${hint}`,
         );
       }
       if (command === "test")
@@ -1633,6 +1669,11 @@ async function runLifecycle(
       ...(sequence ? { sequence } : {}),
       ...(expiresDays ? { expiresDays } : {}),
     });
+    // A pack's runtime archives are published beside it.
+    const added = artifacts.map((item) => basename(item));
+    const runtimeArchives = (signed.metadata.packs ?? [])
+      .filter((item) => added.includes(item.archive))
+      .flatMap((item) => Object.values(item.runtimes).map((r) => r.archive));
     output.stdout(
       `Signed ${signed.path} (sequence ${signed.metadata.sequence}, expires ${signed.metadata.expires}) with ${keyIds.join(", ")}:\n${[
         ...signed.metadata.releases.map(
@@ -1641,7 +1682,9 @@ async function runLifecycle(
         ...(signed.metadata.packs ?? []).map(
           (item) => `  ${item.version} pack ${item.archive}`,
         ),
-      ].join("\n")}`,
+      ].join(
+        "\n",
+      )}\n${publishSteps(channel, [...added, ...new Set(runtimeArchives)], signed.metadata.expires)}`,
     );
   } else if (command === "trust-root") {
     const expiry = {

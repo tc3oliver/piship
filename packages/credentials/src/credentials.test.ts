@@ -247,6 +247,24 @@ describe("platform secret stores", () => {
       code: "CONFIG_INVALID",
     });
   });
+  it("tells a Windows user how to fix an unreadable entry without chmod", async () => {
+    const directory = join(temp, "win-secrets");
+    const store = new RestrictedFileSecretStore(directory, {
+      platform: "win32",
+      account: "alice",
+      run: () => ({ status: 0, stdout: "", stderr: "" }),
+    });
+    await store.put("piship:x:inference#1", secret);
+    writeFileSync(join(directory, readdirSync(directory)[0] ?? ""), "not json");
+    const error = (await store.get("piship:x:inference#1").then(
+      () => null,
+      (caught: unknown) => caught,
+    )) as PiShipError;
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.userAction).toContain("Security");
+    expect(error.userAction).toContain("PISHIP_STATE_HOME");
+    expect(error.userAction).not.toMatch(/chmod|POSIX/);
+  });
   it.skipIf(process.platform === "win32")(
     "advises a local state directory, not the opt-in already taken, for permissions that are not owner-only",
     async () => {

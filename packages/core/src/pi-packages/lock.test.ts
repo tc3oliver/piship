@@ -296,12 +296,24 @@ describe("Pi packages in the lock", () => {
     ).toBe(false);
   }, 120_000);
 
-  it("the install-script review applies without lifecycle.release, to a package root's own binding.gyp too", () => {
+  it("the install-script review applies without lifecycle.release, to a package root's own binding.gyp too, and release.installScripts can review it", () => {
     const manifest = distribution();
     write(dirname(manifest), { "packages/team/binding.gyp": "{}\n" });
-    expect(() => lockPackages(manifest)).toThrow(
-      /install-script: pi-packages\/team\/package@sha256-[0-9a-f]{64} runs npm lifecycle scripts/,
+    let key = "";
+    try {
+      lockPackages(manifest);
+    } catch (error) {
+      key = /pi-packages\/team\/package@sha256-[0-9a-f]{64}/.exec(
+        (error as Error).message,
+      )?.[0] as string;
+    }
+    expect(key).toMatch(/^pi-packages\/team\/package@sha256-[0-9a-f]{64}$/);
+    // The key the gate names is one the manifest can record.
+    writeFileSync(
+      manifest,
+      `${readFileSync(manifest, "utf8")}release:\n  installScripts: ["${key}"]\n`,
     );
+    expect(() => lockPackages(manifest)).not.toThrow();
   }, 120_000);
 
   it("a certified package's evidence must match the locked tree", () => {

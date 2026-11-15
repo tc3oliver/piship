@@ -256,21 +256,25 @@ export function pathHint(
       end -= 1;
     return value.slice(0, end);
   };
+  // PISHIP_BIN_HOME may be written with / where PATH has \\: the same folder.
+  const fold = (value: string) =>
+    trim(value).replaceAll("/", "\\").toLowerCase();
   const same = (a: string, b: string) =>
-    windows
-      ? trim(a).toLowerCase() === trim(b).toLowerCase()
-      : trim(a) === trim(b);
+    windows ? fold(a) === fold(b) : trim(a) === trim(b);
   const path = env.PATH ?? env.Path ?? "";
   if (
     path.split(windows ? ";" : ":").some((entry) => entry && same(entry, bin))
   )
     return undefined;
-  if (windows)
+  if (windows) {
+    // Inside a PowerShell double-quoted string, `$`, a backtick and `"` are special.
+    const escaped = bin.replace(/([`"$])/g, "`$1");
     return [
-      `${bin} is not on PATH. In PowerShell, add it for new terminals with:`,
-      `  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";${bin}", "User")`,
+      `${bin} is not on PATH. In PowerShell (type powershell first in cmd.exe), add it for new terminals with:`,
+      `  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";${escaped}", "User")`,
       "then open a new terminal.",
     ].join("\n");
+  }
   const quoted = bin.replace(/(["\\$`])/g, "\\$1");
   const shell = (env.SHELL ?? "").split("/").pop();
   if (shell === "fish")
