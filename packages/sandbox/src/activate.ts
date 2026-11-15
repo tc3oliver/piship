@@ -414,7 +414,13 @@ async function runGoverned(
     result = await Promise.race([pending, abandoned]);
   } catch (error) {
     if (!timedOut && !cancelled)
-      throw new Error(redact(String((error as Error)?.message ?? error)));
+      throw Object.assign(
+        new Error(redact(String((error as Error)?.message ?? error))),
+        // Kept so the session can say what to do when the sandbox is gone.
+        (error as { code?: unknown })?.code === "SANDBOX_GONE"
+          ? { code: "SANDBOX_GONE" }
+          : {},
+      );
   } finally {
     open = false;
     if (timer) clearTimeout(timer);

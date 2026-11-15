@@ -270,6 +270,60 @@ describe("remote workspace file access", () => {
     await sandbox.dispose();
   });
 
+  it("keeps an idle remote workspace alive and stops when disposed", async () => {
+    const script: Parameters<typeof e2bServer>[0] = {};
+    const mock = await e2bServer(script);
+    const renewals = () =>
+      mock.requests.filter((r) => r.path === "/sandboxes/sbx1/timeout").length;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const sandbox = await activate(
+        new E2bCompatibleBackend({
+          endpoint: mock.url,
+          fetch,
+          envdUrl: () => mock.url,
+          createWorkdir: true,
+          lifetimeSeconds: 400,
+        }),
+      );
+      const before = renewals();
+      await vi.advanceTimersByTimeAsync(100_000);
+      await vi.waitFor(() => expect(renewals()).toBe(before + 1));
+      // A renewal that fails is ignored; the timer goes on.
+      script.gone = true;
+      await vi.advanceTimersByTimeAsync(100_000);
+      await vi.waitFor(() => expect(renewals()).toBe(before + 2));
+      await sandbox.dispose();
+      await vi.advanceTimersByTimeAsync(500_000);
+      expect(renewals()).toBe(before + 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a sandbox that expired, for the file and command paths alike", async () => {
+    const script: Parameters<typeof e2bServer>[0] = {};
+    const mock = await e2bServer(script);
+    const sandbox = await activate(backend(mock.url));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      script.gone = true;
+      vi.setSystemTime(Date.now() + 61_000);
+      await expect(
+        sandbox.files?.read(join(workspace, "a")),
+      ).rejects.toMatchObject({
+        code: "SANDBOX_GONE",
+        message: expect.stringMatching(/expired or was lost/),
+      });
+      await expect(
+        sandbox.exec("true", workspace, { onData: () => {} }),
+      ).rejects.toMatchObject({ code: "SANDBOX_GONE" });
+    } finally {
+      vi.useRealTimers();
+    }
+    await sandbox.dispose();
+  });
+
   it("has no file access without remoteWorkspace", async () => {
     const mock = await e2bServer();
     const sandbox = await activate(backend(mock.url), {

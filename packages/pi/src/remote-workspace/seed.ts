@@ -31,8 +31,11 @@ export class SeedRefused extends Error {}
 export interface SeedResult {
   /** The host's HEAD, or null before the first commit. */
   readonly baseHead: string | null;
-  /** The baseline commit made in the sandbox. */
-  readonly baselineCommit: string;
+  /**
+   * The baseline commit made in the sandbox. It moves (one new commit) when a
+   * policy-skipped file is uploaded later, so that file is not a change.
+   */
+  baselineCommit: string;
   /** Workspace-relative paths uploaded. */
   readonly uploaded: readonly string[];
   readonly skipped: readonly { path: string; reason: SeedSkipReason }[];
@@ -71,6 +74,42 @@ const SCRIPT = [
   "git rev-parse HEAD",
 ].join(" && ");
 
+const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
+
+/** What the seed left out and why, and how to add one such file later. */
+export interface SeedLookup {
+  /** The seed's reason for leaving a host path out of the sandbox. */
+  skipped(hostPath: string): SeedSkipReason | undefined;
+  /** Upload one policy-skipped file whose read was just approved, as part of the baseline. */
+  adopt(hostPath: string, signal?: AbortSignal): Promise<void>;
+}
+const lookups = new WeakMap<object, SeedLookup>();
+
+/** The finished seed of the sandbox whose `files` this is. */
+export function seedLookup(files: object): SeedLookup | undefined {
+  return lookups.get(files);
+}
+
+/** Human text for a skip reason, finishing "<path> is not in the sandbox: it is ...". */
+export function skipExplanation(reason: SeedSkipReason): string {
+  switch (reason) {
+    case "policy":
+      return "withheld by policy when the sandbox was seeded";
+    case "symlink":
+      return "a symlink, which the sandbox copy leaves out; use the path it points to";
+    case "too-large":
+      return "over the per-file upload cap (sandbox.remote.seed.maxFileMiB); ask for a smaller file or raise the cap";
+    case "git":
+      return "inside .git, which the sandbox builds for itself";
+    case "outside":
+      return "reached through a path that leaves the project, so it was left out";
+    case "not-file":
+      return "a directory or submodule, which the sandbox copy leaves out";
+    case "reserved":
+      return "a name PiShip reserves for seeding the sandbox";
+  }
+}
+
 const size = (bytes: number) =>
   bytes >= 1024 * 1024 ? `${bytes / 1024 / 1024} MiB` : `${bytes} bytes`;
 
@@ -98,6 +137,21 @@ export async function seedRemoteWorkspace(
   const baseHead = await git(root, ["rev-parse", "HEAD"])
     .then((out) => out.toString("utf8").trim() || null)
     .catch(() => null);
+
+  // A tracked file's mode is git's, on every platform: a Windows checkout has
+  // no exec bit to read, and a later chmod would show up as a change.
+  const indexModes = new Map<string, number>();
+  const staged = await git(root, ["ls-files", "-s", "-z"]).catch(() =>
+    Buffer.alloc(0),
+  );
+  for (const record of staged.toString("utf8").split("\0")) {
+    const found = /^(\d{6}) [0-9a-f]+ \d\t(.*)$/s.exec(record);
+    if (found?.[2])
+      indexModes.set(found[2], found[1] === "100755" ? 0o755 : 0o644);
+  }
+  const modeOf = (path: string, info: { mode: number }) =>
+    indexModes.get(path) ??
+    (process.platform !== "win32" && info.mode & 0o111 ? 0o755 : 0o644);
 
   const totalCap = options.caps?.totalCap ?? SEED_TOTAL_CAP;
   const fileCap = options.caps?.fileCap ?? SEED_FILE_CAP;
@@ -162,11 +216,16 @@ export async function seedRemoteWorkspace(
     const data = await readFile(absolute);
     entries.push({
       path,
-      mode: process.platform !== "win32" && info.mode & 0o111 ? 0o755 : 0o644,
+      mode: modeOf(path, info),
       data,
     });
   }
 
+  const withheld = skipped.filter((item) => item.reason === "policy").length;
+  if (withheld * 2 > withheld + entries.length)
+    options.progress?.(
+      `Your policy withheld ${withheld} of ${withheld + entries.length} project files from the sandbox, so the agent will not see them.`,
+    );
   const sizeOf = entries.reduce((n, e) => n + e.data.length, 0);
   options.progress?.(
     `Uploading ${entries.length} files (${(sizeOf / 1024 / 1024).toFixed(1)} MiB) to the sandbox`,
@@ -197,10 +256,78 @@ export async function seedRemoteWorkspace(
     throw new Error(
       `seeding the sandbox failed (exit ${result.exitCode}): ${output.trim().slice(-300)}`,
     );
-  return {
+  const seeded: SeedResult = {
     baseHead,
     baselineCommit: commit,
     uploaded: entries.map((entry) => entry.path),
     skipped,
   };
+  const reasons = new Map(skipped.map((item) => [item.path, item.reason]));
+  const relativeOf = (hostPath: string) =>
+    relative(root, hostPath).split(sep).join("/");
+  let chain: Promise<unknown> = Promise.resolve();
+  lookups.set(sandbox.files, {
+    skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
+    adopt: (hostPath, signal) => {
+      const path = relativeOf(hostPath);
+      const run = async () => {
+        if (reasons.get(path) !== "policy") return;
+        const absolute = join(root, ...path.split("/"));
+        const info = await lstat(absolute);
+        if (!info.isFile() || info.size > fileCap)
+          throw new Error(
+            `${path} cannot be copied to the sandbox (a non-regular file, or over the ${size(fileCap)} per-file cap); read it on the host instead`,
+          );
+        // The agent may already have made its own file there: keep it.
+        if (
+          !(await sandbox.files.stat(
+            join(root, path),
+            signal ? { signal } : {},
+          ))
+        ) {
+          await sandbox.files.write(
+            join(root, path),
+            await readFile(absolute),
+            {
+              ...(signal ? { signal } : {}),
+            },
+          );
+          // A temporary index builds the new baseline tree, so the work the
+          // agent already staged is not folded into the baseline.
+          const mode = modeOf(path, info);
+          const output: string[] = [];
+          const done = await sandbox.exec(
+            [
+              "set -e",
+              'idx="$(git rev-parse --git-dir)/piship-baseline.idx"',
+              'export GIT_INDEX_FILE="$idx"',
+              'rm -f "$idx"',
+              `git read-tree ${seeded.baselineCommit}`,
+              ...(mode === 0o755 ? [`chmod 755 -- ${quote(path)}`] : []),
+              `git add -f -- ${quote(path)}`,
+              'tree="$(git write-tree)"',
+              'rm -f "$idx"',
+              'git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$tree" -m piship-baseline',
+            ].join("\n"),
+            root,
+            {
+              onData: (chunk) => output.push(chunk.toString("utf8")),
+              timeout: EXTRACT_TIMEOUT_SECONDS,
+              ...(signal ? { signal } : {}),
+            },
+          );
+          const commit = output.join("").trim().split(/\s+/).at(-1) ?? "";
+          if (done.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(commit))
+            throw new Error(
+              `copying ${path} into the sandbox failed (exit ${done.exitCode}); try the read again`,
+            );
+          seeded.baselineCommit = commit;
+        }
+        reasons.delete(path);
+      };
+      chain = chain.then(run, run);
+      return chain as Promise<void>;
+    },
+  });
+  return seeded;
 }

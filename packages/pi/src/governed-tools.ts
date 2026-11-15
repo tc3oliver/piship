@@ -15,7 +15,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, posix, resolve, win32 } from "node:path";
 import {
   type BashOperations,
   type BashToolDetails,
@@ -57,9 +57,11 @@ import {
   withApprovedNetwork,
 } from "@piship/sandbox";
 import { projectProtection } from "./governance/engine.js";
+import { remoteWorkdir } from "./governance/sandbox.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
+import { seedLookup, skipExplanation } from "./remote-workspace/seed.js";
 import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 import { taskTools } from "./task-tools.js";
@@ -420,6 +422,73 @@ export function seedDecision(
   };
 }
 
+export function sandboxGoneMessage(command: string): string {
+  return `The sandbox expired or was lost. Changes up to the last checkpoint are saved: exit, run ${command} sandbox pull to review them, then start a new session.`;
+}
+
+function sandboxGone<T>(gov: GovernanceSession, work: Promise<T>): Promise<T> {
+  return work.catch((error: unknown) => {
+    throw (error as { code?: string })?.code === "SANDBOX_GONE"
+      ? new Error(sandboxGoneMessage(gov.options.lock.app.command))
+      : error;
+  });
+}
+
+/** The project directory inside a remote workspace's sandbox, when PiShip knows it. */
+function remoteWorkdirOf(config: {
+  workdir?: string | undefined;
+  provider?: string | undefined;
+  user?: string | undefined;
+}): string | undefined {
+  return (
+    config.workdir ??
+    (config.provider === "e2b-compatible"
+      ? remoteWorkdir(config.user ?? "user")
+      : undefined)
+  );
+}
+
+/**
+ * A path the sandbox printed (`pwd`, a stack trace) as the host path of the
+ * same file, so policy judges the host-equivalent path. Only an exact
+ * path-segment prefix of the sandbox workdir maps, and nothing that leaves it
+ * after normalising. On Windows, Pi has already resolved `/home/u/ws/x`
+ * against the current drive, so a drive prefix is dropped first.
+ */
+export function mapSandboxPath(
+  path: string,
+  workdir: string,
+  root: string,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const host = platform === "win32" ? win32 : posix;
+  const rooted =
+    platform === "win32"
+      ? path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")
+      : path;
+  if (!rooted.startsWith("/") || path.includes("\0")) return undefined;
+  // A host path already inside the project is the host's own.
+  if (platform !== "win32" || /^[A-Za-z]:/.test(path)) {
+    const own = host.relative(root, path);
+    if (
+      own !== ".." &&
+      !own.startsWith(`..${host.sep}`) &&
+      !host.isAbsolute(own)
+    )
+      return undefined;
+  }
+  const base = posix.normalize(workdir).replace(/\/+$/, "");
+  const full = posix.normalize(rooted);
+  if (full !== base && !full.startsWith(`${base}/`)) return undefined;
+  const rest = full
+    .slice(base.length + 1)
+    .split("/")
+    .filter(Boolean);
+  if (rest.some((segment) => segment === ".." || segment.includes("\\")))
+    return undefined;
+  return host.join(root, ...rest);
+}
+
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 // Opening a FIFO without it waits for a peer on a thread no abort can release,
 // and a few such opens stop all async file I/O of the process. With it the
@@ -709,7 +778,7 @@ export function governedBashOperations(
             : {}),
           ...(options.env ? { env: options.env } : {}),
         });
-        return gov.remote?.track(running) ?? running;
+        return gov.remote?.track(sandboxGone(gov, running)) ?? running;
       });
     const env = uncontainedEnvironment(options.env, source);
     // The local Pi runner has no Windows Job Object. Use the same
@@ -1062,16 +1131,28 @@ export function governedTools(
   cwd: string,
   table: ToolExposureTable | null = gov.exposure,
 ): ToolDefinition[] {
-  const absolute = (path: string) =>
-    isAbsolute(path) ? path : resolve(cwd, path);
-  const missing = (path: string) =>
-    Object.assign(new Error(`ENOENT: no such file, ${path}`), {
-      code: "ENOENT",
-    });
   // A remote workspace: the same decision, then the sandbox's file API.
   // The host-only guards (no-follow open, hard-link check) do not apply to
   // a path the host cannot reach.
   const remote = gov.remote ? gov.sandbox.files : undefined;
+  const workdir = remote ? remoteWorkdirOf(gov.manifest.sandbox) : undefined;
+  // A path the sandbox printed names the same file as under the project root.
+  const absolute = (path: string) =>
+    (workdir && mapSandboxPath(path, workdir, gov.project.root)) ||
+    (isAbsolute(path) ? path : resolve(cwd, path));
+  const missing = (path: string, decided?: string) => {
+    const reason =
+      remote && decided ? seedLookup(remote)?.skipped(decided) : undefined;
+    return Object.assign(
+      new Error(
+        reason && reason !== "policy"
+          ? `ENOENT: ${path} is not in the sandbox: it is ${skipExplanation(reason)}`
+          : `ENOENT: no such file, ${path}`,
+      ),
+      { code: "ENOENT" },
+    );
+  };
+  const gone = <T>(work: Promise<T>) => sandboxGone(gov, work);
   const decideRemote = async (
     action: "filesystem.read" | "filesystem.write",
     path: string,
@@ -1081,11 +1162,28 @@ export function governedTools(
     await gov.remote?.ensureSeeded();
     return decided;
   };
+  // A file the seed withheld by policy, read after the user approved it: it
+  // goes into the sandbox now, as part of the baseline. `gated` is false when
+  // only a write was decided so far, so the read is decided here too.
+  const adoptWithheld = async (
+    decided: string,
+    tool: string,
+    gated: boolean,
+  ) => {
+    const seed = remote && seedLookup(remote);
+    if (!seed || seed.skipped(decided) !== "policy") return;
+    if (!gated) await gatePath(gov, "filesystem.read", decided, tool);
+    await gone(seed.adopt(decided));
+  };
   const read = async (path: string, tool: string) => {
     if (remote) {
-      const data = await remote.read(
-        await decideRemote("filesystem.read", path, tool),
-      );
+      const decided = await decideRemote("filesystem.read", path, tool);
+      await adoptWithheld(decided, tool, true);
+      const data = await gone(remote.read(decided)).catch((error: unknown) => {
+        throw (error as { code?: string })?.code === "ENOENT"
+          ? missing(path, decided)
+          : error;
+      });
       if (data.length > GOVERNED_READ_LIMIT_BYTES)
         throw tooLarge(path, formatSize(data.length), tool);
       return data;
@@ -1106,9 +1204,11 @@ export function governedTools(
   const write = async (path: string, content: string, tool: string) => {
     if (remote)
       return gov.remote!.track(
-        remote.write(
-          await decideRemote("filesystem.write", path, tool),
-          Buffer.from(content, "utf8"),
+        gone(
+          remote.write(
+            await decideRemote("filesystem.write", path, tool),
+            Buffer.from(content, "utf8"),
+          ),
         ),
       );
     const handle = await openDecided(
@@ -1133,10 +1233,9 @@ export function governedTools(
   };
   const exists = async (path: string, tool: string) => {
     if (remote) {
-      const found = await remote.stat(
-        await decideRemote("filesystem.read", path, tool),
-      );
-      if (!found) throw missing(path);
+      const decided = await decideRemote("filesystem.read", path, tool);
+      await adoptWithheld(decided, tool, true);
+      if (!(await gone(remote.stat(decided)))) throw missing(path, decided);
       return;
     }
     await gatePath(gov, "filesystem.read", absolute(path), tool);
@@ -1180,10 +1279,14 @@ export function governedTools(
         readFile: (path) => read(path, "edit"),
         access: async (path) => {
           if (remote) {
-            const found = await remote.stat(
-              await decideRemote("filesystem.write", path, "edit"),
+            const decided = await decideRemote(
+              "filesystem.write",
+              path,
+              "edit",
             );
-            if (!found) throw missing(path);
+            await adoptWithheld(decided, "edit", false);
+            if (!(await gone(remote.stat(decided))))
+              throw missing(path, decided);
             return;
           }
           await gatePath(gov, "filesystem.write", absolute(path), "edit");
