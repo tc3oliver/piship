@@ -61,7 +61,7 @@ import { remoteWorkdir } from "./governance/sandbox.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
-import { seedLookup, skipExplanation } from "./remote-workspace/seed.js";
+import { skipExplanation } from "./remote-workspace/seed.js";
 import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 import { taskTools } from "./task-tools.js";
@@ -1142,7 +1142,7 @@ export function governedTools(
     (isAbsolute(path) ? path : resolve(cwd, path));
   const missing = (path: string, decided?: string) => {
     const reason =
-      remote && decided ? seedLookup(remote)?.skipped(decided) : undefined;
+      remote && decided ? gov.remote?.lookup()?.skipped(decided) : undefined;
     return Object.assign(
       new Error(
         reason && reason !== "policy"
@@ -1170,7 +1170,7 @@ export function governedTools(
     tool: string,
     gated: boolean,
   ) => {
-    const seed = remote && seedLookup(remote);
+    const seed = remote && gov.remote?.lookup();
     if (!seed || seed.skipped(decided) !== "policy") return;
     if (!gated) await gatePath(gov, "filesystem.read", decided, tool);
     await gone(seed.adopt(decided));

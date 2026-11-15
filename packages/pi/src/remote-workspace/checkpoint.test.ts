@@ -114,6 +114,30 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     expect(diffs).toBe(2);
   });
 
+  it("says in one line what the seed left out, and warns when policy withheld most of the project", async () => {
+    initProject();
+    for (const name of ["b", "c"])
+      writeFileSync(join(project, `${name}.txt`), name);
+    const ws = workspace("s8", undefined, {
+      decide: async (path) => (path.endsWith("a.txt") ? "allow" : "skip"),
+    });
+    await ws.ensureSeeded();
+    const left = notices.filter((line) => line.includes("Left out"));
+    expect(left).toEqual([
+      "Left out of the sandbox: 2 by policy. Policy withheld 2 of 3 project files, so the agent will not see most of the project.",
+    ]);
+    expect(notices.join("\n")).not.toContain("Your policy withheld");
+    expect(ws.lookup()?.skipped(join(project, "b.txt"))).toBe("policy");
+
+    notices.length = 0;
+    rmSync(remote, { recursive: true });
+    mkdirSync(remote);
+    await workspace("s9", undefined, {
+      decide: async (path) => (path.endsWith("b.txt") ? "skip" : "allow"),
+    }).ensureSeeded();
+    expect(notices.at(-1)).toBe("Left out of the sandbox: 1 by policy.");
+  });
+
   it("remembers a seed failure no retry can cure, and retries a transient one", async () => {
     const ws = workspace("s2");
     await expect(ws.ensureSeeded()).rejects.toThrow(/git work tree/);
