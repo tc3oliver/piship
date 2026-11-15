@@ -380,6 +380,9 @@ function checkPath(
     const folded = fold(segment);
     if (/^\.git[. ]*$/.test(folded) || /^git~\d+$/.test(folded))
       return refuseSoft("touches .git");
+    // Windows drops trailing dots and spaces, so `.claude.` lands in `.claude`.
+    if (/[. ]$/.test(segment))
+      return refuse("a path segment ending in a dot or a space");
   }
   for (const segment of path.split("/"))
     if (/~\d+$/.test(segment))
@@ -392,6 +395,8 @@ function checkPath(
       return refuseSoft("touches a protected path");
   return path;
 }
+
+const MAX_SKIPPED = 200;
 
 const ALLOWED_MODES = new Set(["100644", "100755"]);
 
@@ -557,10 +562,19 @@ export async function validateRemoteWorkspacePatch(
   options: { cwd?: string; maxBytes?: number; skipProtected?: boolean } = {},
 ): Promise<RemoteWorkspacePatchResult> {
   const first = await validatePatch(patch, protectedPaths, options, []);
-  const { soft: _soft, skipPaths: _paths, ...plain } = first;
+  const { soft: _soft, skipPaths: _paths, ...plain0 } = first;
+  const plain = { ...plain0, refused: [...new Set(plain0.refused)] };
   if (first.ok || first.soft <= 0 || first.soft !== first.refused.length)
     return plain;
   if (options.skipProtected === false) return { ...plain, protectedOnly: true };
+  // Every skipped path becomes one --exclude argument.
+  if (first.skipPaths.size > MAX_SKIPPED)
+    return {
+      ...plain,
+      refused: [
+        `the patch touches ${first.skipPaths.size} protected files, more than the ${MAX_SKIPPED} that can be skipped`,
+      ],
+    };
   // Only protected or .git paths were refused and the patch is otherwise
   // sound: have git leave exactly those out, then validate again with the same
   // excludes. The second pass is the full check, so a path the exclude missed
@@ -578,7 +592,7 @@ export async function validateRemoteWorkspacePatch(
   const { soft: _s, skipPaths: _p, ...done } = second;
   return second.ok
     ? { ...done, skipped, excludeArgs }
-    : { ...done, refused: first.refused };
+    : { ...done, refused: [...new Set(first.refused)] };
 }
 
 async function validatePatch(
@@ -677,4 +691,62 @@ async function validatePatch(
     soft: soft.count,
     skipPaths,
   };
+}
+
+export interface RemoteWorkspaceChange {
+  readonly path: string;
+  /** `created`, `deleted`, or `changed` (with `mode` set when the mode changes). */
+  readonly kind: "created" | "deleted" | "changed";
+  readonly mode?: string;
+  /** Lines added and removed; undefined for a binary file. */
+  readonly added?: number;
+  readonly removed?: number;
+}
+
+/**
+ * What the patch does to each file, from git's own report of it (the same
+ * excludes as the apply): full paths, created or deleted, mode changes, line
+ * counts. Run after the patch validated.
+ */
+export async function describeRemoteWorkspacePatch(
+  patch: Buffer,
+  excludeArgs: readonly string[],
+  cwd: string,
+): Promise<RemoteWorkspaceChange[]> {
+  const [numstat, summary] = await Promise.all([
+    runGit(cwd, ["apply", "--numstat", "-z", ...excludeArgs, "-"], patch),
+    runGit(cwd, ["apply", "--summary", ...excludeArgs, "-"], patch),
+  ]);
+  const notes = new Map<
+    string,
+    { kind?: "created" | "deleted"; mode?: string }
+  >();
+  for (const line of summary.stdout.toString("latin1").split("\n")) {
+    let m = /^ (create|delete) mode (\S+) (.+)$/.exec(line);
+    if (m) {
+      const path = summaryPath(m[3] as string)?.toString("utf8");
+      if (path)
+        notes.set(path, { kind: m[1] === "create" ? "created" : "deleted" });
+      continue;
+    }
+    m = /^ mode change (\S+) => (\S+) (.+)$/.exec(line);
+    const path = m && summaryPath(m[3] as string)?.toString("utf8");
+    if (m && path) notes.set(path, { mode: `${m[1]} => ${m[2]}` });
+  }
+  const changes: RemoteWorkspaceChange[] = [];
+  for (const record of numstat.stdout.toString("latin1").split("\0")) {
+    const fields = /^(-|\d+)\t(-|\d+)\t([\s\S]+)$/.exec(record);
+    if (!fields) continue;
+    const path = Buffer.from(fields[3] as string, "latin1").toString("utf8");
+    const note = notes.get(path);
+    changes.push({
+      path,
+      kind: note?.kind ?? "changed",
+      ...(note?.mode ? { mode: note.mode } : {}),
+      ...(fields[1] === "-"
+        ? {}
+        : { added: Number(fields[1]), removed: Number(fields[2]) }),
+    });
+  }
+  return changes;
 }

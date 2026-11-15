@@ -1,6 +1,7 @@
 // `<command> sandbox pull` against a real git work tree and real `git diff` output.
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   symlinkSync,
   mkdirSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandedContext } from "./branded/context.js";
 import { runSandbox } from "./branded/sandbox.js";
@@ -206,6 +207,7 @@ describe("sandbox pull", () => {
     expect(failed?.message).toMatch(/nothing was changed/);
     expect(failed?.userAction).toMatch(/demo sandbox pull again/);
     expect(failed?.userAction).toContain("latest.patch");
+    expect(failed?.userAction).not.toMatch(/git apply --3way/);
     expect(failed).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\nmine\n");
     expect(existsSync(join(repo, "b.txt"))).toBe(false);
@@ -407,6 +409,125 @@ describe("sandbox pull", () => {
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);
+  });
+
+  /** A patch that edits a.txt, then creates each `created` path (all new, content "new"). */
+  function editAndCreate(created: string[]): Buffer {
+    const clone = join(temp, `ec-${Math.random().toString(16).slice(2)}`);
+    git(temp, "clone", "-q", repo, clone);
+    writeFileSync(join(clone, "a.txt"), "one\nthree\n");
+    for (const name of created) {
+      mkdirSync(dirname(join(clone, name)), { recursive: true });
+      writeFileSync(join(clone, name), "new\n");
+    }
+    git(clone, "add", "-A");
+    return git(clone, "diff", "--cached", "--binary", "HEAD");
+  }
+  const storeEc = (patch: Buffer) =>
+    writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+      session: "ec",
+      baseHead: null,
+      files: 2,
+    });
+  const failure = async () =>
+    runSandbox(ctx, ["pull", "--yes"]).then(
+      () => undefined,
+      (error: Error & { userAction?: string; code?: string }) => error,
+    );
+
+  describe("a write that cannot succeed", () => {
+    it("refuses a new file whose path is an existing directory, before writing", async () => {
+      storeEc(editAndCreate(["b.txt"]));
+      mkdirSync(join(repo, "b.txt"));
+      writeFileSync(join(repo, "b.txt", "keep"), "mine\n");
+      const failed = await failure();
+      expect(failed?.message).toMatch(/a directory with that name exists/);
+      expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
+      expect(readFileSync(join(repo, "b.txt", "keep"), "utf8")).toBe("mine\n");
+    });
+
+    it("refuses a new file below an existing file, before writing", async () => {
+      storeEc(editAndCreate(["notes/x"]));
+      writeFileSync(join(repo, "notes"), "a file\n");
+      const failed = await failure();
+      expect(failed?.message).toMatch(/exists on this machine as a file/);
+      expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
+      expect(readFileSync(join(repo, "notes"), "utf8")).toBe("a file\n");
+    });
+
+    it.skipIf(
+      process.platform === "win32" ||
+        (process.getuid !== undefined && process.getuid() === 0),
+    )(
+      "puts every file back when a later write fails, and says why",
+      async () => {
+        storeEc(editAndCreate(["sub/z.txt"]));
+        mkdirSync(join(repo, "sub"));
+        chmodSync(join(repo, "sub"), 0o555);
+        try {
+          const failed = await failure();
+          expect(failed?.message).toMatch(/put back exactly as they were/);
+          expect(failed?.message).toMatch(/z\.txt/);
+          expect(failed?.message).not.toMatch(/Falling back/);
+          expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
+          expect(existsSync(join(repo, "sub", "z.txt"))).toBe(false);
+          expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(
+            true,
+          );
+        } finally {
+          chmodSync(join(repo, "sub"), 0o755);
+        }
+      },
+    );
+  });
+
+  describe("the listing before the prompt", () => {
+    it("shows full paths, unicode as text, created files and mode changes", async () => {
+      const long = `.github/workflows/${"very-long-name-".repeat(6)}checker.yml`;
+      const clone = join(temp, "listing");
+      git(temp, "clone", "-q", repo, clone);
+      mkdirSync(join(clone, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(clone, long), "name: x\n");
+      writeFileSync(join(clone, "ä.txt"), "x\n");
+      writeFileSync(join(clone, "rtl\u202eexe.txt"), "x\n");
+      if (process.platform !== "win32") chmodSync(join(clone, "a.txt"), 0o755);
+      git(clone, "add", "-A");
+      writeRemoteWorkspaceCheckpoint(
+        state,
+        repo,
+        git(clone, "diff", "--cached", "--binary", "HEAD"),
+        { session: "ls", baseHead: null, files: 4 },
+      );
+      await runSandbox(ctx, ["pull", "--yes"]);
+      const text = out.join("\n");
+      expect(text).toContain(`created  ${long}`);
+      expect(text).toContain("ä.txt");
+      expect(text).not.toContain("\u202e");
+      expect(text).toContain("rtl?exe.txt");
+      if (process.platform !== "win32")
+        expect(text).toContain("(mode 100644 => 100755)");
+    });
+
+    it("caps the list at 50 files and says how to see the rest", async () => {
+      storeEc(editAndCreate(Array.from({ length: 52 }, (_, i) => `f${i}.txt`)));
+      await runSandbox(ctx, ["pull", "--yes"]);
+      expect(out.join("\n")).toMatch(
+        /and 3 more; use demo sandbox pull --diff/,
+      );
+    });
+  });
+
+  it("names the unreadable record and lets --discard clear it", async () => {
+    checkpoint();
+    const paths = remoteWorkspacePaths(state, repo);
+    writeFileSync(paths.meta, "{ not json");
+    const failed = await failure();
+    expect(failed?.message).toContain(paths.meta);
+    expect(failed?.message).toMatch(/unreadable/);
+    expect(failed?.userAction).toMatch(/demo sandbox pull --discard/);
+    await runSandbox(ctx, ["pull", "--discard"]);
+    expect(existsSync(paths.patch)).toBe(false);
+    expect(existsSync(paths.meta)).toBe(false);
   });
 
   describe("pulled marker", () => {
