@@ -477,7 +477,9 @@ export function mapSandboxPath(
     )
       return undefined;
   }
-  const base = posix.normalize(workdir).replace(/\/+$/, "");
+  // normalize() leaves at most one trailing slash.
+  const normal = posix.normalize(workdir);
+  const base = normal.endsWith("/") ? normal.slice(0, -1) : normal;
   const full = posix.normalize(rooted);
   if (full !== base && !full.startsWith(`${base}/`)) return undefined;
   const rest = full

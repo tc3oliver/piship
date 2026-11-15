@@ -633,9 +633,13 @@ async function validatePatch(
       `git cannot read the patch: ${(numstat.stderr || summary.stderr).trim().slice(0, 200)}`,
     );
 
-  const protectedSet = new Set(
-    protectedPaths.map((p) => fold(p.replace(/\/+$/, ""))),
-  );
+  // A loop, not /\/+$/: that pattern is quadratic on a run of slashes.
+  const untrail = (p: string) => {
+    let end = p.length;
+    while (end > 0 && p[end - 1] === "/") end--;
+    return p.slice(0, end);
+  };
+  const protectedSet = new Set(protectedPaths.map((p) => fold(untrail(p))));
   const files = new Set<string>();
   const check = (token: string) => {
     const bytes = summaryPath(token);
