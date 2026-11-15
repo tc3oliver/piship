@@ -487,6 +487,44 @@ describe("seedRemoteWorkspace", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "finishes an adopt whose call is cancelled after the upload, so the file never reads as the agent's",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "ask\n");
+      const abort = new AbortController();
+      const base = fakeSandbox();
+      // Esc lands once the file is uploaded; a cancelled exec throws, as the
+      // governed sandbox's does.
+      const sandbox: SeedSandbox = {
+        ...base,
+        files: {
+          ...base.files,
+          write: async (path, data, options) => {
+            await base.files.write(path, data, options);
+            if (path.endsWith("ask.txt")) abort.abort();
+          },
+        },
+        exec: (command, cwd, options) =>
+          options.signal?.aborted
+            ? Promise.reject(new Error("aborted"))
+            : base.exec(command, cwd, options),
+      };
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      await seeded.lookup?.adopt(join(project, "ask.txt"), abort.signal);
+      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBeUndefined();
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "overlays over a seeded tree with awkward names, removing only what is neither uploaded nor ignored",
     async () => {
       initProject();

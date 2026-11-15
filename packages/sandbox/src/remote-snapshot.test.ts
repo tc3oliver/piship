@@ -88,8 +88,14 @@ describe("e2b snapshots", () => {
     await instance.dispose();
   });
 
-  it("stops a snapshot that is still saving when the caller's signal aborts", async () => {
-    const mock = await e2bServer({ holdSnapshot: true });
+  it("stops waiting for a snapshot when the caller's signal aborts, and deletes the one the service still makes", async () => {
+    let release = () => {};
+    const script: Parameters<typeof e2bServer>[0] = {
+      holdSnapshot: new Promise<void>((done) => {
+        release = done;
+      }),
+    };
+    const mock = await e2bServer(script);
     const sandbox = await activate(backend(mock.url));
     const abort = new AbortController();
     const saving = sandbox.snapshot?.({ signal: abort.signal });
@@ -102,6 +108,12 @@ describe("e2b snapshots", () => {
       await new Promise((done) => setTimeout(done, 10));
     abort.abort();
     await expect(saving).rejects.toThrow(/aborted/);
+    // The service finishes it anyway; PiShip deletes it by the id it returns.
+    release();
+    for (let i = 0; i < 200 && !script.deletedSnapshots?.length; i++)
+      await new Promise((done) => setTimeout(done, 10));
+    expect(script.deletedSnapshots).toEqual(["snap-1"]);
+    expect(script.snapshots).toEqual([]);
     await sandbox.dispose();
   });
 
