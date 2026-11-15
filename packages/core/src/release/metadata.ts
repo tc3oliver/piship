@@ -219,6 +219,8 @@ export interface ReleaseOptions extends OutputStagingOptions {
    * the runtime from scratch, as `piship release --rebuild` does.
    */
   readonly cache?: boolean;
+  /** Receives a short line as each long step starts (see `progressReporter`). */
+  readonly progress?: ((step: string) => void) | undefined;
   /** Test seam: assembles the canonical payload (defaults to buildDistribution). */
   readonly assemble?: (manifestPath: string, outputRoot: string) => string;
 }

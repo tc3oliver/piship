@@ -58,7 +58,13 @@ export function runCommand(
               : null
             : 0,
           stdout,
-          stderr: stderr || error?.message || "",
+          // A timeout's own message only repeats the command line.
+          stderr:
+            error?.killed &&
+            options.timeout !== undefined &&
+            error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+              ? `timed out after ${options.timeout / 1000} s${stderr ? `: ${stderr}` : ""}`
+              : stderr || error?.message || "",
         }),
     );
     // Like spawnSync, give the command an empty, closed standard input.

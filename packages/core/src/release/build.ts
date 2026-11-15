@@ -67,6 +67,7 @@ import {
   evaluateVulnerabilities,
   npmAuditScanner,
   npmSignatureAuditor,
+  announceScans,
 } from "./scans.js";
 import {
   auditPiPackage,
@@ -378,6 +379,7 @@ export async function buildRelease(
     // directory. Each Pi package lockfile goes through the same policy,
     // against release.vulnerabilities.registry or the package's own registry.
     // The package files are read now, before bundling rewrites the payload.
+    announceScans(options.progress);
     const vulnerabilityScan = outcome(
       timer.run("npm audit", async () =>
         (options.scanner ?? npmAuditScanner)(lockDirectory),

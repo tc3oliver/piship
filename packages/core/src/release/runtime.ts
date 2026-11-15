@@ -68,6 +68,7 @@ import {
   evaluateVulnerabilities,
   npmAuditScanner,
   npmSignatureAuditor,
+  announceScans,
 } from "./scans.js";
 import {
   gate,
@@ -150,6 +151,7 @@ export interface RuntimeReleaseOptions
     | "cache"
     | "reclaimStaging"
     | "abandonedStaging"
+    | "progress"
   > {
   /** Test seam: runs the payload's `piship.mjs` (defaults to Node). */
   readonly runTest?: (
@@ -292,6 +294,7 @@ export async function buildRuntimeRelease(
     const lockDirectory = join(stage, AUDIT_DIRECTORY);
     prepareAuditDirectory(payload, lockDirectory);
     const now = options.now ?? (() => new Date());
+    announceScans(options.progress);
     const vulnerabilityScan = outcome(
       timer.run("npm audit", async () =>
         (options.scanner ?? npmAuditScanner)(lockDirectory),
