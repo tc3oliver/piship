@@ -61,6 +61,72 @@ export interface BundleOptions {
   readonly onCache?: (found: "hit" | "miss") => void;
 }
 
+/**
+ * The program the bundler runs in a child process. esbuild resolves a bare
+ * import by walking up from the importing file, so an
+ * import the payload's own packages do not satisfy (an optional `require` in a
+ * try block, say) would be bundled from a `node_modules` above the payload on
+ * the build machine: code the lock never named, and a payload that differs
+ * between machines. Every input of the first build is therefore checked to lie
+ * inside the payload before anything is written.
+ */
+export function runtimeBundleScript(
+  esbuild: string,
+  payload: string,
+  entries: Readonly<Record<string, string>>,
+  runtime: string,
+): string {
+  const tool = esbuild;
+  return `
+import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+const require = createRequire(${IMPORT_META_URL});
+const { build } = require(${JSON.stringify(tool)});
+const root = ${JSON.stringify(payload)};
+const options = {
+ entryPoints: ${JSON.stringify(entries)}, outdir: ${JSON.stringify(runtime)},
+ bundle: true, splitting: true, metafile: true, write: false, format: 'esm', platform: 'node', target: 'node22',
+ minify: true, sourcemap: false, chunkNames: 'chunk-[hash]',
+ external: ['esbuild', 'jiti', '@silvia-odwyer/photon-node'],
+ banner: {js: 'import {createRequire as __pishipRequire} from "node:module"; const require=__pishipRequire(${IMPORT_META_URL});'},
+ plugins: [{ name: 'preserve-module-asset-urls', setup(build) {
+  build.onLoad({filter: /\\.[cm]?js$/}, ({path}) => {
+   const text = readFileSync(path, 'utf8');
+   if (!text.includes('${IMPORT_META_URL}')) return;
+   const source = relative(root,path).split(sep).join('/');
+   return {contents: text.replaceAll('${IMPORT_META_URL}', 'new URL('+JSON.stringify('../'+source)+', ${IMPORT_META_URL}).href'), loader:'js'};
+  });
+ }}]
+};
+const scan = await build(options);
+const outside = Object.keys(scan.metafile.inputs).filter((file) => {
+ const path = relative(root, resolve(process.cwd(), file));
+ return path.startsWith('..') || isAbsolute(path);
+});
+if (outside.length) throw new Error('the bundle would include files outside the payload: ' + outside.slice(0, 5).join(', '));
+const sources = [];
+const mapping = {};
+for (const [name, path] of Object.entries(options.entryPoints)) {
+ if (name.endsWith('worker') || name === 'piship-pi-environment') continue;
+ const output = Object.entries(scan.metafile.outputs).find(([file]) => file.replaceAll('\\\\','/').endsWith('/'+name+'.js'))?.[1];
+ if (!output) throw new Error('Missing bundle entry '+name);
+ const names = output.exports;
+ const prefix = name.replaceAll('-', '_');
+ mapping[name] = names.map(key => [key, prefix+'_'+key]);
+ sources.push('export {'+mapping[name].map(([key, renamed])=>key+' as '+renamed).join(',')+'} from '+JSON.stringify(path)+';');
+}
+const mainSource = ${JSON.stringify(join(runtime, ".main.mjs"))};
+const bootSource = ${JSON.stringify(join(runtime, ".boot.mjs"))};
+const { writeFileSync, rmSync } = require('node:fs');
+writeFileSync(mainSource, sources.join('\\n'));
+const dependency = (name, file) => JSON.stringify(join(root, 'node_modules', '@piship', name, 'dist', file));
+writeFileSync(bootSource, 'export {formatError} from '+dependency('contracts', 'index.js')+'; export {verifyLaunchPayload} from '+dependency('core', 'index.js')+'; export {preparePiEnvironment} from '+dependency('pi', 'environment.js')+';');
+await build({...options, entryPoints: { main: mainSource, boot: bootSource, 'codemode-worker': options.entryPoints['codemode-worker'], 'image-resize-worker': options.entryPoints['image-resize-worker'] }, splitting: false, write:true});
+writeFileSync(${JSON.stringify(join(runtime, "exports.json"))}, JSON.stringify(mapping));
+rmSync(mainSource); rmSync(bootSource);`;
+}
+
 /** Build-time only: combine JS while retaining upstream assets and public exports. */
 export function bundleDistribution(
   payload: string,
@@ -204,49 +270,7 @@ export function bundleDistribution(
   if (!placed) {
     mkdirSync(runtime, { recursive: true });
     const tool = load.resolve("esbuild");
-    const script = `
-import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-const require = createRequire(${IMPORT_META_URL});
-const { build } = require(${JSON.stringify(tool)});
-const root = ${JSON.stringify(payload)};
-const options = {
- entryPoints: ${JSON.stringify(entries)}, outdir: ${JSON.stringify(runtime)},
- bundle: true, splitting: true, metafile: true, write: false, format: 'esm', platform: 'node', target: 'node22',
- minify: true, sourcemap: false, chunkNames: 'chunk-[hash]',
- external: ['esbuild', 'jiti', '@silvia-odwyer/photon-node'],
- banner: {js: 'import {createRequire as __pishipRequire} from "node:module"; const require=__pishipRequire(${IMPORT_META_URL});'},
- plugins: [{ name: 'preserve-module-asset-urls', setup(build) {
-  build.onLoad({filter: /\\.[cm]?js$/}, ({path}) => {
-   const text = readFileSync(path, 'utf8');
-   if (!text.includes('${IMPORT_META_URL}')) return;
-   const source = relative(root,path).split(sep).join('/');
-   return {contents: text.replaceAll('${IMPORT_META_URL}', 'new URL('+JSON.stringify('../'+source)+', ${IMPORT_META_URL}).href'), loader:'js'};
-  });
- }}]
-};
-const scan = await build(options);
-const sources = [];
-const mapping = {};
-for (const [name, path] of Object.entries(options.entryPoints)) {
- if (name.endsWith('worker') || name === 'piship-pi-environment') continue;
- const output = Object.entries(scan.metafile.outputs).find(([file]) => file.replaceAll('\\\\','/').endsWith('/'+name+'.js'))?.[1];
- if (!output) throw new Error('Missing bundle entry '+name);
- const names = output.exports;
- const prefix = name.replaceAll('-', '_');
- mapping[name] = names.map(key => [key, prefix+'_'+key]);
- sources.push('export {'+mapping[name].map(([key, renamed])=>key+' as '+renamed).join(',')+'} from '+JSON.stringify(path)+';');
-}
-const mainSource = ${JSON.stringify(join(runtime, ".main.mjs"))};
-const bootSource = ${JSON.stringify(join(runtime, ".boot.mjs"))};
-const { writeFileSync, rmSync } = require('node:fs');
-writeFileSync(mainSource, sources.join('\\n'));
-const dependency = (name, file) => JSON.stringify(join(root, 'node_modules', '@piship', name, 'dist', file));
-writeFileSync(bootSource, 'export {formatError} from '+dependency('contracts', 'index.js')+'; export {verifyLaunchPayload} from '+dependency('core', 'index.js')+'; export {preparePiEnvironment} from '+dependency('pi', 'environment.js')+';');
-await build({...options, entryPoints: { main: mainSource, boot: bootSource, 'codemode-worker': options.entryPoints['codemode-worker'], 'image-resize-worker': options.entryPoints['image-resize-worker'] }, splitting: false, write:true});
-writeFileSync(${JSON.stringify(join(runtime, "exports.json"))}, JSON.stringify(mapping));
-rmSync(mainSource); rmSync(bootSource);`;
+    const script = runtimeBundleScript(tool, payload, entries, runtime);
     const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
       input: script,
       encoding: "utf8",

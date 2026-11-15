@@ -1,77 +1,94 @@
+import { spawnSync } from "node:child_process";
 import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  type MockInstance,
-  vi,
-} from "vitest";
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { runtimeBundleScript } from "./bundle.js";
 
-const rename = vi.hoisted(() => vi.fn());
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  renameSync: rename,
-}));
-
-import { wildcardTarget } from "./bundle.js";
-import { renameWithRetry } from "./rename-retry.js";
-
-function failure(code: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(code), { code });
-}
-
-describe("wildcardTarget", () => {
-  it("replaces every wildcard, as Node resolves an exports pattern", () => {
-    expect(wildcardTarget("./dist/*/*.js", "openai")).toBe(
-      "./dist/openai/openai.js",
-    );
-  });
-  it("inserts the subpath literally", () => {
-    expect(wildcardTarget("./dist/*.js", "a$&b")).toBe("./dist/a$&b.js");
-  });
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
 });
 
-describe("renameWithRetry", () => {
-  let wait: MockInstance<typeof Atomics.wait>;
-  const platform = Object.getOwnPropertyDescriptor(process, "platform");
-  beforeEach(() => {
-    rename.mockReset();
-    wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
-    Object.defineProperty(process, "platform", { value: "win32" });
+function write(path: string, text: string): string {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+  return path;
+}
+
+/** A tiny payload under `<root>/outer`, with the files the runtime bundle reads. */
+function payloadWith(mainSource: string) {
+  const root = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-bundle-")),
+  );
+  roots.push(root);
+  const payload = join(root, "outer", "payload");
+  const stub = (name: string, exports: string) =>
+    write(
+      join(payload, "node_modules", "@piship", name, "dist", "index.js"),
+      exports,
+    );
+  stub("contracts", "export const formatError = () => '';");
+  stub("core", "export const verifyLaunchPayload = () => ({});");
+  write(
+    join(payload, "node_modules", "@piship", "pi", "dist", "environment.js"),
+    "export const preparePiEnvironment = () => ({});",
+  );
+  const entries = {
+    "piship-a": write(join(payload, "a.js"), mainSource),
+    "codemode-worker": write(join(payload, "worker.js"), "export {};"),
+    "image-resize-worker": write(join(payload, "image.js"), "export {};"),
+  };
+  const runtime = join(payload, "runtime");
+  mkdirSync(runtime, { recursive: true });
+  const esbuild = createRequire(import.meta.url).resolve("esbuild");
+  return { root, payload, entries, runtime, esbuild };
+}
+
+function bundle(fixture: ReturnType<typeof payloadWith>) {
+  return spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: runtimeBundleScript(
+      fixture.esbuild,
+      fixture.payload,
+      fixture.entries,
+      fixture.runtime,
+    ),
+    encoding: "utf8",
+    cwd: fixture.root,
   });
-  afterEach(() => {
-    wait.mockRestore();
-    if (platform) Object.defineProperty(process, "platform", platform);
+}
+
+describe("the runtime bundle stays inside the payload", () => {
+  it("bundles a payload whose imports it holds itself", () => {
+    const fixture = payloadWith("export const a = 1;");
+    const result = bundle(fixture);
+    expect(result.status, result.stderr).toBe(0);
   });
 
-  it("retries while Windows holds the tree open, then succeeds", () => {
-    rename
-      .mockImplementationOnce(() => {
-        throw failure("EPERM");
-      })
-      .mockImplementationOnce(() => {
-        throw failure("EBUSY");
-      })
-      .mockImplementation(() => undefined);
-    renameWithRetry("from", "to");
-    expect(rename).toHaveBeenCalledTimes(3);
-    expect(rename).toHaveBeenLastCalledWith("from", "to");
-    expect(wait.mock.calls.map((call) => call[3])).toEqual([100, 200]);
-  });
-  it("gives up with the original error once the holder does not let go", () => {
-    rename.mockImplementation(() => {
-      throw failure("EACCES");
-    });
-    expect(() => renameWithRetry("from", "to")).toThrow("EACCES");
-    expect(rename).toHaveBeenCalledTimes(10);
-  });
-  it("does not retry an error that waiting cannot fix", () => {
-    rename.mockImplementation(() => {
-      throw failure("ENOENT");
-    });
-    expect(() => renameWithRetry("from", "to")).toThrow("ENOENT");
-    expect(rename).toHaveBeenCalledTimes(1);
-    expect(wait).not.toHaveBeenCalled();
+  it("refuses a module that only a node_modules above the payload provides", () => {
+    const fixture = payloadWith(
+      'import { leak } from "leaky"; export const a = leak;',
+    );
+    // On the build machine, above the payload: not in the lock.
+    write(
+      join(fixture.root, "outer", "node_modules", "leaky", "index.js"),
+      "export const leak = 1;",
+    );
+    write(
+      join(fixture.root, "outer", "node_modules", "leaky", "package.json"),
+      '{"name":"leaky","version":"1.0.0","type":"module","main":"index.js"}',
+    );
+    const result = bundle(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("outside the payload");
+    expect(result.stderr).toContain("leaky");
   });
 });
