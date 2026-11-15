@@ -514,13 +514,19 @@ describe("a custom adapter that never answers", () => {
     issue?: () => void;
     revoked: string[];
   }
+  // Each test's adapter logs under its own name: the module that never
+  // settles is still being imported after its test ends, and once it runs
+  // it would replace a shared log under a later test.
+  let logName = "";
+  let written = 0;
   const hungLog = () =>
-    (globalThis as unknown as { __sandboxHungLog: HungLog }).__sandboxHungLog;
+    (globalThis as unknown as Record<string, HungLog>)[logName] as HungLog;
   const write = (body: string) => {
+    logName = `__sandboxHungLog${++written}`;
     mkdirSync(join(root, "resources", "sandbox"), { recursive: true });
     writeFileSync(
       join(root, "resources", "sandbox", "hung.mjs"),
-      `const log = (globalThis.__sandboxHungLog = { signals: [], revoked: [] });
+      `const log = (globalThis.${logName} = { signals: [], revoked: [] });
 ${body}`,
     );
   };
@@ -595,5 +601,31 @@ export default () => ({});`);
     expect(log.signals[0]?.aborted).toBe(true);
     log.issue?.();
     await vi.waitFor(() => expect(log.revoked).toEqual(["fake-late-token"]));
+  });
+
+  it("revokes a credential issued in time when the factory then never settles", {
+    timeout: 5_000,
+  }, async () => {
+    write(`export const sandboxCredential = {
+  mode: "adapter",
+  requiresIdentity: false,
+  async acquire() {
+    return { kind: "bearer", secret: "fake-early-token" };
+  },
+  async revoke(credential) {
+    log.revoked.push(credential.secret.reveal?.() ?? credential.secret);
+  },
+};
+export default () => new Promise(() => {});`);
+    await expect(
+      sandboxBackend(
+        options(custom, { adapterTimeoutMs: 50 } as Partial<GovernanceOptions>),
+      ),
+    ).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("the factory did not settle"),
+    });
+    // Revoked before the launch failure was reported, not afterwards.
+    expect(hungLog().revoked).toEqual(["fake-early-token"]);
   });
 });
