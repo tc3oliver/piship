@@ -13,13 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnManaged } from "./process.js";
+import { windowsJobCommand, windowsJobSupervisor } from "./windows-job.js";
 import {
   HELPER_SOURCE,
   helperDirectory,
   type RunSync,
   windowsJobHelper,
 } from "./windows-job-helper.js";
-import { windowsJobCommand, windowsJobSupervisor } from "./windows-job.js";
 
 let root: string;
 let state: string;

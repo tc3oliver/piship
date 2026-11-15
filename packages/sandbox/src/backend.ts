@@ -207,6 +207,28 @@ export interface SandboxExecResult {
   readonly signal?: NodeJS.Signals | null;
 }
 
+/**
+ * File access to a remote sandbox's workspace. Paths are workspace-relative
+ * with `/` separators, never absolute and never containing `..`.
+ */
+export interface SandboxFiles {
+  /** Rejects with code `ENOENT` when the file is missing. */
+  read(path: string, options: { signal: AbortSignal }): Promise<Buffer>;
+  /** Creates parent directories and overwrites. */
+  write(
+    path: string,
+    data: Buffer,
+    options: { signal: AbortSignal },
+  ): Promise<void>;
+  /** Undefined when the path does not exist. */
+  stat(
+    path: string,
+    options: { signal: AbortSignal },
+  ): Promise<
+    { type: "file" | "directory" | "other"; size: number } | undefined
+  >;
+}
+
 /** One prepared sandbox for one session (created by `prepare`). */
 export interface SandboxInstance {
   exec(
@@ -227,6 +249,8 @@ export interface SandboxInstance {
    * synchronized workspace again before the next command. Never a secret.
    */
   epoch?(): string | undefined;
+  /** Optional: file access to the sandbox's workspace (remote backends). */
+  readonly files?: SandboxFiles;
 }
 
 export interface SandboxBackend {
