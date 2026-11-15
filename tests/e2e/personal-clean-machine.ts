@@ -114,7 +114,7 @@ async function update(s: PersonalScenario, name: string): Promise<void> {
   expect((await s.run(["version"])).stdout).toContain(`${name} 1.1.0`);
   const doctor = await s.run(["doctor"]);
   expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
-  expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+  expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
   expect(doctor.stdout).toMatch(/rollback\s+1\.0\.0 retained/);
 }
 
@@ -277,7 +277,7 @@ export function myPiFlow(): void {
     expect(doctor.stdout).toMatch(/state\s+delegated \(no PiShip secret\)/);
     expect(doctor.stdout).toMatch(/mcp notes\s+healthy \(stdio; 2 tool\(s\)\)/);
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
-    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+    expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
     expect(doctor.stdout).toMatch(/Secret Store\n {2}- backend\s+not used/);
 
     // Update through the signed channel: the session and the delegated
@@ -441,18 +441,18 @@ export function myPiLocalFlow(): void {
     const doctor = await s.run(["doctor"]);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
     expect(doctor.stdout).toMatch(
-      /Credential\n {2}✓ provider\s+local-secret\n {2}✓ valid\s+no expiry/,
+      /Credential\n {2}[✓+] provider\s+local-secret\n {2}[✓+] valid\s+no expiry/,
     );
     expect(doctor.stdout).toMatch(
-      /Inference\n {2}✓ provider\s+openai-compatible/,
+      /Inference\n {2}[✓+] provider\s+openai-compatible/,
     );
     expect(doctor.stdout).toMatch(
-      /Gateway\n {2}✓ endpoint\s+http:\/\/127\.0\.0\.1:\d+\n {2}✓ gateway\s+reachable \(1 listed; model providers not contacted\)/,
+      /Gateway\n {2}[✓+] endpoint\s+http:\/\/127\.0\.0\.1:\d+\n {2}[✓+] gateway\s+reachable \(1 listed; model providers not contacted\)/,
     );
     expect(doctor.stdout).toMatch(
       /Secret Store\n {2}! backend\s+restricted plaintext file/,
     );
-    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+    expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
     expect(doctor.stdout).not.toContain(key);
 

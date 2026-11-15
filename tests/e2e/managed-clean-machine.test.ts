@@ -318,20 +318,22 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     // doctor: every group reports the state the flow has produced.
     const doctor = await run(["doctor"]);
     expect(doctor.stdout).toMatch(
-      /Identity\n {2}✓ mode\s+oidc\n {2}✓ session\s+signed in/,
+      /Identity\n {2}[✓+] mode\s+oidc\n {2}[✓+] session\s+signed in/,
     );
-    expect(doctor.stdout).toMatch(/Credential\n {2}✓ provider\s+http-broker/);
-    expect(doctor.stdout).toMatch(/✓ valid\s+\d+m remaining/);
     expect(doctor.stdout).toMatch(
-      /Gateway\n(?: {2}.*\n)*? {2}✓ gateway\s+reachable \(3 listed; model providers not contacted\)/,
+      /Credential\n {2}[✓+] provider\s+http-broker/,
+    );
+    expect(doctor.stdout).toMatch(/[✓+] valid\s+\d+m remaining/);
+    expect(doctor.stdout).toMatch(
+      /Gateway\n(?: {2}.*\n)*? {2}[✓+] gateway\s+reachable \(3 listed; model providers not contacted\)/,
     );
     expect(doctor.stdout).toMatch(
       new RegExp(
-        `Secret Store\\n {2}${PRIMARY_STORAGE === "file" ? "!" : "✓"} backend\\s+${STORE_LABEL}`,
+        `Secret Store\\n {2}${PRIMARY_STORAGE === "file" ? "!" : "[✓+]"} backend\\s+${STORE_LABEL}`,
       ),
     );
     expect(doctor.stdout).toMatch(
-      /✓ outbound\s+private-only: declared hosts only/,
+      /[✓+] outbound\s+private-only: declared hosts only/,
     );
     expect(doctor.stdout).toMatch(
       windows ? /containment\s+not-required/ : /containment\s+enforced/,
@@ -339,9 +341,9 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     expect(doctor.stdout).toMatch(
       windows ? /isolation\s+none/ : /isolation\s+local/,
     );
-    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
-    expect(doctor.stdout).toMatch(/✓ rollback\s+no retained release/);
-    expect(doctor.stdout).toMatch(/Audit\n {2}✓ state\s+healthy/);
+    expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
+    expect(doctor.stdout).toMatch(/[✓+] rollback\s+no retained release/);
+    expect(doctor.stdout).toMatch(/Audit\n {2}[✓+] state\s+healthy/);
     done("doctor");
 
     // sandbox execution: commands the model asks for run inside the native
@@ -478,11 +480,13 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     ).toMatchObject({ text: sessionReply, stopReason: "stop" });
     const updatedDoctor = await run(["doctor"]);
     expect(updatedDoctor.stdout).toMatch(
-      /Supply Chain\n {2}✓ manifest\s+verified/,
+      /Supply Chain\n {2}[✓+] manifest\s+verified/,
     );
-    expect(updatedDoctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
-    expect(updatedDoctor.stdout).toMatch(/✓ active\s+1\.1\.0/);
-    expect(updatedDoctor.stdout).toMatch(/✓ rollback\s+1\.0\.0 retained/);
+    expect(updatedDoctor.stdout).toMatch(
+      /Release\n {2}[✓+] release\s+verified/,
+    );
+    expect(updatedDoctor.stdout).toMatch(/[✓+] active\s+1\.1\.0/);
+    expect(updatedDoctor.stdout).toMatch(/[✓+] rollback\s+1\.0\.0 retained/);
     s.expectSecretStore();
     done("update");
 

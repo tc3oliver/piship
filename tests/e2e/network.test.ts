@@ -473,7 +473,7 @@ describe("enterprise networking through the launcher (loopback fixtures)", () =>
     const doctor = await s.run(["doctor"], env);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
     expect(doctor.stdout).toMatch(
-      /✓ outbound\s+private-only: declared hosts only/,
+      /[✓+] outbound\s+private-only: declared hosts only/,
     );
   }, 300000);
 

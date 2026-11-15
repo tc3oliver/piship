@@ -133,8 +133,14 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
       /- agent commands\s+not restricted \(personal mode/,
     );
     expect(doctor.stdout).toMatch(/Secret Store\n {2}- backend\s+not used/);
-    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+    expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
     expect(doctor.stdout).not.toContain("personal owner policy");
+    // PISHIP_ASCII=1 gives the report ASCII marks on any platform.
+    s.env.PISHIP_ASCII = "1";
+    const ascii = await s.run(["doctor"]);
+    delete s.env.PISHIP_ASCII;
+    expect(ascii.stdout).toMatch(/Release\n {2}\+ release\s+verified/);
+    expect(ascii.stdout).not.toMatch(/[✓✗]/);
 
     // The installed lock declares no enterprise endpoint: no identity,
     // broker, or gateway, and the update source is the only variable.

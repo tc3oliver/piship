@@ -54,6 +54,8 @@ node dist/acmecode/piship.mjs install dist/acmecode
 node dist/acmecode/piship.mjs uninstall acmecode
 ```
 
+On Windows (PowerShell), run the installed `acmecode` by name once `$HOME\.local\bin` is on `PATH` (`install` prints the line), paste the `$env:` lines the fixture prints, and in the shell lines of this page read `~/` as `$HOME\`, `/tmp/` as `$env:TEMP\`, `export NAME=value` as `$env:NAME = "value"`, and `mkdir -p` as `mkdir`.
+
 `login` prints the sign-in URL and opens a browser; the fixture approves it at once and redirects to `http://127.0.0.1:8765/callback`, so that port must be free. Set `PISHIP_NO_BROWSER=1` to only print the URL. Before `login`, `--smoke` fails with `IDENTITY_REQUIRED`. `--smoke` checks Pi startup, declared resources, the read tool, session resume, and the access summary without a model call, and adds a `governance` summary: policy, project origin, sandbox level and planes, workflow mode, capabilities, resource decisions, MCP servers and their exposed tools, and audit state. `--smoke-model` sends one prompt through the fixture gateway. The declared `enterprise-context` extension adds a `demo_context` tool that reads the token-free enterprise context. `config set theme light` is refused because the theme is enforced; `config set model acme/general` is permitted.
 
 What to look for:

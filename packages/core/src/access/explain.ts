@@ -1,4 +1,4 @@
-import { redact } from "@piship/contracts";
+import { asciiOnly, redact } from "@piship/contracts";
 import {
   effectiveHttpTransport,
   type GovernanceManifest,
@@ -506,12 +506,16 @@ export async function explainConfiguration(
 export function formatExplanation(
   appName: string,
   rows: readonly ExplainRow[],
+  ascii: boolean = asciiOnly(),
 ): string {
+  // The note joins sources with the intersection sign and the row with a dash.
+  const note = (text: string) =>
+    ascii ? ` - ${text.replaceAll(" ∩ ", " and ")}` : ` — ${text}`;
   return [
     `${appName} configuration (precedence, highest first: Distribution Enforced > User Preferences > Distribution Defaults; enforced values cannot be overridden, and a permitted user preference replaces a default)`,
     ...rows.map((row) =>
       redact(
-        `${row.key.padEnd(34)} ${JSON.stringify(row.value)}  [${row.source}${row.overridable ? ", user-overridable" : ""}]${row.note ? ` — ${row.note}` : ""}`,
+        `${row.key.padEnd(34)} ${JSON.stringify(row.value)}  [${row.source}${row.overridable ? ", user-overridable" : ""}]${row.note ? note(row.note) : ""}`,
       ),
     ),
   ].join("\n");

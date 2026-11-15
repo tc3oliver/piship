@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkStateMigration,
   compareVersions,
@@ -241,6 +241,20 @@ describe("checkStateMigration", () => {
     expect(formatMigrationReport(report)).toMatch(
       /^Migration check 1.1.0 -> 1.0.0 \(Pi 1.5.0 -> 1.5.0\): safe/,
     );
+  });
+
+  it("marks a safe item with + instead of a check mark when PISHIP_ASCII asks for ASCII", () => {
+    const report = checkStateMigration(populated(), target(), current);
+    const unicode = formatMigrationReport(report);
+    vi.stubEnv("PISHIP_ASCII", "1");
+    try {
+      const ascii = formatMigrationReport(report);
+      expect(ascii).toMatch(/^ {2}\+ /m);
+      expect(ascii).not.toContain("✓");
+      expect(unicode).toContain("✓");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("summarizes a no-op migration in one line and lists only what changes", () => {

@@ -389,10 +389,10 @@ describe("headless workload distribution (local fixtures)", () => {
     const doctor = await run(["doctor"]);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
     expect(doctor.stdout).toMatch(
-      /Identity\n {2}✓ mode\s+adapter\n {2}✓ session\s+workload identity, obtained per run/,
+      /Identity\n {2}[✓+] mode\s+adapter\n {2}[✓+] session\s+workload identity, obtained per run/,
     );
     expect(doctor.stdout).toMatch(
-      /Secret Store\n(?:.*\n)*? {2}✓ revocation retries\s+none pending/,
+      /Secret Store\n(?:.*\n)*? {2}[✓+] revocation retries\s+none pending/,
     );
     expect(doctor.stdout + doctor.stderr).not.toContain(firstToken);
 

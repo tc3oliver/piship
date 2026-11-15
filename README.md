@@ -81,6 +81,8 @@ acmecode policy explain shell.execute "git status"
 
 Clean up with `acmecode logout`, then `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes`.
 
+On Windows the demo needs a native sandbox, which Windows does not have: see the [demo README](examples/demo-company/README.md#deterministic-local-path) for the one-line change, or start with the personal example below. In PowerShell, an installed command is `$HOME\.local\bin\<name>.cmd`; add that folder to `PATH` (`install` prints the line) and run it by name, such as `acmecode login`.
+
 The CLI is not on npm, so run it as `node packages/cli/dist/bin.js`; `npx` and `npm exec` would look it up on the public registry instead. If something fails, [troubleshooting](docs/troubleshooting.md) lists every error code and what to do. The full walkthrough is in the [company demo](examples/demo-company/README.md).
 
 ## Set it up with your coding agent
@@ -211,6 +213,8 @@ node packages/cli/dist/bin.js build examples/personal/piship.yaml
 node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
+
+On Windows (PowerShell): `node packages\cli\dist\bin.js build examples\personal\piship.yaml`, then `node dist\mypi\piship.mjs install dist\mypi`, then `mypi` once `$HOME\.local\bin` is on `PATH`.
 
 For a batteries-included coding agent, the [developer example](examples/developer/README.md) (`devcode`) ships six Pi packages: Claude Code compatibility, diagnostics and LSP, background tasks, review, a browser, and a permission provider. Its profile runs normal work without asking, and asks before `sudo`, recursive deletes, destructive git, and writes outside the workspace. A [hardened variant](examples/developer/managed.piship.yaml) shows how a company tightens it. Read the [requirements](examples/developer/README.md#requirements) for Chrome and the browser package's Node 24.18.0 requirement.
 
