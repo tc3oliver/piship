@@ -2,11 +2,11 @@
 // kept, and the validation of that patch. The patch comes from an untrusted
 // sandbox, so it is parsed here and the WHOLE patch is refused when any entry
 // could write outside the project's ordinary files.
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "@piship/credentials";
+import { runGit } from "./git-run.js";
 
 export const REMOTE_PATCH_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -31,6 +31,17 @@ export interface RemoteWorkspaceMeta {
    * host, never by the sandbox. Absent in a checkpoint written before it.
    */
   readonly protectedPaths?: readonly string[];
+  /**
+   * How `sandbox pull` treats this checkpoint; the distribution's policy,
+   * written by the host. Absent means the usable defaults. A damaged value
+   * reads as the stricter setting.
+   */
+  readonly pull?: {
+    /** `skip` (default): apply the rest and skip protected files. `refuse`: refuse the whole patch. */
+    readonly protectedFiles?: "skip" | "refuse";
+    /** `optional` (default): `--yes` allowed. `required`: interactive review only. */
+    readonly confirm?: "optional" | "required";
+  };
 }
 
 function realOrResolved(path: string): string {
@@ -70,6 +81,7 @@ export function writeRemoteWorkspaceCheckpoint(
     readonly files: number;
     readonly createdAt?: string;
     readonly protectedPaths?: readonly string[];
+    readonly pull?: RemoteWorkspaceMeta["pull"];
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
@@ -77,6 +89,7 @@ export function writeRemoteWorkspaceCheckpoint(
     version: 1,
     session: info.session,
     projectRoot: realOrResolved(projectRoot),
+    ...(info.pull ? { pull: info.pull } : {}),
     baseHead: info.baseHead,
     createdAt: info.createdAt ?? new Date().toISOString(),
     files: info.files,
@@ -115,21 +128,89 @@ export function readRemoteWorkspaceCheckpoint(
         ))
     )
       return undefined;
+    const pull = meta.pull as unknown;
+    const field = (value: unknown, ok: readonly string[], strict: string) =>
+      value === undefined
+        ? undefined
+        : ok.includes(value as string)
+          ? value
+          : strict;
+    const normalized =
+      pull === undefined
+        ? undefined
+        : typeof pull === "object" && pull !== null && !Array.isArray(pull)
+          ? {
+              protectedFiles: field(
+                (pull as Record<string, unknown>).protectedFiles,
+                ["skip", "refuse"],
+                "refuse",
+              ),
+              confirm: field(
+                (pull as Record<string, unknown>).confirm,
+                ["optional", "required"],
+                "required",
+              ),
+            }
+          : { protectedFiles: "refuse", confirm: "required" };
     return {
       patch: readFileSync(paths.patch),
-      meta: meta as RemoteWorkspaceMeta,
+      meta: {
+        ...(meta as RemoteWorkspaceMeta),
+        ...(normalized ? { pull: normalized } : {}),
+      } as RemoteWorkspaceMeta,
     };
   } catch {
     return undefined;
   }
 }
 
+/**
+ * Checkpoints another session parked for the project because the main slot was
+ * taken, oldest first. Each lives in `<stateDir>/sandbox-workspace-parked/<session>/`
+ * with the same layout as the main slot, so `stateDir` below is that session
+ * root. The directory names are untrusted: only direct subdirectories are read.
+ */
+export function listParkedRemoteWorkspaceCheckpoints(
+  stateDir: string,
+  projectRoot: string,
+): {
+  readonly stateDir: string;
+  readonly patch: Buffer;
+  readonly meta: RemoteWorkspaceMeta;
+}[] {
+  const parkedRoot = join(stateDir, "sandbox-workspace-parked");
+  let names: string[];
+  try {
+    names = readdirSync(parkedRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const name of names.sort()) {
+    const sessionRoot = join(parkedRoot, name);
+    const checkpoint = readRemoteWorkspaceCheckpoint(sessionRoot, projectRoot);
+    if (checkpoint) found.push({ stateDir: sessionRoot, ...checkpoint });
+  }
+  const time = (createdAt: string) => Date.parse(createdAt) || 0;
+  return found.sort((a, b) => time(a.meta.createdAt) - time(b.meta.createdAt));
+}
+
 export interface RemoteWorkspacePatchResult {
   readonly ok: boolean;
-  /** Every path git will write, delete, or read as a rename or copy source. */
+  /** Every path git will write or delete. */
   readonly files: string[];
   /** Why the patch is refused; empty when ok. */
   readonly refused: string[];
+  /**
+   * Protected or `.git` paths left out of an otherwise sound patch. Pass
+   * `excludeArgs` to every `git apply` of this patch so git skips exactly them.
+   */
+  readonly skipped: string[];
+  readonly excludeArgs: string[];
+  /** Set when the only refusals are protected or `.git` paths and skipping was not allowed. */
+  readonly protectedOnly?: boolean;
 }
 
 const ESCAPES: Record<string, number> = {
@@ -180,12 +261,20 @@ function checkPath(
   raw: Buffer,
   protectedPaths: ReadonlySet<string>,
   refused: string[],
+  soft: { count: number },
+  skipPaths?: Set<string>,
 ): string | undefined {
   const path = raw.toString("utf8");
   const shown = JSON.stringify(path);
   const refuse = (why: string) => {
     refused.push(`${shown}: ${why}`);
     return undefined;
+  };
+  // A path that only touches .git or a protected path can be skipped alone.
+  const refuseSoft = (why: string) => {
+    soft.count++;
+    skipPaths?.add(path);
+    return refuse(why);
   };
   if (path === "") return refuse("empty path");
   for (const byte of raw)
@@ -200,12 +289,17 @@ function checkPath(
     if (segment === "..") return refuse("'..' path segment");
     // .git, plus the Windows aliases of it (trailing dots/spaces, 8.3 name).
     if (/^\.git[. ]*$/i.test(segment) || /^git~\d+$/i.test(segment))
-      return refuse("touches .git");
+      return refuseSoft("touches .git");
   }
+  for (const segment of path.split("/"))
+    if (/~\d+$/.test(segment))
+      return refuse(
+        "a ~N segment; on Windows it can name a different file by its 8.3 short name",
+      );
   const folded = path.toLowerCase();
   for (const protectedPath of protectedPaths)
     if (folded === protectedPath || folded.startsWith(`${protectedPath}/`))
-      return refuse("touches a protected path");
+      return refuseSoft("touches a protected path");
   return path;
 }
 
@@ -234,6 +328,13 @@ function scanStructure(lines: readonly string[]): string[] {
   let oldLeft = 0;
   let newLeft = 0;
   let awaitingPlus = false;
+  let oldName: string | null | undefined;
+  // `--- a/x` or `+++ b/x` as the bare name (quotes kept), null for /dev/null.
+  // Git deletes the --- name and writes the +++ name, yet numstat shows only one.
+  const diffName = (text: string): string | null | undefined =>
+    text === "/dev/null"
+      ? null
+      : /^("?)[ab]\/([\s\S]+)$/.exec(text)?.slice(1).join("");
   const BINARY_LINE = /^[A-Za-z][0-9A-Za-z!#$%&()*+\-;<=>?@^_`{|}~]*$/;
   for (const [index, line] of lines.entries()) {
     if (line === "" && index === lines.length - 1) continue;
@@ -291,11 +392,21 @@ function scanStructure(lines: readonly string[]): string[] {
     }
     if (awaitingPlus) {
       if (!line.startsWith("+++ ")) refuseLine("a --- line without +++");
+      else {
+        const newName = diffName(line.slice(4));
+        if (
+          oldName === undefined ||
+          newName === undefined ||
+          (oldName !== null && newName !== null && oldName !== newName)
+        )
+          refuseLine("--- and +++ lines that name different files");
+      }
       awaitingPlus = false;
       state = "between";
       continue;
     }
     if (line.startsWith("--- ")) {
+      oldName = diffName(line.slice(4));
       awaitingPlus = true;
       continue;
     }
@@ -307,12 +418,12 @@ function scanStructure(lines: readonly string[]): string[] {
       checkMode(mode[1] as string);
       continue;
     }
-    if (
-      /^index [0-9a-f]+\.\.[0-9a-f]+$/.test(line) ||
-      /^(?:dis)?similarity index \d+%$/.test(line) ||
-      /^(?:rename|copy) (?:from|to|old|new) [\s\S]*$/.test(line)
-    )
+    // The producer runs git diff --no-renames, so a rename or copy is never honest.
+    if (/^(?:rename|copy) (?:from|to|old|new) /.test(line)) {
+      refuseLine("a rename or copy header");
       continue;
+    }
+    if (/^index [0-9a-f]+\.\.[0-9a-f]+$/.test(line)) continue;
     if (line === "GIT binary patch") {
       state = "binary";
       continue;
@@ -329,44 +440,62 @@ function scanStructure(lines: readonly string[]): string[] {
   return refused;
 }
 
-function runGit(
-  cwd: string,
-  args: string[],
-  input: Buffer,
-): Promise<{ stdout: Buffer; stderr: string; code: number }> {
-  return new Promise((resolveRun, reject) => {
-    const child = execFile(
-      "git",
-      args,
-      { cwd, encoding: "buffer", maxBuffer: 256 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        const code =
-          error === null ? 0 : typeof error.code === "number" ? error.code : -1;
-        if (code === -1) reject(error);
-        else resolveRun({ stdout, stderr: stderr.toString("utf8"), code });
-      },
-    );
-    child.stdin?.end(input);
-  });
-}
-
 /**
  * Validate the output of `git diff --binary`. Git's own parser is the
  * authority on which paths the patch touches: `git apply --numstat -z` lists
- * what it writes and `git apply --summary` the modes and the rename and copy
- * sources, run without applying anything. Every path is checked, and the whole
+ * what it writes or deletes and `git apply --summary` the modes of what it
+ * creates, deletes or re-modes, run without applying anything. Every path is checked, and the whole
  * patch is refused when one fails. `cwd` is where git runs (the project).
  */
 export async function validateRemoteWorkspacePatch(
   patch: Buffer,
   protectedPaths: readonly string[] = [],
-  options: { cwd?: string; maxBytes?: number } = {},
+  options: { cwd?: string; maxBytes?: number; skipProtected?: boolean } = {},
 ): Promise<RemoteWorkspacePatchResult> {
+  const first = await validatePatch(patch, protectedPaths, options, []);
+  const { soft: _soft, skipPaths: _paths, ...plain } = first;
+  if (first.ok || first.soft <= 0 || first.soft !== first.refused.length)
+    return plain;
+  if (options.skipProtected === false) return { ...plain, protectedOnly: true };
+  // Only protected or .git paths were refused and the patch is otherwise
+  // sound: have git leave exactly those out, then validate again with the same
+  // excludes. The second pass is the full check, so a path the exclude missed
+  // refuses the whole patch.
+  const skipped = [...first.skipPaths];
+  const excludeArgs = skipped.map(
+    (path) => `--exclude=${path.replace(/[\\*?[]/g, "\\$&")}`,
+  );
+  const second = await validatePatch(
+    patch,
+    protectedPaths,
+    options,
+    excludeArgs,
+  );
+  const { soft: _s, skipPaths: _p, ...done } = second;
+  return second.ok
+    ? { ...done, skipped, excludeArgs }
+    : { ...done, refused: first.refused };
+}
+
+async function validatePatch(
+  patch: Buffer,
+  protectedPaths: readonly string[],
+  options: { cwd?: string; maxBytes?: number; skipProtected?: boolean },
+  excludeArgs: readonly string[],
+): Promise<
+  RemoteWorkspacePatchResult & { soft: number; skipPaths: Set<string> }
+> {
+  const soft = { count: 0 };
+  const skipPaths = new Set<string>();
   const maxBytes = options.maxBytes ?? REMOTE_PATCH_MAX_BYTES;
   const fail = (...reasons: string[]) => ({
     ok: false,
     files: [],
     refused: reasons,
+    skipped: [],
+    excludeArgs: [],
+    soft: -1,
+    skipPaths,
   });
   if (patch.length > maxBytes)
     return fail(`the patch is larger than ${maxBytes} bytes`);
@@ -378,8 +507,8 @@ export async function validateRemoteWorkspacePatch(
 
   const cwd = options.cwd ?? process.cwd();
   const [numstat, summary] = await Promise.all([
-    runGit(cwd, ["apply", "--numstat", "-z", "-"], patch),
-    runGit(cwd, ["apply", "--summary", "-"], patch),
+    runGit(cwd, ["apply", "--numstat", "-z", ...excludeArgs, "-"], patch),
+    runGit(cwd, ["apply", "--summary", ...excludeArgs, "-"], patch),
   ]);
   if (numstat.code !== 0 || summary.code !== 0)
     return fail(
@@ -394,7 +523,7 @@ export async function validateRemoteWorkspacePatch(
     const bytes = summaryPath(token);
     if (!bytes) refused.push("git reports a malformed path");
     else {
-      const path = checkPath(bytes, protectedSet, refused);
+      const path = checkPath(bytes, protectedSet, refused, soft);
       if (path !== undefined) files.add(path);
     }
   };
@@ -408,6 +537,8 @@ export async function validateRemoteWorkspacePatch(
         Buffer.from(fields[1] as string, "latin1"),
         protectedSet,
         refused,
+        soft,
+        skipPaths,
       );
       if (path !== undefined) files.add(path);
     }
@@ -431,18 +562,15 @@ export async function validateRemoteWorkspacePatch(
       check(m[3] as string);
       continue;
     }
-    m = /^ (?:rename|copy) (.+) \(\d+%\)$/.exec(line);
-    if (m) {
-      // "a => b" is ambiguous when a name holds " => ": check every split.
-      const pair = m[1] as string;
-      const parts = pair.split(" => ");
-      for (let i = 1; i < parts.length; i++) {
-        check(parts.slice(0, i).join(" => "));
-        check(parts.slice(i).join(" => "));
-      }
-      continue;
-    }
     refused.push("git reports an unrecognized summary line");
   }
-  return { ok: refused.length === 0, files: [...files], refused };
+  return {
+    ok: refused.length === 0,
+    files: [...files],
+    refused,
+    skipped: [],
+    excludeArgs: [],
+    soft: soft.count,
+    skipPaths,
+  };
 }
