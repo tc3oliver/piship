@@ -61,11 +61,18 @@ const SCRIPT = [
   "git rev-parse HEAD",
 ].join(" && ");
 
+const size = (bytes: number) =>
+  bytes >= 1024 * 1024 ? `${bytes / 1024 / 1024} MiB` : `${bytes} bytes`;
+
 export async function seedRemoteWorkspace(
   sandbox: SeedSandbox,
   projectRoot: string,
   decide: (absolutePath: string) => Promise<"allow" | "skip">,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    /** Tests only: smaller caps than the documented ones. */
+    caps?: { totalCap: number; fileCap: number };
+  } = {},
 ): Promise<SeedResult> {
   const root = await realpath(projectRoot);
   let listing: Buffer;
@@ -80,6 +87,8 @@ export async function seedRemoteWorkspace(
     .then((out) => out.toString("utf8").trim() || null)
     .catch(() => null);
 
+  const totalCap = options.caps?.totalCap ?? SEED_TOTAL_CAP;
+  const fileCap = options.caps?.fileCap ?? SEED_FILE_CAP;
   const entries: TarEntry[] = [];
   const skipped: { path: string; reason: SeedSkipReason }[] = [];
   let total = 0;
@@ -129,14 +138,14 @@ export async function seedRemoteWorkspace(
       skip("policy");
       continue;
     }
-    if (info.size > SEED_FILE_CAP)
+    if (info.size > fileCap)
       throw new Error(
-        `${path} is larger than the ${SEED_FILE_CAP / 1024 / 1024} MiB single-file cap of the remote workspace seed`,
+        `${path} is larger than the ${size(fileCap)} single-file cap of the remote workspace seed`,
       );
     total += info.size;
-    if (total > SEED_TOTAL_CAP)
+    if (total > totalCap)
       throw new Error(
-        `the project is larger than the ${SEED_TOTAL_CAP / 1024 / 1024} MiB cap of the remote workspace seed`,
+        `the project is larger than the ${size(totalCap)} total cap of the remote workspace seed`,
       );
     const data = await readFile(absolute);
     entries.push({
