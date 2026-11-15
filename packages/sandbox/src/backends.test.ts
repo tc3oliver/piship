@@ -205,6 +205,47 @@ describe("custom adapter lifecycle", () => {
     });
   });
 
+  it("stops waiting for a file call that ignores its signal, and honors a longer timeout", async () => {
+    const never = () => new Promise<never>(() => {});
+    let writes = 0;
+    const backend = customBackend({
+      id: "acme",
+      available: async () => ({ available: true }),
+      capabilities: () => REMOTE,
+      prepare: async () => ({
+        exec: async (_request: unknown, io: { onStdout(b: Buffer): void }) => {
+          io.onStdout(Buffer.from("piship-sandbox-ready unset\n"));
+          return { exitCode: 0 };
+        },
+        dispose: async () => {},
+        files: {
+          read: never,
+          write: async () => {
+            writes++;
+            if (writes === 1) return never();
+            await new Promise((done) => setTimeout(done, 80));
+          },
+          stat: never,
+        },
+      }),
+    });
+    const sandbox = await activate(backend, {
+      ...policy(),
+      remoteWorkspace: true,
+    });
+    const path = join(workspace, "a");
+    await expect(
+      sandbox.files?.write(path, Buffer.alloc(1), { timeoutMs: 40 }),
+    ).rejects.toMatchObject({ code: "SANDBOX_UNAVAILABLE", retryable: true });
+    // A longer timeout lets the slower call finish.
+    await sandbox.files?.write(path, Buffer.alloc(1), { timeoutMs: 5000 });
+    // A caller's abort still ends the wait.
+    const controller = new AbortController();
+    const pending = sandbox.files?.read(path, { signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toThrow(/aborted/);
+  });
+
   it("refuses to wrap local processes, such as MCP stdio servers, for a remote backend", async () => {
     const { backend } = fakeBackend();
     const sandbox = await activate(backend);

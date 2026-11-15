@@ -1,8 +1,11 @@
 // The session side of a remote workspace: the lazy seed, and the checkpoints
 // of the sandbox's work that `sandbox pull` later reviews.
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import {
   REMOTE_PATCH_MAX_BYTES,
   readRemoteWorkspaceCheckpoint,
+  remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
 } from "@piship/core";
 import {
@@ -65,6 +68,8 @@ export interface RemoteWorkspaceOptions {
   readonly root: string;
   readonly stateDir: string;
   readonly session: string;
+  /** The distribution's command, named in the end-of-session line. */
+  readonly command: string;
   /** A non-prompting `filesystem.read` decision for the seed. */
   readonly decide: (absolutePath: string) => Promise<"allow" | "skip">;
   /** Workspace-relative protected paths `sandbox pull` must refuse. */
@@ -85,6 +90,8 @@ export class RemoteWorkspace {
   #seeded: SeedResult | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #changed = 0;
+  /** Where this session's patch went instead of the shared slot. */
+  #parked: string | undefined;
 
   constructor(options: RemoteWorkspaceOptions) {
     this.#options = options;
@@ -117,10 +124,19 @@ export class RemoteWorkspace {
     return next;
   }
 
-  /** The final checkpoint; returns how many files the stored patch changes. */
-  async finish(): Promise<number> {
+  /**
+   * The final checkpoint. Returns the line to show when the sandbox changed
+   * files, naming where they were saved.
+   */
+  async finish(): Promise<string | undefined> {
     await this.checkpoint();
-    return this.#changed;
+    const changed = this.#changed;
+    if (changed === 0) return undefined;
+    const files = `${changed} ${changed === 1 ? "file" : "files"}`;
+    const { command, root, stateDir } = this.#options;
+    if (this.#parked)
+      return `The sandbox changed ${files}, but an earlier session's changes are still waiting to be applied, so these were saved in ${this.#parked} instead. Run ${command} sandbox pull (or sandbox pull --discard) for the earlier changes first, then move latest.patch and latest.json from that directory into ${remoteWorkspacePaths(stateDir, root).dir}.`;
+    return `The sandbox changed ${files}. Review and apply them with: ${command} sandbox pull`;
   }
 
   async #take(): Promise<void> {
@@ -135,15 +151,32 @@ export class RemoteWorkspace {
       );
       const files = (patch.toString("latin1").match(/^diff --git /gm) ?? [])
         .length;
-      // An empty result must not replace another session's unapplied patch.
+      // Another session's unapplied patch is never replaced: its sandbox is
+      // gone, so it could not be made again. This session's patch is parked
+      // beside it, in the same layout, until that one is pulled or discarded.
       const kept = readRemoteWorkspaceCheckpoint(stateDir, root);
-      if (patch.length === 0 && kept && kept.meta.session !== session) return;
-      writeRemoteWorkspaceCheckpoint(stateDir, root, patch, {
+      const blocked =
+        kept !== undefined &&
+        kept.meta.session !== session &&
+        kept.patch.length > 0;
+      if (blocked && patch.length === 0) return;
+      const parkedState = join(stateDir, "sandbox-workspace-parked", session);
+      const info = {
         session,
         baseHead: seeded.baseHead,
         files,
         protectedPaths: this.#options.protectedPaths(),
-      });
+      };
+      if (blocked) {
+        this.#parked = remoteWorkspacePaths(parkedState, root).dir;
+        writeRemoteWorkspaceCheckpoint(parkedState, root, patch, info);
+      } else {
+        writeRemoteWorkspaceCheckpoint(stateDir, root, patch, info);
+        if (this.#parked) {
+          rmSync(this.#parked, { recursive: true, force: true });
+          this.#parked = undefined;
+        }
+      }
       this.#changed = files;
     } catch (error) {
       this.#options.warn(

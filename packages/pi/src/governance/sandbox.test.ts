@@ -24,7 +24,7 @@ import {
   protectedPathRedirected,
 } from "./engine.js";
 import type { GovernanceOptions } from "./options.js";
-import { sandboxBackend } from "./sandbox.js";
+import { remoteWorkdir, sandboxBackend } from "./sandbox.js";
 
 let distributionDir: string;
 beforeEach(() => {
@@ -780,5 +780,13 @@ describe("protected configuration path spelling", () => {
         "linux",
       ),
     ).toBe(true);
+  });
+});
+
+describe("the remote workspace directory", () => {
+  it("is a directory of its own under the sandbox user's home, never the home itself", () => {
+    expect(remoteWorkdir("user")).toBe("/home/user/workspace");
+    expect(remoteWorkdir("dev")).toBe("/home/dev/workspace");
+    expect(remoteWorkdir("root")).toBe("/root/workspace");
   });
 });

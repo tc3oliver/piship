@@ -2,6 +2,7 @@
 // envd process service (data plane). Any service that implements that API,
 // such as E2B or CubeSandbox, works through this one compatibility layer.
 import { randomBytes } from "node:crypto";
+import { redact } from "@piship/contracts";
 import type { AdapterAvailability } from "../adapter.js";
 import {
   HOST_FILESYSTEM_ISOLATION,
@@ -21,6 +22,7 @@ import {
   type RemoteBackendOptions,
   readJson,
   remoteDirectory,
+  shellQuote,
   trimSlashes,
 } from "./http.js";
 
@@ -37,6 +39,11 @@ export interface E2bCompatibleOptions extends RemoteBackendOptions {
    * `user`, as E2B templates expect; CubeSandbox runs commands as `root`.
    */
   readonly user?: string;
+  /**
+   * Create `workdir` in the sandbox before the first command, for a workdir
+   * the template does not have (a remote workspace's project directory).
+   */
+  readonly createWorkdir?: boolean;
   /** Test seam: the envd base URL for a created sandbox. */
   readonly envdUrl?: (sandbox: {
     readonly sandboxId: string;
@@ -152,6 +159,17 @@ export class E2bCompatibleBackend implements SandboxBackend {
   }: SandboxPrepareRequest): Promise<SandboxInstance> {
     const created = await this.#create(profile.network, signal);
     const workdir = this.#options.workdir ?? "/home/user";
+    if (this.#options.createWorkdir)
+      await this.#makeWorkdir(created, workdir).catch(async (error) => {
+        await this.#control(
+          `sandboxes/${created.sandboxId}`,
+          { method: "DELETE" },
+          true,
+        )
+          .then((response) => response.body?.cancel())
+          .catch(() => undefined);
+        throw error;
+      });
     let disposed = false;
     return {
       exec: (request, io) => {
@@ -240,6 +258,39 @@ export class E2bCompatibleBackend implements SandboxBackend {
       this.#options.envdUrl?.({ sandboxId, domain }) ??
       `${this.#endpoint.protocol}//${ENVD_PORT}-${sandboxId}.${domain}`;
     return { sandboxId, accessToken, envd: trimSlashes(envd) };
+  }
+
+  async #makeWorkdir(sandbox: CreatedSandbox, workdir: string): Promise<void> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 30_000);
+    let stderr = "";
+    try {
+      // From `/`: the directory does not exist yet to run in.
+      const result = await this.#stream(
+        sandbox,
+        "/",
+        {
+          command: `mkdir -p -- ${shellQuote(workdir)}`,
+          cwd: "/",
+          workspacePath: undefined,
+          env: {},
+        },
+        {
+          signal: abort.signal,
+          onStdout: () => {},
+          onStderr: (chunk) => {
+            stderr += chunk.toString("utf8");
+          },
+        },
+        `piship-${randomBytes(8).toString("hex")}`,
+      );
+      if (result.exitCode !== 0)
+        throw new Error(
+          `creating the workspace directory failed: ${redact(stderr).slice(0, 200)}`,
+        );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #lifetime(): number {
