@@ -155,6 +155,7 @@ export default () => ({
         });
         child.stdout.on("data", io.onStdout);
         child.stderr.on("data", io.onStderr);
+        io.signal.addEventListener("abort", () => child.kill(), { once: true });
         child.once("error", reject);
         child.once("close", (code, signal) => resolve({ exitCode: code, signal }));
       });
@@ -299,14 +300,8 @@ async function open(
   const tools = governedTools(session, workspace);
   const tool = (name: string) => {
     const found = tools.find((item) => item.name === name) as ToolDefinition;
-    return (params: unknown, ctx = context()) =>
-      found.execute(
-        "call",
-        params as never,
-        undefined,
-        undefined,
-        ctx as never,
-      );
+    return (params: unknown, ctx = context(), signal?: AbortSignal) =>
+      found.execute("call", params as never, signal, undefined, ctx as never);
   };
   return { session, root, workspace, remote, stateDir, tool };
 }
@@ -945,6 +940,40 @@ describe.skipIf(!posix || asRoot)("sandbox.remote.setup", () => {
     expect(h.sections.piship_remote_workspace).toContain(
       "ran once after the upload",
     );
+  });
+
+  it("is cancelled by Esc in a file tool, takes no snapshot of it, and runs again on the next call", async () => {
+    const { session, workspace, remote, tool } = await open({
+      setup: withLock,
+      sandbox: [
+        '  remote: { setup: "test -e go || exec sleep 30", cacheKeyFiles: ["lock.txt"], cache: snapshot }',
+      ],
+    });
+    const h = hooks(session);
+    const abort = new AbortController();
+    const writing = tool("write")(
+      { path: "out.txt", content: "agent\n" },
+      context(),
+      abort.signal,
+    ).catch((error: unknown) => error);
+    for (
+      let i = 0;
+      i < 500 && !log().commands.includes("test -e go || exec sleep 30");
+      i++
+    )
+      await new Promise((done) => setTimeout(done, 10));
+    abort.abort();
+    expect(String(await writing)).toMatch(/cancelled.*next tool call/);
+    expect(existsSync(join(remote, "out.txt"))).toBe(false);
+    expect(existsSync(join(workspace, "out.txt"))).toBe(false);
+    expect(log().snapshotsMade).toEqual([]);
+    expect(h.notices.some((l) => l.startsWith("Setup failed"))).toBe(false);
+    writeFileSync(join(remote, "go"), "");
+    await tool("read")({ path: "notes.txt" });
+    expect(h.notices.filter((l) => l.startsWith("Running setup"))).toHaveLength(
+      2,
+    );
+    expect(log().snapshotsMade).toHaveLength(1);
   });
 
   it("warns with the exit code and last lines when it fails, and tells the model", async () => {

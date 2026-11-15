@@ -1083,8 +1083,11 @@ function withChannel<T extends ToolDefinition>(
     ...tool,
     execute: (id, params, signal, onUpdate, ctx) =>
       gov.withChannel(uiChannel(ctx), () =>
-        gov.withToolCall(id, tool.name, () =>
-          execute(id, params, signal, onUpdate, ctx),
+        gov.withToolCall(
+          id,
+          tool.name,
+          () => execute(id, params, signal, onUpdate, ctx),
+          signal,
         ),
       ),
   } as T;
@@ -1164,7 +1167,7 @@ export function governedTools(
     tool: string,
   ) => {
     const decided = await gatePath(gov, action, absolute(path), tool);
-    await gov.remote?.ensureSeeded();
+    await gov.remote?.ensureSeeded(gov.toolSignal());
     return decided;
   };
   // A file the seed withheld by policy, read after the user approved it: it
@@ -1178,7 +1181,7 @@ export function governedTools(
     const seed = remote && gov.remote?.lookup();
     if (!seed || seed.skipped(decided) !== "policy") return;
     if (!gated) await gatePath(gov, "filesystem.read", decided, tool);
-    await gone(seed.adopt(decided));
+    await gone(seed.adopt(decided, gov.toolSignal()));
   };
   const read = async (path: string, tool: string) => {
     if (remote) {

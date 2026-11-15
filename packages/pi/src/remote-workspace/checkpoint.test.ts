@@ -195,6 +195,38 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     await retry;
   });
 
+  it("cancels the upload with the abort signal and uploads again on the next call", async () => {
+    initProject();
+    const abort = new AbortController();
+    let hang = true;
+    let writing = false;
+    const ws = workspace("s1", undefined, {
+      sandbox: {
+        ...sandbox,
+        files: {
+          ...sandbox.files,
+          write: (path, data, options) =>
+            hang
+              ? new Promise((_, reject) => {
+                  writing = true;
+                  options?.signal?.addEventListener("abort", () =>
+                    reject(new Error("aborted")),
+                  );
+                })
+              : sandbox.files.write(path, data, options),
+        },
+      },
+    });
+    const seeding = ws.ensureSeeded(abort.signal).catch((error) => error);
+    await waitFor(() => writing);
+    abort.abort();
+    expect(String(await seeding)).toMatch(/upload.*cancelled.*next tool call/);
+    expect(ws.lookup()).toBeUndefined();
+    hang = false;
+    await ws.ensureSeeded();
+    expect(ws.lookup()).toBeDefined();
+  });
+
   it("says in one line what the seed left out, and warns when policy withheld most of the project", async () => {
     initProject();
     for (const name of ["b", "c"])
