@@ -1,9 +1,11 @@
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import type { LocalMetrics } from "@piship/audit";
 import {
-  PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
   dropInsecureTlsSwitch,
   normalizeProxyEnvironment,
+  PiShipError,
   proxyCorrectionNotice,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
@@ -15,8 +17,6 @@ import {
   type DistributionAccess,
   openAccess,
 } from "@piship/core";
-import type { LocalMetrics } from "@piship/audit";
-import { VERSION } from "@earendil-works/pi-coding-agent";
 import { launchMetrics, saveMetrics } from "../launch-metrics.js";
 import { applyPiEnvironment } from "./pi-defaults.js";
 

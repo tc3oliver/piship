@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 import {
   normalizePolicyAction,
   PiShipError,
-  type PolicyAction,
   POLICY_ACTIONS,
+  type PolicyAction,
   redact,
 } from "@piship/contracts";
 import { type GovernedLock, governedLock } from "@piship/core";

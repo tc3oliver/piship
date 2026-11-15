@@ -4,6 +4,7 @@ import {
   closeSync,
   mkdirSync,
   openSync,
+  readdirSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -19,8 +20,8 @@ import {
 import {
   SEED_FILE_CAP,
   SEED_TOTAL_CAP,
-  type SeedResult,
   SeedRefused,
+  type SeedResult,
   type SeedSandbox,
   seedRemoteWorkspace,
 } from "./seed.js";
@@ -114,6 +115,7 @@ export class RemoteWorkspace {
   /** Set when something ran that may have changed the sandbox since the last checkpoint. */
   #dirty = false;
   #warned = false;
+  #told = false;
   /** Where this session's patch went instead of the shared slot. */
   #parked: string | undefined;
 
@@ -200,10 +202,40 @@ export class RemoteWorkspace {
     const changed = this.#changed;
     if (changed === 0) return undefined;
     const files = `${changed} ${changed === 1 ? "file" : "files"}`;
-    const { command, root, stateDir } = this.#options;
+    const { command } = this.#options;
     if (this.#parked)
-      return `The sandbox changed ${files}, but an earlier session's changes are still waiting to be applied, so these were saved in ${this.#parked} instead. Run ${command} sandbox pull (or sandbox pull --discard) for the earlier changes first, then move latest.patch and latest.json from that directory into ${remoteWorkspacePaths(stateDir, root).dir}.`;
-    return `The sandbox changed ${files}. Review and apply them with: ${command} sandbox pull`;
+      return `${files} changed in the sandbox. An earlier session's changes are waiting too; run ${command} sandbox pull once for each.`;
+    return `${files} changed in the sandbox; run ${command} sandbox pull to bring them to this machine`;
+  }
+
+  /**
+   * Once per session: a notice when an earlier session left changes
+   * unapplied for this project (the shared slot or a parked copy). This
+   * session starts from the host files, so they are not in the sandbox.
+   */
+  waitingNotice(): string | undefined {
+    if (this.#told || !this.#options.checkpoints) return undefined;
+    this.#told = true;
+    const { stateDir, root, command } = this.#options;
+    const parkedDir = join(stateDir, "sandbox-workspace-parked");
+    const states = [stateDir];
+    try {
+      for (const name of readdirSync(parkedDir))
+        states.push(join(parkedDir, name));
+    } catch {
+      // none parked
+    }
+    let files = 0;
+    let latest = "";
+    for (const state of states) {
+      const kept = readRemoteWorkspaceCheckpoint(state, root);
+      if (!kept || kept.patch.length === 0) continue;
+      files += kept.meta.files;
+      if (kept.meta.createdAt > latest) latest = kept.meta.createdAt;
+    }
+    if (files === 0) return undefined;
+    const when = latest.slice(0, 16).replace("T", " ");
+    return `Earlier sandbox changes to ${files} ${files === 1 ? "file" : "files"} (saved ${when} UTC) are still waiting. Run ${command} sandbox pull first; this session starts from your host files.`;
   }
 
   async #take(): Promise<void> {

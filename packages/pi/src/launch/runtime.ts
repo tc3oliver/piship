@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type AgentSessionServices,
+  type CreateAgentSessionRuntimeFactory,
   createAgentSession,
   createAgentSessionRuntime,
   DefaultResourceLoader,
+  type InlineExtension,
   SessionManager,
   SettingsManager,
-  type AgentSessionServices,
-  type CreateAgentSessionRuntimeFactory,
-  type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import {
   ENTERPRISE_CONTEXT_SYMBOL,
@@ -20,11 +20,6 @@ import {
 } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import {
-  type GovernedRuntime,
-  isCredentialRejection,
-  isModelDenial,
-} from "../governance.js";
-import {
   activateExposure,
   boundedByAllowlist,
   buildExposureTable,
@@ -32,31 +27,29 @@ import {
   exposureFactories,
   extensionToolsOf,
 } from "../governance/exposure.js";
+import {
+  type GovernedRuntime,
+  isCredentialRejection,
+  isModelDenial,
+} from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
+import { entitlementNotice } from "./entitlement-notice.js";
 import {
   activeWorkflow,
   governanceExtensions,
   governedCustomTools,
   modelPolicy,
 } from "./governance.js";
-import { piSettings } from "./pi-defaults.js";
-import { sessionProjectTrust } from "./project-trust.js";
 import {
   createModelRuntime,
   launchVirtualModels,
   type Model,
 } from "./model-runtime.js";
-import { entitlementNotice } from "./entitlement-notice.js";
-import {
-  assertPrivateDirectory,
-  childToolOptions,
-  type SubagentChild,
-} from "./subagent-child.js";
-import { publishSubagentOwner } from "./subagent-owner.js";
+import { piSettings } from "./pi-defaults.js";
+import { sessionProjectTrust } from "./project-trust.js";
 import { providerErrorRedaction } from "./redaction.js";
-import { governVirtualModels } from "./virtual-models.js";
 import {
   cacheWarmingSetting,
   enforcedRuntime,
@@ -69,6 +62,13 @@ import {
   resumeRefusal,
   SessionOwnership,
 } from "./session-file.js";
+import {
+  assertPrivateDirectory,
+  childToolOptions,
+  type SubagentChild,
+} from "./subagent-child.js";
+import { publishSubagentOwner } from "./subagent-owner.js";
+import { governVirtualModels } from "./virtual-models.js";
 
 /**
  * Each resource the launch loads is still the regular file the lock lists.

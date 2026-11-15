@@ -108,7 +108,9 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     await ws.checkpoint();
     expect(diffs).toBe(1);
     expect(readFileSync(slot().patch, "utf8")).toBe(patch);
-    expect(await ws.finish()).toMatch(/changed 1 file/);
+    expect(await ws.finish()).toMatch(
+      /^1 file changed in the sandbox; run piship sandbox pull/,
+    );
     expect(diffs).toBe(2);
   });
 

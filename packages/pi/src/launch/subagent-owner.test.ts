@@ -2,7 +2,6 @@
 // nonce only its children received, and the workspace they may work in.
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import type { PiShipError } from "@piship/contracts";
 import {
   chmodSync,
   linkSync,
@@ -17,13 +16,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import type { PiShipError } from "@piship/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertChildWorkspace,
   authenticateSubagentChild,
   publishSubagentOwner,
-  SUBAGENT_TOKEN_ENV,
   SUBAGENT_OWNER_DIRECTORY,
+  SUBAGENT_TOKEN_ENV,
 } from "./subagent-owner.js";
 
 let dirs: string[] = [];

@@ -150,7 +150,8 @@ export function taskTools(
         const refusal = planRefusal(gov, "task_start");
         if (refusal) throw blocked(refusal);
         const input = params as { command: string; timeout?: number };
-        if (gov.sandbox.report.isolation === "remote")
+        // A remote workspace runs tasks in its sandbox (seeded first, checkpointed).
+        if (gov.sandbox.report.isolation === "remote" && !gov.remote)
           throw blocked(
             `Background tasks run on this machine; the ${gov.sandbox.report.adapter} sandbox backend runs commands elsewhere. Use bash instead.`,
           );
