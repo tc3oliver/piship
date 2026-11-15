@@ -186,7 +186,7 @@ describe("browser evidence tiers", () => {
       "PISHIP_REQUIRE_BROWSER: ${{ inputs.skip-browser && '0' || '1' }}",
     );
     expect(portable).toContain(
-      "if: runner.os == 'Linux' && matrix.shard == 1 && !inputs.skip-browser",
+      "if: runner.os == 'Linux' && !inputs.skip-browser",
     );
     expect(qualification).toMatch(
       /portable-e2e:\n {4}uses: \.\/\.github\/workflows\/portable-e2e.yml\n {4}with:\n {6}skip-browser: true/,

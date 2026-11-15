@@ -115,8 +115,10 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends gnome-keyring dbus dbus-x11 libsecret-tools
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
+      # Every Linux shard: the shard that runs the Chrome startup test
+      # (developer-profile) follows the measured split in e2e-shards.ts.
       - name: Verify headless Chrome
-        if: runner.os == 'Linux' && matrix.shard == 1 && !inputs.skip-browser
+        if: runner.os == 'Linux' && !inputs.skip-browser
         shell: bash
         run: |
           node --input-type=module <<'NODE'
