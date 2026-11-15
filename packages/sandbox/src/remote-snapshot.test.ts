@@ -88,6 +88,23 @@ describe("e2b snapshots", () => {
     await instance.dispose();
   });
 
+  it("stops a snapshot that is still saving when the caller's signal aborts", async () => {
+    const mock = await e2bServer({ holdSnapshot: true });
+    const sandbox = await activate(backend(mock.url));
+    const abort = new AbortController();
+    const saving = sandbox.snapshot?.({ signal: abort.signal });
+    for (
+      let i = 0;
+      i < 200 &&
+      !mock.requests.some((item) => item.path.endsWith("/snapshots"));
+      i++
+    )
+      await new Promise((done) => setTimeout(done, 10));
+    abort.abort();
+    await expect(saving).rejects.toThrow(/aborted/);
+    await sandbox.dispose();
+  });
+
   it("maps 404, 405 and 501 to an unsupported error and 503 to a plain failure", async () => {
     for (const status of [404, 405, 501]) {
       const mock = await e2bServer({ snapshot: status });
