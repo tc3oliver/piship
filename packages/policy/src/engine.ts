@@ -79,6 +79,13 @@ export function strictest(
 }
 
 const PLATFORM = process.platform === "win32" ? "win32" : "posix";
+/**
+ * macOS and Windows filesystems fold case by default: `~/.ZSHENV` is the file
+ * zsh reads as `~/.zshenv`. A path that exists is normalized to its stored
+ * case, but a missing one keeps the case it was written in.
+ */
+const FOLDS_CASE =
+  process.platform === "darwin" || process.platform === "win32";
 
 /** Characters that chain, substitute, redirect, or group POSIX commands. */
 const POSIX_SHELL_METACHARACTERS = /[;&|$`<>()\r\n]/g;
@@ -527,7 +534,13 @@ export class PolicyEngine {
       // every deny and ask covers it; an allow covers only what it spells.
       if (entry.rule.effect !== "allow" && resource.includes("*")) return true;
     }
-    return matchGlob(pattern, resource);
+    // A deny or ask also covers its path in any case where the filesystem
+    // folds case; an allow never widens that way.
+    return matchGlob(
+      pattern,
+      resource,
+      FOLDS_CASE && isPathAction(action) && entry.rule.effect !== "allow",
+    );
   }
 
   /**

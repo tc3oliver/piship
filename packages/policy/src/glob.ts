@@ -49,8 +49,14 @@ export function globToRegExp(pattern: string): RegExp {
   return regexp;
 }
 
-export function matchGlob(pattern: string, value: string): boolean {
-  return globToRegExp(pattern).test(value);
+export function matchGlob(
+  pattern: string,
+  value: string,
+  ignoreCase = false,
+): boolean {
+  return ignoreCase
+    ? globToRegExp(pattern.toLowerCase()).test(value.toLowerCase())
+    : globToRegExp(pattern).test(value);
 }
 
 /** Match a rule action (`exact`, `prefix.*`, or `*`) against a request action. */
