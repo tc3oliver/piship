@@ -2,7 +2,6 @@
 // the sandbox as tar.gz parts, which are extracted and committed as a baseline the
 // session's changes are later diffed against.
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
@@ -454,31 +453,56 @@ export async function seedRemoteWorkspace(
   const relativeOf = (hostPath: string) =>
     relative(root, hostPath).split(sep).join("/");
   let chain: Promise<unknown> = Promise.resolve();
-  // Paths written by an adopt whose baseline did not follow, with the digest
-  // of what was written: while the file there still holds it, it is ours and
-  // a retry writes it and makes the baseline again.
-  // INCOMPLETE: the write itself failed, so whatever is there is ours too.
-  const unbaselined = new Map<string, string>();
-  const INCOMPLETE = "incomplete";
-  const digest = (data: Buffer) =>
-    createHash("sha256").update(data).digest("hex");
-  // Whether the adopt writes the file: not over a file the agent made there.
+  // Paths an adopt wrote whose baseline did not follow, with the bytes it
+  // wrote. What is there now is the adopt's own while it is those bytes or a
+  // truncated start of them (an upload that died partway); anything else is
+  // the agent's file. shortcut: an agent file that is a byte-for-byte start of
+  // the host file (an empty file, say) counts as the adopt's; tell them apart
+  // by a sandbox-side marker if that ever matters.
+  const unbaselined = new Map<string, Buffer>();
+  const leftByAdopt = (bytes: Buffer, wrote: Buffer) =>
+    bytes.length <= wrote.length &&
+    wrote.subarray(0, bytes.length).equals(bytes);
+  // The file's bytes in the sandbox, or undefined when there is none.
+  const current = (path: string, signal?: AbortSignal) =>
+    sandbox.files
+      .read(join(root, path), signal ? { signal } : {})
+      .catch((error: unknown) => {
+        if ((error as { code?: string })?.code === "ENOENT") return undefined;
+        throw error;
+      });
+  // Whether the adopt writes the file: never over a file the agent made there.
   const ours = async (path: string, signal: AbortSignal | undefined) => {
-    const target = join(root, path);
-    const options = signal ? { signal } : {};
-    const written = unbaselined.get(path);
-    if (written === undefined)
-      return !(await sandbox.files.stat(target, options));
-    if (written === INCOMPLETE) return true;
-    const there = await sandbox.files.read(target, options).catch((error) => {
-      if ((error as { code?: string })?.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (there === undefined || digest(there) === written) return true;
+    const wrote = unbaselined.get(path);
+    if (wrote === undefined)
+      return !(await sandbox.files.stat(
+        join(root, path),
+        signal ? { signal } : {},
+      ));
+    const bytes = await current(path, signal);
+    if (bytes === undefined || leftByAdopt(bytes, wrote)) return true;
     // The agent replaced it: keep the agent's file, unbaselined, so the patch
     // holds the agent's content and never the host's.
     unbaselined.delete(path);
     return false;
+  };
+  // After a failed write or baseline: remove what the adopt left, so an
+  // unbaselined host copy cannot reach the patch even if the read is never
+  // retried. Never removes the agent's file; whatever cannot be decided now
+  // stays in `unbaselined` for the next call.
+  const cleanUp = async (path: string, wrote: Buffer) => {
+    const bytes = await current(path).catch(() => null);
+    if (bytes === null) return;
+    if (bytes !== undefined && leftByAdopt(bytes, wrote)) {
+      const removed = await sandbox
+        .exec(`rm -f -- ${quote(path)}`, root, {
+          onData: () => {},
+          timeout: 30,
+        })
+        .catch(() => undefined);
+      if (removed?.exitCode !== 0) return;
+    }
+    unbaselined.delete(path);
   };
   const lookup: SeedLookup = {
     skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
@@ -499,12 +523,9 @@ export async function seedRemoteWorkspace(
           // back in the patch. Esc stops before the write, not between them.
           signal?.throwIfAborted();
           const data = await readFile(absolute);
-          unbaselined.set(path, digest(data));
+          unbaselined.set(path, data);
           try {
-            await sandbox.files.write(join(root, path), data).catch((error) => {
-              unbaselined.set(path, INCOMPLETE);
-              throw error;
-            });
+            await sandbox.files.write(join(root, path), data);
             // A temporary index builds the new baseline tree, so the work the
             // agent already staged is not folded into the baseline.
             const mode = modeOf(path, info);
@@ -536,15 +557,7 @@ export async function seedRemoteWorkspace(
             seeded.baselineCommit = commit;
             unbaselined.delete(path);
           } catch (error) {
-            // Best effort: an unbaselined host copy left there would reach the
-            // patch even if the read is never retried. A failed removal stays
-            // in `unbaselined` and is decided again on the next call.
-            await sandbox
-              .exec(`rm -f -- ${quote(path)}`, root, {
-                onData: () => {},
-                timeout: 30,
-              })
-              .catch(() => undefined);
+            await cleanUp(path, data);
             throw error;
           }
         }
