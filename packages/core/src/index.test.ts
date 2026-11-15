@@ -464,6 +464,13 @@ describe("the command PiShip prints for its next step", () => {
     expect(shellArg("it's", "win32")).toBe('"it\'s"');
     expect(shellArg("a,b", "win32")).toBe('"a,b"');
     expect(shellArg("", "win32")).toBe('""');
+    // A backslash run before the closing quote or a `"` is doubled, so it
+    // does not escape the quote (`.\My Dist\` as PowerShell completes it).
+    expect(shellArg(".\\My Dist\\", "win32")).toBe('".\\My Dist\\\\"');
+    expect(shellArg("a b\\\\", "win32")).toBe('"a b\\\\\\\\"');
+    expect(shellArg('a\\"b', "win32")).toBe('"a\\\\""b"');
+    // Backslashes elsewhere are literal and stay single.
+    expect(shellArg("C:\\my tools\\x", "win32")).toBe('"C:\\my tools\\x"');
   });
   it("falls back to piship when the running script is not PiShip", () => {
     expect(pishipCommand("/usr/bin/vitest")).toBe("piship");
