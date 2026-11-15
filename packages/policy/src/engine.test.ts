@@ -992,3 +992,47 @@ describe("parseRuleList", () => {
     }
   });
 });
+
+// macOS and Windows fold case: a file written as `~/.ZSHENV` where none
+// exists yet is the file zsh reads as `~/.zshenv`. A missing path keeps the
+// case it was written in, so the rule must match it without regard to case.
+describe("path rules where the filesystem folds case", () => {
+  const folds = process.platform === "darwin" || process.platform === "win32";
+  const policy = makePolicy(
+    {
+      default: "allow",
+      enforced: [
+        rule("zshenv", "filesystem.write", "~/.zshenv", "deny"),
+        rule("workflows", "filesystem.write", "workspace/.github/**", "ask"),
+      ],
+    },
+    "personal",
+  );
+  const write = (resource: string) =>
+    engine({ policy }).evaluate({ action: "filesystem.write", resource })
+      .effect;
+
+  it("denies or asks for a missing path written in another case", () => {
+    expect(write(join(base, "home", ".zshenv"))).toBe("deny");
+    expect(write(join(base, "home", ".ZSHENV"))).toBe(folds ? "deny" : "allow");
+    expect(write(join(base, "work", ".GitHub", "ci.yml"))).toBe(
+      folds ? "ask" : "allow",
+    );
+  });
+
+  it("never widens an allow by case", () => {
+    expect(
+      engine({
+        policy: makePolicy({
+          default: "ask",
+          enforced: [
+            rule("src", "filesystem.write", "workspace/SRC/**", "allow"),
+          ],
+        }),
+      }).evaluate({
+        action: "filesystem.write",
+        resource: join(base, "work", "src", "a.ts"),
+      }).effect,
+    ).toBe("ask");
+  });
+});
