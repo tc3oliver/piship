@@ -115,6 +115,10 @@ ${
     : `  enabled: false
 `
 }# Updates stay disabled until updates.source and updates.trust.bootstrap are set.
+# updates.source is an https URL or a \${NAME} runtime variable listed under
+# variables; a local directory (a file share, say) works only through such a
+# variable, set to an absolute path. piship trust-root init prints the
+# trust.bootstrap block.
 updates:
   channel: stable
   channels: [stable]

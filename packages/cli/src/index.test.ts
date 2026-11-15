@@ -17,6 +17,7 @@ import {
   installNext,
   lifecycleCommands,
   optionHelp,
+  publishSteps,
   runCli,
   runtimeCacheLine,
   simpleUsage,
@@ -1619,5 +1620,29 @@ describe("what to do after an install", () => {
     expect(installNext({ app: { command: "acme" }, payload: temp })).toBe(
       "Next: run acme --help to see its commands, then acme to start.",
     );
+  });
+});
+
+describe("publishSteps", () => {
+  const now = new Date("2026-11-15T00:00:00Z");
+  it("orders the uploads and asks for a new signature a week before expiry", () => {
+    const steps = publishSteps(
+      "stable",
+      [join("dist", "releases", "acmecode-1.1.0-darwin-arm64.tar.gz")],
+      "2026-12-15T14:38:15.643Z",
+      now,
+    );
+    expect(steps).toContain(
+      "1. the archives this run added: acmecode-1.1.0-darwin-arm64.tar.gz",
+    );
+    expect(steps).toContain("2. stable.json.sig and stable.json together");
+    expect(steps).toContain(
+      "Sign stable again by 2026-12-08: clients refuse it after 2026-12-15T14:38:15.643Z.",
+    );
+  });
+  it("says now when less than a week is left", () => {
+    expect(
+      publishSteps("candidate", [], "2026-11-18T00:00:00.000Z", now),
+    ).toContain("Sign candidate again by now:");
   });
 });

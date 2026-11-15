@@ -207,6 +207,21 @@ describe("CLI", () => {
       ACMECODE_LLM_GATEWAY_URL: "https://llm.acme.example/v1",
     };
     delete testEnv.PISHIP_BUILD_INPUT;
+    // Unset variables: whoever runs the test build sets them, so the
+    // failure does not stop at the branded "Ask your administrator".
+    const unsetEnv = { ...testEnv };
+    for (const name of Object.keys(unsetEnv))
+      if (name.startsWith("ACMECODE_")) delete unsetEnv[name];
+    const unset = spawnSync(process.execPath, [bin, "test", manifest], {
+      cwd: temp,
+      encoding: "utf8",
+      env: unsetEnv,
+    });
+    expect(unset.status).toBe(1);
+    expect(unset.stderr).toContain("CONFIG_UNAVAILABLE");
+    expect(unset.stderr).toContain(
+      "For this test build, set them in this shell",
+    );
     const tested = spawnSync(process.execPath, [bin, "test", manifest], {
       cwd: temp,
       encoding: "utf8",
