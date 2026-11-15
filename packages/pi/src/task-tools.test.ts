@@ -24,7 +24,7 @@ import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
-import { taskTools } from "./task-tools.js";
+import { report, taskTools } from "./task-tools.js";
 
 /** The generic task tests use POSIX commands; Windows has its own Bash test. */
 const tasksRun = process.platform !== "win32";
@@ -307,6 +307,21 @@ describe("task_start decides a command as bash does", () => {
     30_000,
   );
 
+  it("tells a subagent child that nobody can approve for it, and a session without a prompt that it needs an interactive one", async () => {
+    // `ls` matches no allow rule, so policy.default asks; neither has a prompt.
+    const child = await open({ subagent: true });
+    const childError = await outcome(
+      child.call("bash")({ command: "ls" }, context().ctx),
+    );
+    expect(childError).toContain("a subagent cannot ask for approval");
+    expect(childError).not.toContain("interactive session");
+    const alone = await open();
+    const aloneError = await outcome(
+      alone.call("bash")({ command: "ls" }, context().ctx),
+    );
+    expect(aloneError).toContain("approval needs an interactive session");
+  });
+
   it("is not offered to a subagent child", async () => {
     const { tools } = await open({ subagent: true });
     expect(tools.map((tool) => tool.name)).not.toContain("task_start");
@@ -371,6 +386,29 @@ describe.runIf(tasksRun)("a background task", () => {
       expect(await outcome(call(tool)({ id }, ctx))).toContain(
         `No background task ${id} in this session`,
       );
+  });
+
+  it("says a task that timed out was stopped by its timeout, and how to give it more", () => {
+    const text = report({
+      id: "t1",
+      status: "timed-out",
+      exitCode: null,
+      output: "",
+      dropped: 0,
+    });
+    expect(text).toContain("Task t1: timed-out (its timeout passed");
+    expect(text).toContain(
+      "task_start takes a timeout in seconds, at most 7200",
+    );
+    expect(
+      report({
+        id: "t2",
+        status: "exited",
+        exitCode: 0,
+        output: "",
+        dropped: 0,
+      }),
+    ).toContain("Task t2: exited (exit code 0)");
   });
 
   it("refuses a ninth running task before it asks anything", async () => {
