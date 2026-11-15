@@ -101,24 +101,35 @@ export function inTemp(
   );
 }
 
+/** What a command's name looks like: the only first word a refusal repeats. */
+const COMMAND_WORD = /^[a-z][a-z0-9-]{0,31}$/;
+
 /**
  * The refusal of arguments the branded command does not take. A child's
- * arguments end in the task, which a parent may log, so those are not
- * repeated; anything else is shown as typed, as it always was.
+ * arguments end in the task, and what follows an option may be a secret, so
+ * only the names of the options are shown (cut at `=` and at 40 characters),
+ * never a value or a word that is not an option.
  */
 export function unknownOptionMessage(
   args: readonly string[],
   command: string,
 ): string {
-  // A leading word is a mistyped command, not an option; only it is echoed,
-  // as what follows may be a secret typed after the wrong command.
+  // A leading word is a mistyped command, not an option. It is repeated only
+  // when it looks like a command word (lowercase letters, hyphens, at most two
+  // digits), so a mistyped `polcy` is named but a token, URL or path is not;
+  // what follows it is never repeated.
   const [first] = args;
   if (first !== undefined && !first.startsWith("-"))
-    return `Unknown command: ${first}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
+    return COMMAND_WORD.test(first) && (first.match(/\d/g)?.length ?? 0) <= 2
+      ? `Unknown command: ${first}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`
+      : `Unknown command: its first word is not a command of ${command}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
   const shown =
     args[0] === "--mode" && args[1] === "json" && args[2] === "-p"
       ? "--mode json -p ..."
-      : args.join(" ");
+      : args
+          .filter((arg) => arg.startsWith("-"))
+          .map((arg) => (arg.split("=")[0] as string).slice(0, 40))
+          .join(" ");
   return `Unknown branded command option: ${shown}\n${command} has no non-interactive prompt mode; see ${command} --help.`;
 }
 

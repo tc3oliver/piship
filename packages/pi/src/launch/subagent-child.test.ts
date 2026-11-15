@@ -35,6 +35,7 @@ import {
   inTemp,
   isSubagentChild,
   parseSubagentChild,
+  unknownOptionMessage,
 } from "./subagent-child.js";
 
 const ENV = { PI_CODE_SUBAGENT: "1" } as NodeJS.ProcessEnv;
@@ -586,18 +587,55 @@ describe("the launch", () => {
     expect(error?.message).not.toContain("canary-task");
   });
 
-  it("names a mistyped command as one, without echoing what follows it", async () => {
+  it("names a mistyped command, and repeats nothing that follows it", async () => {
     delete process.env.PI_CODE_SUBAGENT;
-    const error = await failure(["polcy", "explain", "canary-secret"]);
+    const error = await failure(["polcy", "explain", "zQ9fSentinelWord"]);
     expect(error?.message).toBe(
       "Unknown command: polcy. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
     );
   });
 
+  it.each([
+    "zQ9fSentinelWord",
+    "sk-live-4f9a8b7c6d5e",
+    "ghp_zQ9fSentinelValue1234567890",
+    "https://example.test/x",
+    "../secret/path",
+    "dGhpc2lzYXNlY3JldA==",
+    "a.b.c",
+    "x".repeat(33),
+  ])(
+    "does not repeat a first word that is not shaped like a command: %s",
+    async (word) => {
+      delete process.env.PI_CODE_SUBAGENT;
+      const error = await failure([word, "explain"]);
+      expect(error?.message).toBe(
+        "Unknown command: its first word is not a command of acmecode. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
+      );
+    },
+  );
+
+  it.each([
+    [["--token", "zQ9fSentinelValue"]],
+    [["--token=zQ9fSentinelValue"]],
+    [["--smoke", "--unknown", "zQ9fSentinelValue", "zQ9fSentinelPositional"]],
+    [["-p", "zQ9fSentinelValue"]],
+    [["--mode", "text", "-p", "zQ9fSentinelValue"]],
+  ])(
+    "names only the options of %j, never a value or a word after them",
+    (args) => {
+      const message = unknownOptionMessage(args, "acmecode");
+      expect(message).not.toContain("zQ9fSentinel");
+      expect(message).toMatch(/^Unknown branded command option: -/);
+      expect(message).toContain("no non-interactive prompt mode");
+    },
+  );
+
   it("is unchanged under the marker when the arguments are not a child's", async () => {
     process.env.PI_CODE_SUBAGENT = "1";
     const error = await failure(["-p", "hi"]);
-    expect(error?.message).toMatch(/^Unknown branded command option: -p hi/);
+    expect(error?.message).toMatch(/^Unknown branded command option: -p\n/);
+    expect(error?.message).not.toContain("hi");
   });
 
   /** What a running session of the distribution publishes for its children. */

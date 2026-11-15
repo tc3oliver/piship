@@ -413,7 +413,8 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(brokerCalls().length).toBe(brokerBefore);
     const print = await run(["-p", "hi"]);
     expect(print.status).toBe(1);
-    expect(print.stderr).toContain("Unknown branded command option: -p hi");
+    expect(print.stderr).toContain("Unknown branded command option: -p\n");
+    expect(print.stderr).not.toMatch(/-p hi/);
     expect(print.stderr).toContain("no non-interactive prompt mode");
 
     // pi-code's subagent child (`--mode json -p ... <task>` under
