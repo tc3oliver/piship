@@ -660,6 +660,25 @@ describe("downloading the upstream archives", () => {
     ).rejects.toMatchObject({ code: "NETWORK_DENIED" });
   });
 
+  it("names runtime.searchTools when the network refuses the download", async () => {
+    const failure = new PiShipError("GATEWAY_UNREACHABLE", "proxy refused", {
+      userAction: "Check the proxy",
+    });
+    await expect(
+      downloadSearchToolArchives(project(), {
+        fetch: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      message: "proxy refused",
+      userAction: expect.stringMatching(
+        /^Check the proxy\. .*remove runtime\.searchTools from piship\.yaml/,
+      ),
+    });
+  });
+
   it("checks the source gate before downloading anything", async () => {
     const server = host(() => new Response("never"));
     await expect(

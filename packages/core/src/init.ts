@@ -276,5 +276,7 @@ ${initGovernance(false, id)}release:
     );
   }
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
+  // `build`, `dev` and `test` write dist/<id> under the directory they run in.
+  writeFileSync(join(root, ".gitignore"), "dist/\n");
   return join(root, "piship.yaml");
 }

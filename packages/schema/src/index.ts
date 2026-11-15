@@ -33,7 +33,7 @@ import {
 } from "./lifecycle.js";
 import { locateErrors } from "./locate.js";
 import { migrationPath } from "./migrations/index.js";
-import { unknownFieldMessage } from "./suggest.js";
+import { nearestField, unknownFieldMessage } from "./suggest.js";
 import {
   LATEST_SCHEMA,
   PISHIP_SCHEMA_V1,
@@ -501,15 +501,20 @@ export function parseManifest(value: unknown): Manifest {
           "managed requires schema piship/v1alpha2, piship/v1alpha3, piship/v1alpha4, piship/v1alpha5, piship/v1alpha6, or piship/v1 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
         ),
       );
-    else if (mode !== "personal" && mode !== "managed")
+    else if (mode !== "personal" && mode !== "managed") {
+      const guess =
+        typeof mode === "string"
+          ? nearestField(mode, v2 ? ["personal", "managed"] : ["personal"])
+          : undefined;
+      const near = guess ? `; did you mean ${guess}?` : "";
       problems.push(
         new ManifestError(
           "invalid field",
           "deployment.mode",
-          v2 ? "Expected personal or managed" : "Expected personal",
+          `${v2 ? "Expected personal or managed" : "Expected personal"}${near}`,
         ),
       );
-    else modeKnown = true;
+    } else modeKnown = true;
   }
   let access: AccessManifest | undefined;
   let governance: GovernanceManifest | undefined;
@@ -680,6 +685,20 @@ function parseManifestSource(source: string, label: string): Manifest {
       ? locateErrors(error, document, lineCounter)
       : error;
   }
+}
+/**
+ * The same problem with the line and column of its field in `source`, for a
+ * check made after parsing (a file the manifest names, say). A problem that
+ * already has a position, or text that does not parse, comes back unchanged.
+ */
+export function locateInSource(
+  error: ManifestError,
+  source: string,
+): ManifestError {
+  const lineCounter = new LineCounter();
+  const document = parseDocument(source, { uniqueKeys: true, lineCounter });
+  if (document.errors.length) return error;
+  return locateErrors(error, document, lineCounter);
 }
 /** Throw every syntax error of a YAML document as one ManifestError. */
 function yamlProblems(document: Document, label: string): void {

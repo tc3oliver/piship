@@ -97,6 +97,8 @@ my-agent
 
 A personal distribution signs in inside Pi: run `my-agent` and use `/login`. A managed distribution instead needs its runtime variables set and a `my-agent login`; the install prints which.
 
+To install a rebuilt copy over the one you have, run the install again with `--replace`; its state is kept.
+
 Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too).
 
 ## Where to go next

@@ -40,6 +40,17 @@ export function nearestField(
   return best;
 }
 
+/** The message of a value that is not one of `allowed`, with the nearest one when a typo explains it. */
+export function expectedOneOf(
+  value: unknown,
+  allowed: readonly string[],
+  prefix = "Expected ",
+): string {
+  const near =
+    typeof value === "string" ? nearestField(value, allowed) : undefined;
+  return `${prefix}${allowed.join(", ")}${near ? `; did you mean ${near}?` : ""}`;
+}
+
 /** The message of an unknown field, with a suggestion or the allowed names. */
 export function unknownFieldMessage(
   key: string,

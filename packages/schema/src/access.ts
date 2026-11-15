@@ -4,7 +4,7 @@ import {
   plainHttpPermitted,
   plainHttpProblem,
 } from "./http-transport.js";
-import { unknownFieldMessage } from "./suggest.js";
+import { expectedOneOf, unknownFieldMessage } from "./suggest.js";
 import {
   checkTemplate,
   checkVariableName,
@@ -370,7 +370,7 @@ function httpTransport(
     typeof value !== "string" ||
     !(HTTP_TRANSPORTS as readonly string[]).includes(value)
   )
-    fail(path, `Expected ${HTTP_TRANSPORTS.join(", ")}`);
+    fail(path, expectedOneOf(value, HTTP_TRANSPORTS));
   return value as HttpTransport;
 }
 function positiveInteger(value: unknown, path: string): number {
@@ -791,7 +791,7 @@ function modelType(value: unknown, path: string): ModelType {
     typeof value !== "string" ||
     !(MODEL_TYPES as readonly string[]).includes(value)
   )
-    fail(path, `Expected ${MODEL_TYPES.join(", ")}`);
+    fail(path, expectedOneOf(value, MODEL_TYPES));
   return value as ModelType;
 }
 
@@ -998,7 +998,7 @@ function configValue(
     key === "thinkingLevel" &&
     !(THINKING_LEVELS as readonly string[]).includes(text)
   )
-    fail(path, `Expected one of ${THINKING_LEVELS.join(", ")}`);
+    fail(path, expectedOneOf(text, THINKING_LEVELS, "Expected one of "));
   if (key === "theme" && !/^[a-z][a-z0-9-]*$/.test(text))
     fail(path, "Theme names use lowercase letters, digits, and hyphens");
   if (key === "model") {

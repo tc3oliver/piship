@@ -110,6 +110,11 @@ export function unknownOptionMessage(
   args: readonly string[],
   command: string,
 ): string {
+  // A leading word is a mistyped command, not an option; only it is echoed,
+  // as what follows may be a secret typed after the wrong command.
+  const [first] = args;
+  if (first !== undefined && !first.startsWith("-"))
+    return `Unknown command: ${first}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
   const shown =
     args[0] === "--mode" && args[1] === "json" && args[2] === "-p"
       ? "--mode json -p ..."

@@ -12,6 +12,7 @@ import {
   checkVariableName,
   hasRuntimeReference,
 } from "../variables.js";
+import { expectedOneOf } from "../suggest.js";
 
 export type Json = Record<string, unknown>;
 
@@ -118,7 +119,7 @@ export function oneOf<T extends string>(
     typeof value !== "string" ||
     !(allowed as readonly string[]).includes(value)
   )
-    fail(path, `Expected ${allowed.join(", ")}`);
+    fail(path, expectedOneOf(value, allowed));
   return value as T;
 }
 /** A `./` path inside the distribution repository, without traversal. */
