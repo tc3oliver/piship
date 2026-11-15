@@ -124,9 +124,12 @@ const REMOVE_STALE = [
   // GNU xargs runs rm once with no operands, which is a no-op with -f.
   'git diff-tree -r --name-only --diff-filter=A -z "$keep" "$all" | xargs -0 rm -f --',
 ];
-const finish = (mode: SeedMode) => [
+const finish = (mode: SeedMode, autocrlf: boolean) => [
   ...(mode === "overlay" ? [...REMOVE_STALE, "rm -rf .git"] : []),
   "git init -q",
+  // The host checks out CRLF and stores LF: the sandbox stores LF too, so a
+  // tool there that writes LF changes only the lines it changed.
+  ...(autocrlf ? ["git config core.autocrlf input"] : []),
   `mv ${UPLOADED} ${LIST}`,
   `git add -A -- . ':(exclude)${MARKER}' ':(exclude)${KEEP}'`,
   "git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit -q --allow-empty -m piship-baseline",
@@ -241,6 +244,9 @@ export async function seedRemoteWorkspace(
     throw new Error(
       "the cached sandbox does not say what it was seeded with, so it cannot be overlaid",
     );
+  const autocrlf = await git(root, ["config", "--get", "core.autocrlf"])
+    .then((out) => out.toString("utf8").trim().toLowerCase() === "true")
+    .catch(() => false);
   const baseHead = await git(root, ["rev-parse", "HEAD"])
     .then((out) => out.toString("utf8").trim() || null)
     .catch(() => null);
@@ -412,7 +418,7 @@ export async function seedRemoteWorkspace(
       [
         ...(index === 0 ? prepare(mode) : []),
         EXTRACT,
-        ...(last ? finish(mode) : []),
+        ...(last ? finish(mode, autocrlf) : []),
       ].join(" && "),
       root,
       {

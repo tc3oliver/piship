@@ -305,6 +305,20 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     // careless API does. The launch stops, and the echo goes nowhere.
     cluster.token = "rotated-away-SENTINEL-not-a-real-token";
     const marks = service.requests.length;
+    // doctor, run first after the rotation, meets the 401 itself and says so.
+    const doctor = await step("doctor-rejected", ["doctor"]);
+    expect(doctor.stdout).toMatch(
+      /sandbox credential\s+rejected \(stored[^\n]*sandbox login/,
+    );
+    expect(
+      describeSightings(
+        sightings(
+          "output of doctor-rejected",
+          `${doctor.stdout}\n${doctor.stderr}`,
+          [BOB_TOKEN],
+        ),
+      ),
+    ).toEqual([]);
     const rejected = await step("launch-rejected", ["--smoke"]);
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain("SANDBOX_UNAVAILABLE");
