@@ -545,9 +545,9 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `capabilities.<name>.provider.package` | none | A declared package of the provider's trust class as the provider, instead of a `./` `path`; with the `permissions` settings `autoApproveFile` and `autoApproveKey` ([below](#what-a-package-is-given-environment-and-files)) |
 | `packageTrust` | managed: npm integrity, full commit SHAs, no local paths; personal: npm integrity | `npm.requireIntegrity`, `git.hosts`, `git.requireCommitSha`, `local.paths` |
 | `release.vulnerabilities.registry` | the configured registry | An https registry URL that `npm audit` asks for advisories |
-| `release.installScripts` | `[]` | Reviewed install scripts in Pi package closures, as `pi-packages/<id>/node_modules/<name>@<version>`; PiShip never runs the script either way |
+| `release.installScripts` | `[]` | Reviewed install scripts in Pi package closures, as `pi-packages/<id>/node_modules/<name>@<version>`, or a git or local package's own root script as `pi-packages/<id>/package@<commit>` or `pi-packages/<id>/package@<sha256- tree digest>`, the key the `install-script` gate names; PiShip never runs the script either way |
 
-Policy gains the actions `model.select` (the v1alpha5 `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` ([Policy](#policy)).
+v0.9.0 added the policy actions `model.select` (formerly `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` together with v1alpha6. Like every policy action they are not tied to a schema version: one action vocabulary serves manifests, rule files, and locks, so a v1alpha3 to v1alpha5 manifest accepts them too ([Policy](#policy)).
 
 Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), bundled search tools ([below](#bundled-search-tools-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
 

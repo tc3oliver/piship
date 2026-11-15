@@ -497,13 +497,20 @@ describe("piship/v1alpha6 schema", () => {
           installScripts: [
             "pi-packages/company-platform/node_modules/esbuild@0.28.2",
             "pi-packages/company-platform/node_modules/@scope/a/node_modules/b@1.0.0-rc.1",
+            `pi-packages/native/package@${"a".repeat(40)}`,
+            `pi-packages/native/package@sha256-${"0".repeat(64)}`,
           ],
         },
       }),
     );
-    expect(manifest.lifecycle?.release.installScripts).toHaveLength(2);
+    expect(manifest.lifecycle?.release.installScripts).toHaveLength(4);
     for (const entry of [
       "node_modules/esbuild@0.28.2",
+      `pi-packages/x/package@${"a".repeat(39)}`,
+      `pi-packages/x/package@${"A".repeat(40)}`,
+      `pi-packages/x/package@sha256-${"0".repeat(63)}`,
+      "pi-packages/x/package@1.0.0",
+      "pi-packages/x/package@main",
       "pi-packages/x/node_modules/esbuild@^0.28.2",
       "pi-packages/x/node_modules/../esbuild@0.28.2",
     ])
