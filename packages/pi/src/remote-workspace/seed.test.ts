@@ -604,14 +604,21 @@ describe("seedRemoteWorkspace", () => {
     );
   });
 
-  it("uploads a file whose name no ustar field holds", async () => {
-    initProject();
-    const name = `${"n".repeat(150)}.txt`;
-    put(name, "long\n");
-    sh(project, "add", "-A");
-    sh(project, "commit", "-qm", "init");
-    const result = await seedRemoteWorkspace(fakeSandbox(), project, allowAll);
-    expect(result.uploaded).toContain(name);
-    expect(readFileSync(join(remote, name), "utf8")).toBe("long\n");
-  });
+  it.skipIf(process.platform === "win32")(
+    "uploads a file whose name no ustar field holds",
+    async () => {
+      initProject();
+      const name = `${"n".repeat(150)}.txt`;
+      put(name, "long\n");
+      sh(project, "add", "-A");
+      sh(project, "commit", "-qm", "init");
+      const result = await seedRemoteWorkspace(
+        fakeSandbox(),
+        project,
+        allowAll,
+      );
+      expect(result.uploaded).toContain(name);
+      expect(readFileSync(join(remote, name), "utf8")).toBe("long\n");
+    },
+  );
 });

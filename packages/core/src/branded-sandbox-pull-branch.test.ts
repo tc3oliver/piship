@@ -61,6 +61,9 @@ beforeEach(() => {
   mkdirSync(repo);
   mkdirSync(state);
   git(repo, "init", "-q");
+  // CI runners have no global identity; the commit under test needs one.
+  git(repo, "config", "user.name", "t");
+  git(repo, "config", "user.email", "t@invalid");
   for (const f of ["a.txt", "c.txt", "d.txt"])
     writeFileSync(join(repo, f), "one\ntwo\n");
   git(repo, "add", "-A");
@@ -299,6 +302,8 @@ describe("sandbox pull --branch", () => {
 
   it("leaves the changes staged when git has no identity to commit with", async () => {
     checkpoint();
+    git(repo, "config", "--unset", "user.name");
+    git(repo, "config", "--unset", "user.email");
     git(repo, "config", "user.useConfigOnly", "true");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
     vi.stubEnv("GIT_CONFIG_SYSTEM", "/dev/null");
@@ -308,7 +313,8 @@ describe("sandbox pull --branch", () => {
     vi.stubEnv("GIT_COMMITTER_EMAIL", "");
     await runSandbox(ctx, ["pull", "--branch", "--yes"]);
     expect(out.join("\n")).toMatch(/staged but not committed/);
-    expect(out.join("\n")).toContain(`git -C ${wt()} commit`);
+    // The path is quoted for the shell, which differs per platform.
+    expect(out.join("\n")).toMatch(/git -C \S*repo-sandbox-sess1234\S* commit/);
     expect(git(wt(), "diff", "--cached", "--name-only").toString()).toBe(
       "a.txt\nb.txt\n",
     );
