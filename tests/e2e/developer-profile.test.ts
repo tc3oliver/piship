@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { branded, launcher } from "../helpers/distribution.js";
+import { registryReachable } from "../helpers/fake-npm.js";
 import { removeTree } from "../helpers/teardown.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -1011,6 +1012,14 @@ describe.skipIf(windows)(
       const reason = `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`;
       if (process.env.CI) expect(NPM_MAJOR, reason).toBeGreaterThanOrEqual(11);
       context.skip(NPM_MAJOR < 11, reason);
+      // `piship lock` resolves pi-code with `npm view`, and the build installs it.
+      const online = registryReachable();
+      if (process.env.PISHIP_REQUIRE_REGISTRY === "1")
+        expect(online, "the npm registry is required").toBe(true);
+      context.skip(
+        !online,
+        "the npm registry is unreachable (PISHIP_REQUIRE_REGISTRY=1 fails instead)",
+      );
       // A copy of the example that calls this repository a company one, locked
       // here, because the origin is part of the manifest.
       const copy = join(temp, "company-example");

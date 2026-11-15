@@ -23,6 +23,7 @@ import { expect, inject, onTestFinished } from "vitest";
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, type Result, STDIN_CLOSED_CODES } from "./distribution.js";
 import type { LifecycleFixture } from "./e2e-shards.js";
+import { withFakeNpm } from "./fake-npm.js";
 import {
   clearPlatformStore,
   expectOwnParts,
@@ -231,7 +232,8 @@ function baseEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PISHIP_NO_BROWSER: "1" };
   delete env.PISHIP_BUILD_INPUT;
   delete env.PISHIP_SANDBOX_ADAPTER;
-  return env;
+  // The fixtures' subject is the lifecycle, not the registry's audit answer.
+  return withFakeNpm(env);
 }
 
 /** Run the PiShip CLI without blocking, so independent builds overlap. */

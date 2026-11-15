@@ -171,6 +171,10 @@ describe("browser evidence tiers", () => {
     "utf8",
   );
 
+  it("runs the release gates against the real npm registry", () => {
+    expect(portable).toMatch(/^ {6}PISHIP_REQUIRE_REGISTRY: "1"$/m);
+  });
+
   it("keeps live Chrome required by default and excludes it only in qualification", () => {
     expect(portable).toMatch(
       /skip-browser:\n(?:[^\n]*\n)*? {8}type: boolean\n {8}default: false/,

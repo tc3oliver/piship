@@ -13,6 +13,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PISHIP_VERSION } from "@piship/core";
 import { branded } from "../helpers/distribution.js";
+import { withFakeNpm } from "../helpers/fake-npm.js";
 import { afterAll, describe, expect, it } from "vitest";
 
 const bin = fileURLToPath(
@@ -25,14 +26,15 @@ const root = mkdtempSync(join(tmpdir(), "piship-pack-install-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 const target = `${process.platform}-${process.arch}`;
-const env: NodeJS.ProcessEnv = {
+const base: NodeJS.ProcessEnv = {
   ...process.env,
   PISHIP_INSTALL_HOME: join(root, "install"),
   PISHIP_BIN_HOME: join(root, "bin"),
   PISHIP_STATE_HOME: join(root, "state"),
   PISHIP_NO_BROWSER: "1",
 };
-delete env.PISHIP_BUILD_INPUT;
+delete base.PISHIP_BUILD_INPUT;
+const env = withFakeNpm(base);
 const cli = (...args: string[]) =>
   spawnSync(process.execPath, [bin, ...args], { encoding: "utf8", env });
 const command = join(

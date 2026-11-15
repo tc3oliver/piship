@@ -7,6 +7,7 @@ import { SEARCH_TOOLS } from "@piship/schema";
 import { PI_VERSION, PISHIP_VERSION, SEARCH_TOOL_SPECS } from "@piship/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { pretranspileProject } from "../helpers/pretranspile-project.js";
+import { withFakeNpm } from "../helpers/fake-npm.js";
 import { lifecycleReleases, lifecycleScenario } from "../helpers/lifecycle.js";
 
 const bin = fileURLToPath(
@@ -16,8 +17,9 @@ const out = mkdtempSync(join(tmpdir(), "piship-runtime-e2e-"));
 afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 // The test runner points the build input at the repository; the built CLI uses its own.
-const env = { ...process.env };
-delete env.PISHIP_BUILD_INPUT;
+const base = { ...process.env };
+delete base.PISHIP_BUILD_INPUT;
+const env = withFakeNpm(base);
 const cli = (...args: string[]) =>
   spawnSync(process.execPath, [bin, ...args], { encoding: "utf8", env });
 

@@ -22,6 +22,7 @@ import {
 } from "@piship/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { branded } from "../helpers/distribution.js";
+import { withFakeNpm } from "../helpers/fake-npm.js";
 import { bootstrapTrust } from "../helpers/update-trust.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
@@ -30,13 +31,13 @@ const root = mkdtempSync(join(tmpdir(), "piship-pack-update-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 const target = `${process.platform}-${process.arch}`;
-const baseEnv: NodeJS.ProcessEnv = {
+const baseEnv: NodeJS.ProcessEnv = withFakeNpm({
   ...process.env,
   PISHIP_INSTALL_HOME: join(root, "install"),
   PISHIP_BIN_HOME: join(root, "bin"),
   PISHIP_STATE_HOME: join(root, "state"),
   PISHIP_NO_BROWSER: "1",
-};
+});
 delete baseEnv.PISHIP_BUILD_INPUT;
 let source = join(root, "channel");
 const env = (): NodeJS.ProcessEnv => ({

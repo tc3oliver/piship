@@ -63,6 +63,9 @@ jobs:
       npm_config_prefer_offline: "true"
       PISHIP_SKIP_BROWSER: ${{ inputs.skip-browser && '1' || '0' }}
       PISHIP_REQUIRE_BROWSER: ${{ inputs.skip-browser && '0' || '1' }}
+      # The release gates run against the real npm registry, not the fake npm
+      # the local E2E harness puts first on PATH (tests/helpers/fake-npm.ts).
+      PISHIP_REQUIRE_REGISTRY: "1"
     steps:
       # Windows runners are ephemeral VMs whose C: drive is slow for the many
       # small files npm writes. Skip Defender scanning and keep temp output and
