@@ -104,6 +104,9 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   "pack-update": { seconds: { linux: 480, darwin: 360, win32: 800 } },
   "pack-install": { seconds: { linux: 120, darwin: 90, win32: 250 } },
   "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
+  // Estimated from one darwin run (5 s): one demo build, a login, a launch and
+  // three pulls; skipped on Windows (the fake backend runs /bin/sh).
+  "remote-workspace": { seconds: { linux: 12, darwin: 8, win32: 2 } },
   // Estimated from background-tasks (one demo build and launch); skipped on
   // Windows, where the pack's shell rules need an enforced sandbox.
   "routine-pack": { seconds: { linux: 30, darwin: 36, win32: 2 } },
