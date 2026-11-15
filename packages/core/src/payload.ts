@@ -242,7 +242,10 @@ export function verifyPayloadContents(
       isRecord(value.app) &&
       isRecord(value.runtime),
   );
-  const manifest = readManifest(join(root, "piship.yaml"));
+  // A payload built before a limit on names existed still verifies.
+  const manifest = readManifest(join(root, "piship.yaml"), {
+    existing: true,
+  });
   if (
     manifestDigest(manifest) !== lock.manifest.sha256 ||
     JSON.stringify(manifest.app) !== JSON.stringify(lock.app)

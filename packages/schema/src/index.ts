@@ -343,8 +343,23 @@ export function distributionNameProblem(value: string): string | undefined {
     return `"${value}" is a reserved device name on Windows, where the command would be ${value}.cmd; choose another`;
   return undefined;
 }
-function commandName(value: unknown, path: string): string {
+/**
+ * Options of reading a manifest. `existing` is for the manifest of a payload
+ * that was built or installed earlier: limits added since then (the length and
+ * device-name limits of `app.id` and `app.command`) are for authoring and are
+ * not applied, so a release that was valid when it shipped still verifies,
+ * repairs and updates.
+ */
+export interface ParseOptions {
+  readonly existing?: boolean;
+}
+function commandName(
+  value: unknown,
+  path: string,
+  options: ParseOptions = {},
+): string {
   const result = name(value, path);
+  if (options.existing) return result;
   const problem = distributionNameProblem(result);
   if (problem) throw new ManifestError("unsafe path/name", path, problem);
   return result;
@@ -424,7 +439,10 @@ function piVersion(value: unknown): string {
     );
   return pi;
 }
-export function parseManifest(value: unknown): Manifest {
+export function parseManifest(
+  value: unknown,
+  options: ParseOptions = {},
+): Manifest {
   assertNoSecretValues(value);
   const schema = isRecord(value) ? value.schema : undefined;
   if (!(SUPPORTED_SCHEMAS as readonly unknown[]).includes(schema)) {
@@ -554,7 +572,7 @@ export function parseManifest(value: unknown): Manifest {
           root,
           deploymentMode,
           variables,
-          { id: commandName(app?.id, "app.id") },
+          { id: commandName(app?.id, "app.id", options) },
           v5,
           v6,
         );
@@ -590,9 +608,11 @@ export function parseManifest(value: unknown): Manifest {
       : attempt(() => piVersion(runtime.pi));
   const appFields = app
     ? {
-        id: attempt(() => commandName(app.id, "app.id")),
+        id: attempt(() => commandName(app.id, "app.id", options)),
         name: attempt(() => displayText(app.name, "app.name")),
-        command: attempt(() => commandName(app.command, "app.command")),
+        command: attempt(() =>
+          commandName(app.command, "app.command", options),
+        ),
         version: attempt(() => {
           const version = string(app.version, "app.version");
           if (!/^[0-9]/.test(version) || validSemver(version) === null)
@@ -686,8 +706,11 @@ function flatResources(governance: GovernanceManifest): Manifest["resources"] {
     themes: of("themes"),
   };
 }
-export function readManifest(path: string): Manifest {
-  return parseManifestSource(readManifestSource(path), path);
+export function readManifest(
+  path: string,
+  options: ParseOptions = {},
+): Manifest {
+  return parseManifestSource(readManifestSource(path), path, options);
 }
 /**
  * Parse manifest text. A problem carries the line and column of its field,
@@ -717,12 +740,16 @@ function plainValue(document: Document): unknown {
     );
   return value;
 }
-function parseManifestSource(source: string, label: string): Manifest {
+function parseManifestSource(
+  source: string,
+  label: string,
+  options: ParseOptions = {},
+): Manifest {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, { uniqueKeys: true, lineCounter });
   yamlProblems(document, label);
   try {
-    return parseManifest(plainValue(document));
+    return parseManifest(plainValue(document), options);
   } catch (error) {
     throw error instanceof ManifestError
       ? locateErrors(error, document, lineCounter)
