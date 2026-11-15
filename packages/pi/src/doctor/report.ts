@@ -2,7 +2,7 @@
 // doctor text is written. Every label and value passes through the same
 // sanitizer, so no group can print a credential, a token, URL credentials,
 // or a URL query, whatever an error message or a configuration value holds.
-import { redact } from "@piship/contracts";
+import { redact, type StatusMarks, statusMarks } from "@piship/contracts";
 import type { DoctorVerification } from "@piship/core";
 
 /**
@@ -76,7 +76,6 @@ export interface DoctorCheck {
 }
 
 const STATUS = { ok: "ok", warn: "warn", bad: "fail", info: "info" } as const;
-const MARKS = { ok: "✓", warn: "!", fail: "✗", info: "-" } as const;
 
 function sanitizeState(
   item: DoctorVerification["runtime"],
@@ -125,7 +124,7 @@ export class DoctorReport {
     };
   }
 
-  render(): string {
+  render(marks: StatusMarks = statusMarks()): string {
     const output = [sanitizeDoctorText(this.title)];
     for (const { group, checks } of this.toJSON().groups)
       output.push(
@@ -133,7 +132,7 @@ export class DoctorReport {
         group,
         ...checks.map(
           (check) =>
-            `  ${MARKS[check.status]} ${check.label.padEnd(20)} ${check.value}`,
+            `  ${marks[check.status]} ${check.label.padEnd(20)} ${check.value}`,
         ),
       );
     return output.join("\n");

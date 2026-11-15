@@ -39,6 +39,8 @@ export default defineConfig({
   ...base,
   test: {
     ...base.test,
+    // The E2E regexes accept both sets of marks, so the real detection runs.
+    env: { ...base.test?.env, PISHIP_ASCII: "" },
     include: ["tests/e2e/**/*.test.ts"],
     fileParallelism: true,
     maxWorkers: availableParallelism(),

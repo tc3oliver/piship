@@ -277,25 +277,25 @@ describe("managed distribution (local fixtures)", () => {
     const doctor = await run(["doctor"]);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
     expect(doctor.stdout).toMatch(
-      /Gateway\n(?:.*\n)*? {2}✓ gateway\s+reachable/,
+      /Gateway\n(?:.*\n)*? {2}[✓+] gateway\s+reachable/,
     );
     expect(doctor.stdout).toMatch(
-      /Identity\n {2}✓ mode\s+oidc\n {2}✓ session\s+signed in\n {2}✓ issuer\s+\S+ answers/,
+      /Identity\n {2}[✓+] mode\s+oidc\n {2}[✓+] session\s+signed in\n {2}[✓+] issuer\s+\S+ answers/,
     );
     expect(doctor.stdout).toMatch(
       /Secret Store\n {2}! backend\s+restricted plaintext file/,
     );
     expect(doctor.stdout).toMatch(
-      /✓ outbound\s+private-only: declared hosts only/,
+      /[✓+] outbound\s+private-only: declared hosts only/,
     );
-    expect(doctor.stdout).toMatch(/Network\n(?:.*\n)*? {2}✓ proxy\s+/);
+    expect(doctor.stdout).toMatch(/Network\n(?:.*\n)*? {2}[✓+] proxy\s+/);
     expect(doctor.stdout).toMatch(
-      /✓ agent commands\s+approved network variables only/,
+      /[✓+] agent commands\s+approved network variables only/,
     );
     expect(doctor.stdout).toMatch(
       process.platform === "win32"
         ? /Workspace\n {2}- consistency\s+none: no sandbox is enforced/
-        : /Workspace\n {2}✓ consistency\s+shared \(commands run on this host's files\)/,
+        : /Workspace\n {2}[✓+] consistency\s+shared \(commands run on this host's files\)/,
     );
     expect(doctor.stdout).toMatch(/Audit\n {2}. state\s+/);
     expect(doctor.stdout).toMatch(/Release\n {2}. release\s+/);
@@ -401,7 +401,7 @@ describe("managed distribution (local fixtures)", () => {
     });
     expect(insecureDoctor.status).toBe(1);
     expect(insecureDoctor.stdout).toMatch(
-      /✗ TLS verification\s+DISABLED in environment/,
+      /[✗x] TLS verification\s+DISABLED in environment/,
     );
     expect(insecureDoctor.stdout).toContain("TLS_POLICY_VIOLATION");
   }, 600000);

@@ -51,6 +51,11 @@ export default defineConfig({
       // against local servers, and the test of the bundled template asks for
       // them explicitly).
       PISHIP_INIT_PROBE: "unreachable",
+      // Reports print check marks, and ASCII ones on the legacy Windows
+      // console. Unit tests assert the marks, so they never depend on the
+      // terminal of the machine running them; the helper and the E2E tier
+      // (see vitest.e2e.config.ts) cover the detection.
+      PISHIP_ASCII: "0",
       // On Windows a governed child is started through a compiled helper kept
       // under the state home. A test must not compile it into the user's real
       // home or race other files to do it; the helper's own live test turns it

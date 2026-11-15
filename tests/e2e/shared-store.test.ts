@@ -100,7 +100,7 @@ describe("shared file store on the installed command (local fixtures)", () => {
     expect(smoke.status, smoke.stderr).toBe(0);
     const doctor = await s.run(["doctor"]);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
-    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+    expect(doctor.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
     expect(doctor.stderr).not.toMatch(/damaged/);
     // Install and launch contacted no host: the update host is asked only by `update`.
     expect(s.hostRequests).toEqual([]);
@@ -174,7 +174,7 @@ describe("shared file store on the installed command (local fixtures)", () => {
     expect(without.status, without.stderr).toBe(0);
     const diagnosed = await s.run(["doctor"]);
     expect(diagnosed.status, diagnosed.stdout + diagnosed.stderr).toBe(0);
-    expect(diagnosed.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
+    expect(diagnosed.stdout).toMatch(/Release\n {2}[✓+] release\s+verified/);
     expect(existsSync(store)).toBe(false);
     const uninstall = s.cli("uninstall", "mypi");
     expect(uninstall.status, uninstall.stderr).toBe(0);

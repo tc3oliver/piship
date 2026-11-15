@@ -45,6 +45,7 @@ import {
   resolveRuntimeReferences,
 } from "./access/index.js";
 import { loadAdapter } from "./access/adapters.js";
+import { formatExplanation } from "./access/explain.js";
 import { setVariablesHint } from "./access/network.js";
 import {
   readPreferences,
@@ -369,6 +370,24 @@ describe("runtime references and network policy", () => {
     expect(one.message).toBe(
       "Runtime variable ACMECODE_LLM_GATEWAY_URL for inference.baseUrl is not set",
     );
+  });
+
+  it("joins an explanation note with a dash and a sign the console may lack, or with ASCII", () => {
+    const rows = [
+      {
+        key: "models.allowed",
+        value: [],
+        source: "distribution-enforced",
+        overridable: false,
+        note: "defaults ∩ manifest; users may only narrow",
+      },
+    ];
+    expect(formatExplanation("Acme", rows, false)).toContain(
+      "] — defaults ∩ manifest;",
+    );
+    const ascii = formatExplanation("Acme", rows, true);
+    expect(ascii).toContain("] - defaults and manifest;");
+    expect([...ascii].every((c) => c.charCodeAt(0) < 128)).toBe(true);
   });
 
   it("offers PowerShell syntax where the shell is PowerShell", () => {

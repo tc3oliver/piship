@@ -21,6 +21,7 @@ import { type ActivatedAccess, SandboxCredential } from "@piship/core";
 import type { WorkspaceReport } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { statusMarks } from "@piship/contracts";
 import { renderDoctor } from "../commands/doctor.js";
 import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
@@ -254,6 +255,17 @@ describe("DoctorReport", () => {
     expect(report.failed).toBe(true);
     expect(report.render()).toContain(`  ✗ ${"g".padEnd(20)} h`);
     expect(report.render()).toContain(`  ! ${"c".padEnd(20)} d`);
+  });
+
+  it("renders ASCII marks, in the same columns, where the console cannot show check marks", () => {
+    const report = new DoctorReport("AcmeCode Doctor");
+    const out = report.section("Gateway");
+    out.ok("a", "b");
+    out.bad("g", "h");
+    const ascii = report.render(statusMarks({}, "win32"));
+    expect(ascii).toContain(`  + ${"a".padEnd(20)} b`);
+    expect(ascii).toContain(`  x ${"g".padEnd(20)} h`);
+    expect(ascii).not.toMatch(/[✓✗]/);
   });
 
   it("sanitizes URL credentials, queries, fragments, tokens, and control characters", () => {

@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditLogFiles } from "@piship/audit";
+import { statusMarks } from "@piship/contracts";
 import type { SecretStoreProvider } from "@piship/credentials";
 import {
   applySecretLayoutTransition,
@@ -624,7 +625,8 @@ function migrationHeader(report: MigrationReport): string {
 }
 
 function migrationLine(item: MigrationReport["items"][number]): string {
-  return `  ${item.verdict === "safe" ? "✓" : item.verdict === "requires-review" ? "!" : "✗"} ${item.name.padEnd(28)} ${item.action.padEnd(19)} ${item.reason}`;
+  const marks = statusMarks();
+  return `  ${item.verdict === "safe" ? marks.ok : item.verdict === "requires-review" ? marks.warn : marks.fail} ${item.name.padEnd(28)} ${item.action.padEnd(19)} ${item.reason}`;
 }
 
 /** Plain-text rendering for CLI output. */
