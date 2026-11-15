@@ -20,6 +20,7 @@ import { PISHIP_VERSION, verifySignature } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsArgv } from "../helpers/distribution.js";
+import { withFakeNpm } from "../helpers/fake-npm.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
@@ -540,7 +541,10 @@ describe("CLI", () => {
       const validated = relocatedBuilder("validate", otherManifest);
       expect(validated.status, validated.stderr).toBe(0);
       expect(validated.stdout).toContain("Manifest is valid.");
-      const adminEnv = { ...env, PISHIP_E2E_ADMIN_PASSPHRASE: "e2e-admin-pw" };
+      const adminEnv = withFakeNpm({
+        ...env,
+        PISHIP_E2E_ADMIN_PASSPHRASE: "e2e-admin-pw",
+      });
       const admin = (...args: string[]) =>
         spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
           cwd: temp,
