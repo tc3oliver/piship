@@ -207,7 +207,7 @@ export function policyRefusal(
       : `${subject} was declined (${asked}).`;
   if (decision.approval === "cancelled")
     return `${subject} did not run: the approval prompt was dismissed (${asked}).${model ? " Do not retry it unless the user asks." : ""}`;
-  return `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
+  return `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? (gov.options.subagent ? " (a subagent cannot ask for approval, and approvals given in its parent session do not carry over)" : " (approval needs an interactive session)") : ""}.${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
 }
 
 export function blocked(message: string): BlockedError {

@@ -12,6 +12,7 @@ import {
   leadingPartial,
   type TaskEvent,
   TaskLimitError,
+  TASK_LIMITS,
   TaskRegistry,
   type TaskReport,
 } from "./background-tasks.js";
@@ -74,7 +75,7 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
   return tasks;
 }
 
-function report(task: TaskReport, prefix = ""): string {
+export function report(task: TaskReport, prefix = ""): string {
   // The model gets Pi's tool output limit of the newest output, on a
   // character boundary.
   const all = Buffer.from(task.output);
@@ -85,8 +86,12 @@ function report(task: TaskReport, prefix = ""): string {
   const shown = kept.subarray(kept === all ? 0 : leadingPartial(kept));
   const output = shown.toString("utf8");
   const dropped = task.dropped + all.length - shown.length;
+  const status =
+    task.status === "timed-out"
+      ? `${task.status} (its timeout passed, so it was stopped; task_start takes a timeout in seconds, at most ${TASK_LIMITS.maxTimeoutSeconds})`
+      : task.status;
   return [
-    `${prefix}Task ${task.id}: ${task.status}${task.exitCode !== null ? ` (exit code ${task.exitCode})` : ""}`,
+    `${prefix}Task ${task.id}: ${status}${task.exitCode !== null ? ` (exit code ${task.exitCode})` : ""}`,
     ...(dropped
       ? [`[${formatSize(dropped)} of earlier output not shown]`]
       : []),
