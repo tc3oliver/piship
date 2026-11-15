@@ -47,6 +47,8 @@ export async function readSandboxPatch(
   root: string,
   baseline: string,
   maxBytes = REMOTE_PATCH_MAX_BYTES,
+  /** Workspace-relative paths left out of the patch (an adopt's unbaselined host copy). */
+  exclude: readonly string[] = [],
 ): Promise<{ patch: Buffer; commit: string }> {
   if (!/^[0-9a-f]{40,64}$/.test(baseline)) throw new Error("no baseline");
   const abort = new AbortController();
@@ -57,7 +59,11 @@ export async function readSandboxPatch(
     .exec(
       // stderr stays out of the patch; `--no-ext-diff` and `--no-textconv` keep
       // the diff to git's own format.
-      `git add -A 2>/dev/null && c=$(git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$(git write-tree)" -p ${baseline} -m piship-checkpoint) && echo "$c" && git diff --binary --no-color --no-ext-diff --no-textconv --no-renames ${baseline} "$c" 2>/dev/null`,
+      `git add -A 2>/dev/null && c=$(git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$(git write-tree)" -p ${baseline} -m piship-checkpoint) && echo "$c" && git diff --binary --no-color --no-ext-diff --no-textconv --no-renames ${baseline} "$c"${
+        exclude.length
+          ? ` -- . ${exclude.map((path) => `'${`:(exclude,literal)${path}`.replaceAll("'", `'"'"'`)}'`).join(" ")}`
+          : ""
+      } 2>/dev/null`,
       root,
       {
         onData: (chunk) => {
@@ -527,6 +533,7 @@ export class RemoteWorkspace {
         root,
         seeded.baselineCommit,
         this.#options.maxPatchBytes,
+        seeded.lookup.pending(),
       );
       this.#recorded.add(commit);
       const files = (patch.toString("latin1").match(/^diff --git /gm) ?? [])

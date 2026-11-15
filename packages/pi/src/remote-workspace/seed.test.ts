@@ -18,9 +18,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readSandboxPatch } from "./checkpoint.js";
 import {
   SEED_FILE_CAP,
   SeedRefused,
+  type SeedResult,
   type SeedSandbox,
   seedRemoteWorkspace,
 } from "./seed.js";
@@ -643,120 +645,27 @@ describe("seedRemoteWorkspace", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "removes a partly written adopt and treats what is left as its own on the retry",
-    async () => {
-      initProject();
-      put("a.txt", "a\n");
-      put("ask.txt", "host secret, all of it\n");
-      const base = fakeSandbox();
-      let partial = true;
-      let removable = true;
-      const sandbox: SeedSandbox = {
-        ...base,
-        files: {
-          ...base.files,
-          stat: async (path) =>
-            existsSync(join(remote, path.slice(project.length + 1)))
-              ? { type: "file", size: 0 }
-              : undefined,
-          // The upload dies halfway, leaving a truncated copy.
-          write: async (path, data, options) => {
-            if (partial && path.endsWith("ask.txt")) {
-              partial = false;
-              await base.files.write(path, data.subarray(0, 4), options);
-              throw new Error("connection reset");
-            }
-            await base.files.write(path, data, options);
-          },
-        },
-        // The first clean-up fails too, as on a dropped connection.
-        exec: (command, cwd, options) => {
-          if (command.startsWith("rm -f") && removable === false)
-            return Promise.reject(new Error("connection reset"));
-          return base.exec(command, cwd, options);
-        },
-      };
-      const seeded = await seedRemoteWorkspace(
-        sandbox,
-        project,
-        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
-      );
-      const first = seeded.baselineCommit;
-      removable = false;
-      await expect(
-        seeded.lookup?.adopt(join(project, "ask.txt")),
-      ).rejects.toThrow(/connection reset/);
-      // The clean-up failed: the truncated copy is still there.
-      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("host");
-      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
-      removable = true;
-      await seeded.lookup?.adopt(join(project, "ask.txt"));
-      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe(
-        "host secret, all of it\n",
-      );
-      expect(seeded.baselineCommit).not.toBe(first);
-      sh(remote, "add", "-A");
-      expect(
-        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
-      ).toBe("");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "removes the upload when an adopt fails, so a never-retried file stays out of the patch",
-    async () => {
-      initProject();
-      put("a.txt", "a\n");
-      put("ask.txt", "host secret\n");
-      const base = fakeSandbox();
-      let partial = true;
-      const sandbox: SeedSandbox = {
-        ...base,
-        files: {
-          ...base.files,
-          write: async (path, data, options) => {
-            if (partial && path.endsWith("ask.txt")) {
-              partial = false;
-              await base.files.write(path, data.subarray(0, 4), options);
-              throw new Error("connection reset");
-            }
-            await base.files.write(path, data, options);
-          },
-        },
-      };
-      const seeded = await seedRemoteWorkspace(
-        sandbox,
-        project,
-        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
-      );
-      await expect(
-        seeded.lookup?.adopt(join(project, "ask.txt")),
-      ).rejects.toThrow(/connection reset/);
-      expect(existsSync(join(remote, "ask.txt"))).toBe(false);
-      sh(remote, "add", "-A");
-      expect(
-        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
-      ).toBe("");
-    },
-  );
-
   /** A sandbox with a real stat, and hooks into the adopt's write and execs. */
   const adoptSandbox = (hooks: {
     write?: (data: Buffer) => Promise<"ok" | "partial" | "fail">;
     exec?: (command: string) => Promise<number | "throw" | undefined>;
+    /** Called before each read of ask.txt; may throw. */
+    read?: (options: { signal?: AbortSignal } | undefined) => Promise<void>;
   }): SeedSandbox => {
     const base = fakeSandbox();
     return {
       ...base,
       files: {
         ...base.files,
-        stat: async (path) =>
-          existsSync(join(remote, path.slice(project.length + 1)))
-            ? { type: "file", size: 0 }
-            : undefined,
-        read: async (path) => {
+        stat: async (path) => {
           const file = join(remote, path.slice(project.length + 1));
+          return existsSync(file)
+            ? { type: "file", size: statSync(file).size }
+            : undefined;
+        },
+        read: async (path, options) => {
+          const file = join(remote, path.slice(project.length + 1));
+          if (path.endsWith("ask.txt")) await hooks.read?.(options);
           if (!existsSync(file))
             throw Object.assign(new Error("no such file"), { code: "ENOENT" });
           return readFileSync(file);
@@ -843,13 +752,30 @@ describe("seedRemoteWorkspace", () => {
   // the agent's content is never overwritten or deleted, the withheld host
   // content never enters the patch as an addition, and an untouched file ends
   // up baselined once the faults are gone.
+  /** What a checkpoint would take from the sandbox now. */
+  const checkpointed = async (seeded: SeedResult) =>
+    (
+      await readSandboxPatch(
+        fakeSandbox(),
+        project,
+        seeded.baselineCommit,
+        undefined,
+        seeded.lookup.pending(),
+      )
+    ).patch.toString("utf8");
+  // A write that is not ok never reaches the baseline, and a first attempt
+  // that succeeds runs no removal: those combinations would repeat others.
   const matrix = (["ok", "partial", "fail"] as const).flatMap((write) =>
-    (["ok", "fail"] as const).flatMap((baseline) =>
-      (["ok", "fail"] as const).flatMap((rm) =>
-        (["writes", "deletes", "untouched"] as const).map(
-          (agent) => [write, baseline, rm, agent] as const,
+    (write === "ok" ? (["ok", "fail"] as const) : (["ok"] as const)).flatMap(
+      (baseline) =>
+        (write === "ok" && baseline === "ok"
+          ? (["ok"] as const)
+          : (["ok", "fail"] as const)
+        ).flatMap((rm) =>
+          (["writes", "deletes", "untouched"] as const).map(
+            (agent) => [write, baseline, rm, agent] as const,
+          ),
         ),
-      ),
     ),
   );
   it.skipIf(process.platform === "win32").each(matrix)(
@@ -863,33 +789,146 @@ describe("seedRemoteWorkspace", () => {
             if (!faults) return undefined;
             if (baseline === "fail" && command.includes("piship-baseline.idx"))
               return 1;
-            if (rm === "fail" && command.startsWith("rm -f")) return "throw";
+            if (rm === "fail" && command.includes("wc -c")) return "throw";
             return undefined;
           },
         }),
       );
       const ask = join(project, "ask.txt");
       const file = join(remote, "ask.txt");
-      const hostAdded = () => /^\+host/m.test(staged(seeded.baselineCommit));
+      const hostAdded = async () => /^\+host/m.test(await checkpointed(seeded));
       const firstOk = await seeded.lookup?.adopt(ask).then(
         () => true,
         () => false,
       );
       expect(firstOk).toBe(write === "ok" && baseline === "ok");
-      // Only a removal that failed can leave a host copy behind.
-      if (rm === "ok") expect(hostAdded()).toBe(false);
+      // Whatever the adopt left, a checkpoint never takes host content, and
+      // a removal that works leaves nothing behind.
+      expect(await hostAdded()).toBe(false);
+      if (!firstOk && rm === "ok") {
+        expect(existsSync(file)).toBe(false);
+        expect(seeded.lookup?.pending()).toEqual([]);
+      }
       if (agent === "writes") writeFileSync(file, "agent\n");
       if (agent === "deletes") rmSync(file, { force: true });
       faults = false;
       await seeded.lookup?.adopt(ask);
       expect(seeded.lookup?.skipped(ask)).toBeUndefined();
-      expect(hostAdded()).toBe(false);
+      expect(seeded.lookup?.pending()).toEqual([]);
+      expect(await hostAdded()).toBe(false);
       if (agent === "writes")
         expect(readFileSync(file, "utf8")).toBe("agent\n");
-      else if (agent === "untouched" || !firstOk) {
+      else if (agent === "deletes" && firstOk) {
+        // The agent deleted a baselined file: that is its change, kept.
+        expect(existsSync(file)).toBe(false);
+        expect(await checkpointed(seeded)).toContain("deleted file mode");
+      } else {
         expect(readFileSync(file, "utf8")).toBe("host secret\n");
-        expect(staged(seeded.baselineCommit)).toBe("");
+        expect(await checkpointed(seeded)).toBe("");
       }
+    },
+  );
+
+  // A partial write whose removal failed: the leftover "host" waits for the retry.
+  const leftover = async (hooks: Parameters<typeof adoptSandbox>[0] = {}) => {
+    let faults = true;
+    const seeded = await seedWithheld(
+      adoptSandbox({
+        ...hooks,
+        write: async () => (faults ? "partial" : "ok"),
+        exec: async (command) =>
+          faults && command.includes("wc -c") ? "throw" : hooks.exec?.(command),
+      }),
+    );
+    const ask = join(project, "ask.txt");
+    await expect(seeded.lookup?.adopt(ask)).rejects.toThrow();
+    expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("host");
+    faults = false;
+    return { seeded, ask, file: join(remote, "ask.txt") };
+  };
+
+  it.skipIf(process.platform === "win32")(
+    "decides an agent file larger than the adopt's write from its size, without reading it",
+    async () => {
+      let reads = 0;
+      const { seeded, ask, file } = await leftover({
+        read: async () => {
+          reads++;
+        },
+      });
+      writeFileSync(file, "agent ".repeat(100));
+      reads = 0;
+      await seeded.lookup?.adopt(ask);
+      expect(reads).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("agent ".repeat(100));
+      expect(seeded.lookup?.pending()).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "takes an agent file that is a start of the host file for the adopt's own (the documented shortcut)",
+    async () => {
+      const { seeded, ask, file } = await leftover();
+      writeFileSync(file, "host s");
+      await seeded.lookup?.adopt(ask);
+      expect(readFileSync(file, "utf8")).toBe("host secret\n");
+      expect(await checkpointed(seeded)).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps the record when the sandbox cannot be read on the retry, and decides on the next call",
+    async () => {
+      let broken = false;
+      const { seeded, ask, file } = await leftover({
+        read: async () => {
+          if (broken) throw new Error("HTTP 503");
+        },
+      });
+      broken = true;
+      await expect(seeded.lookup?.adopt(ask)).rejects.toThrow(/503/);
+      expect(seeded.lookup?.pending()).toEqual(["ask.txt"]);
+      expect(seeded.lookup?.skipped(ask)).toBe("policy");
+      expect(await checkpointed(seeded)).not.toMatch(/^\+host/m);
+      broken = false;
+      await seeded.lookup?.adopt(ask);
+      expect(readFileSync(file, "utf8")).toBe("host secret\n");
+      expect(await checkpointed(seeded)).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "bounds the clean-up's read and removal, and removes only a file no larger than the write",
+    async () => {
+      const signals: (AbortSignal | undefined)[] = [];
+      let first = true;
+      const seeded = await seedWithheld(
+        adoptSandbox({
+          write: async () => {
+            const how = first ? "partial" : "ok";
+            first = false;
+            return how;
+          },
+          read: async (options) => {
+            signals.push(options?.signal);
+          },
+          // The agent writes a larger file between the clean-up's read and its removal.
+          exec: async (command) => {
+            if (command.includes("wc -c"))
+              writeFileSync(join(remote, "ask.txt"), "agent ".repeat(100));
+            return undefined;
+          },
+        }),
+      );
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow();
+      expect(signals.length).toBeGreaterThan(0);
+      expect(signals.every((signal) => signal !== undefined)).toBe(true);
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe(
+        "agent ".repeat(100),
+      );
+      expect(seeded.lookup?.pending()).toEqual([]);
     },
   );
 
