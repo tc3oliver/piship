@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PiShipError, stopwatch } from "@piship/contracts";
-import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
+import {
+  RuntimeReferenceError,
+  resolveTemplate,
+  type UpdatesManifest,
+} from "@piship/schema";
+import { setVariablesHint } from "../access/network.js";
 import {
   currentTarget,
   installHome,
@@ -125,8 +130,15 @@ function resolveSource(
       env,
     );
   } catch (error) {
+    const variable =
+      error instanceof RuntimeReferenceError ? error.variable : undefined;
     throw new PiShipError("CONFIG_UNAVAILABLE", (error as Error).message, {
       component: "update",
+      ...(variable
+        ? {
+            userAction: `Ask your administrator where ${lock.app.name} updates come from (its channel's URL or directory), then set ${variable} in the environment that runs this command, or pass it once with --from <directory|url>. In ${setVariablesHint([variable], env)}`,
+          }
+        : {}),
     });
   }
   // The static check sees only the template; the resolved value gets the

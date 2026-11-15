@@ -2755,6 +2755,13 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const relative = await attempt("channel");
     expect(relative.code).toBe("CONFIG_INVALID");
     expect(relative.message).toMatch(/absolute local directory/);
+    // Unset: the error says how to set it, or to pass --from instead.
+    const unset = await rejection(
+      updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
+    );
+    expect(unset.code).toBe("CONFIG_UNAVAILABLE");
+    expect(unset.userAction).toMatch(/set ACMEPI_UPDATE_SOURCE/);
+    expect(unset.userAction).toMatch(/--from <directory\|url>/);
     expect(requests).toBe(0);
     // An absolute local directory is accepted after resolution.
     const result = await updateDistribution(ID, {
