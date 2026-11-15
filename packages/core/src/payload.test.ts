@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readManifest } from "@piship/schema";
@@ -360,7 +360,7 @@ describe("launch integrity verification", () => {
         if (!verifyContents && file.endsWith("inventory.json")) continue;
         expect(error, `${file} ${verifyContents}`).toMatchObject({
           code: "INTEGRITY_FAILED",
-          message: expect.stringContaining(file.replaceAll("/", sep)),
+          message: expect.stringContaining(file),
           userAction: expect.stringContaining("piship repair"),
         });
       }

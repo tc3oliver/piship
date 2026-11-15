@@ -145,7 +145,8 @@ export function stripRuntimeIrrelevant(root: string): string[] {
   return removed;
 }
 /**
- * One of a payload's own JSON files. A file that is missing, not JSON, or not
+ * One of a payload's own JSON files, named by its inventory path (always with
+ * `/`, so the message reads the same on every system). A file that is missing, not JSON, or not
  * the shape every reader expects is a damaged payload, reported with the file
  * and the repair, not as a parser or type error.
  */
@@ -209,7 +210,7 @@ export function verifyPayloadContents(
   if (options.verifyContents !== false) {
     const expected = payloadJson(
       root,
-      join("metadata", "inventory.json"),
+      "metadata/inventory.json",
       (value): value is Record<string, string> =>
         isRecord(value) &&
         Object.values(value).every((entry) => typeof entry === "string"),
@@ -224,7 +225,7 @@ export function verifyPayloadContents(
     if (added.length || missing.length || modified.length)
       throw payloadIntegrityError(root, { added, modified, missing });
   }
-  const target = payloadJson(root, join("metadata", "target.json"), isTarget);
+  const target = payloadJson(root, "metadata/target.json", isTarget);
   if (
     options.requireTarget &&
     (target.platform !== process.platform || target.arch !== process.arch)
