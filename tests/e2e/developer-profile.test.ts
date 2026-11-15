@@ -897,20 +897,48 @@ describe("pi-browser-use", () => {
       // exactly the Chrome that the test discovered, explicitly headless.
       const settings = join(where.home, ".pi", "agent", "settings.json");
       mkdirSync(join(where.home, ".pi", "agent"), { recursive: true });
+      // The package starts Chrome with stdio ignored, so a Chrome that never
+      // opens its DevTools port leaves nothing to read (nightly runs on
+      // Ubuntu failed this way with only "Timed out waiting for Chrome
+      // DevTools"). Where a shell exists, start Chrome through a wrapper that
+      // records every launch and Chrome's own stderr, and show both on failure.
+      const launchLog = join(where.base, "chrome-launches.log");
+      let launcher = executablePath;
+      const logged = process.platform !== "win32";
+      if (logged) {
+        launcher = join(where.base, "chrome-logged.sh");
+        writeFileSync(
+          launcher,
+          `#!/bin/sh\necho "$(date +%H:%M:%S) launch pid $$: $*" >> '${launchLog}'\nexec '${executablePath}' "$@" --enable-logging=stderr 2>> '${launchLog}'\n`,
+          { mode: 0o755 },
+        );
+      }
       writeFileSync(
         settings,
         JSON.stringify({
-          "pi-browser-use": { executablePath, headless: true },
+          "pi-browser-use": { executablePath: launcher, headless: true },
         }),
       );
+      const began = Date.now();
       const result = probed<{
         tools: string[];
         errors: unknown[];
         shutdownError?: string;
       }>(where, "browser", where.workspace);
+      const elapsed = Date.now() - began;
+      let diagnostics = "";
+      if (result.errors.length > 0 && logged) {
+        const version = spawnSync(executablePath as string, ["--version"], {
+          encoding: "utf8",
+        }).stdout.trim();
+        const log = existsSync(launchLog)
+          ? readFileSync(launchLog, "utf8").slice(-6000)
+          : "(no launch recorded)";
+        diagnostics = `\n${version}, probe took ${elapsed}ms\nlaunches and Chrome stderr:\n${log}`;
+      }
       expect(
         result.errors,
-        `Browser extension startup errors (Chrome: ${executablePath})`,
+        `Browser extension startup errors (Chrome: ${executablePath})${diagnostics}`,
       ).toEqual([]);
       expect(
         result.shutdownError,
