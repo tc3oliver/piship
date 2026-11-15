@@ -9,9 +9,9 @@ import { packTar, type TarEntry } from "./tar.js";
 
 export const SEED_TOTAL_CAP = 200 * 1024 * 1024;
 export const SEED_FILE_CAP = 50 * 1024 * 1024;
-const ARCHIVE = ".piship-seed.tar";
+export const ARCHIVE = ".piship-seed.tar";
 /** Written before the extract, removed once the baseline is committed: it marks a seed of ours that did not finish. */
-const MARKER = ".piship-seed.started";
+export const MARKER = ".piship-seed.started";
 const EXTRACT_TIMEOUT_SECONDS = 300;
 /** The upload of the whole project may be large: far longer than a file call. */
 const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -39,6 +39,8 @@ export interface SeedResult {
   /** Workspace-relative paths uploaded. */
   readonly uploaded: readonly string[];
   readonly skipped: readonly { path: string; reason: SeedSkipReason }[];
+  /** What the seed left out and why, and how to add one such file later. */
+  readonly lookup: SeedLookup;
 }
 
 export type SeedSandbox = Pick<ActiveSandbox, "exec"> & {
@@ -82,12 +84,6 @@ export interface SeedLookup {
   skipped(hostPath: string): SeedSkipReason | undefined;
   /** Upload one policy-skipped file whose read was just approved, as part of the baseline. */
   adopt(hostPath: string, signal?: AbortSignal): Promise<void>;
-}
-const lookups = new WeakMap<object, SeedLookup>();
-
-/** The finished seed of the sandbox whose `files` this is. */
-export function seedLookup(files: object): SeedLookup | undefined {
-  return lookups.get(files);
 }
 
 /** Human text for a skip reason, finishing "<path> is not in the sandbox: it is ...". */
@@ -221,11 +217,6 @@ export async function seedRemoteWorkspace(
     });
   }
 
-  const withheld = skipped.filter((item) => item.reason === "policy").length;
-  if (withheld * 2 > withheld + entries.length)
-    options.progress?.(
-      `Your policy withheld ${withheld} of ${withheld + entries.length} project files from the sandbox, so the agent will not see them.`,
-    );
   const sizeOf = entries.reduce((n, e) => n + e.data.length, 0);
   options.progress?.(
     `Uploading ${entries.length} files (${(sizeOf / 1024 / 1024).toFixed(1)} MiB) to the sandbox`,
@@ -256,17 +247,11 @@ export async function seedRemoteWorkspace(
     throw new Error(
       `seeding the sandbox failed (exit ${result.exitCode}): ${output.trim().slice(-300)}`,
     );
-  const seeded: SeedResult = {
-    baseHead,
-    baselineCommit: commit,
-    uploaded: entries.map((entry) => entry.path),
-    skipped,
-  };
   const reasons = new Map(skipped.map((item) => [item.path, item.reason]));
   const relativeOf = (hostPath: string) =>
     relative(root, hostPath).split(sep).join("/");
   let chain: Promise<unknown> = Promise.resolve();
-  lookups.set(sandbox.files, {
+  const lookup: SeedLookup = {
     skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
     adopt: (hostPath, signal) => {
       const path = relativeOf(hostPath);
@@ -328,6 +313,13 @@ export async function seedRemoteWorkspace(
       chain = chain.then(run, run);
       return chain as Promise<void>;
     },
-  });
+  };
+  const seeded: SeedResult = {
+    baseHead,
+    baselineCommit: commit,
+    uploaded: entries.map((entry) => entry.path),
+    skipped,
+    lookup,
+  };
   return seeded;
 }

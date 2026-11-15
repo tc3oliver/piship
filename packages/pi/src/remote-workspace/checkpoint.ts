@@ -20,6 +20,7 @@ import {
 import {
   SEED_FILE_CAP,
   SEED_TOTAL_CAP,
+  type SeedLookup,
   SeedRefused,
   type SeedResult,
   type SeedSandbox,
@@ -123,6 +124,11 @@ export class RemoteWorkspace {
     this.#options = options;
   }
 
+  /** What the finished seed left out and how to add one such file; undefined before the seed. */
+  lookup(): SeedLookup | undefined {
+    return this.#seeded?.lookup;
+  }
+
   /** Run something that may change the sandbox; a checkpoint follows it. Marked again at its end, as a task may outlive the turn. */
   track<T>(work: Promise<T>): Promise<T> {
     this.#dirty = true;
@@ -156,20 +162,26 @@ export class RemoteWorkspace {
         this.#seeded = result;
         this.#options.seeded(result);
         this.#dirty = false;
-        const left = new Map<string, number>();
-        for (const { reason } of result.skipped)
-          if (reason === "policy" || reason === "too-large")
-            left.set(reason, (left.get(reason) ?? 0) + 1);
-        if (left.size)
+        const policy = result.skipped.filter(
+          (item) => item.reason === "policy",
+        ).length;
+        const large = result.skipped.filter(
+          (item) => item.reason === "too-large",
+        ).length;
+        const left = [
+          ...(policy ? [`${policy} by policy`] : []),
+          ...(large ? [`${large} over the per-file size cap`] : []),
+        ];
+        if (left.length) {
+          const total = policy + result.uploaded.length;
           this.#options.notify(
-            `Left out of the sandbox: ${[...left]
-              .map(([reason, n]) =>
-                reason === "policy"
-                  ? `${n} by policy`
-                  : `${n} over the per-file size cap`,
-              )
-              .join(", ")}.`,
+            `Left out of the sandbox: ${left.join(", ")}.${
+              policy * 2 > total
+                ? ` Policy withheld ${policy} of ${total} project files, so the agent will not see most of the project.`
+                : ""
+            }`,
           );
+        }
         return result;
       },
       (error: unknown) => {
@@ -217,22 +229,7 @@ export class RemoteWorkspace {
     if (this.#told || !this.#options.checkpoints) return undefined;
     this.#told = true;
     const { stateDir, root, command } = this.#options;
-    const parkedDir = join(stateDir, "sandbox-workspace-parked");
-    const states = [stateDir];
-    try {
-      for (const name of readdirSync(parkedDir))
-        states.push(join(parkedDir, name));
-    } catch {
-      // none parked
-    }
-    let files = 0;
-    let latest = "";
-    for (const state of states) {
-      const kept = readRemoteWorkspaceCheckpoint(state, root);
-      if (!kept || kept.patch.length === 0) continue;
-      files += kept.meta.files;
-      if (kept.meta.createdAt > latest) latest = kept.meta.createdAt;
-    }
+    const { files, latest } = waitingChanges(stateDir, root);
     if (files === 0) return undefined;
     const when = latest.slice(0, 16).replace("T", " ");
     return `Earlier sandbox changes to ${files} ${files === 1 ? "file" : "files"} (saved ${when} UTC) are still waiting. Run ${command} sandbox pull first; this session starts from your host files.`;
@@ -306,6 +303,32 @@ export class RemoteWorkspace {
       release?.();
     }
   }
+}
+
+/** The unapplied changes waiting for a project: the shared slot and every parked copy. */
+export function waitingChanges(
+  stateDir: string,
+  root: string,
+): { files: number; patches: number; latest: string } {
+  const parkedDir = join(stateDir, "sandbox-workspace-parked");
+  const states = [stateDir];
+  try {
+    for (const name of readdirSync(parkedDir))
+      states.push(join(parkedDir, name));
+  } catch {
+    // none parked
+  }
+  let files = 0;
+  let patches = 0;
+  let latest = "";
+  for (const state of states) {
+    const kept = readRemoteWorkspaceCheckpoint(state, root);
+    if (!kept || kept.patch.length === 0) continue;
+    files += kept.meta.files;
+    patches++;
+    if (kept.meta.createdAt > latest) latest = kept.meta.createdAt;
+  }
+  return { files, patches, latest };
 }
 
 /**

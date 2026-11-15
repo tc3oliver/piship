@@ -20,7 +20,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SEED_FILE_CAP,
   type SeedSandbox,
-  seedLookup,
   seedRemoteWorkspace,
 } from "./seed.js";
 import { packTar } from "./tar.js";
@@ -304,21 +303,6 @@ describe("seedRemoteWorkspace", () => {
     expect(mode("plain.txt")).toBe(0o644);
   });
 
-  it("warns when policy withheld most of the project", async () => {
-    initProject();
-    for (const name of ["a", "b", "c"]) put(`${name}.txt`, name);
-    const progress: string[] = [];
-    await seedRemoteWorkspace(
-      { ...fakeSandbox(), exec: async () => ({ exitCode: 1 }) },
-      project,
-      async (path) => (path.endsWith("a.txt") ? "allow" : "skip"),
-      { progress: (message) => progress.push(message) },
-    ).catch(() => {});
-    expect(progress.join("\n")).toContain(
-      "Your policy withheld 2 of 3 project files from the sandbox, so the agent will not see them.",
-    );
-  });
-
   it.skipIf(process.platform === "win32")(
     "adds a withheld file to the baseline later without folding in the agent's staged work",
     async () => {
@@ -332,7 +316,7 @@ describe("seedRemoteWorkspace", () => {
         async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
       );
       const first = seeded.baselineCommit;
-      const lookup = seedLookup(sandbox.files);
+      const lookup = seeded.lookup;
       expect(lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
       // Work the agent did, already staged by a checkpoint.
       writeFileSync(join(remote, "agent.txt"), "work\n");
