@@ -373,11 +373,11 @@ describe("runtime references and network policy", () => {
 
   it("offers PowerShell syntax where the shell is PowerShell", () => {
     expect(setVariablesHint(["A_B", "C_D"], {}, "win32")).toBe(
-      'PowerShell (lasts for this window):\n  $env:A_B="..."\n  $env:C_D="..."',
+      'PowerShell (lasts for this window):\n  $env:A_B="..."\n  $env:C_D="..."\ncmd.exe (lasts for this window):\n  set A_B=...\n  set C_D=...\nFor every new window, use setx in cmd.exe (setx A_B "...") or the Environment Variables dialog.',
     );
-    expect(
-      setVariablesHint(["A_B"], { PSModulePath: "/x" }, "linux"),
-    ).toContain('$env:A_B="..."');
+    expect(setVariablesHint(["A_B"], { PSModulePath: "/x" }, "linux")).toBe(
+      'PowerShell (lasts for this window):\n  $env:A_B="..."',
+    );
     expect(
       setVariablesHint(["A_B"], { SHELL: "/bin/bash" }, "win32"),
     ).toContain("export A_B=");

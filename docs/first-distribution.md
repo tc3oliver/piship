@@ -21,6 +21,14 @@ The "Next:" lines the CLI prints already name the command that is running, so yo
 
 `$PISHIP --help` lists the commands, and `$PISHIP help <command>` (or `<command> --help`) lists that command's options, one line each. A mistyped option is named in the error before the usage line.
 
+On Windows, a PowerShell variable holding a command line does not run, so define a function instead and read `$PISHIP` below as `piship`:
+
+```powershell
+function piship { node "$HOME\src\piship\packages\cli\dist\bin.js" @args }
+```
+
+An installed command is `%USERPROFILE%\.local\bin\<name>.cmd`, which cmd.exe and PowerShell both run; there is no `.ps1`, so the PowerShell execution policy does not apply. When that folder is not on `PATH`, `install` prints a PowerShell line that adds it for new terminals. Git for Windows turns LF into CRLF by default, which would make `piship.lock` stale on a clone, so `init` writes a `.gitattributes` that keeps LF.
+
 ## 1. Create it
 
 ```bash
