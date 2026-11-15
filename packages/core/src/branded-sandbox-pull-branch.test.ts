@@ -42,6 +42,10 @@ let state: string;
 let out: string[];
 let ctx: BrandedContext;
 
+// Commands in the output quote a path the shell would not take bare (a Windows path).
+const quoted = (path: string) =>
+  /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path}'`;
+
 const git = (cwd: string, ...args: string[]) =>
   execFileSync(
     "git",
@@ -158,9 +162,9 @@ describe("sandbox pull --branch", () => {
     const text = out.join("\n");
     expect(text).toContain(`Created branch sandbox/sess1234 in ${wt()}`);
     expect(text).toMatch("the commit the session started from");
-    expect(text).toContain(`git -C ${wt()} log -1`);
+    expect(text).toContain(`git -C ${quoted(wt())} log -1`);
     expect(text).toContain("git merge sandbox/sess1234");
-    expect(text).toContain(`git worktree remove ${wt()}`);
+    expect(text).toContain(`git worktree remove ${quoted(wt())}`);
   });
 
   it("takes a given name and says when it started from the current HEAD", async () => {
