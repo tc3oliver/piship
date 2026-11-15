@@ -179,6 +179,8 @@ async function readUploadedList(
   }
 }
 
+/** How long an adopt's clean-up may wait on the sandbox. */
+const CLEANUP_TIMEOUT_MS = 30_000;
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 /** What the seed left out and why, and how to add one such file later. */
@@ -187,6 +189,12 @@ export interface SeedLookup {
   skipped(hostPath: string): SeedSkipReason | undefined;
   /** Upload one policy-skipped file whose read was just approved, as part of the baseline. */
   adopt(hostPath: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Workspace-relative paths an adopt may have left in the sandbox without
+   * their baseline: a checkpoint leaves them out, so host content never
+   * reaches the patch.
+   */
+  pending(): string[];
 }
 
 /** Human text for a skip reason, finishing "<path> is not in the sandbox: it is ...". */
@@ -463,24 +471,43 @@ export async function seedRemoteWorkspace(
   const leftByAdopt = (bytes: Buffer, wrote: Buffer) =>
     bytes.length <= wrote.length &&
     wrote.subarray(0, bytes.length).equals(bytes);
-  // The file's bytes in the sandbox, or undefined when there is none.
-  const current = (path: string, signal?: AbortSignal) =>
-    sandbox.files
-      .read(join(root, path), signal ? { signal } : {})
+  /**
+   * Whether the file at `path` is what the adopt left there: absent counts as
+   * ours too. Undefined when the sandbox could not say. The size comes first,
+   * so a larger agent file is never read.
+   */
+  const leftThere = async (
+    path: string,
+    wrote: Buffer,
+    signal: AbortSignal,
+  ): Promise<"absent" | "ours" | "agent"> => {
+    const target = join(root, path);
+    const info = await sandbox.files.stat(target, { signal });
+    if (!info) return "absent";
+    if (info.size > wrote.length) return "agent";
+    const bytes = await sandbox.files
+      .read(target, { signal })
       .catch((error: unknown) => {
         if ((error as { code?: string })?.code === "ENOENT") return undefined;
         throw error;
       });
+    if (bytes === undefined) return "absent";
+    return leftByAdopt(bytes, wrote) ? "ours" : "agent";
+  };
   // Whether the adopt writes the file: never over a file the agent made there.
   const ours = async (path: string, signal: AbortSignal | undefined) => {
+    const options = signal ? { signal } : {};
     const wrote = unbaselined.get(path);
     if (wrote === undefined)
-      return !(await sandbox.files.stat(
-        join(root, path),
-        signal ? { signal } : {},
-      ));
-    const bytes = await current(path, signal);
-    if (bytes === undefined || leftByAdopt(bytes, wrote)) return true;
+      return !(await sandbox.files.stat(join(root, path), options));
+    const there = await leftThere(
+      path,
+      wrote,
+      signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)])
+        : AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+    );
+    if (there !== "agent") return true;
     // The agent replaced it: keep the agent's file, unbaselined, so the patch
     // holds the agent's content and never the host's.
     unbaselined.delete(path);
@@ -489,23 +516,33 @@ export async function seedRemoteWorkspace(
   // After a failed write or baseline: remove what the adopt left, so an
   // unbaselined host copy cannot reach the patch even if the read is never
   // retried. Never removes the agent's file; whatever cannot be decided now
-  // stays in `unbaselined` for the next call.
+  // stays in `unbaselined` (and out of checkpoints) for the next call. Bounded
+  // on its own: the call's signal has already fired or does not matter here.
   const cleanUp = async (path: string, wrote: Buffer) => {
-    const bytes = await current(path).catch(() => null);
-    if (bytes === null) return;
-    if (bytes !== undefined && leftByAdopt(bytes, wrote)) {
+    const there = await leftThere(
+      path,
+      wrote,
+      AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+    ).catch(() => undefined);
+    if (there === undefined) return;
+    if (there === "ours") {
+      // The size check runs again just before the removal, so an agent file
+      // written since the read and larger than the write is kept. An agent
+      // write of at most that size in that instant would still be removed.
       const removed = await sandbox
-        .exec(`rm -f -- ${quote(path)}`, root, {
-          onData: () => {},
-          timeout: 30,
-        })
+        .exec(
+          `p=${quote(path)}; [ -e "$p" ] || exit 0; n=$(wc -c < "$p") || exit 1; [ "$n" -le ${wrote.length} ] || exit 3; rm -f -- "$p"`,
+          root,
+          { onData: () => {}, timeout: CLEANUP_TIMEOUT_MS / 1000 },
+        )
         .catch(() => undefined);
-      if (removed?.exitCode !== 0) return;
+      if (removed?.exitCode !== 0 && removed?.exitCode !== 3) return;
     }
     unbaselined.delete(path);
   };
   const lookup: SeedLookup = {
     skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
+    pending: () => [...unbaselined.keys()],
     adopt: (hostPath, signal) => {
       const path = relativeOf(hostPath);
       const run = async () => {
