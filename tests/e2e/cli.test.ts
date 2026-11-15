@@ -185,8 +185,39 @@ describe("CLI", () => {
     expect(cli("diff", join(before, "piship.yaml"), manifest).stdout).toContain(
       "1.0.0 -> 1.1.0",
     );
+    // A lock kept under another name is still read as a lock.
+    const kept = join(temp, "previous-release.json");
+    cpSync(beforeLock, kept);
+    const renamed = cli("diff", kept, afterLock);
+    expect(renamed.status, renamed.stderr).toBe(0);
+    expect(renamed.stdout).toContain("acmecode 1.0.0 -> 1.1.0");
     expect(cli("diff", beforeLock).status).toBe(2);
     expect(cli("diff", beforeLock, afterLock, "--yaml").status).toBe(2);
+    // The managed demo needs sign-in. The test state has none yet, so the
+    // failure names the built command to sign in with, not an installed one.
+    const testEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      PISHIP_STATE_HOME: join(temp, "state"),
+      HOME: join(temp, "home"),
+      USERPROFILE: join(temp, "home"),
+      ACMECODE_OIDC_ISSUER: "https://id.acme.example",
+      ACMECODE_OIDC_CLIENT_ID: "acmecode",
+      ACMECODE_CREDENTIAL_BROKER_URL: "https://broker.acme.example/issue",
+      ACMECODE_CREDENTIAL_REVOKE_URL: "https://broker.acme.example/revoke",
+      ACMECODE_LLM_GATEWAY_URL: "https://llm.acme.example/v1",
+    };
+    delete testEnv.PISHIP_BUILD_INPUT;
+    const tested = spawnSync(process.execPath, [bin, "test", manifest], {
+      cwd: temp,
+      encoding: "utf8",
+      env: testEnv,
+    });
+    expect(tested.status).toBe(1);
+    expect(tested.stderr).toContain("IDENTITY_REQUIRED");
+    expect(tested.stderr).toContain("This build is not installed");
+    expect(tested.stderr).toMatch(
+      /dist[\\/]acmecode[\\/]bin[\\/]acmecode(\.cmd)?'? login, then run .* test /,
+    );
   }, 180000);
   it("dev validates, builds from source, and launches the isolated command headlessly", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-dev-"));

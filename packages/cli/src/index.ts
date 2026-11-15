@@ -566,10 +566,22 @@ async function lockFor(target: string): Promise<DistributionLock> {
       verified.cleanup();
       return verified.lock;
     }
-    if (path.endsWith(".lock"))
-      return JSON.parse(
-        (await import("node:fs")).readFileSync(path, "utf8"),
-      ) as DistributionLock;
+    // A lock is JSON with a piship-lock schema, whatever the file is called
+    // (a copy kept as previous-release.json); a manifest is YAML.
+    const text = (await import("node:fs")).readFileSync(path, "utf8");
+    if (path.endsWith(".lock")) return JSON.parse(text) as DistributionLock;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // YAML: a manifest.
+    }
+    if (
+      (parsed as DistributionLock | undefined)?.schema?.startsWith?.(
+        "piship-lock/",
+      )
+    )
+      return parsed as DistributionLock;
     return requireCurrentLock(target);
   }
   if (existsSync(path) && existsSync(join(path, "release.json")))
@@ -1231,8 +1243,18 @@ export async function runCli(
           interactive,
         ),
       );
-      if (result.status !== 0)
-        throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
+      if (result.status !== 0) {
+        // The branded "Run <command> login" names a command not installed
+        // yet; the test state signs in through the built one.
+        const signIn = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
+          result.stderr,
+        )
+          ? `\nThis build is not installed: sign in to the test state with ${shellArg(join(artifact, "bin", process.platform === "win32" ? `${lock.app.command}.cmd` : lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
+          : "";
+        throw new Error(
+          `Pi launch failed: ${result.stderr || result.status}${signIn}`,
+        );
+      }
       if (command === "test")
         output.stdout(
           rest.includes("--json")
@@ -1662,7 +1684,7 @@ async function runLifecycle(
       for (const warning of described.warnings)
         output.stderr(`Warning: ${warning}`);
       output.stdout(
-        `Add this bootstrap root to piship.yaml (schema: piship/v1alpha5):\n\n${described.yaml}\nKey fingerprints:\n${described.fingerprints.map((key) => `  ${key.id} ${key.fingerprint}`).join("\n")}`,
+        `Add this bootstrap root to piship.yaml (schema piship/v1alpha5 or later):\n\n${described.yaml}\nKey fingerprints:\n${described.fingerprints.map((key) => `  ${key.id} ${key.fingerprint}`).join("\n")}`,
       );
     } else if (first === "next" && positional.length === 2) {
       const manifest = options["--manifest"];

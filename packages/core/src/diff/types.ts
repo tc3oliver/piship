@@ -56,16 +56,27 @@ export interface DiffReport {
   readonly requiredTests: readonly string[];
 }
 
-/** Test and review names `requiredTests` draws from. */
+/**
+ * Test and review names `requiredTests` draws from. They are checks a
+ * distribution owner can run with PiShip and the branded command, not
+ * PiShip's own test suites, which the owner does not have.
+ */
 export const DIFF_TESTS = {
-  check: "npm run check",
-  compatibility: "Pi compatibility suite (npm run test:compatibility)",
-  installed: "installed lifecycle E2E on every advertised target",
-  governance: "governance E2E and policy explain review",
-  sandbox: "sandbox boundary tests on Linux and macOS",
-  managed: "managed E2E (identity, credentials, inference)",
-  release: "release verification and update/rollback E2E",
-  migration: "manifest and lock migration review",
+  check: "piship validate, with every warning understood",
+  compatibility:
+    "Pi or package change: the branded version, doctor, and --smoke on an installed release",
+  installed:
+    "install the release on every target in release.targets and run the branded version and doctor",
+  governance:
+    "policy review: the branded policy explain and capabilities on an installed release",
+  sandbox:
+    "a sandboxed command on each Linux and macOS target (the branded doctor reports the sandbox)",
+  managed:
+    "against staging: the branded login, --smoke-model, and logout (identity, credentials, inference)",
+  release:
+    "piship verify-release, then update and rollback through the candidate channel on a test machine",
+  migration:
+    "migration review: piship migrate --check, and no change in this diff besides the schema",
 } as const;
 
 // Optional v1alpha4 lock fields, typed loosely so older locks compare too.
