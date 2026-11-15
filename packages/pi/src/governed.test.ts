@@ -973,7 +973,9 @@ describe("governed built-in tools", () => {
 
         await expect(
           run(write, { path: "KEPT/secret.txt", content: "escaped" }, ctx),
-        ).rejects.toThrow(/not allowed/);
+        ).rejects.toThrow(
+          /^filesystem\.write .*KEPT[\\/]secret\.txt was declined by the user \(\S+ rule protected-write asks for approval\)\. Do not retry it unless the user asks; ask how they want to proceed\.$/,
+        );
         expect(confirmations).toBe(1);
         expect(seen).toHaveLength(1);
         expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
