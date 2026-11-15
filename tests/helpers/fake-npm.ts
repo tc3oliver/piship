@@ -47,7 +47,7 @@ if (args[0] === "audit") {
   process.stderr.write("fake npm: unknown audit form: npm " + args.join(" ") + "\\n");
   process.exit(2);
 }
-const PATH = (process.env.PATH || process.env.Path || "").split(${JSON.stringify(delimiter)}).filter((entry) => !same(resolve(entry), fakeDir)).join(${JSON.stringify(delimiter)});
+const PATH = (process.env.PATH || process.env.Path || "").split(delimiter).filter((entry) => !same(resolve(entry), fakeDir)).join(delimiter);
 const real = spawnSync("npm", args, { stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, PATH, Path: PATH } });
 process.exit(real.status ?? 1);
 `;
