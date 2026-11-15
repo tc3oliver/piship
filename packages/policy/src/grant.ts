@@ -137,7 +137,11 @@ function canon(path: string, platform: GrantPlatform): string {
   return platform === "win32"
     ? n
         .split(/[\\/]/)
-        .map((seg) => seg.replace(/[. ]+$/, ""))
+        .map((seg) => {
+          let end = seg.length;
+          while (seg[end - 1] === "." || seg[end - 1] === " ") end--;
+          return seg.slice(0, end);
+        })
         .join("\\")
     : n;
 }

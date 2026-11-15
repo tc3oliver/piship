@@ -335,7 +335,15 @@ function spdxIdAllocator(): (item: {
 }) => string {
   const used = new Set<string>([DOCUMENT_ID, DISTRIBUTION_ID]);
   return (item) => {
-    const base = `SPDXRef-Package-${`${item.name}-${item.version}`.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "")}`;
+    const safe = `${item.name}-${item.version}`.replace(
+      /[^A-Za-z0-9.-]+/g,
+      "-",
+    );
+    let start = 0;
+    let end = safe.length;
+    while (safe[start] === "-") start++;
+    while (end > start && safe[end - 1] === "-") end--;
+    const base = `SPDXRef-Package-${safe.slice(start, end)}`;
     let id = base;
     for (let suffix = 2; used.has(id); suffix++) id = `${base}-${suffix}`;
     used.add(id);
@@ -641,7 +649,7 @@ export function generateNotices(
       );
     for (const file of item.licenseFiles) {
       const content = readFileSync(join(payloadDir, file), "utf8");
-      lines.push(THIN, `File: ${file}`, THIN, content.replace(/\s+$/, ""));
+      lines.push(THIN, `File: ${file}`, THIN, content.trimEnd());
     }
     return lines.join("\n");
   });

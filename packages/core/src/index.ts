@@ -31,7 +31,7 @@ export * from "./install/index.js";
 export * from "./remote-workspace.js";
 export * from "./store/index.js";
 export { raiseThreadpool } from "./threadpool.js";
-export { pishipCommand } from "./invocation.js";
+export { pishipCommand, shellArg } from "./invocation.js";
 export * from "./update/index.js";
 export {
   channelTrustFromLock,

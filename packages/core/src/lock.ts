@@ -17,7 +17,7 @@ import {
 } from "@piship/schema";
 import { PI_VERSION } from "./compatibility.js";
 import { digest, hash } from "./digest.js";
-import { pishipCommand } from "./invocation.js";
+import { pishipCommand, shellArg } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
 import {
   type DistributionLock,
@@ -243,11 +243,11 @@ export function requireCurrentLock(manifestPath: string): DistributionLock {
   const expected = `${JSON.stringify(resolveLock(manifestPath), null, 2)}\n`;
   if (!existsSync(path))
     throw new Error(
-      `Lockfile missing: ${path}. Run ${pishipCommand()} lock ${manifestPath}`,
+      `Lockfile missing: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
   if (readFileSync(path, "utf8") !== expected)
     throw new Error(
-      `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${manifestPath}`,
+      `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
   return JSON.parse(expected) as DistributionLock;
 }

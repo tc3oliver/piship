@@ -19,6 +19,7 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
 import { runGit as git } from "../git-run.js";
+import { shellArg } from "../invocation.js";
 import {
   describeRemoteWorkspacePatch,
   listParkedRemoteWorkspaceCheckpoints,
@@ -182,10 +183,6 @@ function usage(command: string): string {
   ].join("\n");
 }
 
-/** A path as a shell would need it written. */
-const shellPath = (path: string) =>
-  /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
-
 export async function sandboxPull(
   ctx: BrandedContext,
   flags: readonly string[],
@@ -285,7 +282,7 @@ export async function sandboxPull(
   )
     throw failure(
       `The stored sandbox changes belong to ${checkpoint.meta.projectRoot}, not ${root}`,
-      `Run cd ${shellPath(checkpoint.meta.projectRoot)} && ${cmd} to pull them there, or ${cmd} --discard to drop them`,
+      `Run cd ${shellArg(checkpoint.meta.projectRoot)}, then ${cmd} to pull them there, or ${cmd} --discard to drop them`,
     );
   const policy = checkpoint.meta.pull;
   const interactiveOnly = policy?.confirm === "required";
@@ -384,7 +381,7 @@ export async function sandboxPull(
     checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
   const cmdBranch =
     typeof branch === "string"
-      ? `${cmd} --branch ${shellPath(branch)}`
+      ? `${cmd} --branch ${shellArg(branch)}`
       : `${cmd} --branch`;
   // No hook and no fsmonitor in any git command of this flow. The user's own clean/smudge
   // filters stay, as in a normal pull: they are the user's git configuration.
@@ -704,7 +701,7 @@ export async function sandboxPull(
         `A newer sandbox checkpoint was saved while this one was open; it is still stored for the next ${cmd}.`,
       );
     if (created) {
-      const dir = shellPath(target);
+      const dir = shellArg(target);
       ctx.out(
         `Applied ${result.files.length} file(s) in ${target} on branch ${created.name}${threeWay ? " with a 3-way merge" : ""}. ${
           committed
@@ -713,7 +710,7 @@ export async function sandboxPull(
         }`,
       );
       ctx.out(
-        `Next: git -C ${dir} log -1 to look at it, git merge ${shellPath(created.name)} to take it, or git worktree remove ${dir} && git branch -D ${shellPath(created.name)} to throw it away.`,
+        `Next: git -C ${dir} log -1 to look at it, git merge ${shellArg(created.name)} to take it, or git worktree remove ${dir}, then git branch -D ${shellArg(created.name)} to throw it away.`,
       );
     } else
       ctx.out(
