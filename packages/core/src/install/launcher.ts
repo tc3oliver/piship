@@ -262,7 +262,15 @@ try {
 process.env.PI_CODING_AGENT_DIR = join(stateRoot, "agent");
 process.env.PI_PACKAGE_DIR = join(payload, "node_modules", "@earendil-works", "pi-coding-agent");
 mark("launcher_handoff");
-await import(pathToFileURL(join(payload, "bin", command)).href);
+try {
+  await import(pathToFileURL(join(payload, "bin", command)).href);
+} catch (error) {
+  // Node reads the payload's package.json before any PiShip code runs; a damaged one is a damaged release, not a crash.
+  if (error?.code !== "ERR_INVALID_PACKAGE_CONFIG") throw error;
+  console.error("INTEGRITY_FAILED: The installed release of ${id} is damaged: " + String(error.message).split("\\n")[0]);
+  console.error("Action: Restore it from a trusted release of the same version with: piship repair ${id} <release archive>");
+  process.exit(1);
+}
 `);
 }
 

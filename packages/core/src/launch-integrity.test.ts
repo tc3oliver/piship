@@ -96,6 +96,21 @@ describe("files a power loss leaves missing or empty", () => {
     expect(() => verifyLaunchPayload(payload)).not.toThrow();
   });
 
+  it.each(["null", "[]", '{"package-lock.json":5}', "{"])(
+    "is reported with the repair command when the inventory is %j",
+    async (content) => {
+      await installed();
+      const { payload } = readInstallReceipt(ID);
+      mkdirSync(join(runtimeStateDirectory({ value: ID }), "cache"), {
+        recursive: true,
+      });
+      writeFileSync(join(payload, "metadata", "inventory.json"), content);
+      expect(() => verifyLaunchPayload(payload)).toThrow(
+        damaged("metadata/inventory.json (empty or unreadable)"),
+      );
+    },
+  );
+
   it("is not checked for a build directory", async () => {
     const { a } = await installed();
     const build = join(a.directory, "payload");

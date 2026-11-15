@@ -1,8 +1,31 @@
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { locateInSource, type Manifest, ManifestError } from "@piship/schema";
 import { hash } from "./digest.js";
 import type { LockedResource } from "./lock-schema.js";
+
+/**
+ * Whether a declared resource exists. A path that cannot be examined (a
+ * directory the user may not enter, say) is reported as that, not as missing.
+ */
+function resourcePresent(
+  absolute: string,
+  field: string,
+  declared: string,
+): boolean {
+  try {
+    statSync(absolute);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw new ManifestError(
+      "invalid field",
+      field,
+      `${declared} cannot be read (${code ?? "error"}); check its permissions`,
+    );
+  }
+}
 
 function walkResource(root: string, current: string, output: string[]): void {
   const stat = lstatSync(current);
@@ -105,7 +128,7 @@ function resolveResourceFiles(
         `resources.${kind}`,
         `Path escapes manifest directory: ${declared}`,
       );
-    if (!existsSync(absolute))
+    if (!resourcePresent(absolute, `resources.${kind}`, declared))
       throw new ManifestError(
         "missing resource",
         `resources.${kind}`,
@@ -160,7 +183,7 @@ function resolveResourceFiles(
         field,
         `Path escapes manifest directory: ${declared}`,
       );
-    if (!existsSync(absolute))
+    if (!resourcePresent(absolute, field, declared))
       throw new ManifestError(
         "missing resource",
         field,

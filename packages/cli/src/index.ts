@@ -83,7 +83,7 @@ import {
   type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
-import { formatError, redact } from "@piship/contracts";
+import { formatError, PiShipError, redact } from "@piship/contracts";
 import {
   launchWarnings,
   unknownToolDenials,
@@ -586,6 +586,34 @@ export function publishSteps(
   ].join("\n");
 }
 
+/** A lock file's content, or LOCK_INVALID naming the file and the way out. */
+function parseLockText(text: string, file: string): DistributionLock {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    value = undefined;
+  }
+  const record = (item: unknown): item is Record<string, unknown> =>
+    typeof item === "object" && item !== null && !Array.isArray(item);
+  if (
+    !record(value) ||
+    typeof value.schema !== "string" ||
+    !value.schema.startsWith("piship-lock/") ||
+    !record(value.app) ||
+    !record(value.runtime)
+  )
+    throw new PiShipError(
+      "LOCK_INVALID",
+      `${file} is not a piship.lock this PiShip can read`,
+      {
+        component: "cli",
+        userAction:
+          "Pass a lock that piship lock wrote, or a manifest, payload, release, or installed id",
+      },
+    );
+  return value as unknown as DistributionLock;
+}
 async function lockFor(target: string): Promise<DistributionLock> {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isFile()) {
@@ -597,7 +625,7 @@ async function lockFor(target: string): Promise<DistributionLock> {
     // A lock is JSON with a piship-lock schema, whatever the file is called
     // (a copy kept as previous-release.json); a manifest is YAML.
     const text = (await import("node:fs")).readFileSync(path, "utf8");
-    if (path.endsWith(".lock")) return JSON.parse(text) as DistributionLock;
+    if (path.endsWith(".lock")) return parseLockText(text, target);
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -605,11 +633,10 @@ async function lockFor(target: string): Promise<DistributionLock> {
       // YAML: a manifest.
     }
     if (
-      (parsed as DistributionLock | undefined)?.schema?.startsWith?.(
-        "piship-lock/",
-      )
+      typeof (parsed as DistributionLock | undefined)?.schema === "string" &&
+      (parsed as DistributionLock).schema.startsWith("piship-lock/")
     )
-      return parsed as DistributionLock;
+      return parseLockText(text, target);
     return requireCurrentLock(target);
   }
   if (existsSync(path) && existsSync(join(path, "release.json")))
@@ -679,12 +706,42 @@ function purgeReport(purged: PurgeResult, output: CliOutput): string {
   const count = purged.deletedSecrets.length;
   return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`;
 }
+/**
+ * Node reads the payload's package.json before any PiShip code of the payload
+ * runs, and answers a damaged one with its own stack trace. Check it first,
+ * so that the user gets the repair line instead.
+ */
+export function assertPayloadPackageJson(artifact: string): void {
+  let intact = false;
+  try {
+    const value: unknown = JSON.parse(
+      readFileSync(join(artifact, "package.json"), "utf8"),
+    );
+    intact =
+      typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch (error) {
+    // A missing file is Node's business (it then treats the folder as plain);
+    // an unreadable one or one that is not JSON is damaged.
+    intact = (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  if (!intact)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `package.json in ${artifact} is damaged`,
+      {
+        component: "cli",
+        userAction:
+          "Restore the release from a trusted copy of the same version with: piship repair <id> <release archive>",
+      },
+    );
+}
 function runLauncher(
   artifact: string,
   command: string,
   args: string[],
   interactive = false,
 ): { status: number | null; stdout: string; stderr: string } {
+  assertPayloadPackageJson(artifact);
   const target = join(artifact, "bin", command);
   const options = {
     encoding: "utf8",
@@ -714,6 +771,7 @@ function runLauncherLive(
   args: string[],
   stderr: (message: string) => void,
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  assertPayloadPackageJson(artifact);
   const target = join(artifact, "bin", command);
   const options: SpawnOptions = {
     stdio: ["inherit", "pipe", "pipe"],
@@ -1498,7 +1556,24 @@ async function runLifecycle(
       verified.cleanup();
     }
   } else if (command === "diff") {
-    const report = diffLocks(await lockFor(first), await lockFor(second));
+    const before = await lockFor(first);
+    const after = await lockFor(second);
+    let report: ReturnType<typeof diffLocks>;
+    try {
+      report = diffLocks(before, after);
+    } catch (error) {
+      // A lock with the right schema name but fields of the wrong shape.
+      if (!(error instanceof TypeError)) throw error;
+      throw new PiShipError(
+        "LOCK_INVALID",
+        `${first} or ${second} has a field of the wrong type, so the two cannot be compared`,
+        {
+          component: "cli",
+          userAction:
+            "Pass locks that piship lock wrote, or a manifest, payload, release, or installed id",
+        },
+      );
+    }
     output.stdout(
       flags.has("--json")
         ? JSON.stringify(report, null, 2)

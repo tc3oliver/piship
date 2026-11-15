@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { systemError } from "@piship/contracts";
 import { valid as validSemver } from "semver";
@@ -330,6 +330,25 @@ function name(value: unknown, path: string): string {
     );
   return result;
 }
+/** Windows device names: a file called con.cmd or nul.exe is the device. */
+const RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
+/**
+ * Why a name that is well formed still cannot be a distribution id or command:
+ * it becomes a file name (`<command>.cmd`) and a directory name on every
+ * system, so it is short and not a Windows device name.
+ */
+export function distributionNameProblem(value: string): string | undefined {
+  if (value.length > 64) return "Use at most 64 characters";
+  if (RESERVED_DEVICE_NAME.test(value))
+    return `"${value}" is a reserved device name on Windows, where the command would be ${value}.cmd; choose another`;
+  return undefined;
+}
+function commandName(value: unknown, path: string): string {
+  const result = name(value, path);
+  const problem = distributionNameProblem(result);
+  if (problem) throw new ManifestError("unsafe path/name", path, problem);
+  return result;
+}
 function displayText(value: unknown, path: string): string {
   const result = string(value, path);
   if (
@@ -535,7 +554,7 @@ export function parseManifest(value: unknown): Manifest {
           root,
           deploymentMode,
           variables,
-          { id: name(app?.id, "app.id") },
+          { id: commandName(app?.id, "app.id") },
           v5,
           v6,
         );
@@ -571,9 +590,9 @@ export function parseManifest(value: unknown): Manifest {
       : attempt(() => piVersion(runtime.pi));
   const appFields = app
     ? {
-        id: attempt(() => name(app.id, "app.id")),
+        id: attempt(() => commandName(app.id, "app.id")),
         name: attempt(() => displayText(app.name, "app.name")),
-        command: attempt(() => name(app.command, "app.command")),
+        command: attempt(() => commandName(app.command, "app.command")),
         version: attempt(() => {
           const version = string(app.version, "app.version");
           if (!/^[0-9]/.test(version) || validSemver(version) === null)
@@ -674,12 +693,36 @@ export function readManifest(path: string): Manifest {
  * Parse manifest text. A problem carries the line and column of its field,
  * and every YAML syntax error is reported, not only the first.
  */
+/**
+ * The plain value of a parsed document. A YAML alias that points at a node
+ * containing it yields a structure with a cycle, which would overflow the
+ * stack in every walk of the manifest, so it is refused here.
+ */
+function plainValue(document: Document): unknown {
+  const value = document.toJS() as unknown;
+  const path = new Set<unknown>();
+  const cyclic = (node: unknown): boolean => {
+    if (node === null || typeof node !== "object") return false;
+    if (path.has(node)) return true;
+    path.add(node);
+    const found = Object.values(node).some(cyclic);
+    path.delete(node);
+    return found;
+  };
+  if (cyclic(value))
+    throw new ManifestError(
+      "invalid field",
+      "manifest",
+      "A YAML alias refers to a node that contains it; a manifest cannot refer to itself",
+    );
+  return value;
+}
 function parseManifestSource(source: string, label: string): Manifest {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, { uniqueKeys: true, lineCounter });
   yamlProblems(document, label);
   try {
-    return parseManifest(document.toJS() as unknown);
+    return parseManifest(plainValue(document));
   } catch (error) {
     throw error instanceof ManifestError
       ? locateErrors(error, document, lineCounter)
@@ -723,8 +766,17 @@ function yamlProblems(document: Document, label: string): void {
  */
 export function readManifestSource(path: string): string {
   try {
+    // A pipe or device would block or read nothing: only a file is a manifest.
+    const kind = statSync(path);
+    if (!kind.isFile() && !kind.isDirectory())
+      throw new ManifestError(
+        "invalid field",
+        path,
+        "Not a regular file; pass the piship.yaml file",
+      );
     return readFileSync(path, "utf8");
   } catch (error) {
+    if (error instanceof ManifestError) throw error;
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new ManifestError(
         "file not found",
@@ -748,7 +800,7 @@ export function readManifestDocument(path: string): unknown {
     uniqueKeys: true,
   });
   yamlProblems(document, path);
-  return document.toJS() as unknown;
+  return plainValue(document);
 }
 
 export interface MigrationPlan {
@@ -784,7 +836,7 @@ export function migrateManifestSource(
   yamlProblems(document, "manifest");
   const current = (() => {
     try {
-      return parseManifest(document.toJS() as unknown);
+      return parseManifest(plainValue(document));
     } catch (error) {
       throw error instanceof ManifestError
         ? locateErrors(error, document, lineCounter)

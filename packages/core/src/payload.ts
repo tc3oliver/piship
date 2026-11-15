@@ -144,6 +144,46 @@ export function stripRuntimeIrrelevant(root: string): string[] {
   visit(root, "");
   return removed;
 }
+/**
+ * One of a payload's own JSON files, named by its inventory path (always with
+ * `/`, so the message reads the same on every system). A file that is missing, not JSON, or not
+ * the shape every reader expects is a damaged payload, reported with the file
+ * and the repair, not as a parser or type error.
+ */
+function payloadJson<T>(
+  root: string,
+  file: string,
+  valid: (value: unknown) => value is T,
+  /** The file's text, when the caller has read it already. */
+  text?: string,
+): T {
+  const path = join(root, file);
+  let reason: string;
+  try {
+    const value: unknown = JSON.parse(text ?? readFileSync(path, "utf8"));
+    if (valid(value)) return value;
+    reason = "does not have the expected content";
+  } catch (error) {
+    reason =
+      error instanceof SyntaxError
+        ? "is not valid JSON"
+        : (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? "is missing"
+          : `cannot be read (${(error as NodeJS.ErrnoException).code ?? "error"})`;
+  }
+  throw new PiShipError("INTEGRITY_FAILED", `${file} in ${root} ${reason}`, {
+    component: "payload",
+    userAction: repairAction(root),
+  });
+}
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isTarget = (
+  value: unknown,
+): value is { platform: string; arch: string } =>
+  isRecord(value) &&
+  typeof value.platform === "string" &&
+  typeof value.arch === "string";
 export function verifyPayload(directory: string): DistributionLock {
   return verifyPayloadContents(directory, {
     requireTarget: true,
@@ -166,13 +206,15 @@ export function verifyPayloadContents(
 ): DistributionLock {
   const started = process.hrtime.bigint();
   const root = resolve(directory);
-  const inventoryPath = join(root, "metadata", "inventory.json");
   let fileCount = 0;
   if (options.verifyContents !== false) {
-    const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
-      string,
-      string
-    >;
+    const expected = payloadJson(
+      root,
+      "metadata/inventory.json",
+      (value): value is Record<string, string> =>
+        isRecord(value) &&
+        Object.values(value).every((entry) => typeof entry === "string"),
+    );
     const actual = inventory(root);
     fileCount = Object.keys(actual).length;
     const added = Object.keys(actual).filter((key) => !(key in expected));
@@ -183,9 +225,7 @@ export function verifyPayloadContents(
     if (added.length || missing.length || modified.length)
       throw payloadIntegrityError(root, { added, modified, missing });
   }
-  const target = JSON.parse(
-    readFileSync(join(root, "metadata", "target.json"), "utf8"),
-  ) as { platform: string; arch: string };
+  const target = payloadJson(root, "metadata/target.json", isTarget);
   if (
     options.requireTarget &&
     (target.platform !== process.platform || target.arch !== process.arch)
@@ -193,9 +233,15 @@ export function verifyPayloadContents(
     throw new Error(
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
     );
-  const lock = JSON.parse(
-    readFileSync(join(root, "piship.lock"), "utf8"),
-  ) as DistributionLock;
+  const lock = payloadJson(
+    root,
+    "piship.lock",
+    (value): value is DistributionLock =>
+      isRecord(value) &&
+      isRecord(value.manifest) &&
+      isRecord(value.app) &&
+      isRecord(value.runtime),
+  );
   const manifest = readManifest(join(root, "piship.yaml"));
   if (
     manifestDigest(manifest) !== lock.manifest.sha256 ||
@@ -235,9 +281,12 @@ export function verifyPayloadContents(
  */
 export function verifyLaunchPayload(directory: string): DistributionLock {
   const root = resolve(directory);
-  const target = JSON.parse(
+  const target = payloadJson(
+    root,
+    "metadata/target.json",
+    isTarget,
     readPayloadFile(root, "metadata/target.json").toString("utf8"),
-  ) as { platform: string; arch: string };
+  );
   if (target.platform !== process.platform || target.arch !== process.arch)
     throw new Error(
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
@@ -323,9 +372,15 @@ function checkFilesPresent(root: string): void {
   }
   let expected: Record<string, string>;
   try {
-    expected = JSON.parse(
+    const value: unknown = JSON.parse(
       readFileSync(join(root, "metadata", "inventory.json"), "utf8"),
-    ) as Record<string, string>;
+    );
+    if (
+      !isRecord(value) ||
+      !Object.values(value).every((entry) => typeof entry === "string")
+    )
+      throw new TypeError("not an inventory");
+    expected = value as Record<string, string>;
   } catch {
     throw payloadIntegrityError(root, {
       added: [],

@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { checkVariableName, LATEST_SCHEMA } from "@piship/schema";
+import {
+  checkVariableName,
+  distributionNameProblem,
+  LATEST_SCHEMA,
+} from "@piship/schema";
 import { pishipCommand, shellArg } from "./invocation.js";
 import { isDistributionId, suggestDistributionId } from "./state-paths.js";
 
@@ -161,6 +165,11 @@ export function initDistribution(
         : `${quoted} is not a valid distribution id: it must start with a lowercase letter and contain only lowercase letters, digits and single hyphens.${suggestion ? ` Try --id ${suggestion}` : ""}`,
     );
   }
+  const unusable = distributionNameProblem(id);
+  if (unusable)
+    throw new Error(
+      `${JSON.stringify(id)} cannot be a distribution id: ${unusable}${options.id === undefined ? "; pass --id <id> to name it" : ""}`,
+    );
   mkdirSync(join(root, "resources"), { recursive: true });
   const header = `schema: ${LATEST_SCHEMA}
 app:

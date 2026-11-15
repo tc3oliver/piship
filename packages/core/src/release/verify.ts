@@ -313,7 +313,17 @@ function verifyReleaseDirectory(
   } catch (error) {
     // Malformed metadata is an integrity failure, not a crash.
     if (error instanceof PiShipError) throw error;
-    throw fail(`malformed release metadata: ${(error as Error).message}`);
+    // The parser's own wording ("Cannot read properties of null") tells the
+    // reader nothing about the release.
+    throw fail(
+      `malformed release metadata: ${
+        error instanceof SyntaxError
+          ? "a file is not valid JSON"
+          : error instanceof TypeError
+            ? "a required field is missing or has the wrong type"
+            : (error as Error).message
+      }`,
+    );
   }
 }
 
