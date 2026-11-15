@@ -453,6 +453,9 @@ export async function seedRemoteWorkspace(
   const relativeOf = (hostPath: string) =>
     relative(root, hostPath).split(sep).join("/");
   let chain: Promise<unknown> = Promise.resolve();
+  // Paths written by an adopt whose baseline did not follow: a file there is
+  // ours, not the agent's, so a retry writes it and makes the baseline again.
+  const unbaselined = new Set<string>();
   const lookup: SeedLookup = {
     skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
     adopt: (hostPath, signal) => {
@@ -467,6 +470,7 @@ export async function seedRemoteWorkspace(
           );
         // The agent may already have made its own file there: keep it.
         if (
+          unbaselined.has(path) ||
           !(await sandbox.files.stat(
             join(root, path),
             signal ? { signal } : {},
@@ -476,6 +480,7 @@ export async function seedRemoteWorkspace(
           // there without its baseline would read as the agent's own and come
           // back in the patch. Esc stops before the write, not between them.
           signal?.throwIfAborted();
+          unbaselined.add(path);
           await sandbox.files.write(join(root, path), await readFile(absolute));
           // A temporary index builds the new baseline tree, so the work the
           // agent already staged is not folded into the baseline.
@@ -506,6 +511,7 @@ export async function seedRemoteWorkspace(
               `copying ${path} into the sandbox failed (exit ${done.exitCode}); try the read again`,
             );
           seeded.baselineCommit = commit;
+          unbaselined.delete(path);
         }
         reasons.delete(path);
       };
