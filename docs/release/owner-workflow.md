@@ -39,7 +39,7 @@ node packages/cli/dist/bin.js trust-root next ./channel --manifest ./acmecode/pi
 | --- | --- |
 | `lock` | `piship.lock` is missing, stale, or does not match the manifest and resources (`LOCK_INVALID`) |
 | `schema` | The manifest is not `piship/v1`, `piship/v1alpha6`, or `piship/v1alpha5` |
-| `trust` | `updates.source` is set without `updates.trust.bootstrap`, or a managed distribution's root and channel roles share a key (as a migrated v1alpha4 key set does) |
+| `trust` | A managed distribution's root and channel roles share a key (as a migrated v1alpha4 key set does). An `updates.source` without `updates.trust.bootstrap` is not refused: the release is built update-disabled, `update` fails closed on it, and `piship validate` warns |
 | `target` | This machine's `<platform>-<arch>` is not in `release.targets`, has no installed lifecycle evidence in this PiShip version (only `linux-x64`, `darwin-arm64`, and `win32-x64` do), or differs from the requested target |
 | `pi` | The pinned Pi version is not in this PiShip build's compatibility matrix |
 | `source` | A locked package, in the payload's npm lock or in a Pi package's closure under `pi-packages/<id>`, has no recorded source, comes from an origin outside `release.sources`, or has no `sha512` integrity |
