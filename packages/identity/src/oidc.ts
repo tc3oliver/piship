@@ -172,6 +172,18 @@ function session(
     );
   const retained = retainClaims(claims);
   const expiresIn = tokens.expiresIn();
+  const expiresAt =
+    expiresIn === undefined
+      ? undefined
+      : new Date(Date.now() + expiresIn * 1000);
+  // A lifetime too large for a date would otherwise be an expiry that never
+  // arrives (every comparison with an invalid date is false).
+  if (expiresAt && !Number.isFinite(expiresAt.getTime()))
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      "The identity provider returned an unusable token lifetime (expires_in)",
+      { component: "identity", userAction: "Contact your administrator" },
+    );
   const displayName =
     (claims?.name as string | undefined) ??
     (claims?.preferred_username as string | undefined) ??
@@ -190,9 +202,7 @@ function session(
         ? { idToken: previous.idToken }
         : {}),
     ...(refreshToken ? { refreshToken: new SecretValue(refreshToken) } : {}),
-    ...(expiresIn === undefined
-      ? {}
-      : { expiresAt: new Date(Date.now() + expiresIn * 1000) }),
+    ...(expiresAt ? { expiresAt } : {}),
     claims: Object.keys(retained).length ? retained : (previous?.claims ?? {}),
   };
 }

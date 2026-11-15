@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHmac, generateKeyPairSync, sign } from "node:crypto";
 import { inspect } from "node:util";
 import {
   createManagedFetch,
@@ -81,6 +81,26 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       session.refreshToken?.reveal(),
     );
   });
+
+  it.each([1e300, 1e13])(
+    "refuses a token lifetime no date can hold (%s s) instead of a session that never expires",
+    async (ttl) => {
+      services.knobs.accessTokenTtl = ttl;
+      const identity = provider();
+      const error = await identity
+        .login({ openUrl: approve })
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
+      expect((error as Error).message).toContain("expires_in");
+      // The same on refresh: the stored session is not replaced by one that never expires.
+      services.knobs.accessTokenTtl = 3600;
+      const session = await identity.login({ openUrl: approve });
+      services.knobs.accessTokenTtl = ttl;
+      await expect(identity.refresh(session)).rejects.toMatchObject({
+        code: "IDENTITY_INVALID",
+      });
+    },
+  );
 
   it("refreshes the same subject and revokes tokens on logout", async () => {
     const identity = provider();
@@ -627,6 +647,131 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     ).rejects.toMatchObject({
       code: "NETWORK_DENIED",
     });
+  });
+});
+
+describe("ID token time and algorithm checks (deterministic fixture, not live evidence)", () => {
+  // Re-signs the fixture's ID token with claims patched, or with a forged
+  // header, and serves the matching key as the provider's JWKS.
+  function forging(options: {
+    claims?: (claims: Record<string, unknown>) => void;
+    token?: (
+      header: Record<string, unknown>,
+      claims: Record<string, unknown>,
+      key: {
+        privateKey: ReturnType<typeof generateKeyPairSync>["privateKey"];
+        jwk: Record<string, unknown>;
+      },
+    ) => string;
+  }) {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+    });
+    const jwk = {
+      ...publicKey.export({ format: "jwk" }),
+      kid: "forge",
+      alg: "RS256",
+      use: "sig",
+    };
+    const base = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    const fetch: ManagedFetch = async (url, init) => {
+      const response = await base(url, init);
+      const path = new URL(String(url)).pathname;
+      if (path === "/idp/jwks") return Response.json({ keys: [jwk] });
+      if (path !== "/idp/token" || !response.ok) return response;
+      const body = (await response.json()) as { id_token: string };
+      const claims = JSON.parse(
+        Buffer.from(body.id_token.split(".")[1] ?? "", "base64url").toString(
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      options.claims?.(claims);
+      const encode = (value: unknown) =>
+        Buffer.from(JSON.stringify(value)).toString("base64url");
+      const header = { alg: "RS256", kid: "forge", typ: "JWT" };
+      const token =
+        options.token?.(header, claims, { privateKey, jwk }) ??
+        (() => {
+          const signed = `${encode(header)}.${encode(claims)}`;
+          return `${signed}.${sign("sha256", Buffer.from(signed), privateKey).toString("base64url")}`;
+        })();
+      return Response.json({ ...body, id_token: token });
+    };
+    return provider({ fetch });
+  }
+  const now = () => Math.floor(Date.now() / 1000);
+
+  it.each([
+    [
+      "expired a minute ago",
+      (c: Record<string, unknown>) => {
+        c.exp = now() - 60;
+      },
+      "IDENTITY_EXPIRED",
+    ],
+    [
+      "not valid for another minute",
+      (c: Record<string, unknown>) => {
+        c.nbf = now() + 60;
+      },
+      "IDENTITY_EXPIRED",
+    ],
+    [
+      "without an expiry",
+      (c: Record<string, unknown>) => {
+        delete c.exp;
+      },
+      "IDENTITY_INVALID",
+    ],
+    [
+      "without a subject",
+      (c: Record<string, unknown>) => {
+        delete c.sub;
+      },
+      "IDENTITY_INVALID",
+    ],
+  ])("refuses an ID token %s", async (_name, patch, code) => {
+    const error = await forging({ claims: patch })
+      .login({ openUrl: approve })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code });
+  });
+
+  it("accepts an ID token expired a few seconds ago, within the 30 s tolerance", async () => {
+    const session = await forging({
+      claims: (claims) => {
+        claims.exp = now() - 10;
+      },
+    }).login({ openUrl: approve });
+    expect(session.subject).toBe("demo-user-1");
+  });
+
+  it("refuses an unsigned ID token (alg none)", async () => {
+    const error = await forging({
+      token: (header, claims) => {
+        const encode = (value: unknown) =>
+          Buffer.from(JSON.stringify(value)).toString("base64url");
+        return `${encode({ ...header, alg: "none" })}.${encode(claims)}.`;
+      },
+    })
+      .login({ openUrl: approve })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
+  });
+
+  it("refuses an ID token signed with HS256 using the public key as the secret", async () => {
+    const error = await forging({
+      token: (header, claims, key) => {
+        const encode = (value: unknown) =>
+          Buffer.from(JSON.stringify(value)).toString("base64url");
+        const signed = `${encode({ ...header, alg: "HS256" })}.${encode(claims)}`;
+        const secret = Buffer.from(JSON.stringify(key.jwk));
+        return `${signed}.${createHmac("sha256", secret).update(signed).digest("base64url")}`;
+      },
+    })
+      .login({ openUrl: approve })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
   });
 });
 
