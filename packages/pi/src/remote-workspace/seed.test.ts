@@ -594,6 +594,56 @@ describe("seedRemoteWorkspace", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "keeps the agent's own file on a retry after a failed adopt baseline, and never folds host content into it",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "host secret\n");
+      const base = fakeSandbox();
+      let failBaseline = true;
+      const sandbox: SeedSandbox = {
+        ...base,
+        files: {
+          ...base.files,
+          stat: async (path) =>
+            existsSync(join(remote, path.slice(project.length + 1)))
+              ? { type: "file", size: 0 }
+              : undefined,
+        },
+        exec: (command, cwd, options) => {
+          if (failBaseline && command.includes("piship-baseline.idx")) {
+            failBaseline = false;
+            return Promise.resolve({ exitCode: 1 });
+          }
+          return base.exec(command, cwd, options);
+        },
+      };
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      const first = seeded.baselineCommit;
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow();
+      // The agent writes its own file there before the read is retried.
+      writeFileSync(join(remote, "ask.txt"), "agent\n");
+      await seeded.lookup?.adopt(join(project, "ask.txt"));
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("agent\n");
+      // Not baselined: the patch holds the agent's file, never the host's.
+      expect(seeded.baselineCommit).toBe(first);
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("ask.txt");
+      expect(
+        sh(remote, "diff", "--cached", seeded.baselineCommit),
+      ).not.toContain("host secret");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "overlays over a seeded tree with awkward names, removing only what is neither uploaded nor ignored",
     async () => {
       initProject();
