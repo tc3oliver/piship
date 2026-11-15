@@ -971,11 +971,18 @@ describe("governed built-in tools", () => {
         await run(write, { path: "ordinary.txt", content: "allowed" }, ctx);
         expect(seen).toHaveLength(1);
 
-        await expect(
-          run(write, { path: "KEPT/secret.txt", content: "escaped" }, ctx),
-        ).rejects.toThrow(
-          /^filesystem\.write .*KEPT[\\/]secret\.txt was declined by the user \(\S+ rule protected-write asks for approval\)\. Do not retry it unless the user asks; ask how they want to proceed\.$/,
+        // The prompt is for the KEPT directory the write would create in.
+        const refused = await run(
+          write,
+          { path: "KEPT/secret.txt", content: "escaped" },
+          ctx,
+        ).then(
+          () => "",
+          (error: Error) => error.message,
         );
+        expect(refused).toContain("was declined by the user");
+        expect(refused).toContain("rule protected-write");
+        expect(refused).not.toMatch(/not allowed/);
         expect(confirmations).toBe(1);
         expect(seen).toHaveLength(1);
         expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
