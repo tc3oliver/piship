@@ -952,9 +952,10 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
         output.finish();
         clearUpdateTimer();
         emitOutputUpdate();
-        const snapshot = output.snapshot();
+        // Flush first: a write error can arrive only now, and the result must
+        // not name a file that the error then removes.
         await output.close();
-        return snapshot;
+        return output.snapshot();
       };
       // Pi's footer, byte for byte when the output is saved: its renderer
       // drops the footer by finding fullOutputPath in it.
