@@ -569,11 +569,20 @@ function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// Parallel session launches (a subagent's children) meet here at once: they
-// wait out a busy lock for `waitMs`, then report the same error as before.
-// The wait backs off with jitter so that they do not retry in step, and it
-// never runs past the budget; with none (a launch that is not a session) the
-// first busy answer is the error.
+/**
+ * The most a launch waits in all while the lock keeps passing from one
+ * launch to the next, as a burst of parallel sessions makes it do.
+ */
+export const AGENT_FILES_LOCK_QUEUE_MS = 30_000;
+
+// Parallel session launches (a subagent's children, several sessions opened
+// at once) meet here together: they wait out a busy lock for `waitMs`, then
+// report the same error as before. The budget is per holder: each time the
+// lock has passed to another launch the queue is moving, so the wait starts
+// again, up to AGENT_FILES_LOCK_QUEUE_MS in all. A single holder that keeps
+// the lock for `waitMs` still ends the wait. The wait backs off with jitter so
+// that they do not retry in step; with no budget (a launch that is not a
+// session) the first busy answer is the error.
 function agentFilesTransaction<T>(
   agentDir: string,
   operation: () => T,
@@ -581,13 +590,25 @@ function agentFilesTransaction<T>(
 ): T {
   // Monotonic: a wall-clock step (NTP, a user change) must not lengthen or
   // cut short how long a launch waits for another's transaction.
-  const deadline = performance.now() + waitMs;
+  const start = performance.now();
+  const cap = start + Math.max(waitMs, AGENT_FILES_LOCK_QUEUE_MS);
+  let deadline = start + waitMs;
+  let holder: string | null = null;
+  const guard = filePath(agentDir, ".piship-agent-files-lock");
   for (let attempt = 0; ; attempt += 1) {
     try {
       return agentFilesTransactionOnce(agentDir, operation);
     } catch (error) {
+      if (!(error instanceof AgentFilesBusyError) || waitMs <= 0) throw error;
+      const owner = readOwner(join(guard, "owner.json"));
+      const token = typeof owner === "object" ? owner.token : null;
+      if (token !== null && token !== holder) {
+        if (holder !== null)
+          deadline = Math.min(performance.now() + waitMs, cap);
+        holder = token;
+      }
       const left = deadline - performance.now();
-      if (!(error instanceof AgentFilesBusyError) || left <= 0) throw error;
+      if (left <= 0) throw error;
       const ceiling = Math.min(20 * 2 ** attempt, 400);
       pause(Math.min(left, ceiling / 2 + Math.random() * (ceiling / 2)));
     }
