@@ -757,7 +757,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
             if (!INSTALL_SCRIPT_KEY.test(text))
               fail(
                 at,
-                "Expected pi-packages/<id>/node_modules/<name>@<exact version>",
+                "Expected pi-packages/<id>/node_modules/<name>@<exact version> or pi-packages/<id>/package@<commit or sha256- tree digest>",
               );
             return text;
           },
@@ -790,9 +790,13 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
 }
 
 const NPM_SEGMENT = "(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*";
-/** `pi-packages/<id>/node_modules/<name>[/node_modules/<name>...]@<semver>`. */
+/**
+ * `pi-packages/<id>/node_modules/<name>[/node_modules/<name>...]@<semver>`,
+ * or a git or local package's own root script, `pi-packages/<id>/package@`
+ * its full commit or its `sha256-` tree digest (the core gate's key).
+ */
 const INSTALL_SCRIPT_KEY = new RegExp(
-  `^pi-packages/[a-z][a-z0-9-]{0,63}/node_modules/${NPM_SEGMENT}(?:/node_modules/${NPM_SEGMENT})*@\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$`,
+  `^pi-packages/[a-z][a-z0-9-]{0,63}/(?:node_modules/${NPM_SEGMENT}(?:/node_modules/${NPM_SEGMENT})*@\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?|package@(?:[0-9a-f]{40}|sha256-[0-9a-f]{64}))$`,
 );
 
 /** An https registry URL without credentials, query, or fragment. */
