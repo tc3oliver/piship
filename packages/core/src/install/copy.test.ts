@@ -121,9 +121,9 @@ describe("copyTree", () => {
       }
       // Without the option a file is written again.
       await copyTree(source, join(dir, "copied"));
-      expect(statSync(join(dir, "copied", "one")).ino).not.toBe(
-        statSync(join(source, "one")).ino,
-      );
+      expect(
+        statSync(join(dir, "copied", "one"), { bigint: true }).ino,
+      ).not.toBe(statSync(join(source, "one"), { bigint: true }).ino);
     },
   );
 

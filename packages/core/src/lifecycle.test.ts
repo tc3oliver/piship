@@ -734,7 +734,12 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const copied = await installDistribution(a.directory);
     const installed = statSync(join(copied.payload, "piship.lock"));
     expect(installed.nlink).toBe(1);
-    expect(installed.ino).not.toBe(source.ino);
+    expect(
+      statSync(join(copied.payload, "piship.lock"), { bigint: true }).ino,
+    ).not.toBe(
+      statSync(join(a.directory, "payload", "piship.lock"), { bigint: true })
+        .ino,
+    );
     if (process.platform === "win32") return;
     uninstallDistribution(ID);
     process.env.PISHIP_INSTALL_LINK = "1";

@@ -300,7 +300,20 @@ const LATE_START_MS = 1_700;
  * The kit's command that only looks for the marker is not slowed.
  */
 const LATE_FAULTS: Partial<
-  Record<Fault, { readonly marker: string; readonly delayMs: number }>
+  Record<
+    Fault,
+    {
+      readonly marker: string;
+      readonly delayMs: number;
+      /**
+       * Count the delay from the kit's release file, not from exec(), and
+       * start the sandbox at once with the command held until a go file the
+       * host writes when the delay ends, so a slow sandbox start is spent
+       * before the command's first line rather than after the delay.
+       */
+      readonly afterRelease?: boolean;
+    }
+  >
 > = {
   "starts a timed-out command late and leaves it running": {
     marker: "timeout",
@@ -310,13 +323,17 @@ const LATE_FAULTS: Partial<
     marker: "cancel-early",
     delayMs: 1_000,
   },
-  // Its first line comes after the marker window that counts from the abort
-  // (1.8 s) and before the one a silent command gets (2.8 s), so only a kit
-  // that watches a silent command longer sees it. 2.3 s is the middle: half a
-  // second of margin to either side for a loaded machine.
+  // Its first line comes after the marker window that counts from the
+  // release (1.8 s) and before the one a silent command gets (2.8 s), so only
+  // a kit that watches a silent command longer sees it. Held until 2 s after
+  // the kit's release file, the line cannot come before 2 s, and a sandbox
+  // start up to 2 s slow still prints it at about 2 s. Counted from exec() at
+  // 2.3 s, a bubblewrap start half a second slow on a loaded runner overran
+  // the 2.8 s window.
   "starts a cancelled command after the kit's window and leaves it running": {
     marker: "cancel-early",
-    delayMs: 2_300,
+    delayMs: 2_000,
+    afterRelease: true,
   },
   "starts a command late and ignores dispose()": {
     marker: "dispose",
@@ -533,6 +550,7 @@ function referenceAdapter(options: ReferenceOptions) {
       request: SandboxExecRequest,
       io: SandboxExecIO,
       delayMs: number,
+      afterRelease = false,
     ): Promise<SandboxExecResult> => {
       let watch: ReturnType<typeof setInterval> | undefined;
       const stopped = new Promise<SandboxExecResult>((resolve) => {
@@ -544,16 +562,37 @@ function referenceAdapter(options: ReferenceOptions) {
         }, 25);
       });
       // The command runs on with a signal nothing aborts.
-      const ran = sleep(delayMs).then(() =>
-        spawnCommand(session, request, {
-          ...io,
-          signal: new AbortController().signal,
-        }),
-      );
+      const release = afterRelease
+        ? /-e '([^']*\.release)'/.exec(request.command)?.[1]
+        : undefined;
+      if (afterRelease && !release)
+        throw new Error("the command names no release file to count from");
+      const spawn = (command = request.command) =>
+        spawnCommand(
+          session,
+          { ...request, command },
+          { ...io, signal: new AbortController().signal },
+        );
+      const ran = release
+        ? (async () => {
+            // Bounded, so a kit that never writes the release still ends.
+            for (let i = 0; i < 400; i++) {
+              if (existsSync(join(session.work, release))) break;
+              await sleep(25);
+            }
+            const go = `${release}.go`;
+            const started = spawn(
+              `i=0; until [ -e '${go}' ] || [ "$i" -ge 200 ]; do sleep 0.05; i=$((i+1)); done; ${request.command}`,
+            );
+            await sleep(delayMs);
+            writeFileSync(join(session.work, go), "");
+            return started;
+          })()
+        : sleep(delayMs).then(() => spawn());
       ran.catch(() => undefined);
       const finished = Promise.race([ran, stopped]);
-      const release = () => clearInterval(watch);
-      finished.then(release, release);
+      const unwatch = () => clearInterval(watch);
+      finished.then(unwatch, unwatch);
       return finished;
     };
 
@@ -583,7 +622,13 @@ function referenceAdapter(options: ReferenceOptions) {
       await new Promise((resolve) => setImmediate(resolve));
       const late = fault ? LATE_FAULTS[fault] : undefined;
       if (late && writesMarker(request.command, `${late.marker}-`))
-        return leaveRunning(session, request, io, late.delayMs);
+        return leaveRunning(
+          session,
+          request,
+          io,
+          late.delayMs,
+          late.afterRelease,
+        );
       if (options.slowStart && writesMarker(request.command))
         await startLate(session, io, LATE_START_MS);
       const retireOnCancel =

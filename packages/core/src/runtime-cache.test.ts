@@ -376,9 +376,13 @@ describe("install tree entries", () => {
     expect(lookupInstallTree(cache)?.digest).toBe(adopted?.tree.digest);
     // The entry holds its own copies, not the stage's files.
     expect(
-      statSync(join(adopted?.tree.tree as string, "node_modules/dep/index.js"))
-        .ino,
-    ).not.toBe(statSync(join(stage, "node_modules/dep/index.js")).ino);
+      statSync(
+        join(adopted?.tree.tree as string, "node_modules/dep/index.js"),
+        { bigint: true },
+      ).ino,
+    ).not.toBe(
+      statSync(join(stage, "node_modules/dep/index.js"), { bigint: true }).ino,
+    );
     // A later build can place it, copying where links cannot cross volumes.
     const target = join(root, "placed");
     fixture.linkError = "EXDEV";
@@ -764,8 +768,9 @@ describe("placing files", () => {
     const target = join(root, "copied");
     materializeInstallTree(tree, target, { strip: false });
     const placed = join(target, "node_modules/dep/index.js");
-    expect(statSync(placed).ino).not.toBe(
-      statSync(join(tree.tree, "node_modules/dep/index.js")).ino,
+    expect(statSync(placed, { bigint: true }).ino).not.toBe(
+      statSync(join(tree.tree, "node_modules/dep/index.js"), { bigint: true })
+        .ino,
     );
     writeFileSync(placed, "changed");
     expect(
