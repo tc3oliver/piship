@@ -222,6 +222,32 @@ describe("validateRemoteWorkspacePatch", () => {
     ).toEqual([".Git/x"]);
   });
 
+  it("refuses Windows aliases of a protected directory (trailing dot or space)", async () => {
+    for (const path of [".claude./settings.json", ".claude /settings.json"])
+      expect(await refusal(newFile(path), [".claude"])).toMatch(
+        "dot or a space",
+      );
+  });
+
+  it("refuses a patch with more than 200 skippable protected files", async () => {
+    const many = Array.from({ length: 201 }, (_, i) => newFile(`p/f${i}`)).join(
+      "",
+    );
+    expect(await refusal(many, ["p"])).toMatch("more than the 200");
+    const few = Array.from({ length: 200 }, (_, i) => newFile(`p/f${i}`)).join(
+      "",
+    );
+    expect((await skipped(few, ["p"])).skipped).toHaveLength(200);
+  });
+
+  it("lists a refused path once", async () => {
+    const result = await validateRemoteWorkspacePatch(
+      Buffer.from(newFile("C:evil")),
+    );
+    expect(result.refused.length).toBeGreaterThan(0);
+    expect(new Set(result.refused).size).toBe(result.refused.length);
+  });
+
   it("refuses a ~N path segment (Windows 8.3 short names)", async () => {
     expect(await refusal(newFile("CLAUDE~1/settings.json"))).toMatch("~N");
     expect(await refusal(newFile("sub/HUSKY~12"))).toMatch("~N");

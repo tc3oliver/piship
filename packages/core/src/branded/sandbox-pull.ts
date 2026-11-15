@@ -4,8 +4,11 @@
 // which neither commits nor runs any hook. With the main slot empty, the oldest
 // patch another session parked for the project is pulled the same way.
 import {
+  chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   rmdirSync,
   rmSync,
@@ -16,6 +19,7 @@ import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
 import { runGit as git } from "../git-run.js";
 import {
+  describeRemoteWorkspacePatch,
   listParkedRemoteWorkspaceCheckpoints,
   normalizeProjectRoot,
   readRemoteWorkspaceCheckpoint,
@@ -25,26 +29,120 @@ import {
 } from "../remote-workspace.js";
 import type { BrandedContext } from "./context.js";
 
-/** The first patch path that is, or sits under, a symlink on this machine. */
-function throughSymlink(root: string, files: readonly string[]) {
+/**
+ * What on this machine stops the patch from being written where it says: a
+ * symlink on the path, a directory where a file goes, or a file where a parent
+ * directory goes. Checked before anything is written.
+ */
+function pathProblem(
+  root: string,
+  files: readonly string[],
+): { path: string; why: "symlink" | "directory" | "parent" } | undefined {
   for (const file of files) {
     let current = root;
-    for (const segment of file.split("/")) {
+    const segments = file.split("/");
+    for (const [index, segment] of segments.entries()) {
       current = join(current, segment);
+      let info: ReturnType<typeof lstatSync>;
       try {
-        if (lstatSync(current).isSymbolicLink()) return file;
+        info = lstatSync(current);
       } catch {
         break; // not there yet: nothing below it exists either
       }
+      if (info.isSymbolicLink()) return { path: file, why: "symlink" };
+      const last = index === segments.length - 1;
+      if (last && info.isDirectory()) return { path: file, why: "directory" };
+      if (!last && !info.isDirectory()) return { path: file, why: "parent" };
     }
   }
   return undefined;
 }
 
-/** Terminal control characters in untrusted text would let a patch rewrite the screen. */
+interface Snapshot {
+  readonly files: Map<string, { data: Buffer; mode: number } | undefined>;
+  /** Parent directories the patch may create: absent now, removed again if left empty. */
+  readonly newDirs: string[];
+}
+
+/** The bytes, mode and existence of every file the patch names, so a failed write can be undone. */
+function takeSnapshot(root: string, files: readonly string[]): Snapshot {
+  const taken = new Map<string, { data: Buffer; mode: number } | undefined>();
+  const newDirs = new Set<string>();
+  for (const file of files) {
+    const full = join(root, ...file.split("/"));
+    try {
+      taken.set(file, {
+        data: readFileSync(full),
+        mode: lstatSync(full).mode & 0o777,
+      });
+    } catch {
+      taken.set(file, undefined);
+    }
+    let dir = dirname(full);
+    while (dir !== root && dir.startsWith(root)) {
+      try {
+        lstatSync(dir);
+        break;
+      } catch {
+        newDirs.add(dir);
+        dir = dirname(dir);
+      }
+    }
+  }
+  return { files: taken, newDirs: [...newDirs].sort().reverse() };
+}
+
+/** Does the work tree still hold exactly the snapshot's bytes and modes? */
+function matchesSnapshot(root: string, snapshot: Snapshot): boolean {
+  for (const [file, before] of snapshot.files) {
+    const full = join(root, ...file.split("/"));
+    try {
+      const now = {
+        data: readFileSync(full),
+        mode: lstatSync(full).mode & 0o777,
+      };
+      if (
+        !before ||
+        !now.data.equals(before.data) ||
+        (process.platform !== "win32" && now.mode !== before.mode)
+      )
+        return false;
+    } catch {
+      if (before) return false;
+    }
+  }
+  return true;
+}
+
+/** Put every named file back as it was, then report whether the tree matches the snapshot. */
+function restoreSnapshot(root: string, snapshot: Snapshot): boolean {
+  for (const [file, before] of snapshot.files) {
+    const full = join(root, ...file.split("/"));
+    try {
+      if (before) {
+        writeFileSync(full, before.data);
+        chmodSync(full, before.mode);
+      } else rmSync(full, { force: true });
+    } catch {
+      // reported by the check below
+    }
+  }
+  for (const dir of snapshot.newDirs)
+    try {
+      rmdirSync(dir);
+    } catch {
+      // not empty or already gone
+    }
+  return matchesSnapshot(root, snapshot);
+}
+
+/** Terminal control/** Terminal control characters in untrusted text would let a patch rewrite the screen. */
 function printable(text: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
-  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "?");
+  return text.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    "?",
+  );
 }
 
 function failure(
@@ -102,6 +200,18 @@ export async function sandboxPull(
   const checkpoint = main ?? parked[0];
   // Where the patch being pulled lives: the main slot, or a parked session root.
   const sourceState = main ? ctx.stateDir : (parked[0]?.stateDir ?? "");
+  if (!main && (existsSync(paths.patch) || existsSync(paths.meta))) {
+    if (discard) {
+      rmSync(paths.patch, { force: true });
+      rmSync(paths.meta, { force: true });
+      ctx.out("The unreadable stored sandbox checkpoint was discarded.");
+      return;
+    }
+    throw failure(
+      `The stored checkpoint record ${paths.meta} is unreadable (damaged or incomplete), so the patch ${paths.patch} cannot be pulled safely`,
+      `Run ${ctx.metadata.app.command} sandbox pull --discard to drop it`,
+    );
+  }
   if (!checkpoint) {
     ctx.out(
       `No sandbox changes are waiting for ${root}. A remote-workspace session saves them when it ends.`,
@@ -175,13 +285,21 @@ export async function sandboxPull(
       `The sandbox is gone; the patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
       "POLICY_DENIED",
     );
-  const linked = throughSymlink(root, result.files);
-  if (linked !== undefined)
+  const problem = pathProblem(root, result.files);
+  if (problem) {
+    const name = printable(problem.path);
     throw failure(
-      `The sandbox patch touches ${printable(linked)}, which is or sits under a symbolic link on this machine. A sandbox patch never writes through or over a symlink, so nothing was applied`,
-      `The patch is stored at ${storedPatch}. Apply it by hand if you trust it, or run ${cmd} --discard`,
+      problem.why === "symlink"
+        ? `The sandbox patch touches ${name}, which is or sits under a symbolic link on this machine. A sandbox patch never writes through or over a symlink, so nothing was applied`
+        : problem.why === "directory"
+          ? `The sandbox patch writes the file ${name}, but a directory with that name exists on this machine, so nothing was applied`
+          : `The sandbox patch writes ${name}, but a parent of it exists on this machine as a file, not a directory, so nothing was applied`,
+      problem.why === "symlink"
+        ? `Change that file by hand, or replace the symlink with a regular file, then run ${cmd} again. The stored patch is at ${storedPatch}; run ${cmd} --discard to drop it`
+        : `Move or remove ${problem.why === "directory" ? "that directory" : "that file"}, then run ${cmd} again. The stored patch is at ${storedPatch}`,
       "POLICY_DENIED",
     );
+  }
   if (result.skipped.length > 0) {
     const n = result.skipped.length;
     ctx.out(
@@ -202,18 +320,21 @@ export async function sandboxPull(
     ctx.out(
       `Your branch has moved since the session started (${base.slice(0, 7)} -> ${head.slice(0, 7)}); the patch is applied to the current tree.`,
     );
-  const stat = await git(
-    root,
-    ["apply", "--stat", ...result.excludeArgs, "-"],
+  // git's own --stat shortens names to their tail and prints unicode as octal; list full paths.
+  const changes = await describeRemoteWorkspacePatch(
     checkpoint.patch,
+    result.excludeArgs,
+    root,
   );
-  if (stat.code !== 0)
-    throw failure(
-      `The sandbox patch does not parse: ${printable(stat.stderr).trim()}`,
-      `The patch is stored at ${storedPatch}. Run ${cmd} --discard to drop it`,
-      "SANDBOX_UNAVAILABLE",
+  const LISTED = 50;
+  for (const change of changes.slice(0, LISTED))
+    ctx.out(
+      `  ${change.kind === "changed" ? "changed" : change.kind.padEnd(7)}  ${printable(change.path)}${change.mode ? `  (mode ${change.mode})` : ""}  ${change.added === undefined ? "binary" : `+${change.added} -${change.removed}`}`,
     );
-  ctx.out(printable(stat.stdout.toString("utf8")).trimEnd());
+  if (changes.length > LISTED)
+    ctx.out(
+      `  and ${changes.length - LISTED} more; use ${cmd} --diff to see them`,
+    );
   if (showDiff) ctx.out(printable(checkpoint.patch.toString("utf8")));
   else
     ctx.out(
@@ -227,6 +348,22 @@ export async function sandboxPull(
       ["apply", "--whitespace=nowarn", ...extra, ...result.excludeArgs, "-"],
       checkpoint.patch,
     );
+  // Why git could not apply: a stale or edited tree is cured by committing; anything else is shown as git said it.
+  const cannot = (stderr: string, what: string) => {
+    const shown = printable(stderr).trim();
+    const edited = [...stderr.matchAll(/error: (.+?): does not match index/g)]
+      .map((m) => printable(m[1] ?? ""))
+      .join(", ");
+    return failure(
+      `${what}: ${shown}`,
+      /does not match index|patch does not apply|does not exist in index|already exists in working directory/.test(
+        stderr,
+      )
+        ? `Commit or stash your edits to ${edited || "the files the patch names"}, then run ${cmd} again (it then merges 3-way; conflicts get markers). The stored patch is at ${storedPatch}`
+        : `The stored patch is at ${storedPatch}; run ${cmd} --discard to drop it`,
+      "SANDBOX_UNAVAILABLE",
+    );
+  };
   const plainCheck = await apply(["--check"]);
   let threeWay = false;
   if (plainCheck.code === 0)
@@ -239,10 +376,9 @@ export async function sandboxPull(
       ...merge.stderr.matchAll(/Applied patch to '(.*)' with conflicts/g),
     ].map((m) => printable(m[1] ?? ""));
     if (merge.code !== 0)
-      throw failure(
-        `The sandbox patch cannot be applied to your working tree, and nothing was changed: ${printable(merge.stderr).trim()}`,
-        `Commit or stash your own edits to the files the patch names, then run ${cmd} again. To apply it by hand: git apply --3way ${storedPatch}`,
-        "SANDBOX_UNAVAILABLE",
+      throw cannot(
+        merge.stderr,
+        "The sandbox patch cannot be applied to your working tree, and nothing was changed",
       );
     threeWay = true;
     ctx.out(
@@ -268,32 +404,46 @@ export async function sandboxPull(
       return;
     }
   }
-  // The work tree may have changed during the prompt: try the plain apply again, and
-  // fall back to --3way only when it fails. git apply is atomic when it does not conflict.
-  let applied = await apply([]);
-  if (applied.code !== 0) {
-    threeWay = true;
-    applied = await apply(["--3way"]);
-  }
+  // The work tree may have changed during the prompt. Plain apply when the patch still fits
+  // (git checks, then writes: a failed write is undone from the snapshot, never retried as a
+  // merge); --3way only when it does not fit.
+  const again = pathProblem(root, result.files);
+  if (again)
+    throw failure(
+      `${printable(again.path)} changed on this machine while you were deciding, so nothing was applied`,
+      `Run ${cmd} again`,
+    );
+  const snapshot = takeSnapshot(root, result.files);
+  const fits = (await apply(["--check"])).code === 0;
+  threeWay = !fits;
+  const applied = await apply(fits ? [] : ["--3way"]);
   if (applied.code !== 0) {
     // --3way conflicts leave markers in the file, an unmerged index entry, and the rest of
     // the patch applied and staged. Running pull again cannot work.
-    const conflicted = (
-      await git(root, ["diff", "--name-only", "--diff-filter=U", "-z"])
-    ).stdout
-      .toString("utf8")
-      .split("\0")
-      .filter(Boolean);
+    const conflicted = fits
+      ? []
+      : (
+          await git(root, ["diff", "--name-only", "--diff-filter=U", "-z"])
+        ).stdout
+          .toString("utf8")
+          .split("\0")
+          .filter(Boolean);
     if (conflicted.length > 0)
       throw failure(
         `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file(s): ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
         `Resolve the conflict markers and git add those files. Do not run pull again: the patch is already applied. The stored copy is kept; run ${cmd} --discard when you are done`,
         "SANDBOX_UNAVAILABLE",
       );
-    throw failure(
-      `The patch could not be applied and nothing was changed: ${printable(applied.stderr).trim()}`,
-      `The stored changes are kept. Commit or stash your own edits to the files the patch names, then run ${cmd} again. To apply it by hand: git apply --3way ${storedPatch}`,
-      "SANDBOX_UNAVAILABLE",
+    // Not a conflict: git may have written some files before failing. Say what is true.
+    const untouched = matchesSnapshot(root, snapshot);
+    const restored = untouched || restoreSnapshot(root, snapshot);
+    throw cannot(
+      applied.stderr,
+      untouched
+        ? "The patch could not be applied and nothing was changed"
+        : restored
+          ? "The patch could not be written completely; the files it names were put back exactly as they were, so nothing was changed"
+          : `The patch could not be written completely and some of ${[...snapshot.files.keys()].slice(0, 5).map(printable).join(", ")} could not be put back; check git status`,
     );
   }
   // Archive the bytes that were applied. A newer checkpoint written while the
