@@ -348,6 +348,8 @@ const ABANDONED = Symbol("abandoned");
 
 const FILES_DEADLINE_MS = 60_000;
 const SNAPSHOT_DEADLINE_MS = 240_000;
+/** A snapshot a cancelled save still made is deleted, best effort, within this. */
+const SNAPSHOT_DELETE_MS = 30_000;
 
 /** The default for `ActivationContext.settleMs`. */
 const DEFAULT_SETTLE_MS = 5000;
@@ -770,36 +772,49 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     session.remoteWorkspace && enforced && sandboxSnapshot
       ? async (options) => {
           if (retired || disposed) throw retiredError(report);
-          if (options?.signal?.aborted) throw new Error("aborted");
+          const cancel = options?.signal;
+          if (cancel?.aborted) throw new Error("aborted");
           const deadline = AbortSignal.timeout(SNAPSHOT_DEADLINE_MS);
-          const signal = options?.signal
-            ? AbortSignal.any([options.signal, deadline])
-            : deadline;
-          let onAbort: (() => void) | undefined;
+          let onDeadline: (() => void) | undefined;
+          let onCancel: (() => void) | undefined;
           // The signal only asks: an adapter that ignores it must not hang the session.
           const expired = new Promise<never>((_, reject) => {
-            onAbort = () =>
+            onDeadline = () =>
               reject(
-                deadline.aborted
-                  ? new PiShipError(
-                      "SANDBOX_UNAVAILABLE",
-                      `The ${report.adapter} sandbox backend did not save a snapshot within ${SNAPSHOT_DEADLINE_MS / 1000} s`,
-                      { component: "sandbox", retryable: true },
-                    )
-                  : new Error("aborted"),
+                new PiShipError(
+                  "SANDBOX_UNAVAILABLE",
+                  `The ${report.adapter} sandbox backend did not save a snapshot within ${SNAPSHOT_DEADLINE_MS / 1000} s`,
+                  { component: "sandbox", retryable: true },
+                ),
               );
-            signal.addEventListener("abort", onAbort, { once: true });
+            deadline.addEventListener("abort", onDeadline, { once: true });
+          });
+          // A cancel stops the wait, not the backend: the service may finish
+          // the snapshot anyway, so it is deleted once its id arrives.
+          const pending = sandboxSnapshot({ signal: deadline });
+          const cancelled = new Promise<never>((_, reject) => {
+            onCancel = () => {
+              reject(new Error("aborted"));
+              pending
+                .then((saved) =>
+                  typeof saved?.id === "string"
+                    ? session.backend.deleteSnapshot?.(saved.id, {
+                        signal: AbortSignal.timeout(SNAPSHOT_DELETE_MS),
+                      })
+                    : undefined,
+                )
+                .catch(() => undefined);
+            };
+            cancel?.addEventListener("abort", onCancel, { once: true });
           });
           try {
-            const saved = await Promise.race([
-              sandboxSnapshot({ signal }),
-              expired,
-            ]);
+            const saved = await Promise.race([pending, expired, cancelled]);
             if (typeof saved?.id !== "string")
               throw new Error("the backend returned no snapshot id");
             return { id: saved.id };
           } finally {
-            if (onAbort) signal.removeEventListener("abort", onAbort);
+            if (onDeadline) deadline.removeEventListener("abort", onDeadline);
+            if (onCancel) cancel?.removeEventListener("abort", onCancel);
           }
         }
       : undefined;

@@ -192,11 +192,19 @@ export class HostRefresh {
     return readFile(absolute).catch(() => "gone" as const);
   }
 
-  /** The baseline and working blob of each path in the sandbox; "-" is absent. */
+  /**
+   * The baseline blob of each path in the sandbox, its working file hashed as
+   * git would store it (`work`, compared with the baseline), and its raw bytes
+   * (`raw`, compared with the host file); "-" is absent. The two hashes differ
+   * when the sandbox converts line endings (core.autocrlf=input).
+   */
   async #sandboxState(
     paths: readonly string[],
-  ): Promise<Map<string, { base: string; work: string }>> {
-    const state = new Map<string, { base: string; work: string }>();
+  ): Promise<Map<string, { base: string; work: string; raw: string }>> {
+    const state = new Map<
+      string,
+      { base: string; work: string; raw: string }
+    >();
     for (let i = 0; i < paths.length; i += BATCH) {
       const batch = paths.slice(i, i + BATCH);
       const { exitCode, output } = await run(
@@ -205,17 +213,17 @@ export class HostRefresh {
         [
           `for p in ${batch.map(quote).join(" ")}; do`,
           `b=$(git rev-parse -q --verify "${this.#seeded.baselineCommit}:$p" 2>/dev/null || echo -)`,
-          'if [ -f "$p" ] && [ ! -L "$p" ]; then w=$(git hash-object --no-filters -- "$p" 2>/dev/null || echo -); else w=-; fi',
-          'printf "%s\\t%s\\t%s\\n" "$b" "$w" "$p"',
+          'if [ -f "$p" ] && [ ! -L "$p" ]; then w=$(git hash-object -- "$p" 2>/dev/null || echo -); r=$(git hash-object --no-filters -- "$p" 2>/dev/null || echo -); else w=-; r=-; fi',
+          'printf "%s\\t%s\\t%s\\t%s\\n" "$b" "$w" "$r" "$p"',
           "done",
         ].join("\n"),
       );
       if (exitCode !== 0)
         throw new Error(`the sandbox did not answer (exit ${exitCode})`);
       for (const line of output.split("\n")) {
-        const [base, work, ...rest] = line.replace(/\r$/, "").split("\t");
+        const [base, work, raw, ...rest] = line.replace(/\r$/, "").split("\t");
         const path = rest.join("\t");
-        if (base && work && path) state.set(path, { base, work });
+        if (base && work && raw && path) state.set(path, { base, work, raw });
       }
     }
     return state;
@@ -265,7 +273,7 @@ export class HostRefresh {
     for (const [path, data] of content) {
       const there = state.get(path);
       if (!there) continue; // unanswered: retried next turn
-      if (there.work === blobId(data)) settled.push(path);
+      if (there.raw === blobId(data)) settled.push(path);
       else if (there.work === there.base) upload.push(path);
       else conflicts.push(path);
     }

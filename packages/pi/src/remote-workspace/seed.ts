@@ -472,13 +472,11 @@ export async function seedRemoteWorkspace(
             signal ? { signal } : {},
           ))
         ) {
-          await sandbox.files.write(
-            join(root, path),
-            await readFile(absolute),
-            {
-              ...(signal ? { signal } : {}),
-            },
-          );
+          // The write and the baseline go together or not at all: a file left
+          // there without its baseline would read as the agent's own and come
+          // back in the patch. Esc stops before the write, not between them.
+          signal?.throwIfAborted();
+          await sandbox.files.write(join(root, path), await readFile(absolute));
           // A temporary index builds the new baseline tree, so the work the
           // agent already staged is not folded into the baseline.
           const mode = modeOf(path, info);
@@ -500,7 +498,6 @@ export async function seedRemoteWorkspace(
             {
               onData: (chunk) => output.push(chunk.toString("utf8")),
               timeout: EXTRACT_TIMEOUT_SECONDS,
-              ...(signal ? { signal } : {}),
             },
           );
           const commit = output.join("").trim().split(/\s+/).at(-1) ?? "";

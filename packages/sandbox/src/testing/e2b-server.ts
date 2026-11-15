@@ -23,8 +23,8 @@ export interface E2bScript {
   create?: number;
   /** Status of `POST /sandboxes/{id}/snapshots`; default 201 with a new id. */
   snapshot?: number;
-  /** Never answer `POST /sandboxes/{id}/snapshots`, as a save that takes minutes. */
-  holdSnapshot?: boolean;
+  /** Answer `POST /sandboxes/{id}/snapshots` only once this settles, as a save that takes minutes. */
+  holdSnapshot?: Promise<void>;
   /** Status when a sandbox is created from a snapshot id; default: found, or 404. */
   createFromSnapshot?: number;
   /** The snapshots that exist (ids `snap-1`, `snap-2`, ...), and those deleted. */
@@ -100,7 +100,17 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
       return void response.end();
     }
     if (request.method === "POST" && path === "/sandboxes/sbx1/snapshots") {
-      if (script.holdSnapshot) return;
+      const held = script.holdSnapshot;
+      delete script.holdSnapshot;
+      if (held)
+        return void held.then(() => {
+          const { snapshots = [], deletedSnapshots = [] } = script;
+          const id = `snap-${snapshots.length + deletedSnapshots.length + 1}`;
+          snapshots.push(id);
+          response.setHeader("Content-Type", "application/json");
+          response.statusCode = 201;
+          response.end(JSON.stringify({ snapshotID: id, names: [] }));
+        });
       response.setHeader("Content-Type", "application/json");
       response.statusCode = script.snapshot ?? 201;
       if (response.statusCode >= 400)

@@ -815,6 +815,42 @@ describe.skipIf(!posix || asRoot)("host edits during a remote session", () => {
     expect(patch).not.toContain("new file");
   });
 
+  it("sends a host edit and deletion of CRLF files under core.autocrlf=true, with no conflict", async () => {
+    // The machine's own git config must not decide the case.
+    const global = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+    try {
+      const { session, workspace, remote, stateDir, tool } = await open({
+        setup: (workspace) => {
+          execFileSync("git", ["config", "core.autocrlf", "true"], {
+            cwd: workspace,
+          });
+          writeFileSync(join(workspace, "crlf.txt"), "one\r\ntwo\r\n");
+          writeFileSync(join(workspace, "gone.txt"), "bye\r\n");
+        },
+      });
+      const h = hooks(session);
+      await read(tool("read"), "notes.txt");
+      writeFileSync(join(workspace, "crlf.txt"), "ONE\r\ntwo\r\n");
+      rmSync(join(workspace, "gone.txt"));
+      await h.turn();
+      expect(readFileSync(join(remote, "crlf.txt"), "utf8")).toBe(
+        "ONE\r\ntwo\r\n",
+      );
+      expect(existsSync(join(remote, "gone.txt"))).toBe(false);
+      expect(
+        h.notices.some((l) =>
+          l.includes("changed on this machine and in the sandbox"),
+        ),
+      ).toBe(false);
+      await h.end();
+      expect(patchOf(stateDir, workspace)).toBe("");
+    } finally {
+      if (global === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = global;
+    }
+  });
+
   it("applies a host deletion the agent did not touch", async () => {
     const { session, workspace, remote, stateDir, tool } = await open();
     const h = hooks(session);

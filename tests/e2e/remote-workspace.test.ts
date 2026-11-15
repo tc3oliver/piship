@@ -501,7 +501,9 @@ describe.skipIf(!posix)("remote workspace round trips", () => {
     const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}\n`);
     const s = await session(
       { "a.txt": lines.join("") },
-      "sed 's/^line1\\r$/SANDBOX/' a.txt | tr -d '\\r' > t && mv t a.txt",
+      // printf, not sed: on the Windows runner a sed pattern ending in \r
+      // did not match, so the sandbox changed nothing.
+      `printf '${["SANDBOX", ...lines.slice(1).map((l) => l.trim())].join("\\n")}\\n' > a.txt`,
       { autocrlf: "true", checkout: true },
     );
     const local = s.read("a.txt").toString().replace("line12\r\n", "LOCAL\r\n");
