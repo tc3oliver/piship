@@ -903,6 +903,8 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
+    // State with no marker of this distribution's: not the earlier install's.
+    rmSync(stateDir(), { recursive: true, force: true });
     mkdirSync(stateDir(), { recursive: true });
     await expect(installDistribution(a.archive)).rejects.toThrow(
       /State already exists for acmepi/,
@@ -923,12 +925,34 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await expect(installDistribution(a.archive)).resolves.toMatchObject({
       active: "1.0.0",
     });
-    // The install owns the state now; it is not test-created any more.
+    // The install owns the state now; it is not test-created any more, and
+    // its own marker names it, so installing again adopts it as this
+    // distribution's, not as test state.
     expect(existsSync(testStateMarker({ value: ID }))).toBe(false);
     uninstallDistribution(ID);
-    await expect(installDistribution(a.archive)).rejects.toThrow(
-      /State already exists for acmepi/,
-    );
+    expect(isTestCreatedState({ value: ID })).toBe(false);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+  });
+
+  it("reinstalls over the state its own sessions wrote, with no update in between", async () => {
+    const a = await release("1.0.0");
+    await installDistribution(a.archive);
+    // A session writes state; nothing activates another release.
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    uninstallDistribution(ID);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    // A marker an earlier activation wrote is kept, not rewritten by install.
+    uninstallDistribution(ID);
+    const marker = join(stateDir(), "state.json");
+    const recorded = JSON.parse(readFileSync(marker, "utf8"));
+    write(marker, JSON.stringify({ ...recorded, version: "0.9.0" }));
+    await installDistribution(a.archive);
+    expect(JSON.parse(readFileSync(marker, "utf8")).version).toBe("0.9.0");
   });
 
   it("adopts the state of an earlier install of this distribution without --use-existing-state, and no other", async () => {

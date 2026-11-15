@@ -343,15 +343,12 @@ describe("CLI", () => {
     // repeat it. A personal distribution signs in inside Pi.
     expect(installed.stderr).not.toContain("unqualified local build");
     expect(installed.stdout).toContain("sign in inside Pi with /login");
-    // Once installed, the state is the install's: after an uninstall it is
-    // pre-existing state like any other and must be adopted explicitly.
+    // Once installed, the state is the install's: its marker names the
+    // distribution, so installing again after an uninstall adopts it as this
+    // distribution's own, with no flag and no longer as test state.
     expect(run(manager, "uninstall", "first-run").status).toBe(0);
     const again = run(manager, "install", payload);
-    expect(again.status).toBe(1);
-    expect(again.stderr).toContain("State already exists");
-    expect(
-      run(manager, "install", payload, "--use-existing-state").status,
-    ).toBe(0);
+    expect(again.status, again.stderr).toBe(0);
   }, 360000);
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";
@@ -829,12 +826,9 @@ describe("CLI", () => {
           env: movedEnv,
           encoding: "utf8",
         });
-      expect(movedCommand("install", spare).stderr).toContain(
-        "State already exists",
-      );
-      expect(
-        movedCommand("install", spare, "--use-existing-state").status,
-      ).toBe(0);
+      // The earlier install's marker names mypi: its state is adopted.
+      const moved = movedCommand("install", spare);
+      expect(moved.status, moved.stderr).toBe(0);
       const movedLauncher = join(
         temp,
         "moved-bin",
