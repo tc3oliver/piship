@@ -2,6 +2,7 @@
 // the sandbox as tar.gz parts, which are extracted and committed as a baseline the
 // session's changes are later diffed against.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
@@ -453,9 +454,29 @@ export async function seedRemoteWorkspace(
   const relativeOf = (hostPath: string) =>
     relative(root, hostPath).split(sep).join("/");
   let chain: Promise<unknown> = Promise.resolve();
-  // Paths written by an adopt whose baseline did not follow: a file there is
-  // ours, not the agent's, so a retry writes it and makes the baseline again.
-  const unbaselined = new Set<string>();
+  // Paths written by an adopt whose baseline did not follow, with the digest
+  // of what was written: while the file there still holds it, it is ours and
+  // a retry writes it and makes the baseline again.
+  const unbaselined = new Map<string, string>();
+  const digest = (data: Buffer) =>
+    createHash("sha256").update(data).digest("hex");
+  // Whether the adopt writes the file: not over a file the agent made there.
+  const ours = async (path: string, signal: AbortSignal | undefined) => {
+    const target = join(root, path);
+    const options = signal ? { signal } : {};
+    const written = unbaselined.get(path);
+    if (written === undefined)
+      return !(await sandbox.files.stat(target, options));
+    const there = await sandbox.files.read(target, options).catch((error) => {
+      if ((error as { code?: string })?.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (there === undefined || digest(there) === written) return true;
+    // The agent replaced it: keep the agent's file, unbaselined, so the patch
+    // holds the agent's content and never the host's.
+    unbaselined.delete(path);
+    return false;
+  };
   const lookup: SeedLookup = {
     skipped: (hostPath) => reasons.get(relativeOf(hostPath)),
     adopt: (hostPath, signal) => {
@@ -469,19 +490,14 @@ export async function seedRemoteWorkspace(
             `${path} cannot be copied to the sandbox (a non-regular file, or over the ${size(fileCap)} per-file cap); read it on the host instead`,
           );
         // The agent may already have made its own file there: keep it.
-        if (
-          unbaselined.has(path) ||
-          !(await sandbox.files.stat(
-            join(root, path),
-            signal ? { signal } : {},
-          ))
-        ) {
+        if (await ours(path, signal)) {
           // The write and the baseline go together or not at all: a file left
           // there without its baseline would read as the agent's own and come
           // back in the patch. Esc stops before the write, not between them.
           signal?.throwIfAborted();
-          unbaselined.add(path);
-          await sandbox.files.write(join(root, path), await readFile(absolute));
+          const data = await readFile(absolute);
+          unbaselined.set(path, digest(data));
+          await sandbox.files.write(join(root, path), data);
           // A temporary index builds the new baseline tree, so the work the
           // agent already staged is not folded into the baseline.
           const mode = modeOf(path, info);
