@@ -9,7 +9,7 @@ import {
   PiShipError,
   REDACTED_TEXT,
   redact,
-  SECRET_KEY_PATTERN,
+  isSecretKey,
   SecretValue,
 } from "@piship/contracts";
 
@@ -101,7 +101,7 @@ function detailValue(
 ): string | number | boolean | null | undefined {
   if (value instanceof SecretValue) return undefined;
   if (value === null) return null;
-  if (SECRET_KEY_PATTERN.test(key)) return REDACTED_TEXT;
+  if (isSecretKey(key)) return REDACTED_TEXT;
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string")

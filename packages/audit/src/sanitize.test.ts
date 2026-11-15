@@ -19,6 +19,31 @@ const ALL_CAPTURE: AuditCapture = {
 };
 const fixed = () => new Date("2026-09-28T10:00:00.000Z");
 
+describe("audit detail keys that name a credential", () => {
+  it("never records the value, whatever the key's spelling", () => {
+    const sentinel = "zQ9fAuditSentinel0123456";
+    const sanitized = sanitizeEvent(
+      {
+        event: "tool.request",
+        distribution: "acme",
+        resource: "read",
+        detail: {
+          GITHUB_TOKEN: sentinel,
+          AWS_SECRET_ACCESS_KEY: sentinel,
+          githubToken: sentinel,
+          dbPassword: sentinel,
+          maxTokens: 4096,
+          keyId: "k1",
+        },
+      },
+      NO_CONTENT_CAPTURE,
+      fixed,
+    );
+    expect(JSON.stringify(sanitized)).not.toContain(sentinel);
+    expect(sanitized.detail).toMatchObject({ maxTokens: 4096, keyId: "k1" });
+  });
+});
+
 describe("tool execution detail (v0.9)", () => {
   it("keeps the source, parent, exposure, and pre-policy failure of a tool call", () => {
     const detail = {

@@ -111,6 +111,19 @@ describe("SecretValue", () => {
       fill("secret "),
       `password${fill(" ")}`,
       fill('"secret"'),
+      fill("a://u:"),
+      `http://${fill("u:")}`,
+      `http://u:${fill("p")}`,
+      fill("--token "),
+      `--password${fill(" ")}x`,
+      fill("npm_"),
+      fill("sk_live_"),
+      fill("hf_"),
+      fill("ya29."),
+      fill("SG.a"),
+      fill("pypi-"),
+      fill("dckr_pat_"),
+      fill("passphrase "),
       fill("-----BEGIN "),
       fill("-----BEGIN PRIVATE KEY-----"),
       `-----BEGIN ${fill("A")}`,
@@ -152,6 +165,22 @@ describe("SecretValue", () => {
     const rendered = `${formatError(error)} ${JSON.stringify(error)}`;
     expect(rendered).not.toContain(secret.reveal());
     expect(error.code).toBe("CREDENTIAL_ACQUIRE_FAILED");
+  });
+
+  it("keeps a credential out of an error's detail under an environment-style key, however deep", () => {
+    const sentinel = "zQ9fDetailSentinel0123";
+    const error = new PiShipError("CONFIG_INVALID", "bad environment", {
+      sanitizedDetail: {
+        environment: {
+          GITHUB_TOKEN: sentinel,
+          list: [{ DB_PASSWORD: sentinel }],
+        },
+        proxy: "http://user:zQ9fDetailSentinel0123@proxy:8080",
+      },
+    });
+    expect(`${formatError(error)} ${JSON.stringify(error)}`).not.toContain(
+      sentinel,
+    );
   });
 
   it("parses Retry-After seconds and HTTP-dates and shows the wait", () => {
