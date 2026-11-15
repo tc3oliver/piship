@@ -15,9 +15,9 @@ import {
   runLogin,
   runLogout,
   runRollback,
-  runUninstall,
   runSandbox,
   runtimeStateDirectory,
+  runUninstall,
   runUpdate,
   sessionAutoApproveTarget,
   yoloRefusal,
@@ -34,6 +34,12 @@ import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import {
+  deferredDownloadNotice,
+  deferredToolDownloads,
+  installSearchTools,
+  searchToolProblemNotice,
+} from "./launch/search-tools.js";
+import {
   isSubagentChild,
   launchOutput,
   parseSubagentChild,
@@ -44,12 +50,6 @@ import {
   authenticateSubagentChild,
   type SubagentParent,
 } from "./launch/subagent-owner.js";
-import {
-  deferredDownloadNotice,
-  deferredToolDownloads,
-  installSearchTools,
-  searchToolProblemNotice,
-} from "./launch/search-tools.js";
 
 export {
   type GovernedRuntime,
@@ -317,7 +317,7 @@ export async function launchPiDistribution(
             : ""
         }${
           metadata.governance.manifest.sandbox.workspace === "remote"
-            ? "\n  sandbox pull [--yes | --discard]"
+            ? "\n  sandbox pull [--diff] [--yes] | --discard"
             : ""
         }${
           metadata.deployment.mode === "personal"

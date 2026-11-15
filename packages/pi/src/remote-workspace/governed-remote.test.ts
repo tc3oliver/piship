@@ -20,6 +20,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ManagedFetch } from "@piship/contracts";
 import {
   remoteWorkspacePaths,
@@ -361,7 +362,7 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     await session.close();
     expect(readFileSync(paths.patch, "utf8")).toContain("second.txt");
     expect(stderr.mock.calls.join("")).toContain(
-      "The sandbox changed 2 files. Review and apply them with: unit sandbox pull",
+      "2 files changed in the sandbox; run unit sandbox pull to bring them to this machine",
     );
   });
 
@@ -411,10 +412,85 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await session.close();
     const line = stderr.mock.calls.join("");
-    expect(line).toContain("an earlier session's changes are still waiting");
-    expect(line).toContain("sandbox pull --discard");
-    expect(line).toContain(parked.dir);
+    expect(line).toContain(
+      "An earlier session's changes are waiting too; run unit sandbox pull once for each.",
+    );
+    expect(line).not.toContain("move");
     expect(readFileSync(slot.patch)).toEqual(earlier);
+  });
+
+  it("tells the user at start about unapplied changes, and the agent about the remote workspace", async () => {
+    const { session, workspace, stateDir } = await open();
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const extension = governanceHooks(session);
+    (typeof extension === "function" ? extension : extension.factory)({
+      on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+        handlers.set(event, handler),
+      registerCommand: () => {},
+    } as never);
+    const notices: string[] = [];
+    const ui = {
+      ...context(),
+      ui: {
+        ...context().ui,
+        notify: (message: string) => notices.push(message),
+      },
+    };
+    const sections: Record<string, string> = {};
+    handlers.get("before_agent_start")?.(
+      { systemPromptOptions: { sections } },
+      ui,
+    );
+    expect(sections.piship_remote_workspace).toMatch(
+      /remote sandbox at \/home\/user\/workspace.*`unit sandbox pull`.*single baseline commit.*Changes made by subagents are discarded/,
+    );
+
+    for (const [state, id, files] of [
+      [stateDir, "one", 2],
+      [join(stateDir, "sandbox-workspace-parked", "two"), "two", 1],
+    ] as const)
+      writeRemoteWorkspaceCheckpoint(state, workspace, Buffer.from("P\n"), {
+        session: id,
+        baseHead: null,
+        files,
+      });
+    handlers.get("session_start")?.({}, ui);
+    handlers.get("session_start")?.({}, ui);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(
+      /^Earlier sandbox changes to 3 files \(saved .* UTC\) are still waiting\. Run unit sandbox pull first; this session starts from your host files\.$/,
+    );
+  });
+
+  it("tells a subagent child its changes are discarded", async () => {
+    const { session } = await open({ subagent: true });
+    const sections: Record<string, string> = {};
+    const extension = governanceHooks(session);
+    (typeof extension === "function" ? extension : extension.factory)({
+      on: (event: string, handler: (event: unknown) => unknown) => {
+        if (event === "before_agent_start")
+          handler({ systemPromptOptions: { sections } });
+      },
+      registerCommand: () => {},
+    } as never);
+    expect(sections.piship_remote_workspace).toContain(
+      "You are a subagent: your file changes are discarded when you finish, so report findings or patch text instead of editing files.",
+    );
+  });
+
+  it("offers background tasks, which run in the sandbox", async () => {
+    const { tool } = await open();
+    const started = await tool("task_start")({ command: "echo hi" }, {
+      ...context(),
+      sessionManager: SessionManager.inMemory(tmpdir()),
+    } as never);
+    expect(JSON.stringify(started)).not.toContain("run on this machine");
+    expect(log().commands.some((command) => command.includes("tar -xf"))).toBe(
+      true,
+    );
   });
 
   it("never lets a subagent child write the parent's checkpoint", async () => {

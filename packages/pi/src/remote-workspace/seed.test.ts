@@ -2,11 +2,11 @@ import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   closeSync,
-  ftruncateSync,
-  openSync,
   existsSync,
+  ftruncateSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   realpathSync,
   rmSync,

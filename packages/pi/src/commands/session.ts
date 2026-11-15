@@ -22,7 +22,6 @@ import {
 import { refreshInstalledLauncher, sweepDistributionData } from "@piship/core";
 import { acceptanceFailure } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
-import { saveMetrics } from "../launch-metrics.js";
 import {
   type LaunchContext,
   type PreparedAccess,
@@ -32,6 +31,7 @@ import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
 import { liveOwner, SessionOwnership } from "../launch/session-file.js";
 import type { SubagentChild } from "../launch/subagent-child.js";
+import { saveMetrics } from "../launch-metrics.js";
 import { endInsideDispose } from "./dispose-hook.js";
 
 /**

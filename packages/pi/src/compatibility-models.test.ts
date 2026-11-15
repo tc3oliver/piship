@@ -23,19 +23,19 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { ManagedFetch } from "@piship/contracts";
+import { type ActivatedAccess, resolveLock } from "@piship/core";
+import type { CatalogModel } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
-  governModelRuntime,
   type GovernedRuntime,
+  governModelRuntime,
   type ModelPolicy,
   PI_VIRTUAL_MODEL_API,
   type VirtualModelRule,
 } from "./governance.js";
-import type { ManagedFetch } from "@piship/contracts";
-import { type ActivatedAccess, resolveLock } from "@piship/core";
-import type { CatalogModel } from "@piship/schema";
 import { GovernanceSession } from "./governance-session.js";
 import type { LaunchContext, PreparedAccess } from "./launch/context.js";
 import { modelPolicy } from "./launch/governance.js";

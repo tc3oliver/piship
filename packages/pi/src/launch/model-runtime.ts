@@ -7,8 +7,8 @@ import { PiShipError } from "@piship/contracts";
 import type { ActivatedAccess } from "@piship/core";
 import type { CatalogModel } from "@piship/schema";
 import {
-  governModelRuntime,
   type GovernedRuntime,
+  governModelRuntime,
   type ModelPolicy,
   type VirtualModelRule,
 } from "../governance.js";
