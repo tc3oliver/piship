@@ -52,6 +52,10 @@ The CLI supports `init [--personal | --managed]`, `dev`, `validate`, `migrate [-
 
 Keep Pi dependencies exact-pinned and confined to `packages/pi`. Use public exports only. Update the pin, the sibling pins (the root `package.json` `overrides`, from `PI_SIBLING_PINS` in `@piship/pi`), [compatibility metadata](compatibility/pi.json), lockfile, and affected tests together. Every temporary workaround needs a regression test. Follow the [compatibility contract](docs/compatibility.md#compatibility-contract) and the [support policy](docs/support-policy.md).
 
+## Dependency updates
+
+Each example's `piship.lock` records the versions of PiShip's runtime dependencies, so any dependency bump, a Dependabot pull request included, leaves them stale and `npm run check:budgets` and the example tests fail. After `npm ci && npm run build` on the branch, run `npm run relock:examples` and commit the changed locks. `undici` is also a security override in the root `package.json`, which must equal `packages/contracts`' version (`tests/compatibility/pi.test.ts`); Dependabot does not edit overrides, so it proposes undici in a pull request of its own, where the override is bumped by hand.
+
 ## Changesets and pull requests
 
 Packages are at `0.13.0`, private, and not published. Record every user-visible change in the newest section of [CHANGELOG.md](CHANGELOG.md) (`Unreleased`), and mark a behavior change as such. Changesets are optional until a publish policy exists; if you add one, use patch for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change, and never run `changeset version`. `piship/v1` and `piship-lock/v1` are stable: an additive, backward-compatible change keeps them, and a breaking change needs a new major schema ([support policy](docs/support-policy.md)). The `piship/v1alpha1` through `piship/v1alpha6` schemas are experimental and stay accepted for the migration window; every example uses `piship/v1`. Every user-visible restriction needs its row in the [UX contract](docs/ux-contract.md). The [changesets README](.changeset/README.md) records this decision.

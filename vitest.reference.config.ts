@@ -18,26 +18,37 @@ const INCLUDE = [
 // The Reference E2E workflow runs one group per runner, each with a Docker of
 // its own. Every stack publishes on ports Docker chooses, so two runs on one
 // host do not meet either (concurrent-stacks.test.ts). The groups are
-// balanced by the durations measured on ubuntu-latest, stack start and stop
-// included (about 205 s each). A file no group names runs in the last group,
-// so a new file is never left out.
-const SHARDS: readonly (readonly string[])[] = [
-  // 205 s
-  ["tests/enterprise-reference/gateway-evidence.test.ts"],
-  // 165 s and 30 s
+// balanced by the test durations measured on ubuntu-latest (run 43649136440),
+// about 200 s each before stack setup. Every file is named once
+// (tests/reference-shards.test.ts); a file no group names still runs in the
+// last group, so a new file is never left out.
+export const SHARDS: readonly (readonly string[])[] = [
+  // 192 s and 4 s
+  [
+    "tests/enterprise-reference/gateway-evidence.test.ts",
+    "tests/enterprise-reference/killed-project-recovery.test.ts",
+  ],
+  // 69, 41, 44 and 42 s
   [
     "examples/enterprise-reference/tests/distribution-flow.test.ts",
     "examples/enterprise-reference/tests/sandbox.test.ts",
+    "tests/enterprise-reference/identity-renewal.test.ts",
+    "tests/enterprise-reference/gateway-rate-limits.test.ts",
   ],
-  // 110 s and 95 s
+  // 61, 86 and 69 s
   [
     "examples/enterprise-reference/tests/user-switching.test.ts",
     "tests/enterprise-reference/usage-continuity.test.ts",
+    "tests/enterprise-reference/team-member-budget.test.ts",
   ],
-  // The rest: security-oidc, team-member-budget, gateway-rate-limits and
-  // gateway-concurrency-entitlement, about 45 s each; live-provider skips
-  // itself without its provider variables.
-  [],
+  // 100, 89 and 46 s; live-provider skips itself without its provider
+  // variables.
+  [
+    "tests/enterprise-reference/concurrent-stacks.test.ts",
+    "tests/enterprise-reference/security-oidc.test.ts",
+    "tests/enterprise-reference/gateway-concurrency-entitlement.test.ts",
+    "examples/enterprise-reference/tests/live-provider.test.ts",
+  ],
 ];
 
 /**
@@ -63,7 +74,7 @@ function shard(value: string | undefined) {
       throw new Error(`vitest.reference.config.ts names ${file} twice`);
   }
   return index === count
-    ? { include: INCLUDE, exclude: named }
+    ? { include: INCLUDE, exclude: SHARDS.slice(0, -1).flat() }
     : { include: [...(SHARDS[index - 1] ?? [])], exclude: [] };
 }
 

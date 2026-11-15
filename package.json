@@ -22,6 +22,7 @@
     "test:compatibility": "vitest run packages/pi/src/compatibility.test.ts packages/pi/src/compatibility-models.test.ts packages/pi/src/compatibility-search-tools.test.ts packages/pi/src/compatibility-packages.test.ts tests/compatibility",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:budgets": "node scripts/check-budgets.mjs",
+    "relock:examples": "node scripts/relock-examples.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm run build && npm test"
   },
   "overrides": {

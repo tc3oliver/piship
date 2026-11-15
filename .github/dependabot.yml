@@ -7,7 +7,10 @@ updates:
     groups:
       routine-npm:
         patterns: ["*"]
-        exclude-patterns: ["@earendil-works/pi-*", "@earendil-works/chord"]
+        # undici is also pinned in the root package.json overrides, which
+        # Dependabot does not edit; alone, its pull request is the only one
+        # needing that hand edit (CONTRIBUTING.md, Dependency updates).
+        exclude-patterns: ["@earendil-works/pi-*", "@earendil-works/chord", "undici"]
         update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "*"
