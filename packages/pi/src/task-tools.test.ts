@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AuditEvent, ManagedFetch } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 import { taskTools } from "./task-tools.js";
@@ -376,8 +376,12 @@ describe.runIf(tasksRun)("a background task", () => {
   it("refuses a ninth running task before it asks anything", async () => {
     const { call, events } = await open();
     const { ctx } = context();
-    for (let index = 0; index < 8; index++)
-      await call("task_start")({ command: "sleep 30" }, ctx);
+    // Each start waits a second for first output, so start the eight together.
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        call("task_start")({ command: "sleep 30" }, ctx),
+      ),
+    );
     const prompted = context(true);
     expect(
       await outcome(call("task_start")({ command: "true" }, prompted.ctx)),
@@ -415,7 +419,16 @@ describe.runIf(tasksRun)("a background task", () => {
       "stuck",
     ) as string;
     expect(records()).toHaveLength(1);
-    await session.backgroundTasks?.stop(stuck);
+    // stop() gives a runner that ignores it a few seconds (stopWaitMs) before
+    // it reports the task as unstoppable; run only that wait on a fake clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const stopping = session.backgroundTasks?.stop(stuck);
+      await vi.advanceTimersByTimeAsync(5000);
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+    }
     expect(records()).toHaveLength(1);
     release();
     await session.backgroundTasks?.settled(stuck);
