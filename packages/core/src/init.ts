@@ -278,5 +278,9 @@ ${initGovernance(false, id)}release:
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
   // `build`, `dev` and `test` write dist/<id> under the directory they run in.
   writeFileSync(join(root, ".gitignore"), "dist/\n");
+  // piship.lock records the digest of every resource's bytes. Git for Windows
+  // checks text out as CRLF by default, which would make the lock stale on
+  // every Windows clone of a repository written on another system.
+  writeFileSync(join(root, ".gitattributes"), "* text=auto eol=lf\n");
   return join(root, "piship.yaml");
 }

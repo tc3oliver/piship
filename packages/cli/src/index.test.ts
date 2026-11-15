@@ -1150,6 +1150,10 @@ describe("init", () => {
     const directory = join(temp, "ignored");
     await runCli(["init", directory], { stdout: () => {}, stderr: () => {} });
     expect(readFileSync(join(directory, ".gitignore"), "utf8")).toBe("dist/\n");
+    // The lock holds byte digests, so a Windows checkout must not turn LF into CRLF.
+    expect(readFileSync(join(directory, ".gitattributes"), "utf8")).toBe(
+      "* text=auto eol=lf\n",
+    );
   });
 
   it("puts a missing resource at its line in the manifest", async () => {

@@ -49,8 +49,13 @@ export function setVariablesHint(
   platform: NodeJS.Platform = process.platform,
 ): string {
   const powershell = !env.SHELL && (platform === "win32" || !!env.PSModulePath);
-  if (powershell)
-    return `PowerShell (lasts for this window):\n${names.map((name) => `  $env:${name}="..."`).join("\n")}`;
+  if (powershell) {
+    const shell = `PowerShell (lasts for this window):\n${names.map((name) => `  $env:${name}="..."`).join("\n")}`;
+    // Windows cannot tell cmd.exe from PowerShell by environment, so offer both.
+    return platform === "win32"
+      ? `${shell}\ncmd.exe (lasts for this window):\n${names.map((name) => `  set ${name}=...`).join("\n")}\nFor every new window, use setx in cmd.exe (setx ${names[0]} "...") or the Environment Variables dialog.`
+      : shell;
+  }
   return `sh, bash or zsh:\n${names.map((name) => `  export ${name}=...`).join("\n")}`;
 }
 
