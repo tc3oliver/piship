@@ -258,12 +258,12 @@ describe("launch integrity verification", () => {
     writeFileSync(join(dir, path), body);
   };
   /** A minimal, internally consistent piship/v1alpha6 payload. */
-  function buildPayload(verifyAtLaunch?: boolean): string {
+  function buildPayload(verifyAtLaunch?: boolean, id = "mypi"): string {
     const dir = mkdtempSync(join(tmpdir(), "piship-launch-"));
     dirOf.add(dir);
     const manifest = {
       schema: "piship/v1alpha6",
-      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      app: { id, name: "MyPi", command: id, version: "1.0.0" },
       runtime: {
         pi: "1.0.0",
         ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
@@ -276,9 +276,11 @@ describe("launch integrity verification", () => {
     const lock = {
       manifest: {
         schema: "piship/v1alpha6",
-        sha256: digest(readManifest(join(dir, "piship.yaml"))),
+        sha256: digest(
+          readManifest(join(dir, "piship.yaml"), { existing: true }),
+        ),
       },
-      app: readManifest(join(dir, "piship.yaml")).app,
+      app: readManifest(join(dir, "piship.yaml"), { existing: true }).app,
       runtime: { npmLockSha256: hash("{}\n") },
       ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
     } as unknown as DistributionLock;
@@ -300,6 +302,23 @@ describe("launch integrity verification", () => {
     for (const dir of dirOf) rmSync(dir, { recursive: true, force: true });
     dirOf.clear();
   });
+
+  it.each(["aux", "con", "a".repeat(70)])(
+    "still verifies a payload built when id %s was allowed, while authoring refuses it",
+    (id) => {
+      const dir = buildPayload(undefined, id);
+      expect(() =>
+        verifyPayloadContents(dir, {
+          requireTarget: true,
+          verifyContents: true,
+        }),
+      ).not.toThrow();
+      // The same manifest read for authoring (lock, build, validate) is refused.
+      expect(() => readManifest(join(dir, "piship.yaml"))).toThrow(
+        /app\.(id|command)/,
+      );
+    },
+  );
 
   it("full verification fails when a payload file is tampered with", () => {
     const dir = buildPayload();
