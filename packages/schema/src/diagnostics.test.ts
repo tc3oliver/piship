@@ -49,6 +49,34 @@ describe("manifest diagnostics", () => {
     );
   });
 
+  it.each([
+    ["id", "con"],
+    ["id", "nul"],
+    ["command", "com1"],
+    ["command", "lpt9"],
+    ["id", "a".repeat(65)],
+  ])(
+    "refuses app.%s %s: Windows device names and long names",
+    (field, value) => {
+      const text = valid
+        .replace("id: mypi", field === "id" ? `id: ${value}` : "id: mypi")
+        .replace(
+          "command: mypi",
+          field === "command" ? `command: ${value}` : "command: mypi",
+        );
+      const error = failure(manifest(text));
+      expect(error.message).toContain(`app.${field}`);
+      expect(error.message).toMatch(/reserved device name|at most 64/);
+    },
+  );
+
+  it("accepts a 64-character id and the names that merely start like a device", () => {
+    for (const id of ["a".repeat(64), "console", "nullable", "com10", "lpt"])
+      expect(() =>
+        readManifest(manifest(valid.replaceAll("mypi", id))),
+      ).not.toThrow();
+  });
+
   it("refuses an alias that refers to itself instead of overflowing the stack", () => {
     const error = failure(manifest("a: &a [*a]\n"));
     expect(error.message).toContain("refers to a node that contains it");

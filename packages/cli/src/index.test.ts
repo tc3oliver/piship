@@ -1210,6 +1210,20 @@ describe("init", () => {
     );
   });
 
+  it.each(["con", "nul", "com3", "a".repeat(65)])(
+    "init refuses the id %s, which validate would refuse too",
+    async (id) => {
+      const stderr: string[] = [];
+      const status = await runCli(["init", join(temp, "idtest"), "--id", id], {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      });
+      expect(status).toBe(1);
+      expect(stderr.join("\n")).toMatch(/cannot be a distribution id/);
+      expect(existsSync(join(temp, "idtest"))).toBe(false);
+    },
+  );
+
   it("keeps the build output out of git", async () => {
     const directory = join(temp, "ignored");
     await runCli(["init", directory], { stdout: () => {}, stderr: () => {} });

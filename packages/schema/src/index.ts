@@ -330,6 +330,25 @@ function name(value: unknown, path: string): string {
     );
   return result;
 }
+/** Windows device names: a file called con.cmd or nul.exe is the device. */
+const RESERVED_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
+/**
+ * Why a name that is well formed still cannot be a distribution id or command:
+ * it becomes a file name (`<command>.cmd`) and a directory name on every
+ * system, so it is short and not a Windows device name.
+ */
+export function distributionNameProblem(value: string): string | undefined {
+  if (value.length > 64) return "Use at most 64 characters";
+  if (RESERVED_DEVICE_NAME.test(value))
+    return `"${value}" is a reserved device name on Windows, where the command would be ${value}.cmd; choose another`;
+  return undefined;
+}
+function commandName(value: unknown, path: string): string {
+  const result = name(value, path);
+  const problem = distributionNameProblem(result);
+  if (problem) throw new ManifestError("unsafe path/name", path, problem);
+  return result;
+}
 function displayText(value: unknown, path: string): string {
   const result = string(value, path);
   if (
@@ -535,7 +554,7 @@ export function parseManifest(value: unknown): Manifest {
           root,
           deploymentMode,
           variables,
-          { id: name(app?.id, "app.id") },
+          { id: commandName(app?.id, "app.id") },
           v5,
           v6,
         );
@@ -571,9 +590,9 @@ export function parseManifest(value: unknown): Manifest {
       : attempt(() => piVersion(runtime.pi));
   const appFields = app
     ? {
-        id: attempt(() => name(app.id, "app.id")),
+        id: attempt(() => commandName(app.id, "app.id")),
         name: attempt(() => displayText(app.name, "app.name")),
-        command: attempt(() => name(app.command, "app.command")),
+        command: attempt(() => commandName(app.command, "app.command")),
         version: attempt(() => {
           const version = string(app.version, "app.version");
           if (!/^[0-9]/.test(version) || validSemver(version) === null)
