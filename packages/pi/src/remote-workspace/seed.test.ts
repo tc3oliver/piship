@@ -579,8 +579,8 @@ describe("seedRemoteWorkspace", () => {
       await expect(
         seeded.lookup?.adopt(join(project, "ask.txt")),
       ).rejects.toThrow(/copying ask\.txt into the sandbox failed/);
-      // The upload landed; its baseline did not.
-      expect(existsSync(join(remote, "ask.txt"))).toBe(true);
+      // The upload landed and its baseline did not, so the upload was removed.
+      expect(existsSync(join(remote, "ask.txt"))).toBe(false);
       expect(seeded.baselineCommit).toBe(first);
       expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
       await seeded.lookup?.adopt(join(project, "ask.txt"));
@@ -640,6 +640,104 @@ describe("seedRemoteWorkspace", () => {
       expect(
         sh(remote, "diff", "--cached", seeded.baselineCommit),
       ).not.toContain("host secret");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "removes a partly written adopt and treats what is left as its own on the retry",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "host secret, all of it\n");
+      const base = fakeSandbox();
+      let partial = true;
+      let removable = true;
+      const sandbox: SeedSandbox = {
+        ...base,
+        files: {
+          ...base.files,
+          stat: async (path) =>
+            existsSync(join(remote, path.slice(project.length + 1)))
+              ? { type: "file", size: 0 }
+              : undefined,
+          // The upload dies halfway, leaving a truncated copy.
+          write: async (path, data, options) => {
+            if (partial && path.endsWith("ask.txt")) {
+              partial = false;
+              await base.files.write(path, data.subarray(0, 4), options);
+              throw new Error("connection reset");
+            }
+            await base.files.write(path, data, options);
+          },
+        },
+        // The first clean-up fails too, as on a dropped connection.
+        exec: (command, cwd, options) => {
+          if (command.startsWith("rm -f") && removable === false)
+            return Promise.reject(new Error("connection reset"));
+          return base.exec(command, cwd, options);
+        },
+      };
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      const first = seeded.baselineCommit;
+      removable = false;
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow(/connection reset/);
+      // The clean-up failed: the truncated copy is still there.
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("host");
+      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
+      removable = true;
+      await seeded.lookup?.adopt(join(project, "ask.txt"));
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe(
+        "host secret, all of it\n",
+      );
+      expect(seeded.baselineCommit).not.toBe(first);
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "removes the upload when an adopt fails, so a never-retried file stays out of the patch",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "host secret\n");
+      const base = fakeSandbox();
+      let partial = true;
+      const sandbox: SeedSandbox = {
+        ...base,
+        files: {
+          ...base.files,
+          write: async (path, data, options) => {
+            if (partial && path.endsWith("ask.txt")) {
+              partial = false;
+              await base.files.write(path, data.subarray(0, 4), options);
+              throw new Error("connection reset");
+            }
+            await base.files.write(path, data, options);
+          },
+        },
+      };
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow(/connection reset/);
+      expect(existsSync(join(remote, "ask.txt"))).toBe(false);
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("");
     },
   );
 

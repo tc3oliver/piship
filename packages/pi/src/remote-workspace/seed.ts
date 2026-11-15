@@ -457,7 +457,9 @@ export async function seedRemoteWorkspace(
   // Paths written by an adopt whose baseline did not follow, with the digest
   // of what was written: while the file there still holds it, it is ours and
   // a retry writes it and makes the baseline again.
+  // INCOMPLETE: the write itself failed, so whatever is there is ours too.
   const unbaselined = new Map<string, string>();
+  const INCOMPLETE = "incomplete";
   const digest = (data: Buffer) =>
     createHash("sha256").update(data).digest("hex");
   // Whether the adopt writes the file: not over a file the agent made there.
@@ -467,6 +469,7 @@ export async function seedRemoteWorkspace(
     const written = unbaselined.get(path);
     if (written === undefined)
       return !(await sandbox.files.stat(target, options));
+    if (written === INCOMPLETE) return true;
     const there = await sandbox.files.read(target, options).catch((error) => {
       if ((error as { code?: string })?.code === "ENOENT") return undefined;
       throw error;
@@ -497,37 +500,53 @@ export async function seedRemoteWorkspace(
           signal?.throwIfAborted();
           const data = await readFile(absolute);
           unbaselined.set(path, digest(data));
-          await sandbox.files.write(join(root, path), data);
-          // A temporary index builds the new baseline tree, so the work the
-          // agent already staged is not folded into the baseline.
-          const mode = modeOf(path, info);
-          const output: string[] = [];
-          const done = await sandbox.exec(
-            [
-              "set -e",
-              'idx="$(git rev-parse --git-dir)/piship-baseline.idx"',
-              'export GIT_INDEX_FILE="$idx"',
-              'rm -f "$idx"',
-              `git read-tree ${seeded.baselineCommit}`,
-              ...(mode === 0o755 ? [`chmod 755 -- ${quote(path)}`] : []),
-              `git add -f -- ${quote(path)}`,
-              'tree="$(git write-tree)"',
-              'rm -f "$idx"',
-              'git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$tree" -m piship-baseline',
-            ].join("\n"),
-            root,
-            {
-              onData: (chunk) => output.push(chunk.toString("utf8")),
-              timeout: EXTRACT_TIMEOUT_SECONDS,
-            },
-          );
-          const commit = output.join("").trim().split(/\s+/).at(-1) ?? "";
-          if (done.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(commit))
-            throw new Error(
-              `copying ${path} into the sandbox failed (exit ${done.exitCode}); try the read again`,
+          try {
+            await sandbox.files.write(join(root, path), data).catch((error) => {
+              unbaselined.set(path, INCOMPLETE);
+              throw error;
+            });
+            // A temporary index builds the new baseline tree, so the work the
+            // agent already staged is not folded into the baseline.
+            const mode = modeOf(path, info);
+            const output: string[] = [];
+            const done = await sandbox.exec(
+              [
+                "set -e",
+                'idx="$(git rev-parse --git-dir)/piship-baseline.idx"',
+                'export GIT_INDEX_FILE="$idx"',
+                'rm -f "$idx"',
+                `git read-tree ${seeded.baselineCommit}`,
+                ...(mode === 0o755 ? [`chmod 755 -- ${quote(path)}`] : []),
+                `git add -f -- ${quote(path)}`,
+                'tree="$(git write-tree)"',
+                'rm -f "$idx"',
+                'git -c user.name=piship -c user.email=piship@invalid -c commit.gpgsign=false commit-tree "$tree" -m piship-baseline',
+              ].join("\n"),
+              root,
+              {
+                onData: (chunk) => output.push(chunk.toString("utf8")),
+                timeout: EXTRACT_TIMEOUT_SECONDS,
+              },
             );
-          seeded.baselineCommit = commit;
-          unbaselined.delete(path);
+            const commit = output.join("").trim().split(/\s+/).at(-1) ?? "";
+            if (done.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(commit))
+              throw new Error(
+                `copying ${path} into the sandbox failed (exit ${done.exitCode}); try the read again`,
+              );
+            seeded.baselineCommit = commit;
+            unbaselined.delete(path);
+          } catch (error) {
+            // Best effort: an unbaselined host copy left there would reach the
+            // patch even if the read is never retried. A failed removal stays
+            // in `unbaselined` and is decided again on the next call.
+            await sandbox
+              .exec(`rm -f -- ${quote(path)}`, root, {
+                onData: () => {},
+                timeout: 30,
+              })
+              .catch(() => undefined);
+            throw error;
+          }
         }
         reasons.delete(path);
       };
