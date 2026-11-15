@@ -11,7 +11,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PISHIP_VERSION } from "./compatibility.js";
-import { DIFF_TESTS, diffLocks, formatDiff } from "./diff/index.js";
+import {
+  DIFF_TESTS,
+  diffLocks,
+  formatDiff,
+  formatGovernanceSummary,
+} from "./diff/index.js";
 import type { DistributionLock } from "./index.js";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
@@ -600,6 +605,36 @@ describe("diffLocks", () => {
     expect(by("sandbox remote.cache")).toMatchObject({ after: "snapshot" });
     sandbox.remote = { setup: "npm ci", cache: "off" };
     expect(by("sandbox remote.cache")).toBeUndefined();
+  });
+
+  it("summarizes for the person what an update changes in governance", () => {
+    const after = clone(base);
+    after.app.version = "1.1.0";
+    after.governance.manifest.sandbox.required = false;
+    after.governance.manifest.policy.default = "allow";
+    expect(formatGovernanceSummary(diffLocks(base, after), "acmecode")).toBe(
+      [
+        "What changes for you in 1.1.0:",
+        "  changed policy default (ask -> allow): Relaxes policy default.",
+        "  changed sandbox required (true -> false): Sandbox no longer fails closed when unavailable.",
+      ].join("\n"),
+    );
+    // A version change alone is not one.
+    const bumped = clone(base);
+    bumped.app.version = "1.1.0";
+    expect(formatGovernanceSummary(diffLocks(base, bumped), "acmecode")).toBe(
+      "",
+    );
+    // Past the limit, the last line counts the rest.
+    const many = formatGovernanceSummary(
+      diffLocks(base, after),
+      "acmecode",
+      1,
+    ).split("\n");
+    expect(many).toEqual([
+      "What changes for you in 1.1.0:",
+      "  and 2 more; run acmecode policy explain <action> <resource> to see how a rule applies",
+    ]);
   });
 
   it("flags a sandbox that no longer fails closed", () => {

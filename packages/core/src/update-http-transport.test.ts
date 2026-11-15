@@ -161,7 +161,10 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
     served = channelDir;
     process.env.ACMEPI_UPDATE_SOURCE = SOURCE;
     expect(await update(["--check"])).toContain("1.1.0 is available");
-    expect(await update()).toContain("Updated AcmePi 1.0.0 -> 1.1.0");
+    const updated = await update();
+    expect(updated).toContain("Updated AcmePi 1.0.0 -> 1.1.0");
+    // The two releases differ only in version: no governance summary.
+    expect(updated).not.toContain("What changes for you");
   });
 
   it("installs, updates, and rolls back over a plain-HTTP internal channel through the proxy", async () => {

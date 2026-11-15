@@ -508,11 +508,11 @@ function unusedVariables(manifest: Manifest): ValidationDiagnostic[] {
 /**
  * Tools a session has before any extension loads: Pi's built-in tools
  * (PiShip governs read, write, edit, and bash and excludes the rest),
- * PiShip's own, and the Codemode and tool search tools. Kept beside
- * PISHIP_TOOLS and UNGOVERNED_PI_BASE_TOOLS in packages/pi, which this
- * package cannot import.
+ * PiShip's own, and the Codemode and tool search tools. A copy of the
+ * lists in packages/pi (governance/exposure.ts), which this package cannot
+ * import; exposure.test.ts there fails when the two differ.
  */
-const KNOWN_TOOLS = new Set([
+export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   "read",
   "write",
   "edit",

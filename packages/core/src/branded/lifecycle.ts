@@ -23,12 +23,15 @@ import {
 } from "../access/index.js";
 import {
   type AccessEvent,
+  diffLocks,
+  formatGovernanceSummary,
   formatMigrationSummary,
   progressReporter,
   readInstallReceipt,
   rollbackDistribution,
   updateDistribution,
 } from "../index.js";
+import { activeLock } from "../install/receipt.js";
 import {
   type BrandedContext,
   auditAccess,
@@ -313,6 +316,16 @@ export async function runUpdate(
   ctx.out(
     `Updated ${app.name} ${result.from} -> ${result.to} (${result.channel}, signed by ${result.keyId}). ${result.from} is kept for ${app.command} rollback; sessions and settings were preserved.`,
   );
+  // Best effort: the update is committed whatever this summary does.
+  try {
+    const summary = formatGovernanceSummary(
+      diffLocks(ctx.metadata, activeLock(readInstallReceipt(app.id))),
+      app.command,
+    );
+    if (summary) ctx.out(summary);
+  } catch {
+    // No summary.
+  }
 }
 
 export async function runRollback(ctx: BrandedContext): Promise<void> {
