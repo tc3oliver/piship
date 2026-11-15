@@ -16,6 +16,29 @@ export function pishipCommand(script: string | undefined = process.argv[1]) {
 }
 
 /**
+ * `value` double-quoted as the Windows argv rules (CommandLineToArgvW, the C
+ * runtime) read it back: a run of backslashes before a `"` or the closing
+ * quote is doubled, else `\"` would escape the quote and swallow what
+ * follows; an embedded `"` is written `""`.
+ */
+function windowsQuoted(value: string): string {
+  let out = "";
+  let slashes = 0;
+  for (const char of value) {
+    if (char === "\\") {
+      slashes++;
+      continue;
+    }
+    out +=
+      char === '"'
+        ? `${"\\".repeat(slashes * 2)}""`
+        : `${"\\".repeat(slashes)}${char}`;
+    slashes = 0;
+  }
+  return `"${out}${"\\".repeat(slashes * 2)}"`;
+}
+
+/**
  * One argument of a command PiShip prints for the user to paste, quoted only
  * when it has to be. On Windows it is double-quoted, which both cmd.exe and
  * PowerShell read as one argument; single quotes mean nothing to cmd.exe.
@@ -27,9 +50,7 @@ export function shellArg(
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform === "win32")
-    return /^[\w+=:./\\~-]+$/.test(value)
-      ? value
-      : `"${value.replaceAll('"', '""')}"`;
+    return /^[\w+=:./\\~-]+$/.test(value) ? value : windowsQuoted(value);
   return /^[\w@%+=:,./-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", "'\\''")}'`;
