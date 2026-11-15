@@ -87,6 +87,7 @@ import { formatError, redact } from "@piship/contracts";
 import {
   launchWarnings,
   runtimeVariableUse,
+  referencedVariables,
   readManifest,
   ManifestError,
   type Manifest,
@@ -128,7 +129,7 @@ const summaries = {
 } as const;
 const commands = Object.keys(summaries) as (keyof typeof summaries)[];
 /** Usage of the commands that take one target and fixed options. */
-const simpleUsage: Record<string, string> = {
+export const simpleUsage: Record<string, string> = {
   init: "init <directory> [--personal | --managed] [--id <id>]",
   dev: "dev <manifest> [--smoke]",
   validate: "validate <manifest>",
@@ -141,8 +142,181 @@ const simpleUsage: Record<string, string> = {
   migrate: "migrate <manifest> [--write | --check]",
   config: "config explain <manifest|artifact|id>",
 };
+/**
+ * One line per option, shown by `piship <command> --help` under the usage.
+ * A test checks that the options named here are exactly the ones in the usage
+ * line and the parser, so help cannot list a flag the command refuses.
+ */
+export const optionHelp: Record<string, Record<string, string>> = {
+  init: {
+    "--personal": "Write a personal distribution (the default)",
+    "--managed":
+      "Write a company template that asks for anything unlisted (OIDC, broker, gateway)",
+    "--id <id>":
+      "Distribution id and command name, when the directory name is not a valid one",
+  },
+  dev: { "--smoke": "Run headlessly once instead of opening the command" },
+  build: {
+    "--rebuild": "Assemble again even when the output for this lock exists",
+    "--reclaim-staging": "Remove staging directories left by a killed run",
+  },
+  test: {
+    "--model-request": "Also send one prompt through the configured model",
+    "--json": "Print the summary as JSON",
+  },
+  inspect: { "--json": "Print the full locked configuration as JSON" },
+  doctor: { "--json": "Print the report as JSON" },
+  purge: {
+    "--yes": "Confirm that the state is deleted",
+    "--without-logout":
+      "Purge without signing out; the credential stays live until it expires",
+  },
+  migrate: {
+    "--write": "Apply the migration to the file (the default is a dry run)",
+    "--check":
+      "Only classify the manifest: exit 0 migratable, 1 needs review, 3 cannot",
+  },
+  install: {
+    "--runtime <runtime-archive>":
+      "The runtime archive a Company Pack is bound to",
+    "--sha256 <hex>": "Refuse the archive unless it has this SHA-256",
+    "--expect-key sha256:<fingerprint>":
+      "Refuse unless the update trust pins this key; repeat for several",
+    "--use-existing-state": "Keep state an earlier install left behind",
+    "--replace":
+      "Replace an installed copy of this distribution; its state is kept",
+  },
+  release: {
+    "--out <dir>": "Directory for the release (default: ./dist)",
+    "--channel <name>": "Update channel the release belongs to",
+    "--rebuild": "Assemble again even when the output for this lock exists",
+    "--reclaim-staging": "Remove staging directories left by a killed run",
+  },
+  "runtime-release": {
+    "--out <dir>": "Directory for the runtime release",
+    "--rebuild": "Assemble again even when the output exists",
+    "--reclaim-staging": "Remove staging directories left by a killed run",
+  },
+  pack: {
+    "--runtime <runtime-archive>":
+      "An official runtime archive to bind; repeat once per platform",
+    "--out <dir>": "Directory for the Company Pack",
+    "--reclaim-staging": "Remove staging directories left by a killed run",
+  },
+  "verify-release": {
+    "--sha256 <hex>": "Refuse the archive unless it has this SHA-256",
+    "--json": "Print the result as JSON",
+  },
+  diff: { "--json": "Print the differences as JSON" },
+  update: {
+    "--channel <name>":
+      "Switch to this channel (it must be one the distribution allows)",
+    "--from <dir|url>":
+      "Update source; defaults to the one the manifest declares",
+    "--check":
+      "Report the available version and migration result without installing",
+    "--accept-review": "Proceed when the migration check asks for review",
+  },
+  uninstall: {
+    "--purge": "Also delete the state (needs --yes)",
+    "--yes": "Confirm the purge",
+    "--without-logout":
+      "Purge without signing out; the credential stays live until it expires",
+    "--remove-edited-shim":
+      "Remove the command file even though it was edited after install",
+  },
+  repair: {
+    "--runtime <runtime-archive>":
+      "The runtime archive a Company Pack is bound to",
+  },
+  keygen: {
+    "--id <key-id>": "Name of the key, pinned in the trust root",
+    "--encrypt": "Protect the private key with a passphrase",
+    "--passphrase-env <NAME>":
+      "Read the passphrase from this environment variable",
+    "--passphrase-stdin": "Read the passphrase from standard input",
+    "--force-in-worktree": "Write the key even inside a git work tree",
+  },
+  "sign-channel": {
+    "--channel <name>": "Channel the metadata is for",
+    "--key <private-key-file>": "Signing key; repeat to sign with several",
+    "--key-id <id>": "Id of the key given before it; repeat in the same order",
+    "--passphrase-env <NAME>":
+      "Read the key passphrase from this environment variable",
+    "--passphrase-stdin": "Read the key passphrase from standard input",
+    "--previous-key <id>=<public-key>": "Previous channel key to keep trusting",
+    "--sequence <n>": "Metadata sequence number",
+    "--expires-days <n>": "Days until the metadata expires",
+    "--runtime <archive|dir>":
+      "A runtime archive or directory to list; repeatable",
+  },
+  "trust-root": {
+    "--key <id>=<public-key>": "A public key to include (init); repeatable",
+    "--root-keys <id,...>": "Ids allowed to sign the root",
+    "--channel-keys <id,...>": "Ids allowed to sign channels",
+    "--root-threshold <n>": "Root signatures required",
+    "--channel-threshold <n>": "Channel signatures required",
+    "--expires <timestamp>": "When the root expires",
+    "--expires-days <n>": "Days until the root expires",
+    "--manifest <piship.yaml>": "Manifest whose trust is being updated (next)",
+    "--sign <id>=<private-key-file>":
+      "Signing key for the next root; repeatable",
+    "--add-key <id>=<public-key>":
+      "Publish this key in the next root; repeatable",
+    "--remove-key <id>": "Drop this key from the next root; repeatable",
+    "--passphrase-env <NAME>":
+      "Read the key passphrase from this environment variable",
+    "--passphrase-stdin": "Read the key passphrase from standard input",
+  },
+  reproducibility: {
+    "--out <report.json>": "Write the comparison report here",
+  },
+};
+/** `piship <command> --help`: usage, the summary, then each option. */
+function commandHelp(command: string): string {
+  const usage = lifecycleCommands[command]?.usage ?? simpleUsage[command];
+  const options = Object.entries(optionHelp[command] ?? {});
+  const width = Math.max(0, ...options.map(([name]) => name.length)) + 2;
+  return `Usage: piship ${usage}\n\n${summaries[command as keyof typeof summaries]}.${
+    options.length
+      ? `\n\nOptions:\n${options.map(([name, text]) => `  ${name.padEnd(width)}${text}`).join("\n")}`
+      : ""
+  }`;
+}
+/** What was wrong with the arguments, when a token can be named. */
+function argumentProblem(
+  command: string,
+  known: readonly string[],
+  valued: readonly string[],
+  maxPositional: number,
+  args: readonly string[],
+): string | undefined {
+  let positional = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (valued.includes(arg)) {
+      if (args[index + 1] === undefined) return `${arg} needs a value.`;
+      index += 1;
+    } else if (arg.startsWith("-") && !known.includes(arg))
+      // Only the name: `--passphrase=<secret>` must not reach the terminal.
+      return `Unknown option ${arg.split("=")[0]} for ${command}.`;
+    else if (!arg.startsWith("-") && positional >= maxPositional)
+      // Not echoed either: a stray word may be a secret typed in the wrong place.
+      return `${command} takes ${maxPositional === 0 ? "no" : `at most ${maxPositional}`} argument${maxPositional === 1 ? "" : "s"}.`;
+    else if (!arg.startsWith("-")) positional += 1;
+  }
+  return undefined;
+}
+/** The usage line, led by what was wrong when that is known. */
+function usageError(
+  command: string,
+  usage: string | undefined,
+  problem: string | undefined,
+): string {
+  return `${problem ? `${problem}\n` : ""}Usage: piship ${usage}`;
+}
 /** Commands with named options: positional count and accepted flags. */
-const lifecycleCommands: Record<
+export const lifecycleCommands: Record<
   string,
   {
     readonly usage: string;
@@ -591,10 +765,12 @@ async function prepareLock(
   const progress = progressReporter(output.stderr);
   await downloadSearchToolArchives(target, progress ? { progress } : {});
   lockManifest(target);
+  // `target` is the manifest file; the lock sits beside it.
+  const lockPath = join(dirname(target), "piship.lock");
   output.stderr(
     status === "missing"
-      ? `Created ${join(target, "piship.lock")}: none existed, so nothing was reviewed yet. Review it and commit it with piship.yaml.`
-      : `Relocked ${join(target, "piship.lock")}: the manifest or a resource changed since it was written.`,
+      ? `Created ${lockPath}: none existed, so nothing was reviewed yet. Review it and commit it with piship.yaml.`
+      : `Relocked ${lockPath}: the manifest or a resource changed since it was written.`,
   );
 }
 /**
@@ -616,7 +792,17 @@ export function installNext(receipt: {
     // The receipt is enough to start the command; only the advice is generic.
   }
   if (lock?.deployment.mode === "managed") {
-    const variables = lock.access?.variables ?? [];
+    // updates.source is read only by `update`; launch and login never need it.
+    const source = JSON.stringify(lock.updates?.source ?? "");
+    const elsewhere = JSON.stringify({
+      ...lock.access,
+      governance: lock.governance,
+    });
+    const variables = (lock.access?.variables ?? []).filter(
+      (name) =>
+        !referencedVariables(source).includes(name) ||
+        referencedVariables(elsewhere).includes(name),
+    );
     return `Next: ${variables.length ? `set ${variables.join(", ")} in the environment that starts ${command}, then ` : ""}run ${command} login, then ${command}. ${command} --help lists its commands.`;
   }
   if (
@@ -635,6 +821,12 @@ export async function runCli(
   output: CliOutput,
 ): Promise<number> {
   const [command, target, ...rest] = args;
+  // `piship help [command]` is `piship [command] --help`.
+  if (command === "help")
+    return runCli(
+      target === undefined ? ["--help"] : [target, "--help"],
+      output,
+    );
   if (command === undefined || command === "--help" || command === "-h") {
     const width = Math.max(...commands.map((item) => item.length)) + 2;
     output.stdout(
@@ -656,15 +848,29 @@ export async function runCli(
   const lifecycle = lifecycleCommands[command];
   // --help anywhere after the command asks for help; it is never a target.
   if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
-    output.stdout(
-      `Usage: piship ${lifecycle?.usage ?? simpleUsage[command]}\n\n${summaries[command as keyof typeof summaries]}.`,
-    );
+    output.stdout(commandHelp(command));
     return 0;
   }
   if (lifecycle) {
     const parsed = parseArguments(lifecycle, args.slice(1));
     if (!parsed) {
-      output.stderr(`Usage: piship ${lifecycle.usage}`);
+      output.stderr(
+        usageError(
+          command,
+          lifecycle.usage,
+          argumentProblem(
+            command,
+            [
+              ...lifecycle.values,
+              ...lifecycle.flags,
+              ...(lifecycle.repeated ?? []),
+            ],
+            [...lifecycle.values, ...(lifecycle.repeated ?? [])],
+            lifecycle.positional[1],
+            args.slice(1),
+          ),
+        ),
+      );
       return 2;
     }
     try {
@@ -680,7 +886,13 @@ export async function runCli(
   }
   if (command === "config") {
     if (target !== "explain" || rest.length !== 1) {
-      output.stderr(`Usage: piship ${simpleUsage.config}`);
+      output.stderr(
+        usageError(
+          command,
+          simpleUsage.config,
+          argumentProblem(command, [], [], 2, args.slice(1)),
+        ),
+      );
       return 2;
     }
   } else if (
@@ -694,14 +906,38 @@ export async function runCli(
     return 2;
   } else if (command === "init") {
     if (!target || !parseInitOptions(rest)) {
-      output.stderr(`Usage: piship ${simpleUsage.init}`);
+      output.stderr(
+        usageError(
+          command,
+          simpleUsage.init,
+          argumentProblem(
+            command,
+            ["--personal", "--managed", "--id"],
+            ["--id"],
+            1,
+            args.slice(1),
+          ),
+        ),
+      );
       return 2;
     }
   } else if (
     !target ||
     (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
   ) {
-    output.stderr(`Usage: piship ${simpleUsage[command]}`);
+    output.stderr(
+      usageError(
+        command,
+        simpleUsage[command],
+        argumentProblem(
+          command,
+          (allowedOptions[command] ?? []).flatMap((item) => item.split(" ")),
+          [],
+          1,
+          args.slice(1),
+        ),
+      ),
+    );
     return 2;
   }
   if (!target) return 2;

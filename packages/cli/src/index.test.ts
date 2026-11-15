@@ -13,7 +13,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markLocalBuild, PI_VERSION, shellArg } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installNext, runCli, runtimeCacheLine } from "./index.js";
+import {
+  installNext,
+  lifecycleCommands,
+  optionHelp,
+  runCli,
+  runtimeCacheLine,
+  simpleUsage,
+} from "./index.js";
 
 const ID = "mypi";
 let temp: string;
@@ -636,6 +643,90 @@ describe("help", () => {
     expect(result.stdout).toContain("[--sha256 <hex>]");
     expect(result.stdout).toContain("[--expect-key sha256:<fingerprint>]...");
     expect(result.stdout).toContain("[--use-existing-state]");
+  });
+
+  it("lists every option of every command with a description", async () => {
+    const optionsIn = (text: string) =>
+      new Set(text.match(/--[a-z][a-z0-9-]*/g) ?? []);
+    for (const command of [
+      ...Object.keys(simpleUsage),
+      ...Object.keys(lifecycleCommands),
+    ]) {
+      const usage = lifecycleCommands[command]?.usage ?? simpleUsage[command];
+      // The usage line, the help table and the parser name the same options.
+      const documented = optionsIn(
+        Object.keys(optionHelp[command] ?? {}).join(" "),
+      );
+      expect(documented, command).toEqual(optionsIn(usage ?? ""));
+      const spec = lifecycleCommands[command];
+      if (spec)
+        for (const flag of [
+          ...spec.values,
+          ...spec.flags,
+          ...(spec.repeated ?? []),
+        ])
+          expect(documented, `${command} ${flag}`).toContain(flag);
+      const help = (await run([command, "--help"])).stdout;
+      for (const [name, text] of Object.entries(optionHelp[command] ?? {}))
+        expect(help, `${command} ${name}`).toMatch(
+          new RegExp(
+            `^ {2}${name.replace(/[|\\^$.*+?()[\]{}]/g, "\\$&")} +${text.slice(0, 12)}`,
+            "m",
+          ),
+        );
+    }
+  });
+
+  it("answers piship help and piship help <command> like --help", async () => {
+    expect(await run(["help"])).toEqual(await run(["--help"]));
+    expect(await run(["help", "build"])).toEqual(
+      await run(["build", "--help"]),
+    );
+    expect((await run(["help", "build"])).stdout).toContain("--rebuild");
+  });
+});
+
+describe("argument errors", () => {
+  async function run(args: string[]) {
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: () => {},
+      stderr: (m) => stderr.push(m),
+    });
+    return { status, stderr: stderr.join("\n") };
+  }
+
+  it.each([
+    [
+      ["build", "m.yaml", "--bogus"],
+      "Unknown option --bogus for build.\nUsage: piship build ",
+    ],
+    [
+      ["init", "d", "--bogus"],
+      "Unknown option --bogus for init.\nUsage: piship init ",
+    ],
+    [
+      ["validate", "a", "b"],
+      "validate takes at most 1 argument.\nUsage: piship validate ",
+    ],
+    [
+      ["release", "m.yaml", "--out"],
+      "--out needs a value.\nUsage: piship release ",
+    ],
+    [
+      ["install", "a", "--nope"],
+      "Unknown option --nope for install.\nUsage: piship install ",
+    ],
+  ])("names what %j got wrong before the usage", async (args, expected) => {
+    const result = await run(args);
+    expect(result.status).toBe(2);
+    expect(result.stderr.startsWith(expected)).toBe(true);
+  });
+
+  it("prints only the usage when nothing specific is wrong", async () => {
+    expect((await run(["validate"])).stderr).toMatch(
+      /^Usage: piship validate /,
+    );
   });
 });
 
@@ -1317,7 +1408,7 @@ describe("docs/agent-setup.md", () => {
         stderr: () => {},
       });
       expect(status, `piship ${command}`).toBe(0);
-      for (const option of rest?.match(/--[a-z][a-z-]*/g) ?? [])
+      for (const option of rest?.match(/--[a-z][a-z0-9-]*/g) ?? [])
         expect(help.join("\n"), `piship ${command} ${option}`).toContain(
           option,
         );
@@ -1465,6 +1556,21 @@ describe("what to do after an install", () => {
     expect(next).toContain(
       "set ACME_ISSUER, ACME_GATEWAY in the environment that starts acme, then run acme login",
     );
+  });
+
+  it("leaves out a variable that only update reads", () => {
+    const next = installNext(
+      receipt({
+        deployment: { mode: "managed" },
+        access: {
+          variables: ["ACME_ISSUER", "ACME_SOURCE", "ACME_SHARED"],
+          identity: { oidc: { issuer: "${ACME_ISSUER}/${ACME_SHARED}" } },
+        },
+        updates: { source: "${ACME_SOURCE}/${ACME_SHARED}" },
+      }),
+    );
+    expect(next).toContain("set ACME_ISSUER, ACME_SHARED in the environment");
+    expect(next).not.toContain("ACME_SOURCE");
   });
 
   it("skips the variables when a managed distribution has none", () => {

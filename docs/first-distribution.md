@@ -19,6 +19,8 @@ export PISHIP="node $HOME/src/piship/packages/cli/dist/bin.js"
 
 The "Next:" lines the CLI prints already name the command that is running, so you can also copy them as they are.
 
+`$PISHIP --help` lists the commands, and `$PISHIP help <command>` (or `<command> --help`) lists that command's options, one line each. A mistyped option is named in the error before the usage line.
+
 ## 1. Create it
 
 ```bash
