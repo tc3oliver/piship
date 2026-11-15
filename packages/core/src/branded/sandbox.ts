@@ -225,7 +225,7 @@ export async function runSandbox(
   if (args[0] === "pull") return sandboxPull(ctx, args.slice(1));
   throw new PiShipError(
     "CONFIG_INVALID",
-    "Unknown sandbox command; use sandbox login, sandbox logout, or sandbox pull [--yes|--discard]. The secret is never given on the command line: sandbox login prompts for it or reads the first line of stdin",
+    "Unknown sandbox command; use sandbox login, sandbox logout, or sandbox pull [--diff] [--yes] | --discard. The secret is never given on the command line: sandbox login prompts for it or reads the first line of stdin",
     { component: "sandbox" },
   );
 }

@@ -82,6 +82,19 @@ describe("sandbox pull", () => {
     expect(out.join("\n")).toMatch("No sandbox changes are waiting");
   });
 
+  it("shows the diff only with --diff", async () => {
+    checkpoint();
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(out.join("\n")).toMatch("run sandbox pull --diff");
+    expect(out.join("\n")).not.toContain("+three");
+  });
+
+  it("prints the full diff with --diff", async () => {
+    checkpoint();
+    await runSandbox(ctx, ["pull", "--diff", "--yes"]);
+    expect(out.join("\n")).toContain("+three");
+  });
+
   it("applies a validated patch with --yes, commits nothing, and archives it", async () => {
     checkpoint();
     const head = git(repo, "rev-parse", "HEAD").toString();

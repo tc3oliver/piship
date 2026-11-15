@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
 import {
-  crossCheckRemoteWorkspacePatch,
   readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   validateRemoteWorkspacePatch,
@@ -38,15 +37,8 @@ function git(
 
 /** Terminal control characters in untrusted text would let a patch rewrite the screen. */
 function printable(text: string): string {
-  return [...text]
-    .map((c) => {
-      const code = c.charCodeAt(0);
-      const control =
-        (code < 0x20 && c !== "\n" && c !== "\t") ||
-        (code >= 0x7f && code <= 0x9f);
-      return control ? "?" : c;
-    })
-    .join("");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "?");
 }
 
 function failure(message: string, userAction?: string): PiShipError {
@@ -73,10 +65,14 @@ export async function sandboxPull(
 ): Promise<void> {
   const yes = flags.includes("--yes");
   const discard = flags.includes("--discard");
-  if (flags.some((f) => f !== "--yes" && f !== "--discard") || (yes && discard))
+  const showDiff = flags.includes("--diff");
+  if (
+    flags.some((f) => f !== "--yes" && f !== "--discard" && f !== "--diff") ||
+    (discard && (yes || showDiff))
+  )
     throw failure(
-      "Usage: sandbox pull [--yes] or sandbox pull --discard",
-      `Run ${ctx.metadata.app.command} sandbox pull with at most one of --yes and --discard`,
+      "Usage: sandbox pull [--diff] [--yes] or sandbox pull --discard",
+      `Run ${ctx.metadata.app.command} sandbox pull with --discard alone, or with --diff and --yes`,
     );
   const top = await git(process.cwd(), ["rev-parse", "--show-toplevel"]).catch(
     () => undefined,
@@ -109,39 +105,14 @@ export async function sandboxPull(
     ctx.out("The sandbox session made no changes.");
     return;
   }
-  const result = validateRemoteWorkspacePatch(
+  const result = await validateRemoteWorkspacePatch(
     checkpoint.patch,
     checkpoint.meta.protectedPaths ?? [],
+    { cwd: root },
   );
   if (!result.ok)
     throw failure(
       `The sandbox patch is refused as a whole and nothing was applied: ${result.refused.slice(0, 5).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,
-      "Inspect the sandbox session, then run sandbox pull --discard",
-    );
-  // git's own reading of the patch must agree with ours.
-  const numstat = await git(
-    root,
-    ["apply", "--numstat", "-z", "-"],
-    checkpoint.patch,
-  );
-  const summary = await git(
-    root,
-    ["apply", "--summary", "-"],
-    checkpoint.patch,
-  );
-  if (numstat.code !== 0 || summary.code !== 0)
-    throw failure(
-      `The sandbox patch does not parse: ${printable(numstat.stderr || summary.stderr).trim()}`,
-      "Run sandbox pull --discard",
-    );
-  const disagreement = crossCheckRemoteWorkspacePatch(
-    numstat.stdout,
-    summary.stdout.toString("latin1"),
-    checkpoint.meta.protectedPaths ?? [],
-  );
-  if (disagreement.length > 0)
-    throw failure(
-      `The sandbox patch is refused as a whole and nothing was applied: ${disagreement.slice(0, 5).join("; ")}`,
       "Inspect the sandbox session, then run sandbox pull --discard",
     );
   const stat = await git(root, ["apply", "--stat", "-"], checkpoint.patch);
@@ -151,7 +122,11 @@ export async function sandboxPull(
       "Run sandbox pull --discard",
     );
   ctx.out(printable(stat.stdout.toString("utf8")).trimEnd());
-  ctx.out(printable(checkpoint.patch.toString("utf8")));
+  if (showDiff) ctx.out(printable(checkpoint.patch.toString("utf8")));
+  else
+    ctx.out(
+      "The full diff is not shown; run sandbox pull --diff to review it before applying.",
+    );
   if (!yes) {
     if (!process.stdin.isTTY)
       throw failure(
