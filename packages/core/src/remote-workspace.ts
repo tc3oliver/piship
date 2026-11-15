@@ -31,6 +31,11 @@ export interface RemoteWorkspaceMeta {
    * host, never by the sandbox. Absent in a checkpoint written before it.
    */
   readonly protectedPaths?: readonly string[];
+  /** The manifest's `sandbox.remote.pull`, copied verbatim; absent means defaults. */
+  readonly pull?: {
+    readonly protectedFiles?: "skip" | "refuse";
+    readonly confirm?: "optional" | "required";
+  };
 }
 
 function realOrResolved(path: string): string {
@@ -70,6 +75,7 @@ export function writeRemoteWorkspaceCheckpoint(
     readonly files: number;
     readonly createdAt?: string;
     readonly protectedPaths?: readonly string[];
+    readonly pull?: RemoteWorkspaceMeta["pull"];
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
@@ -83,6 +89,7 @@ export function writeRemoteWorkspaceCheckpoint(
     ...(info.protectedPaths
       ? { protectedPaths: [...info.protectedPaths] }
       : {}),
+    ...(info.pull ? { pull: info.pull } : {}),
   };
   writeFileAtomic(paths.patch, patch, { directoryMode: 0o700 });
   writeFileAtomic(paths.meta, `${JSON.stringify(meta)}\n`, {

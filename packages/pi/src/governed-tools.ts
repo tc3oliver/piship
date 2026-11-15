@@ -700,16 +700,17 @@ export function governedBashOperations(
     options: ExecOptions,
   ): Promise<{ exitCode: number | null }> => {
     if (gov.sandbox.report.level === "enforced")
-      return (gov.remote?.ensureSeeded() ?? Promise.resolve()).then(() =>
-        gov.sandbox.exec(command, cwd, {
+      return (gov.remote?.ensureSeeded() ?? Promise.resolve()).then(() => {
+        const running = gov.sandbox.exec(command, cwd, {
           onData: options.onData,
           ...(options.signal ? { signal: options.signal } : {}),
           ...(options.timeout !== undefined
             ? { timeout: options.timeout }
             : {}),
           ...(options.env ? { env: options.env } : {}),
-        }),
-      );
+        });
+        return gov.remote?.track(running) ?? running;
+      });
     const env = uncontainedEnvironment(options.env, source);
     // The local Pi runner has no Windows Job Object. Use the same
     // kill-on-close supervisor as background tasks for unsandboxed bash.
@@ -1104,9 +1105,11 @@ export function governedTools(
   };
   const write = async (path: string, content: string, tool: string) => {
     if (remote)
-      return remote.write(
-        await decideRemote("filesystem.write", path, tool),
-        Buffer.from(content, "utf8"),
+      return gov.remote!.track(
+        remote.write(
+          await decideRemote("filesystem.write", path, tool),
+          Buffer.from(content, "utf8"),
+        ),
       );
     const handle = await openDecided(
       gov,

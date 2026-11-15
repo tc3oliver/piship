@@ -114,16 +114,21 @@ describe("seedRemoteWorkspace", () => {
     ).rejects.toThrow(/git work tree/);
   });
 
-  it("rejects a file over the single-file cap", async () => {
+  it("skips a file over the single-file cap and says how much it uploads", async () => {
     initProject();
     put("big.bin", Buffer.alloc(0));
+    put("a.txt", "a");
     // A sparse file reaches the cap without writing it.
     const fd = openSync(join(project, "big.bin"), "r+");
     ftruncateSync(fd, SEED_FILE_CAP + 1);
     closeSync(fd);
-    await expect(
-      seedRemoteWorkspace(fakeSandbox(), project, allowAll),
-    ).rejects.toThrow(/single-file cap/);
+    const progress: string[] = [];
+    const result = await seedRemoteWorkspace(fakeSandbox(), project, allowAll, {
+      progress: (message) => progress.push(message),
+    });
+    expect(result.uploaded).toEqual(["a.txt"]);
+    expect(result.skipped).toEqual([{ path: "big.bin", reason: "too-large" }]);
+    expect(progress).toEqual(["Uploading 1 files (0.0 MiB) to the sandbox"]);
   });
 
   it("rejects a project over the total cap, counting only what policy allows", async () => {
@@ -133,7 +138,7 @@ describe("seedRemoteWorkspace", () => {
     const caps = { totalCap: 1500, fileCap: 2048 };
     await expect(
       seedRemoteWorkspace(fakeSandbox(), project, allowAll, { caps }),
-    ).rejects.toThrow(/1500 bytes total cap/);
+    ).rejects.toThrow(/1500 bytes total cap.*\.gitignore/);
     // A skipped file does not count towards it.
     await expect(
       seedRemoteWorkspace(
@@ -222,6 +227,28 @@ describe("seedRemoteWorkspace", () => {
       await expect(
         seedRemoteWorkspace(fakeSandbox(), project, allowAll),
       ).resolves.toMatchObject({ uploaded: ["a.txt"] });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "redoes its own unfinished seed but still refuses foreign files, leaving no marker behind",
+    async () => {
+      initProject();
+      put("a.txt", "a");
+      // What a seed that died after extracting leaves: files, a repo, the marker.
+      writeFileSync(join(remote, ".piship-seed.started"), "");
+      writeFileSync(join(remote, "stale.txt"), "stale");
+      sh(remote, "init", "-q");
+      const result = await seedRemoteWorkspace(
+        fakeSandbox(),
+        project,
+        allowAll,
+      );
+      expect(result.uploaded).toEqual(["a.txt"]);
+      expect(existsSync(join(remote, "stale.txt"))).toBe(false);
+      expect(existsSync(join(remote, ".piship-seed.started"))).toBe(false);
+      expect(sh(remote, "ls-files")).toBe("a.txt");
+      expect(sh(remote, "status", "--porcelain")).toBe("");
     },
   );
 

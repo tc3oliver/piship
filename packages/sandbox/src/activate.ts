@@ -699,6 +699,8 @@ function createActiveSandbox(session: Session): ActiveSandbox {
             run: (relativePath: string, signal: AbortSignal) => Promise<T>,
           ): Promise<T> => {
             if (retired || disposed) throw retiredError(report);
+            // A signal that is already aborted never fires its event.
+            if (options?.signal?.aborted) throw new Error("aborted");
             const relativePath = workspacePath(profile.workspace, path);
             if (relativePath === undefined || relativePath === ".")
               throw new Error(

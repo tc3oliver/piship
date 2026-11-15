@@ -397,6 +397,7 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     // takes the slot and the parked copy goes.
     rmSync(slot.patch);
     rmSync(slot.meta);
+    await tool("write")({ path: "more.txt", content: "m\n" });
     await handlers.get("agent_end")?.({}, context());
     expect(readFileSync(slot.patch, "utf8")).toContain("mine.txt");
     expect(existsSync(parked.dir)).toBe(false);

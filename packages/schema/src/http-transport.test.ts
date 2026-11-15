@@ -670,6 +670,35 @@ describe("sandbox.workspace", () => {
     );
   });
 
+  it("accepts sandbox.remote only with workspace: remote and keeps what was set", () => {
+    const remote = {
+      seed: { maxTotalMiB: 500 },
+      pull: { protectedFiles: "refuse", confirm: "required" },
+    };
+    expect(workspace({ ...e2b, workspace: "remote", remote })).toMatchObject({
+      remote,
+    });
+    expect(
+      workspace({ ...e2b, workspace: "remote", remote: {} }),
+    ).toMatchObject({ remote: {} });
+    rejects(manifest(sandbox({ ...e2b, remote })), "sandbox.remote");
+    for (const [bad, field] of [
+      [{ seed: { maxTotalMiB: 0 } }, "sandbox.remote.seed.maxTotalMiB"],
+      [{ seed: { maxFileMiB: 1.5 } }, "sandbox.remote.seed.maxFileMiB"],
+      [{ seed: { maxTotalMiB: 100000 } }, "sandbox.remote.seed.maxTotalMiB"],
+      [{ seed: { limit: 1 } }, "sandbox.remote.seed.limit"],
+      [{ pull: { confirm: "never" } }, "sandbox.remote.pull.confirm"],
+      [
+        { pull: { protectedFiles: "allow" } },
+        "sandbox.remote.pull.protectedFiles",
+      ],
+    ] as const)
+      rejects(
+        manifest(sandbox({ ...e2b, workspace: "remote", remote: bad })),
+        field,
+      );
+  });
+
   it("is unknown before piship/v1alpha6", () => {
     rejects(
       {

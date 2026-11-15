@@ -172,22 +172,30 @@ export function taskTools(
         let started: string;
         try {
           started = tasks.start(
-            (command, options) =>
-              gov.sandbox.exec(command, spawn.cwd, {
-                onData: options.onData,
-                signal: options.signal,
-                timeout: options.timeout,
-                // The sandbox narrows an environment it contains; an
-                // uncontained task is narrowed as the bash tool narrows it.
-                ...(enforced
-                  ? spawn.env
-                    ? { env: spawn.env }
-                    : {}
-                  : { env: uncontainedEnvironment(spawn.env, "bash") }),
-                ...(!enforced && platform === "win32"
-                  ? { shell: getShellConfig() }
-                  : {}),
-              }),
+            (command, options) => {
+              // A remote workspace is seeded before its first command, and a
+              // task that changes it is checkpointed.
+              const run = (
+                gov.remote?.ensureSeeded() ?? Promise.resolve()
+              ).then(() =>
+                gov.sandbox.exec(command, spawn.cwd, {
+                  onData: options.onData,
+                  signal: options.signal,
+                  timeout: options.timeout,
+                  // The sandbox narrows an environment it contains; an
+                  // uncontained task is narrowed as the bash tool narrows it.
+                  ...(enforced
+                    ? spawn.env
+                      ? { env: spawn.env }
+                      : {}
+                    : { env: uncontainedEnvironment(spawn.env, "bash") }),
+                  ...(!enforced && platform === "win32"
+                    ? { shell: getShellConfig() }
+                    : {}),
+                }),
+              );
+              return gov.remote?.track(run) ?? run;
+            },
             spawn.command,
             input.timeout,
           );
