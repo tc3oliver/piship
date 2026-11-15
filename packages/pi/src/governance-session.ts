@@ -83,10 +83,12 @@ import type {
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
 import { sandboxBackend } from "./governance/sandbox.js";
+import { seedDecision } from "./governed-tools.js";
 import {
   revokePublishedSubagentGrant,
   type SubagentGrantBinding,
 } from "./launch/subagent-owner.js";
+import { RemoteWorkspace } from "./remote-workspace/checkpoint.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 export { terminalApproval } from "./governance/approval.js";
@@ -249,7 +251,54 @@ export class GovernanceSession {
       options.lock.deployment.mode,
     );
     this.#yolo = options.yolo === true;
+    const files = sandbox.files;
+    if (files)
+      this.remote = new RemoteWorkspace({
+        sandbox: { exec: sandbox.exec, files },
+        root: project.root,
+        stateDir: options.stateDir,
+        session: sessionId,
+        decide: seedDecision(this),
+        protectedPaths: () => {
+          const protection = projectProtection(
+            options,
+            project,
+            sandbox.profile.homeDir,
+          );
+          return [...protection.files, ...protection.directories].flatMap(
+            (path) => {
+              const inside = relative(project.root, path).split(sep).join("/");
+              return inside === "" ||
+                inside.startsWith("..") ||
+                isAbsolute(inside)
+                ? []
+                : [inside];
+            },
+          );
+        },
+        seeded: (result) => {
+          const skipped = result.skipped.filter(
+            (item) => item.reason === "policy",
+          ).length;
+          this.emit("tool.allowed", {
+            resource: "sandbox-seed",
+            decision: "allowed",
+            policy: this.policyId,
+            enforcement: "control-plane",
+            detail: {
+              action: "filesystem.read",
+              uploaded: result.uploaded.length,
+              skipped: result.skipped.length,
+              policySkipped: skipped,
+            },
+          });
+        },
+        warn: (message) => this.#notice(message),
+      });
   }
+
+  /** Set with `sandbox.workspace: remote`: the sandbox holds the project. */
+  readonly remote: RemoteWorkspace | undefined;
 
   /**
    * Opens the session. The paths it resolves while it sets up (the sandbox
@@ -1748,6 +1797,12 @@ export class GovernanceSession {
         await this.mcp?.close();
       } finally {
         try {
+          // The last checkpoint is taken while the sandbox still exists.
+          const changed = (await this.remote?.finish()) ?? 0;
+          if (changed > 0)
+            process.stderr.write(
+              `The sandbox changed ${changed} ${changed === 1 ? "file" : "files"}. Review and apply them with: ${this.options.lock.app.command} sandbox pull\n`,
+            );
           await this.sandbox.dispose();
         } finally {
           await this.outputStore.dispose();

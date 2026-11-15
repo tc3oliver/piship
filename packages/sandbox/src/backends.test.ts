@@ -168,6 +168,43 @@ describe("custom adapter lifecycle", () => {
     });
   });
 
+  it("passes an instance's files through and rejects malformed ones", async () => {
+    const files = {
+      read: async () => Buffer.from("r"),
+      write: async () => {},
+      stat: async () => undefined,
+    };
+    const make = (value: unknown) =>
+      customBackend({
+        id: "acme",
+        available: async () => ({ available: true }),
+        capabilities: () => REMOTE,
+        prepare: async () => ({
+          exec: async (
+            _request: unknown,
+            io: { onStdout(b: Buffer): void },
+          ) => {
+            io.onStdout(Buffer.from("piship-sandbox-ready unset\n"));
+            return { exitCode: 0 };
+          },
+          dispose: async () => {},
+          files: value,
+        }),
+      });
+    const sandbox = await activate(make(files), {
+      ...policy(),
+      remoteWorkspace: true,
+    });
+    expect(await sandbox.files?.read(join(workspace, "a"))).toEqual(
+      Buffer.from("r"),
+    );
+    await expect(
+      activate(make({ read: 1 }), { ...policy(), remoteWorkspace: true }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("exec() and dispose()"),
+    });
+  });
+
   it("refuses to wrap local processes, such as MCP stdio servers, for a remote backend", async () => {
     const { backend } = fakeBackend();
     const sandbox = await activate(backend);

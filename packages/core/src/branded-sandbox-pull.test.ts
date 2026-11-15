@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 /** The checkpoint a sandbox would leave: edit a.txt and add b.txt in a clone. */
-function checkpoint(extra = ""): void {
+function checkpoint(extra = "", protectedPaths?: string[]): void {
   const clone = join(temp, "clone");
   git(temp, "clone", "-q", repo, clone);
   writeFileSync(join(clone, "a.txt"), "one\nthree\n");
@@ -72,6 +72,7 @@ function checkpoint(extra = ""): void {
     session: "s",
     baseHead: null,
     files: 2,
+    ...(protectedPaths ? { protectedPaths } : {}),
   });
 }
 
@@ -109,6 +110,15 @@ describe("sandbox pull", () => {
     );
     await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
       /refused as a whole/,
+    );
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
+    expect(existsSync(join(repo, "b.txt"))).toBe(false);
+  });
+
+  it("refuses a change to a protected path the checkpoint names", async () => {
+    checkpoint("", ["b.txt"]);
+    await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+      /protected path/,
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(join(repo, "b.txt"))).toBe(false);

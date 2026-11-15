@@ -108,9 +108,10 @@ export async function sandboxPull(
     ctx.out("The sandbox session made no changes.");
     return;
   }
-  // shortcut: only `.git` is refused; the sandbox package's protected git
-  // paths (hooks, config, ...) are not reachable from core. `.git` covers them.
-  const result = validateRemoteWorkspacePatch(checkpoint.patch);
+  const result = validateRemoteWorkspacePatch(
+    checkpoint.patch,
+    checkpoint.meta.protectedPaths ?? [],
+  );
   if (!result.ok)
     throw failure(
       `The sandbox patch is refused as a whole and nothing was applied: ${result.refused.slice(0, 5).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,

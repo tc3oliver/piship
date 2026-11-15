@@ -30,6 +30,12 @@ export interface RemoteWorkspaceMeta {
   readonly baseHead: string | null;
   readonly createdAt: string;
   readonly files: number;
+  /**
+   * Workspace-relative paths (`/` separators) `sandbox pull` refuses besides
+   * `.git`: the project's protected git files and directories. Written by the
+   * host, never by the sandbox. Absent in a checkpoint written before it.
+   */
+  readonly protectedPaths?: readonly string[];
 }
 
 function realOrResolved(path: string): string {
@@ -79,6 +85,7 @@ export function writeRemoteWorkspaceCheckpoint(
     readonly baseHead: string | null;
     readonly files: number;
     readonly createdAt?: string;
+    readonly protectedPaths?: readonly string[];
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
@@ -91,6 +98,9 @@ export function writeRemoteWorkspaceCheckpoint(
     baseHead: info.baseHead,
     createdAt: info.createdAt ?? new Date().toISOString(),
     files: info.files,
+    ...(info.protectedPaths
+      ? { protectedPaths: [...info.protectedPaths] }
+      : {}),
   };
   writeAtomic(paths.patch, patch);
   writeAtomic(paths.meta, `${JSON.stringify(meta)}\n`);
@@ -113,7 +123,12 @@ export function readRemoteWorkspaceCheckpoint(
       typeof meta.projectRoot !== "string" ||
       (meta.baseHead !== null && typeof meta.baseHead !== "string") ||
       typeof meta.createdAt !== "string" ||
-      typeof meta.files !== "number"
+      typeof meta.files !== "number" ||
+      (meta.protectedPaths !== undefined &&
+        !(
+          Array.isArray(meta.protectedPaths) &&
+          meta.protectedPaths.every((path) => typeof path === "string")
+        ))
     )
       return undefined;
     return {

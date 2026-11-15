@@ -114,9 +114,10 @@ export function discoverProject(options: GovernanceOptions, homeDir: string) {
 }
 
 export function sandboxConfig(options: GovernanceOptions) {
-  const sandbox = options.lock.governance.manifest.sandbox;
+  const { workspace, ...sandbox } = options.lock.governance.manifest.sandbox;
   return {
     ...sandbox,
+    ...(workspace === "remote" ? { remoteWorkspace: true } : {}),
     filesystem: {
       ...sandbox.filesystem,
       read: { deny: [...sandbox.filesystem.read.deny, options.stateDir] },

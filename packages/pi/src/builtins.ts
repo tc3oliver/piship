@@ -329,7 +329,12 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
           detail: { action: "tool.execute", ...call.detail, error },
         });
       });
-      pi.on("agent_end", () => calls.clear());
+      pi.on("agent_end", async () => {
+        calls.clear();
+        // A remote workspace's changes are saved after every agent turn;
+        // a failed save is a notice and never fails the turn.
+        await gov.remote?.checkpoint();
+      });
       pi.on("tool_call", async (event, ctx) => {
         const tool = event.toolName;
         const call = calls.get(event.toolCallId);

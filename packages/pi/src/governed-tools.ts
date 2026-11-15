@@ -391,6 +391,35 @@ export async function gatePath(
   return real;
 }
 
+/**
+ * The seed's decision for one file: `filesystem.read` without ever asking.
+ * Only an `allow` uploads; `deny`, `ask`, the state directory, and what the
+ * sandbox profile hides are skipped.
+ */
+export function seedDecision(
+  gov: GovernanceSession,
+): (path: string) => Promise<"allow" | "skip"> {
+  return async (path) => {
+    const lexical = resolve(path);
+    const real = realpathNearest(lexical);
+    if (builtinDenial(gov, "filesystem.read", [lexical, real], false))
+      return "skip";
+    if (
+      gov.sandbox.profile.readDeny.some(
+        (denied) => inside(denied, real) || inside(denied, lexical),
+      )
+    )
+      return "skip";
+    return [lexical, real].every(
+      (resource) =>
+        gov.engine.evaluate({ action: "filesystem.read", resource }).effect ===
+        "allow",
+    )
+      ? "allow"
+      : "skip";
+  };
+}
+
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 // Opening a FIFO without it waits for a peer on a thread no abort can release,
 // and a few such opens stop all async file I/O of the process. With it the
@@ -671,12 +700,16 @@ export function governedBashOperations(
     options: ExecOptions,
   ): Promise<{ exitCode: number | null }> => {
     if (gov.sandbox.report.level === "enforced")
-      return gov.sandbox.exec(command, cwd, {
-        onData: options.onData,
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
-        ...(options.env ? { env: options.env } : {}),
-      });
+      return (gov.remote?.ensureSeeded() ?? Promise.resolve()).then(() =>
+        gov.sandbox.exec(command, cwd, {
+          onData: options.onData,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.timeout !== undefined
+            ? { timeout: options.timeout }
+            : {}),
+          ...(options.env ? { env: options.env } : {}),
+        }),
+      );
     const env = uncontainedEnvironment(options.env, source);
     // The local Pi runner has no Windows Job Object. Use the same
     // kill-on-close supervisor as background tasks for unsandboxed bash.
@@ -1030,7 +1063,32 @@ export function governedTools(
 ): ToolDefinition[] {
   const absolute = (path: string) =>
     isAbsolute(path) ? path : resolve(cwd, path);
+  const missing = (path: string) =>
+    Object.assign(new Error(`ENOENT: no such file, ${path}`), {
+      code: "ENOENT",
+    });
+  // A remote workspace: the same decision, then the sandbox's file API.
+  // The host-only guards (no-follow open, hard-link check) do not apply to
+  // a path the host cannot reach.
+  const remote = gov.remote ? gov.sandbox.files : undefined;
+  const decideRemote = async (
+    action: "filesystem.read" | "filesystem.write",
+    path: string,
+    tool: string,
+  ) => {
+    const decided = await gatePath(gov, action, absolute(path), tool);
+    await gov.remote?.ensureSeeded();
+    return decided;
+  };
   const read = async (path: string, tool: string) => {
+    if (remote) {
+      const data = await remote.read(
+        await decideRemote("filesystem.read", path, tool),
+      );
+      if (data.length > GOVERNED_READ_LIMIT_BYTES)
+        throw tooLarge(path, formatSize(data.length), tool);
+      return data;
+    }
     const handle = await openDecided(
       gov,
       "filesystem.read",
@@ -1045,6 +1103,11 @@ export function governedTools(
     }
   };
   const write = async (path: string, content: string, tool: string) => {
+    if (remote)
+      return remote.write(
+        await decideRemote("filesystem.write", path, tool),
+        Buffer.from(content, "utf8"),
+      );
     const handle = await openDecided(
       gov,
       "filesystem.write",
@@ -1066,6 +1129,13 @@ export function governedTools(
     }
   };
   const exists = async (path: string, tool: string) => {
+    if (remote) {
+      const found = await remote.stat(
+        await decideRemote("filesystem.read", path, tool),
+      );
+      if (!found) throw missing(path);
+      return;
+    }
     await gatePath(gov, "filesystem.read", absolute(path), tool);
     await access(path, constants.R_OK);
   };
@@ -1080,6 +1150,11 @@ export function governedTools(
       operations: {
         writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
+          if (remote) {
+            // The sandbox creates parents when it writes the file.
+            await gatePath(gov, "filesystem.write", absolute(dir), "write");
+            return;
+          }
           // Keep the parent policy decision even when mkdir needs no change:
           // it is an independent opportunity to notice a redirected path.
           const existingDirectory = await stat(absolute(dir)).then(
@@ -1101,6 +1176,13 @@ export function governedTools(
       operations: {
         readFile: (path) => read(path, "edit"),
         access: async (path) => {
+          if (remote) {
+            const found = await remote.stat(
+              await decideRemote("filesystem.write", path, "edit"),
+            );
+            if (!found) throw missing(path);
+            return;
+          }
           await gatePath(gov, "filesystem.write", absolute(path), "edit");
           await access(path, constants.R_OK | constants.W_OK);
         },
