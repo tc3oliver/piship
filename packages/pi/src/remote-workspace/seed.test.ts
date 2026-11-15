@@ -741,6 +741,158 @@ describe("seedRemoteWorkspace", () => {
     },
   );
 
+  /** A sandbox with a real stat, and hooks into the adopt's write and execs. */
+  const adoptSandbox = (hooks: {
+    write?: (data: Buffer) => Promise<"ok" | "partial" | "fail">;
+    exec?: (command: string) => Promise<number | "throw" | undefined>;
+  }): SeedSandbox => {
+    const base = fakeSandbox();
+    return {
+      ...base,
+      files: {
+        ...base.files,
+        stat: async (path) =>
+          existsSync(join(remote, path.slice(project.length + 1)))
+            ? { type: "file", size: 0 }
+            : undefined,
+        read: async (path) => {
+          const file = join(remote, path.slice(project.length + 1));
+          if (!existsSync(file))
+            throw Object.assign(new Error("no such file"), { code: "ENOENT" });
+          return readFileSync(file);
+        },
+        write: async (path, data, options) => {
+          const how =
+            path.endsWith("ask.txt") && hooks.write
+              ? await hooks.write(data)
+              : "ok";
+          if (how === "fail") throw new Error("connection reset");
+          await base.files.write(
+            path,
+            how === "partial" ? data.subarray(0, 4) : data,
+            options,
+          );
+          if (how === "partial") throw new Error("connection reset");
+        },
+      },
+      exec: async (command, cwd, options) => {
+        const answer = await hooks.exec?.(command);
+        if (answer === "throw") throw new Error("connection reset");
+        if (typeof answer === "number") return { exitCode: answer };
+        return base.exec(command, cwd, options);
+      },
+    };
+  };
+  const seedWithheld = async (sandbox: SeedSandbox) => {
+    initProject();
+    put("a.txt", "a\n");
+    put("ask.txt", "host secret\n");
+    return seedRemoteWorkspace(sandbox, project, async (path) =>
+      path.endsWith("ask.txt") ? "skip" : "allow",
+    );
+  };
+  const staged = (baseline: string) => {
+    sh(remote, "add", "-A");
+    return sh(remote, "diff", "--cached", baseline);
+  };
+
+  it.skipIf(process.platform === "win32")(
+    "does not overwrite the agent's file made after a failed write was removed",
+    async () => {
+      let first = true;
+      const seeded = await seedWithheld(
+        adoptSandbox({
+          write: async () => {
+            const how = first ? "partial" : "ok";
+            first = false;
+            return how;
+          },
+        }),
+      );
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow();
+      expect(existsSync(join(remote, "ask.txt"))).toBe(false);
+      writeFileSync(join(remote, "ask.txt"), "agent\n");
+      await seeded.lookup?.adopt(join(project, "ask.txt"));
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("agent\n");
+      expect(staged(seeded.baselineCommit)).not.toContain("host secret");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not delete a file the agent changed while the adopt's baseline was failing",
+    async () => {
+      const seeded = await seedWithheld(
+        adoptSandbox({
+          exec: async (command) => {
+            if (!command.includes("piship-baseline.idx")) return undefined;
+            writeFileSync(join(remote, "ask.txt"), "agent\n");
+            return 1;
+          },
+        }),
+      );
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow();
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("agent\n");
+    },
+  );
+
+  // Every way an adopt can fail, and what the agent does before the retry:
+  // the agent's content is never overwritten or deleted, the withheld host
+  // content never enters the patch as an addition, and an untouched file ends
+  // up baselined once the faults are gone.
+  const matrix = (["ok", "partial", "fail"] as const).flatMap((write) =>
+    (["ok", "fail"] as const).flatMap((baseline) =>
+      (["ok", "fail"] as const).flatMap((rm) =>
+        (["writes", "deletes", "untouched"] as const).map(
+          (agent) => [write, baseline, rm, agent] as const,
+        ),
+      ),
+    ),
+  );
+  it.skipIf(process.platform === "win32").each(matrix)(
+    "adopt: write %s, baseline %s, removal %s, agent %s before the retry",
+    async (write, baseline, rm, agent) => {
+      let faults = true;
+      const seeded = await seedWithheld(
+        adoptSandbox({
+          write: async () => (faults ? write : "ok"),
+          exec: async (command) => {
+            if (!faults) return undefined;
+            if (baseline === "fail" && command.includes("piship-baseline.idx"))
+              return 1;
+            if (rm === "fail" && command.startsWith("rm -f")) return "throw";
+            return undefined;
+          },
+        }),
+      );
+      const ask = join(project, "ask.txt");
+      const file = join(remote, "ask.txt");
+      const hostAdded = () => /^\+host/m.test(staged(seeded.baselineCommit));
+      const firstOk = await seeded.lookup?.adopt(ask).then(
+        () => true,
+        () => false,
+      );
+      expect(firstOk).toBe(write === "ok" && baseline === "ok");
+      // Only a removal that failed can leave a host copy behind.
+      if (rm === "ok") expect(hostAdded()).toBe(false);
+      if (agent === "writes") writeFileSync(file, "agent\n");
+      if (agent === "deletes") rmSync(file, { force: true });
+      faults = false;
+      await seeded.lookup?.adopt(ask);
+      expect(seeded.lookup?.skipped(ask)).toBeUndefined();
+      expect(hostAdded()).toBe(false);
+      if (agent === "writes")
+        expect(readFileSync(file, "utf8")).toBe("agent\n");
+      else if (agent === "untouched" || !firstOk) {
+        expect(readFileSync(file, "utf8")).toBe("host secret\n");
+        expect(staged(seeded.baselineCommit)).toBe("");
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "overlays over a seeded tree with awkward names, removing only what is neither uploaded nor ignored",
     async () => {
