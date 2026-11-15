@@ -23,6 +23,7 @@ import {
 } from "../access/index.js";
 import { type BrandedContext, openAccess, recordAudit } from "./context.js";
 import { readSecretInput } from "./login.js";
+import { sandboxPull } from "./sandbox-pull.js";
 
 function notStored(ctx: BrandedContext): PiShipError {
   return new PiShipError(
@@ -212,7 +213,7 @@ function openAccessQuietly(
 }
 
 /**
- * `sandbox login` or `sandbox logout`. Anything else is refused without
+ * `sandbox login`, `sandbox logout` or `sandbox pull`. Anything else is refused without
  * echoing it: a mistyped command line may hold the secret itself.
  */
 export async function runSandbox(
@@ -221,9 +222,10 @@ export async function runSandbox(
 ): Promise<void> {
   if (args.length === 1 && args[0] === "login") return sandboxLogin(ctx);
   if (args.length === 1 && args[0] === "logout") return sandboxLogout(ctx);
+  if (args[0] === "pull") return sandboxPull(ctx, args.slice(1));
   throw new PiShipError(
     "CONFIG_INVALID",
-    "Unknown sandbox command; use sandbox login or sandbox logout. The secret is never given on the command line: sandbox login prompts for it or reads the first line of stdin",
+    "Unknown sandbox command; use sandbox login, sandbox logout, or sandbox pull [--yes|--discard]. The secret is never given on the command line: sandbox login prompts for it or reads the first line of stdin",
     { component: "sandbox" },
   );
 }
