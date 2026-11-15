@@ -300,6 +300,10 @@ describe.skipIf(!posix)("remote workspace round trips", () => {
       commit?: boolean;
       modes?: Record<string, number>;
       autocrlf?: "true" | "false";
+      /** Check the files out again after the commit, as a clone would (CRLF under autocrlf). */
+      checkout?: boolean;
+      /** core.autocrlf from the launch on, after the files were committed under `autocrlf`. */
+      launchAutocrlf?: "true";
     } = {},
   ) {
     const dir = join(dist.temp, `case-${++cases}`);
@@ -327,6 +331,12 @@ describe.skipIf(!posix)("remote workspace round trips", () => {
       git("add", "-A");
       git("commit", "-q", "--allow-empty", "-m", "base");
     }
+    if (options.checkout) {
+      for (const name of Object.keys(files)) rmSync(join(project, name));
+      git("checkout", "--", ".");
+    }
+    if (options.launchAutocrlf)
+      git("config", "core.autocrlf", options.launchAutocrlf);
     const env = sandboxEnv(remote);
     services.knobs.gatewayMode = "script";
     services.knobs.toolScript = [{ name: "bash", arguments: { command } }];
@@ -338,6 +348,8 @@ describe.skipIf(!posix)("remote workspace round trips", () => {
       launched,
       read: (name: string) => readFileSync(join(project, name)),
       pull: () => dist.runIn(project, ["sandbox", "pull", "--yes"], env),
+      git: (...args: string[]) =>
+        spawnSync("git", args, { cwd: project, encoding: "utf8" }).stdout,
     };
   }
   const bytes = (...values: number[]) => Buffer.from(values);
@@ -480,5 +492,38 @@ describe.skipIf(!posix)("remote workspace round trips", () => {
     expect(s.read("a.txt").toString().replaceAll("\r\n", "\n")).toBe(
       "ONE\ntwo\nthree\nfour\n",
     );
+  }, 120000);
+
+  // A Windows checkout (core.autocrlf=true, CRLF on disk, LF in git) and a
+  // sandbox tool that rewrites the file with LF: only the changed line comes
+  // back, so it merges with a local edit to another line of the same file.
+  it("pulls an LF rewrite of a CRLF checkout as the lines it changed", async () => {
+    const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}\n`);
+    const s = await session(
+      { "a.txt": lines.join("") },
+      "sed 's/^line1\\r$/SANDBOX/' a.txt | tr -d '\\r' > t && mv t a.txt",
+      { autocrlf: "true", checkout: true },
+    );
+    const local = s.read("a.txt").toString().replace("line12\r\n", "LOCAL\r\n");
+    expect(local.startsWith("line1\r\n")).toBe(true);
+    writeFileSync(join(s.project, "a.txt"), local);
+    const pulled = await s.pull();
+    expect(pulled.status, pulled.stderr).toBe(0);
+    expect(pulled.stdout).toMatch(/changed {2}a\.txt {2}\+1 -1/);
+    expect(s.read("a.txt").toString()).toBe(
+      local.replace("line1\r\n", "SANDBOX\r\n"),
+    );
+  }, 120000);
+
+  // A file committed with CRLF before autocrlf was turned on still applies.
+  it("pulls a one-line change to a file git stores with CRLF under core.autocrlf=true", async () => {
+    const s = await session(
+      { "a.txt": "one\r\ntwo\r\nthree\r\n" },
+      "sed 's/one/ONE/' a.txt > t && mv t a.txt",
+      { launchAutocrlf: "true" },
+    );
+    const pulled = await s.pull();
+    expect(pulled.status, pulled.stderr).toBe(0);
+    expect(s.read("a.txt").toString()).toBe("ONE\r\ntwo\r\nthree\r\n");
   }, 120000);
 });

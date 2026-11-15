@@ -387,6 +387,39 @@ describe("seedRemoteWorkspace", () => {
     expect(archive.includes("aaa")).toBe(false);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "stores LF in the sandbox when the host checks out CRLF, so an LF rewrite changes only its lines",
+    async () => {
+      // This machine's own git config must not decide the case.
+      const global = process.env.GIT_CONFIG_GLOBAL;
+      process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+      try {
+        for (const autocrlf of ["true", "false"]) {
+          rmSync(project, { recursive: true, force: true });
+          rmSync(remote, { recursive: true, force: true });
+          mkdirSync(project);
+          mkdirSync(remote);
+          initProject();
+          sh(project, "config", "core.autocrlf", autocrlf);
+          put("a.txt", "one\ntwo\nthree\n");
+          sh(project, "add", "-A");
+          sh(project, "commit", "-qm", "base");
+          rmSync(join(project, "a.txt"));
+          sh(project, "checkout", "--", "a.txt");
+          await seedRemoteWorkspace(fakeSandbox(), project, allowAll);
+          writeFileSync(join(remote, "a.txt"), "ONE\ntwo\nthree\n");
+          expect(sh(remote, "diff", "--numstat")).toBe("1\t1\ta.txt");
+          expect(
+            sh(remote, "config", "--default", "unset", "core.autocrlf"),
+          ).toBe(autocrlf === "true" ? "input" : "unset");
+        }
+      } finally {
+        if (global === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = global;
+      }
+    },
+  );
+
   it("takes a tracked file's mode from git's index, on any platform", async () => {
     initProject();
     put("gradlew", "#!/bin/sh\n");
