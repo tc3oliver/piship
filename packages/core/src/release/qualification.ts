@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { pishipCommand } from "../invocation.js";
+import { pishipCommand, shellArg } from "../invocation.js";
 
 export const RELEASE_QUALIFIED = "qualified";
 export const LOCAL_BUILD_UNQUALIFIED = "unqualified-local";
@@ -20,11 +20,14 @@ export function localBuildMarkerPath(output: string): string {
 export const UNQUALIFIED_BUILD_NOTICE =
   "This is an unqualified local build: it is not audited, has no SBOM or notices, and is not signed. Run piship release for the qualified artifact.";
 
-/** The notice with the command that runs this PiShip, for `piship build` to print. */
-export function unqualifiedBuildNotice(): string {
+/**
+ * The notice with the command that runs this PiShip on `manifest`, for
+ * `piship build` to print.
+ */
+export function unqualifiedBuildNotice(manifest: string): string {
   return UNQUALIFIED_BUILD_NOTICE.replace(
     "Run piship release",
-    `Run ${pishipCommand()} release`,
+    `Run ${pishipCommand()} release ${shellArg(manifest)}`,
   );
 }
 

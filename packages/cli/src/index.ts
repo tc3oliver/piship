@@ -1160,7 +1160,7 @@ export async function runCli(
         ...(progress ? { progress } : {}),
       });
       markLocalBuild(built);
-      output.stderr(unqualifiedBuildNotice());
+      output.stderr(unqualifiedBuildNotice(target));
       output.stdout(
         `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
       );
