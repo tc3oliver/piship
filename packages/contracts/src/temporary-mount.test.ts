@@ -31,10 +31,10 @@ vi.mock("node:fs", async (importOriginal) => {
       const stat = (actual.lstatSync as (...args: unknown[]) => unknown)(
         path,
         ...rest,
-      ) as { dev: number } | undefined;
+      ) as { dev: number | bigint } | undefined;
       if (stat && mounts.paths.some((mount) => String(path).endsWith(mount)))
         return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-          dev: stat.dev + 1,
+          dev: typeof stat.dev === "bigint" ? stat.dev + 1n : stat.dev + 1,
         });
       return stat;
     }) as typeof actual.lstatSync,
