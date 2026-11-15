@@ -462,6 +462,9 @@ describe("source URLs", () => {
     expect(canonicalSourceUrl("x", "registry", "https://r.test/npm/")).toBe(
       "https://r.test/npm",
     );
+    expect(canonicalSourceUrl("x", "registry", "https://r.test/npm///")).toBe(
+      "https://r.test/npm",
+    );
     expect(() =>
       canonicalSourceUrl("x", "registry", "https://r.test/#frag"),
     ).toThrow(/fragment/);

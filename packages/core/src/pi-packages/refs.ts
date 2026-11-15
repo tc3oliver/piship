@@ -137,7 +137,10 @@ export function canonicalSourceUrl(
       id,
       `${field} uses ${url.protocol.replace(/:$/, "")}; only ${protocols.map((item) => item.replace(/:$/, "")).join(" or ")} is accepted`,
     );
-  return url.href.replace(/\/+$/, "");
+  const href = url.href;
+  let end = href.length;
+  while (href[end - 1] === "/") end--;
+  return href.slice(0, end);
 }
 
 /** The npm declaration: a real package name and a version that is never a tag or alias. */

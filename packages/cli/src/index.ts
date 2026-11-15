@@ -48,6 +48,7 @@ import {
   lockNeedsNetwork,
   lockStatus,
   pishipCommand,
+  shellArg,
   markLocalBuild,
   nextTrustRoot,
   payloadApp,
@@ -582,7 +583,7 @@ async function prepareLock(
 ): Promise<void> {
   const status = lockStatus(target);
   if (status === "current") return;
-  const lockCommand = `${pishipCommand()} lock ${target}`;
+  const lockCommand = `${pishipCommand()} lock ${shellArg(target)}`;
   if (status === "stale" && lockNeedsNetwork(manifest))
     throw new Error(
       `Lockfile is stale: the manifest or a resource changed since piship.lock was written. This manifest declares Pi packages, which locking resolves over the network and pins, so relock on purpose: ${lockCommand}`,
@@ -717,10 +718,11 @@ export async function runCli(
       });
       if (!bundleSearchTools) output.stderr(SEARCH_TOOLS_SKIPPED);
       const self = pishipCommand();
+      const at = shellArg(created);
       output.stdout(
         managed
-          ? `Created ${created}\nNext: ${self} validate ${created}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
-          : `Created ${created}\nNext: ${self} validate ${created}, then ${self} test ${created} (the first test writes piship.lock; build and release need that lock to be current).`,
+          ? `Created ${created}\nNext: ${self} validate ${at}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
+          : `Created ${created}\nNext: ${self} validate ${at}, then ${self} test ${at} (the first test writes piship.lock; build and release need that lock to be current).`,
       );
     } else if (command === "validate") {
       const manifest = readManifest(target);
@@ -924,7 +926,7 @@ export async function runCli(
       markLocalBuild(built);
       output.stderr(unqualifiedBuildNotice());
       output.stdout(
-        `Built ${built}\nNext: ${pishipCommand()} test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
+        `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
       );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
@@ -962,7 +964,7 @@ export async function runCli(
       output.stdout(
         rest.includes("--json")
           ? JSON.stringify(info, null, 2)
-          : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${target} --json for the full locked configuration.`,
+          : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${shellArg(target)} --json for the full locked configuration.`,
       );
     } else if (command === "dev" || command === "test") {
       const manifest = readManifest(target);

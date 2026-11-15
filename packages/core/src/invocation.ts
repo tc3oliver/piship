@@ -12,5 +12,25 @@ export function pishipCommand(script: string | undefined = process.argv[1]) {
   const name = basename(script);
   if (name !== "bin.js" && name !== "piship.mjs") return "piship";
   const path = resolve(script);
-  return `node ${/[\s"'$&|;<>()*?]/.test(path) ? `"${path}"` : path}`;
+  return `node ${shellArg(path)}`;
+}
+
+/**
+ * One argument of a command PiShip prints for the user to paste, quoted only
+ * when it has to be. On Windows it is double-quoted, which both cmd.exe and
+ * PowerShell read as one argument; single quotes mean nothing to cmd.exe.
+ * shortcut: a Windows value with `%`, `$` or a backtick may still expand in
+ * cmd.exe or PowerShell (no quoting stops both); such paths are rare.
+ */
+export function shellArg(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32")
+    return /^[\w+=:./\\~-]+$/.test(value)
+      ? value
+      : `"${value.replaceAll('"', '""')}"`;
+  return /^[\w@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", "'\\''")}'`;
 }

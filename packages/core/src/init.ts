@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { checkVariableName, LATEST_SCHEMA } from "@piship/schema";
-import { pishipCommand } from "./invocation.js";
+import { pishipCommand, shellArg } from "./invocation.js";
 import { isDistributionId, suggestDistributionId } from "./state-paths.js";
 
 /**
@@ -153,7 +153,7 @@ export function initDistribution(
     const quoted = JSON.stringify(id);
     throw new Error(
       options.id === undefined
-        ? `The directory name ${quoted} is not a valid distribution id, which must start with a lowercase letter and contain only lowercase letters, digits and single hyphens. ${suggestion ? `Keep the directory and name the distribution: ${pishipCommand()} init ${directory} --id ${suggestion}` : `Name it with --id <id>`}`
+        ? `The directory name ${quoted} is not a valid distribution id, which must start with a lowercase letter and contain only lowercase letters, digits and single hyphens. ${suggestion ? `Keep the directory and name the distribution: ${pishipCommand()} init ${shellArg(directory)} --id ${suggestion}` : `Name it with --id <id>`}`
         : `${quoted} is not a valid distribution id: it must start with a lowercase letter and contain only lowercase letters, digits and single hyphens.${suggestion ? ` Try --id ${suggestion}` : ""}`,
     );
   }

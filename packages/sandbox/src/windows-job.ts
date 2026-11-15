@@ -40,7 +40,9 @@ export function systemRoot(host: NodeJS.ProcessEnv): string {
     throw new Error(
       "Windows Job Object supervisor needs an absolute SystemRoot or WINDIR",
     );
-  return value.replace(/[\\/]+$/, "");
+  let end = value.length;
+  while (value[end - 1] === "\\" || value[end - 1] === "/") end--;
+  return value.slice(0, end);
 }
 
 type JobTarget = {

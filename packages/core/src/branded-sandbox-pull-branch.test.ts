@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrandedContext } from "./branded/context.js";
 import { runSandbox } from "./branded/sandbox.js";
+import { shellArg } from "./invocation.js";
 import {
   remoteWorkspacePaths,
   writeRemoteWorkspaceCheckpoint,
@@ -43,9 +44,6 @@ let out: string[];
 let ctx: BrandedContext;
 
 // Commands in the output quote a path the shell would not take bare (a Windows path).
-const quoted = (path: string) =>
-  /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path}'`;
-
 const git = (cwd: string, ...args: string[]) =>
   execFileSync(
     "git",
@@ -162,9 +160,9 @@ describe("sandbox pull --branch", () => {
     const text = out.join("\n");
     expect(text).toContain(`Created branch sandbox/sess1234 in ${wt()}`);
     expect(text).toMatch("the commit the session started from");
-    expect(text).toContain(`git -C ${quoted(wt())} log -1`);
+    expect(text).toContain(`git -C ${shellArg(wt())} log -1`);
     expect(text).toContain("git merge sandbox/sess1234");
-    expect(text).toContain(`git worktree remove ${quoted(wt())}`);
+    expect(text).toContain(`git worktree remove ${shellArg(wt())}`);
   });
 
   it("takes a given name and says when it started from the current HEAD", async () => {

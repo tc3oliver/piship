@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { markLocalBuild, PI_VERSION } from "@piship/core";
+import { markLocalBuild, PI_VERSION, shellArg } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installNext, runCli, runtimeCacheLine } from "./index.js";
 
@@ -1061,7 +1061,7 @@ describe("init", () => {
     try {
       const result = await run(["init", join(temp, "agent")]);
       expect(result.stdout).toContain(
-        `Next: node "${join(temp, "my dir", "bin.js")}" validate `,
+        `Next: node ${shellArg(join(temp, "my dir", "bin.js"))} validate `,
       );
       expect(result.stdout).not.toContain("Next: piship");
     } finally {
