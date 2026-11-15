@@ -36,16 +36,16 @@ import {
 } from "@piship/core";
 import type { GovernanceManifest, ToolExposure } from "@piship/schema";
 import {
+  type GovernanceInspection,
+  type GovernanceSession,
+  inspectGovernance,
+} from "../governance-session.js";
+import {
   buildExposureTable,
   exposureConfigOf,
   PISHIP_TOOLS,
   type ToolExposureTable,
 } from "../governance/exposure.js";
-import {
-  type GovernanceInspection,
-  type GovernanceSession,
-  inspectGovernance,
-} from "../governance-session.js";
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";

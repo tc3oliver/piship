@@ -2,18 +2,18 @@
 // provider policy decisions of a governed session.
 import { join, resolve } from "node:path";
 import {
-  type ApprovalChannel,
   PiShipError,
+  type ApprovalChannel,
   type PolicyAction,
 } from "@piship/contracts";
 import type { GovernanceLock } from "@piship/core";
 import {
   type CapabilityState,
-  computeCapabilityStates,
   type PolicyEngine,
   type ProviderTrustDecision,
-  providerTrustDecision,
   type VerificationResult,
+  computeCapabilityStates,
+  providerTrustDecision,
 } from "@piship/policy";
 import type { GovernanceSession } from "../governance-session.js";
 import type { GovernanceOptions } from "./options.js";

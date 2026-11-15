@@ -1,7 +1,5 @@
 // The launch pi-code's subagent tool uses for its children: accepted only
 // under the parent's marker, by allowlist, and never as a way past a control.
-
-import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -17,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   DEFAULT_NETWORK_POLICY,
   type PiShipError,
@@ -27,16 +26,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preparePiEnvironment } from "../environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "../index.js";
 import {
+  publishSubagentOwner,
+  SUBAGENT_TOKEN_ENV,
+  SUBAGENT_OWNER_DIRECTORY,
+} from "./subagent-owner.js";
+import {
   childToolOptions,
   inTemp,
   isSubagentChild,
   parseSubagentChild,
 } from "./subagent-child.js";
-import {
-  publishSubagentOwner,
-  SUBAGENT_OWNER_DIRECTORY,
-  SUBAGENT_TOKEN_ENV,
-} from "./subagent-owner.js";
 
 const ENV = { PI_CODE_SUBAGENT: "1" } as NodeJS.ProcessEnv;
 const BASE = ["--mode", "json", "-p", "--no-session"];

@@ -20,9 +20,9 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  writeFileSync,
   rmSync,
   statSync,
-  writeFileSync,
   writeSync,
 } from "node:fs";
 import {

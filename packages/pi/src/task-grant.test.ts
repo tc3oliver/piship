@@ -26,14 +26,14 @@ import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import {
+  authenticateSubagentChild,
+  publishSubagentOwner,
+} from "./launch/subagent-owner.js";
+import {
   DEFAULT_GRANT_COMMANDS,
   grantCommand,
   grantMinutes,
 } from "./grant-command.js";
-import {
-  authenticateSubagentChild,
-  publishSubagentOwner,
-} from "./launch/subagent-owner.js";
 
 const realpaths = vi.hoisted(() => vi.fn());
 vi.mock("@piship/sandbox", async (actual) => {

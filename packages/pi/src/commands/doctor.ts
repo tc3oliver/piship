@@ -1,5 +1,6 @@
 import { PiShipError } from "@piship/contracts";
 import {
+  verifyPayload,
   describeReclaimed,
   describeStoreMaintenance,
   maintainRuntimeStore,
@@ -7,7 +8,6 @@ import {
   reclaimObsoleteVersions,
   refreshInstalledLauncher,
   sweepStateTemporaries,
-  verifyPayload,
 } from "@piship/core";
 import { auditGroup } from "../doctor/audit.js";
 import { capabilitiesGroup } from "../doctor/capabilities.js";

@@ -8,8 +8,8 @@ import { join } from "node:path";
 import type { ManagedFetch } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { GovernanceSession } from "../governance-session.js";
 import { capabilityStates } from "./capabilities.js";
+import { GovernanceSession } from "../governance-session.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];

@@ -8,8 +8,8 @@ import {
   DEFAULT_NETWORK_POLICY,
   type NetworkPolicy,
   PiShipError,
-  type PolicyAction,
   plainHttpOrigins,
+  type PolicyAction,
   principalId,
   principalKey,
   samePrincipal,
@@ -29,12 +29,12 @@ import {
   governanceHooks,
   workflowExtension,
 } from "../builtins.js";
-import type { ToolExposureTable } from "../governance/exposure.js";
 import type { ModelPolicy, VirtualModelRule } from "../governance.js";
 import {
   type GovernanceOptions,
   GovernanceSession,
 } from "../governance-session.js";
+import type { ToolExposureTable } from "../governance/exposure.js";
 import { governedTools } from "../governed-tools.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
 
