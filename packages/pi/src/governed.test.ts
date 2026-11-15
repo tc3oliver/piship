@@ -697,10 +697,10 @@ describe("governed built-in tools", () => {
         { path: "prompt-canary/x.txt", content: "x" },
         capture,
       ),
-    ).rejects.toThrow(/not allowed/);
+    ).rejects.toThrow(/declined by the user/);
     await expect(
       run(tool(tools, "bash"), { command: "echo command-canary" }, capture),
-    ).rejects.toThrow(/not allowed/);
+    ).rejects.toThrow(/declined by the user/);
     expect(
       messages.some((message) =>
         message.includes(join(workspace, "prompt-canary")),
@@ -726,7 +726,7 @@ describe("governed built-in tools", () => {
     expect(existsSync(join(workspace, "headless.txt"))).toBe(false);
     await expect(
       run(write, { path: "declined.txt", content: "x" }, context(false)),
-    ).rejects.toThrow(/not allowed/);
+    ).rejects.toThrow(/declined by the user/);
     expect(existsSync(join(workspace, "declined.txt"))).toBe(false);
     await run(write, { path: "approved.txt", content: "yes" }, context(true));
     expect(readFileSync(join(workspace, "approved.txt"), "utf8")).toBe("yes");
@@ -833,7 +833,7 @@ describe("governed built-in tools", () => {
       for (let i = 0; i < 2; i += 1)
         await expect(
           run(write, { path: "kept/secret.txt", content: "denied" }, ctx),
-        ).rejects.toThrow(/not allowed/);
+        ).rejects.toThrow(/declined by the user/);
       expect(confirmations).toBe(2);
       expect(seen).toHaveLength(0);
       expect(existsSync(join(workspace, "kept", "secret.txt"))).toBe(false);
@@ -865,7 +865,7 @@ describe("governed built-in tools", () => {
       for (const name of ["first", "second"])
         await expect(
           run(write, { path: `kept/${name}.txt`, content: "denied" }, ctx),
-        ).rejects.toThrow(/not allowed/);
+        ).rejects.toThrow(/declined by the user/);
       expect(prompts).toBe(2);
       expect(seen).toHaveLength(1);
       for (const name of ["first", "second"])
@@ -893,7 +893,7 @@ describe("governed built-in tools", () => {
           { command: "echo unsafe > second.txt" },
           choosing("Deny", seen),
         ),
-      ).rejects.toThrow(/not allowed/);
+      ).rejects.toThrow(/declined by the user/);
       expect(seen).toHaveLength(2);
       expect(existsSync(join(workspace, "second.txt"))).toBe(false);
     });
@@ -1641,7 +1641,7 @@ describe("one prompt per governed tool call", () => {
         undefined,
         ctx,
       ),
-    ).rejects.toThrow(/not allowed/);
+    ).rejects.toThrow(/declined by the user/);
     expect(prompts).toHaveLength(1);
     expect(existsSync(join(workspace, "c"))).toBe(false);
   });

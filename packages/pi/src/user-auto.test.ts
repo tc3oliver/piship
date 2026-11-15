@@ -316,7 +316,7 @@ describe("user auto mode in a governed session", () => {
             return false;
           }).ctx,
         ),
-      ).rejects.toThrow(/not allowed/);
+      ).rejects.toThrow(/declined by the user/);
       expect(prompts).toBeGreaterThan(0);
       expect(existsSync(join(workspace, path))).toBe(false);
     }

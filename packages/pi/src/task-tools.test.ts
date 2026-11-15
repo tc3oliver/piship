@@ -152,7 +152,7 @@ describe("task_start decides a command as bash does", () => {
     ["an allowed command", "echo hi", undefined, "ok"],
     ["a denied command", "rm -rf x", true, "not allowed by unit@1 rule no-rm"],
     ["an ask, approved", "true", true, "ok"],
-    ["an ask, declined", "true", false, "not allowed"],
+    ["an ask, declined", "true", false, "declined by the user"],
     ["an ask, headless", "true", undefined, "approval needs an interactive"],
   ])("%s", async (_name, command, answer, expected) => {
     const { call } = await open();

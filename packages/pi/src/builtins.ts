@@ -22,6 +22,7 @@ import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
   planRefusal,
+  policyRefusal,
   uiChannel,
 } from "./governed-tools.js";
 import { grantCommand } from "./grant-command.js";
@@ -231,9 +232,7 @@ async function decideToolCall(
   if (decision.outcome === "allow") return undefined;
   return {
     block: true,
-    reason: redact(
-      `${tool} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}${gov.denialHint(decision)}`,
-    ),
+    reason: redact(policyRefusal(gov, decision, tool)),
   };
 }
 
