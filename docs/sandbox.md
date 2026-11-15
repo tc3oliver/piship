@@ -299,7 +299,7 @@ The flow:
 `<command> sandbox pull` reads the latest checkpoint of the project at the git top-level of the current directory and:
 
 - validates the patch ([rules](#patch-rules)); if any entry is refused, nothing is applied;
-- prints `git apply --stat` and the diff, with terminal control characters replaced by `?`;
+- prints `git apply --stat`, and the full diff only with `--diff` (terminal control characters are replaced by `?`);
 - asks `y/N`; without a terminal it refuses unless `--yes` is given;
 - applies it with `git apply --3way` to the working tree. It never commits, and `git apply` runs no hook. On success the patch moves to `applied/` next to it; on failure it stays, so you can fix the tree and run it again.
 
@@ -307,11 +307,11 @@ The flow:
 
 #### Patch rules
 
-The patch comes from a sandbox that may be compromised, so it is untrusted input. PiShip parses every `diff --git` header and the extended headers (it does not trust `---` and `+++` alone), decodes git's C-quoted paths first, and refuses the whole patch when any entry:
+The patch comes from a sandbox that may be compromised, so it is untrusted input. Git's own parser decides which paths the patch touches: PiShip runs `git apply --numstat -z` and `git apply --summary` on it (nothing is applied) and checks every path git reports, including rename and copy sources. A line scan covers what git's report omits: the patch must be well formed, so a hunk ends exactly where its `@@` counts say and no plain `---`/`+++` diff can follow it, every header line must be one git writes, and every mode, including the one on the `index` line, must be exactly `100644` or `100755`. It refuses the whole patch when any entry:
 
 - has an absolute path, a drive-letter path, a `..` or empty segment, a backslash, or a NUL or other control character;
 - touches `.git` in any segment, in any case (also `.git.` and `GIT~1`), or a protected path. The checkpoint's `latest.json` lists the project's protected git files and directories, workspace-relative and written by the host (hooks, config, `info`, `modules`, `worktrees`, and the others in [Protected git paths](#protected-git-paths)); a checkpoint without the list refuses `.git` only;
-- has mode `120000` (symlink) or `160000` (gitlink) on either side;
+- has a mode other than `100644` or `100755` on either side (so no symlink `120000` or gitlink `160000`);
 - renames or copies from or to a refused path;
 - is not a git diff at all, or is larger than 64 MiB.
 

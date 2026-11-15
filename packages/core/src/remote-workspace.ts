@@ -2,16 +2,11 @@
 // kept, and the validation of that patch. The patch comes from an untrusted
 // sandbox, so it is parsed here and the WHOLE patch is refused when any entry
 // could write outside the project's ordinary files.
-import { createHash, randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { writeFileAtomic } from "@piship/credentials";
 
 export const REMOTE_PATCH_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -64,17 +59,6 @@ export function remoteWorkspacePaths(
   };
 }
 
-function ensurePrivateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: 0o700 });
-  chmodSync(path, 0o700);
-}
-
-function writeAtomic(path: string, data: Buffer | string): void {
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(temporary, data, { flag: "wx", mode: 0o600 });
-  renameSync(temporary, path);
-}
-
 /** Store the checkpoint atomically: the patch first, then its description. */
 export function writeRemoteWorkspaceCheckpoint(
   stateDir: string,
@@ -89,8 +73,6 @@ export function writeRemoteWorkspaceCheckpoint(
   },
 ): RemoteWorkspacePaths {
   const paths = remoteWorkspacePaths(stateDir, projectRoot);
-  ensurePrivateDirectory(join(stateDir, "sandbox-workspace"));
-  ensurePrivateDirectory(paths.dir);
   const meta: RemoteWorkspaceMeta = {
     version: 1,
     session: info.session,
@@ -102,8 +84,10 @@ export function writeRemoteWorkspaceCheckpoint(
       ? { protectedPaths: [...info.protectedPaths] }
       : {}),
   };
-  writeAtomic(paths.patch, patch);
-  writeAtomic(paths.meta, `${JSON.stringify(meta)}\n`);
+  writeFileAtomic(paths.patch, patch, { directoryMode: 0o700 });
+  writeFileAtomic(paths.meta, `${JSON.stringify(meta)}\n`, {
+    directoryMode: 0o700,
+  });
   return paths;
 }
 
@@ -142,7 +126,7 @@ export function readRemoteWorkspaceCheckpoint(
 
 export interface RemoteWorkspacePatchResult {
   readonly ok: boolean;
-  /** Every path the patch touches (both sides of a rename or copy). */
+  /** Every path git will write, delete, or read as a rename or copy source. */
   readonly files: string[];
   /** Why the patch is refused; empty when ok. */
   readonly refused: string[];
@@ -183,12 +167,12 @@ function unquote(body: string): Buffer | undefined {
   return Buffer.from(bytes);
 }
 
-/** A git path token: quoted (decoded) or raw up to a tab. Lines are latin1, so chars are bytes. */
-function pathBytes(token: string): Buffer | undefined {
-  if (token.startsWith('"')) {
-    if (token.length < 2 || !token.endsWith('"')) return undefined;
-    return unquote(token.slice(1, -1));
-  }
+/** A path as `git apply --summary` prints it: C-quoted, or raw bytes (latin1 chars). */
+function summaryPath(token: string): Buffer | undefined {
+  if (token.startsWith('"'))
+    return token.length > 1 && token.endsWith('"')
+      ? unquote(token.slice(1, -1))
+      : undefined;
   return Buffer.from(token, "latin1");
 }
 
@@ -210,8 +194,7 @@ function checkPath(
   if (path.includes("\\")) return refuse("backslash in path");
   if (path.startsWith("/") || /^[A-Za-z]:/.test(path))
     return refuse("absolute path");
-  const segments = path.split("/");
-  for (const segment of segments) {
+  for (const segment of path.split("/")) {
     if (segment === "" || segment === ".")
       return refuse("empty or '.' path segment");
     if (segment === "..") return refuse("'..' path segment");
@@ -226,134 +209,240 @@ function checkPath(
   return path;
 }
 
-/** `a/p` or `b/p` prefix removed; undefined when absent. */
-function stripSide(bytes: Buffer): Buffer | undefined {
-  return bytes.length > 2 &&
-    (bytes[0] === 0x61 || bytes[0] === 0x62) &&
-    bytes[1] === 0x2f
-    ? bytes.subarray(2)
-    : undefined;
-}
+const ALLOWED_MODES = new Set(["100644", "100755"]);
 
 /**
- * Validate the output of `git diff --binary`. Parses every `diff --git`
- * header and the extended headers; `---`/`+++` are checked too but never
- * trusted alone. Hunk bodies and binary data are not inspected: a line of
- * either never starts with `diff --git `.
+ * The line scan: what git's report omits. It checks the structure and every
+ * mode (including the `index` line's, which the summary never shows) against
+ * 100644 and 100755, and refuses any line git could read as a header outside
+ * one: a hunk ends exactly where its `@@` counts say, and anything after
+ * that is a header, a hunk header, or a refusal. Paths are not read here.
  */
-export function validateRemoteWorkspacePatch(
-  patch: Buffer,
-  protectedPaths: readonly string[] = [],
-  maxBytes = REMOTE_PATCH_MAX_BYTES,
-): RemoteWorkspacePatchResult {
+function scanStructure(lines: readonly string[]): string[] {
   const refused: string[] = [];
-  const files = new Set<string>();
-  if (patch.length > maxBytes)
-    return {
-      ok: false,
-      files: [],
-      refused: [`the patch is larger than ${maxBytes} bytes`],
-    };
-  const protectedSet = new Set(
-    protectedPaths.map((p) => p.replace(/\/+$/, "").toLowerCase()),
-  );
-  const add = (raw: Buffer | undefined) => {
-    if (!raw) {
-      refused.push("a path in the patch is malformed");
-      return;
-    }
-    const path = checkPath(raw, protectedSet, refused);
-    if (path !== undefined) files.add(path);
-  };
-  const addSided = (token: string) => {
-    if (token === "/dev/null") return;
-    const bytes = pathBytes(token);
-    const stripped = bytes && stripSide(bytes);
-    if (!stripped) refused.push("a path in the patch has no a/ or b/ prefix");
-    else add(stripped);
-  };
-
-  const lines = patch.toString("latin1").split("\n");
-  if (patch.length === 0 || lines[0]?.startsWith("diff --git ") !== true)
-    return {
-      ok: false,
-      files: [],
-      refused: ["the patch does not start with a git diff header"],
-    };
-
-  let inHeader = false;
-  let renamed = false;
-  let headerLine = "";
-  const finishSection = () => {
-    if (headerLine === "" || renamed) return;
-    // No rename lines: both sides name the same path, so split the header
-    // where `a/P b/P` is symmetric.
-    const rest = headerLine.slice("diff --git ".length);
-    if (rest.startsWith('"') || rest.includes('"')) {
-      // Quoted forms: a/ token then b/ token; each may be quoted or raw.
-      const match = /^("(?:[^"\\]|\\.)*"|\S+) ("(?:[^"\\]|\\.)*"|.+)$/s.exec(
-        rest,
+  const checkMode = (mode: string) => {
+    if (!ALLOWED_MODES.has(mode))
+      refused.push(
+        `file mode ${JSON.stringify(mode)} is not 100644 or 100755 (symbolic links, submodules and unusual modes are refused)`,
       );
-      if (!match) {
-        refused.push("a diff header is malformed");
-        return;
-      }
-      addSided(match[1] as string);
-      addSided(match[2] as string);
-      return;
-    }
-    const half = (rest.length - 1) / 2;
-    if (Number.isInteger(half) && rest[half] === " ") {
-      const left = rest.slice(0, half);
-      const right = rest.slice(half + 1);
-      if (
-        left.startsWith("a/") &&
-        right.startsWith("b/") &&
-        left.slice(2) === right.slice(2)
-      ) {
-        addSided(left);
-        addSided(right);
-        return;
-      }
-    }
-    refused.push("a diff header is malformed");
   };
-  const refuseMode = (mode: string) => {
-    if (mode === "120000")
-      refused.push("contains a symbolic link (mode 120000)");
-    else if (mode === "160000")
-      refused.push("contains a submodule (mode 160000)");
-  };
-
-  for (const line of lines) {
+  const refuseLine = (why: string) => refused.push(`${why} in the patch`);
+  // `header`: extended headers of a section; `between`: after +++ or a
+  // finished hunk; `hunk`: consuming lines; `binary`: base85 data; `end`: a
+  // section that takes no more lines.
+  let state: "header" | "between" | "hunk" | "binary" | "end" = "end";
+  let oldLeft = 0;
+  let newLeft = 0;
+  let awaitingPlus = false;
+  const BINARY_LINE = /^[A-Za-z][0-9A-Za-z!#$%&()*+\-;<=>?@^_`{|}~]*$/;
+  for (const [index, line] of lines.entries()) {
+    if (line === "" && index === lines.length - 1) continue;
+    if (state === "hunk") {
+      if (oldLeft > 0 || newLeft > 0) {
+        const lead = line[0];
+        if (lead === " " || line === "") {
+          oldLeft--;
+          newLeft--;
+        } else if (lead === "-") oldLeft--;
+        else if (lead === "+") newLeft--;
+        else if (lead !== "\\") {
+          refuseLine("an unexpected line inside a hunk");
+          return refused;
+        }
+        if (oldLeft < 0 || newLeft < 0) {
+          refuseLine("a hunk longer than its header declares");
+          return refused;
+        }
+        continue;
+      }
+      // A "\ No newline" marker may follow the last counted line.
+      if (line.startsWith("\\")) continue;
+      state = "between";
+    }
     if (line.startsWith("diff --git ")) {
-      finishSection();
-      inHeader = true;
-      renamed = false;
-      headerLine = line;
+      if (awaitingPlus) refuseLine("a --- line without +++");
+      state = "header";
+      awaitingPlus = false;
       continue;
     }
-    if (!inHeader) continue;
-    if (line.startsWith("@@ ") || line.startsWith("GIT binary patch")) {
-      inHeader = false;
+    if (state === "between") {
+      const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+      if (!hunk) {
+        refuseLine("a line that is not a hunk or a header");
+        continue;
+      }
+      oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1]);
+      newLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      state = "hunk";
       continue;
     }
-    if (line.startsWith("Binary files ")) {
-      inHeader = false;
+    if (state === "binary") {
+      if (
+        line !== "" &&
+        !/^(?:literal|delta) \d+$/.test(line) &&
+        !BINARY_LINE.test(line)
+      )
+        refuseLine("an unexpected line in binary data");
+      continue;
+    }
+    if (state === "end") {
+      refuseLine("a line outside any diff section");
+      continue;
+    }
+    if (awaitingPlus) {
+      if (!line.startsWith("+++ ")) refuseLine("a --- line without +++");
+      awaitingPlus = false;
+      state = "between";
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      awaitingPlus = true;
       continue;
     }
     const mode =
-      /^(?:old|new|new file|deleted file) mode (\d+)$/.exec(line) ??
-      /^index [0-9a-f]+\.\.[0-9a-f]+ (\d+)$/.exec(line);
-    if (mode) refuseMode(mode[1] as string);
-    const move = /^(?:rename|copy) (?:from|to) (.*)$/.exec(line);
-    if (move) {
-      renamed = true;
-      add(pathBytes(move[1] as string));
+      /^(?:old mode|new mode|deleted file mode|new file mode) ([\s\S]*)$/.exec(
+        line,
+      ) ?? /^index [0-9a-f]+\.\.[0-9a-f]+ ([\s\S]*)$/.exec(line);
+    if (mode) {
+      checkMode(mode[1] as string);
+      continue;
     }
-    const side = /^(?:---|\+\+\+) ([^\t]*)/.exec(line);
-    if (side) addSided(side[1] as string);
+    if (
+      /^index [0-9a-f]+\.\.[0-9a-f]+$/.test(line) ||
+      /^(?:dis)?similarity index \d+%$/.test(line) ||
+      /^(?:rename|copy) (?:from|to|old|new) [\s\S]*$/.test(line)
+    )
+      continue;
+    if (line === "GIT binary patch") {
+      state = "binary";
+      continue;
+    }
+    if (/^Binary files .* differ$/.test(line)) {
+      state = "end";
+      continue;
+    }
+    refuseLine(
+      `an unrecognized header line ${JSON.stringify(line.slice(0, 40))}`,
+    );
   }
-  finishSection();
+  if (awaitingPlus) refuseLine("a --- line without +++");
+  return refused;
+}
+
+function runGit(
+  cwd: string,
+  args: string[],
+  input: Buffer,
+): Promise<{ stdout: Buffer; stderr: string; code: number }> {
+  return new Promise((resolveRun, reject) => {
+    const child = execFile(
+      "git",
+      args,
+      { cwd, encoding: "buffer", maxBuffer: 256 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        const code =
+          error === null ? 0 : typeof error.code === "number" ? error.code : -1;
+        if (code === -1) reject(error);
+        else resolveRun({ stdout, stderr: stderr.toString("utf8"), code });
+      },
+    );
+    child.stdin?.end(input);
+  });
+}
+
+/**
+ * Validate the output of `git diff --binary`. Git's own parser is the
+ * authority on which paths the patch touches: `git apply --numstat -z` lists
+ * what it writes and `git apply --summary` the modes and the rename and copy
+ * sources, run without applying anything. Every path is checked, and the whole
+ * patch is refused when one fails. `cwd` is where git runs (the project).
+ */
+export async function validateRemoteWorkspacePatch(
+  patch: Buffer,
+  protectedPaths: readonly string[] = [],
+  options: { cwd?: string; maxBytes?: number } = {},
+): Promise<RemoteWorkspacePatchResult> {
+  const maxBytes = options.maxBytes ?? REMOTE_PATCH_MAX_BYTES;
+  const fail = (...reasons: string[]) => ({
+    ok: false,
+    files: [],
+    refused: reasons,
+  });
+  if (patch.length > maxBytes)
+    return fail(`the patch is larger than ${maxBytes} bytes`);
+  const lines = patch.toString("latin1").split("\n");
+  if (patch.length === 0 || !lines[0]?.startsWith("diff --git "))
+    return fail("the patch does not start with a git diff header");
+  const refused = scanStructure(lines);
+  if (refused.length > 0) return fail(...refused);
+
+  const cwd = options.cwd ?? process.cwd();
+  const [numstat, summary] = await Promise.all([
+    runGit(cwd, ["apply", "--numstat", "-z", "-"], patch),
+    runGit(cwd, ["apply", "--summary", "-"], patch),
+  ]);
+  if (numstat.code !== 0 || summary.code !== 0)
+    return fail(
+      `git cannot read the patch: ${(numstat.stderr || summary.stderr).trim().slice(0, 200)}`,
+    );
+
+  const protectedSet = new Set(
+    protectedPaths.map((p) => p.replace(/\/+$/, "").toLowerCase()),
+  );
+  const files = new Set<string>();
+  const check = (token: string) => {
+    const bytes = summaryPath(token);
+    if (!bytes) refused.push("git reports a malformed path");
+    else {
+      const path = checkPath(bytes, protectedSet, refused);
+      if (path !== undefined) files.add(path);
+    }
+  };
+  for (const record of numstat.stdout.toString("latin1").split("\0")) {
+    if (record === "") continue;
+    const fields = /^(?:-|\d+)\t(?:-|\d+)\t([\s\S]*)$/.exec(record);
+    if (!fields) refused.push("git reports an unreadable change summary");
+    // -z numstat paths are raw, never quoted.
+    else if (fields[1] !== "") {
+      const path = checkPath(
+        Buffer.from(fields[1] as string, "latin1"),
+        protectedSet,
+        refused,
+      );
+      if (path !== undefined) files.add(path);
+    }
+  }
+  const mode = (value: string) => {
+    if (!ALLOWED_MODES.has(value))
+      refused.push(`git reports file mode ${JSON.stringify(value)}`);
+  };
+  for (const line of summary.stdout.toString("latin1").split("\n")) {
+    if (line === "") continue;
+    let m = /^ (?:create|delete) mode (\S+) (.+)$/.exec(line);
+    if (m) {
+      mode(m[1] as string);
+      check(m[2] as string);
+      continue;
+    }
+    m = /^ mode change (\S+) => (\S+) (.+)$/.exec(line);
+    if (m) {
+      mode(m[1] as string);
+      mode(m[2] as string);
+      check(m[3] as string);
+      continue;
+    }
+    m = /^ (?:rename|copy) (.+) \(\d+%\)$/.exec(line);
+    if (m) {
+      // "a => b" is ambiguous when a name holds " => ": check every split.
+      const pair = m[1] as string;
+      const parts = pair.split(" => ");
+      for (let i = 1; i < parts.length; i++) {
+        check(parts.slice(0, i).join(" => "));
+        check(parts.slice(i).join(" => "));
+      }
+      continue;
+    }
+    refused.push("git reports an unrecognized summary line");
+  }
   return { ok: refused.length === 0, files: [...files], refused };
 }

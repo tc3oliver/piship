@@ -46,8 +46,11 @@ function realDiff(change: (dir: string) => void): Buffer {
   return git(dir, "diff", "--cached", "--binary", "HEAD");
 }
 
-const refusal = (patch: string | Buffer, protectedPaths: string[] = []) => {
-  const result = validateRemoteWorkspacePatch(
+const refusal = async (
+  patch: string | Buffer,
+  protectedPaths: string[] = [],
+) => {
+  const result = await validateRemoteWorkspacePatch(
     Buffer.from(patch),
     protectedPaths,
   );
@@ -59,7 +62,7 @@ const newFile = (path: string, mode = "100644") =>
   `diff --git a/${path} b/${path}\nnew file mode ${mode}\nindex 0000000..e69de29\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+x\n`;
 
 describe("validateRemoteWorkspacePatch", () => {
-  it("accepts a benign multi-file patch with a binary, a new file and a rename", () => {
+  it("accepts a benign multi-file patch with a binary, a new file and a rename", async () => {
     const patch = realDiff((dir) => {
       writeFileSync(join(dir, "a.txt"), "one\nthree\n");
       writeFileSync(join(dir, "bin.dat"), Buffer.from([9, 8, 7, 0, 255]));
@@ -67,7 +70,7 @@ describe("validateRemoteWorkspacePatch", () => {
       writeFileSync(join(dir, "src", "new file.ts"), "export {};\n");
       git(dir, "mv", "old name.txt", "renamed.txt");
     });
-    const result = validateRemoteWorkspacePatch(patch);
+    const result = await validateRemoteWorkspacePatch(patch);
     expect(result).toMatchObject({ ok: true, refused: [] });
     expect(result.files.sort()).toEqual([
       "a.txt",
@@ -78,45 +81,49 @@ describe("validateRemoteWorkspacePatch", () => {
     ]);
   });
 
-  it("decodes a C-quoted path before checking it", () => {
+  it("decodes a C-quoted path before checking it", async () => {
     const patch = realDiff((dir) => writeFileSync(join(dir, "ä.txt"), "x\n"));
     expect(patch.toString("latin1")).toContain('"a/\\303\\244.txt"');
-    expect(validateRemoteWorkspacePatch(patch).files).toEqual(["ä.txt"]);
-    expect(refusal(newFile('".git/config"').replace(/"/g, ""))).toMatch(".git");
+    expect((await validateRemoteWorkspacePatch(patch)).files).toEqual([
+      "ä.txt",
+    ]);
+    expect(await refusal(newFile('".git/config"').replace(/"/g, ""))).toMatch(
+      ".git",
+    );
     const quoted = `diff --git "a/\\056git/hooks/pre-commit" "b/\\056git/hooks/pre-commit"\nnew file mode 100755\n--- /dev/null\n+++ "b/\\056git/hooks/pre-commit"\n@@ -0,0 +1 @@\n+x\n`;
-    expect(refusal(quoted)).toMatch("touches .git");
-    expect(refusal(quoted.replace(/056/g, "004"))).toMatch(
+    expect(await refusal(quoted)).toMatch("touches .git");
+    expect(await refusal(quoted.replace(/056/g, "004"))).toMatch(
       /control|malformed|\.\.?/,
     );
   });
 
-  it("refuses a real symlink", () => {
+  it("refuses a real symlink", async () => {
     const patch = realDiff((dir) =>
       symlinkSync("/etc/passwd", join(dir, "ln")),
     );
-    expect(refusal(patch)).toMatch("mode 120000");
+    expect(await refusal(patch)).toMatch("120000");
   });
 
-  it("refuses a gitlink", () => {
-    expect(refusal(newFile("sub", "160000"))).toMatch("mode 160000");
+  it("refuses a gitlink", async () => {
+    expect(await refusal(newFile("sub", "160000"))).toMatch("160000");
     const change = "diff --git a/x b/x\nold mode 100644\nnew mode 120000\n";
-    expect(refusal(change)).toMatch("120000");
+    expect(await refusal(change)).toMatch("120000");
   });
 
-  it("refuses absolute, parent, backslash and control-character paths", () => {
-    expect(refusal(newFile("/etc/passwd").replace("a//", "a/"))).toMatch(
+  it("refuses absolute, parent, backslash and control-character paths", async () => {
+    expect(await refusal(newFile("/etc/passwd").replace("a//", "a/"))).toMatch(
       /absolute|empty/,
     );
-    expect(refusal(newFile("../escape"))).toMatch("'..' path segment");
-    expect(refusal(newFile("dir/../../escape"))).toMatch("'..'");
-    expect(refusal(newFile("a\\b"))).toMatch("backslash");
-    expect(refusal(newFile("C:evil"))).toMatch("absolute");
-    expect(refusal(newFile("bell\u0007"))).toMatch("control");
+    expect(await refusal(newFile("../escape"))).toMatch("'..' path segment");
+    expect(await refusal(newFile("dir/../../escape"))).toMatch("'..'");
+    expect(await refusal(newFile("a\\b"))).toMatch("backslash");
+    expect(await refusal(newFile("C:evil"))).toMatch("absolute");
+    expect(await refusal(newFile("bell\u0007"))).toMatch("control");
     const quoted = `diff --git "a/x\\nfoo" "b/x\\nfoo"\nnew file mode 100644\n--- /dev/null\n+++ "b/x\\nfoo"\n@@ -0,0 +1 @@\n+x\n`;
-    expect(refusal(quoted)).toMatch("control");
+    expect(await refusal(quoted)).toMatch("control");
   });
 
-  it("refuses .git in any case and in Windows aliases", () => {
+  it("refuses .git in any case and in Windows aliases", async () => {
     for (const path of [
       ".git/config",
       ".GIT/hooks/x",
@@ -125,61 +132,132 @@ describe("validateRemoteWorkspacePatch", () => {
       ".git./x",
       "GIT~1/x",
     ])
-      expect(refusal(newFile(path))).toMatch(".git");
+      expect(await refusal(newFile(path))).toMatch(".git");
   });
 
-  it("refuses protected paths and everything below them", () => {
-    expect(refusal(newFile("hooks/pre-commit"), ["hooks"])).toMatch(
+  it("refuses protected paths and everything below them", async () => {
+    expect(await refusal(newFile("hooks/pre-commit"), ["hooks"])).toMatch(
       "protected",
     );
-    expect(refusal(newFile(".Husky/x"), [".husky"])).toMatch("protected");
-    expect(refusal(newFile("config"), ["config"])).toMatch("protected");
+    expect(await refusal(newFile(".Husky/x"), [".husky"])).toMatch("protected");
+    expect(await refusal(newFile("config"), ["config"])).toMatch("protected");
     expect(
-      validateRemoteWorkspacePatch(Buffer.from(newFile("hooks2/x")), ["hooks"])
-        .ok,
+      (
+        await validateRemoteWorkspacePatch(Buffer.from(newFile("hooks2/x")), [
+          "hooks",
+        ])
+      ).ok,
     ).toBe(true);
   });
 
-  it("refuses a rename or copy from or to a refused path", () => {
+  it("refuses a rename or copy from or to a refused path", async () => {
     const rename = (from: string, to: string, verb = "rename") =>
       `diff --git a/${from} b/${to}\nsimilarity index 100%\n${verb} from ${from}\n${verb} to ${to}\n`;
-    expect(refusal(rename("a.txt", ".git/config"))).toMatch(".git");
-    expect(refusal(rename(".git/config", "a.txt"))).toMatch(".git");
-    expect(refusal(rename("a.txt", "../b"))).toMatch("'..'");
-    expect(refusal(rename("a.txt", "x/.git/y", "copy"))).toMatch(".git");
-    expect(refusal(rename("a.txt", "hooks/x", "copy"), ["hooks"])).toMatch(
-      "protected",
-    );
+    expect(await refusal(rename("a.txt", ".git/config"))).toMatch(".git");
+    expect(await refusal(rename(".git/config", "a.txt"))).toMatch(".git");
+    expect(await refusal(rename("a.txt", "../b"))).toMatch("'..'");
+    expect(await refusal(rename("a.txt", "x/.git/y", "copy"))).toMatch(".git");
+    expect(
+      await refusal(rename("a.txt", "hooks/x", "copy"), ["hooks"]),
+    ).toMatch("protected");
   });
 
-  it("does not trust ---/+++ or the diff header alone", () => {
+  it("does not trust ---/+++ or the diff header alone", async () => {
     const patch = `diff --git a/ok.txt b/ok.txt\nindex 1..2 100644\n--- a/ok.txt\n+++ b/.git/config\n@@ -1 +1 @@\n-a\n+b\n`;
-    expect(refusal(patch)).toMatch(".git");
+    expect(await refusal(patch)).toMatch(".git");
     const hidden = `diff --git a/ok.txt b/ok.txt\nnew file mode 100644\n--- /dev/null\n+++ b/ok.txt\n@@ -0,0 +1 @@\n+x\n${newFile(".git/x")}`;
-    expect(refusal(hidden)).toMatch(".git");
-    expect(refusal("diff --git a/ok b/other\nnew file mode 100644\n")).toMatch(
-      "malformed",
-    );
+    expect(await refusal(hidden)).toMatch(".git");
+    expect(
+      await refusal("diff --git a/ok b/other\nnew file mode 100644\n"),
+    ).toMatch("cannot read the patch");
   });
 
-  it("refuses text that is not a git diff, and oversized patches", () => {
-    expect(refusal("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n")).toMatch(
+  it("refuses text that is not a git diff, and oversized patches", async () => {
+    expect(await refusal("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n")).toMatch(
       "git diff header",
     );
-    expect(refusal("diff --cc x\n")).toMatch("git diff header");
-    expect(refusal(Buffer.alloc(0))).toMatch("git diff header");
-    const big = validateRemoteWorkspacePatch(
+    expect(await refusal("diff --cc x\n")).toMatch("git diff header");
+    expect(await refusal(Buffer.alloc(0))).toMatch("git diff header");
+    const big = await validateRemoteWorkspacePatch(
       Buffer.from(newFile("a.txt")),
       [],
-      10,
+      { maxBytes: 10 },
     );
     expect(big.ok).toBe(false);
     expect(big.refused[0]).toMatch("larger than 10 bytes");
   });
 });
 
+describe("validateRemoteWorkspacePatch parses like git", () => {
+  const valid = newFile("ok.txt");
+  const plain =
+    "--- /dev/null\n+++ b/.claude/settings.json\n@@ -0,0 +1 @@\n+x\n";
+
+  it("refuses a plain diff appended after a finished hunk", async () => {
+    expect(await refusal(valid + plain, [".claude"])).toMatch(
+      "not a hunk or a header",
+    );
+    expect(await refusal(valid + plain)).toMatch("not a hunk or a header");
+  });
+
+  it("refuses the legacy rename old/new headers into a refused path", async () => {
+    const patch =
+      "diff --git a/a.txt b/b.txt\nrename old a.txt\nrename new .git/config\n";
+    expect(await refusal(patch)).toMatch(".git");
+    expect(await refusal(patch.replace(".git/config", "../x"))).toMatch("'..'");
+  });
+
+  it("refuses any mode that is not exactly 100644 or 100755", async () => {
+    expect(await refusal(newFile("a", "0120000"))).toMatch("0120000");
+    expect(await refusal(newFile("a", "100644 "))).toMatch("not 100644");
+    expect(await refusal(newFile("a", "100644\r"))).toMatch("not 100644");
+    expect(await refusal(newFile("a", "100664"))).toMatch("not 100644");
+    expect(
+      await refusal(
+        newFile("a").replace(
+          "index 0000000..e69de29",
+          "index 0000000..e69de29 120000",
+        ),
+      ),
+    ).toMatch("120000");
+    expect(
+      (await validateRemoteWorkspacePatch(Buffer.from(newFile("a", "100755"))))
+        .ok,
+    ).toBe(true);
+  });
+
+  it("refuses unknown header lines, a lone ---, stray text and overlong hunks", async () => {
+    expect(
+      await refusal(valid.replace("index", "bogus header\nindex")),
+    ).toMatch("unrecognized header");
+    expect(await refusal("diff --git a/a b/a\n--- a/a\n")).toMatch(
+      "without +++",
+    );
+    expect(await refusal(`${valid}stray\n`)).toMatch("not a hunk");
+    expect(await refusal(valid.replace("+x\n", "+x\n+y\n"))).toMatch(
+      /not a hunk|longer/,
+    );
+    expect(await refusal(valid.replace("+x\n", "x\n"))).toMatch(
+      "inside a hunk",
+    );
+  });
+
+  it("checks every reading of an ambiguous rename pair", async () => {
+    const patch =
+      "diff --git a/a b/x => ../y\nsimilarity index 100%\nrename from a\nrename to x => ../y\n";
+    expect(await refusal(patch)).toMatch("'..'");
+  });
+
+  it("reads a hunk line that looks like a header as content, as git does", async () => {
+    const content =
+      "diff --git a/f b/f\nindex 1111111..2222222 100644\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n--- a/.git/config\n+++ b/.git/config\n";
+    const result = await validateRemoteWorkspacePatch(Buffer.from(content));
+    expect(result).toMatchObject({ ok: true, files: ["f"] });
+  });
+});
+
 describe("remote workspace checkpoint", () => {
-  it("stores atomically with private modes and reads back", () => {
+  it("stores atomically with private modes and reads back", async () => {
     const state = join(temp, "state");
     const root = join(temp, "project");
     mkdirSync(root);

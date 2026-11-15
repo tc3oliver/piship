@@ -3,7 +3,7 @@
 // validated first, shown, confirmed, and applied with `git apply --3way`,
 // which neither commits nor runs any hook.
 import { execFile } from "node:child_process";
-import { mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PiShipError } from "@piship/contracts";
@@ -37,15 +37,8 @@ function git(
 
 /** Terminal control characters in untrusted text would let a patch rewrite the screen. */
 function printable(text: string): string {
-  return [...text]
-    .map((c) => {
-      const code = c.charCodeAt(0);
-      const control =
-        (code < 0x20 && c !== "\n" && c !== "\t") ||
-        (code >= 0x7f && code <= 0x9f);
-      return control ? "?" : c;
-    })
-    .join("");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "?");
 }
 
 function failure(message: string, userAction?: string): PiShipError {
@@ -72,10 +65,14 @@ export async function sandboxPull(
 ): Promise<void> {
   const yes = flags.includes("--yes");
   const discard = flags.includes("--discard");
-  if (flags.some((f) => f !== "--yes" && f !== "--discard") || (yes && discard))
+  const showDiff = flags.includes("--diff");
+  if (
+    flags.some((f) => f !== "--yes" && f !== "--discard" && f !== "--diff") ||
+    (discard && (yes || showDiff))
+  )
     throw failure(
-      "Usage: sandbox pull [--yes] or sandbox pull --discard",
-      `Run ${ctx.metadata.app.command} sandbox pull with at most one of --yes and --discard`,
+      "Usage: sandbox pull [--diff] [--yes] or sandbox pull --discard",
+      `Run ${ctx.metadata.app.command} sandbox pull with --discard alone, or with --diff and --yes`,
     );
   const top = await git(process.cwd(), ["rev-parse", "--show-toplevel"]).catch(
     () => undefined,
@@ -108,9 +105,10 @@ export async function sandboxPull(
     ctx.out("The sandbox session made no changes.");
     return;
   }
-  const result = validateRemoteWorkspacePatch(
+  const result = await validateRemoteWorkspacePatch(
     checkpoint.patch,
     checkpoint.meta.protectedPaths ?? [],
+    { cwd: root },
   );
   if (!result.ok)
     throw failure(
@@ -124,7 +122,11 @@ export async function sandboxPull(
       "Run sandbox pull --discard",
     );
   ctx.out(printable(stat.stdout.toString("utf8")).trimEnd());
-  ctx.out(printable(checkpoint.patch.toString("utf8")));
+  if (showDiff) ctx.out(printable(checkpoint.patch.toString("utf8")));
+  else
+    ctx.out(
+      "The full diff is not shown; run sandbox pull --diff to review it before applying.",
+    );
   if (!yes) {
     if (!process.stdin.isTTY)
       throw failure(
@@ -150,10 +152,26 @@ export async function sandboxPull(
       `git apply failed: ${printable(applied.stderr).trim()}`,
       "The stored changes are kept; fix the working tree and run sandbox pull again, or --discard",
     );
+  // Archive the bytes that were applied. A newer checkpoint written while the
+  // prompt was open stays where it is.
   mkdirSync(paths.applied, { recursive: true, mode: 0o700 });
   const stamp = checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
-  renameSync(paths.patch, join(paths.applied, `${stamp}.patch`));
-  renameSync(paths.meta, join(paths.applied, `${stamp}.json`));
+  writeFileSync(join(paths.applied, `${stamp}.patch`), checkpoint.patch, {
+    mode: 0o600,
+  });
+  writeFileSync(
+    join(paths.applied, `${stamp}.json`),
+    `${JSON.stringify(checkpoint.meta)}\n`,
+    { mode: 0o600 },
+  );
+  const latest = readRemoteWorkspaceCheckpoint(ctx.stateDir, root);
+  if (latest?.patch.equals(checkpoint.patch) !== false) {
+    rmSync(paths.patch, { force: true });
+    rmSync(paths.meta, { force: true });
+  } else
+    ctx.err(
+      "A newer sandbox checkpoint was saved while this one was open; it is still stored for the next sandbox pull.",
+    );
   ctx.out(
     `Applied ${result.files.length} file(s) to ${root}. Nothing was committed.`,
   );
