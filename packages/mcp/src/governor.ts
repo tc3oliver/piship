@@ -112,6 +112,8 @@ interface ServerEntry {
   tools: McpToolDefinition[];
   exposed: string[];
   withheld: string[];
+  /** The descriptors this server offers, before names are checked across servers. */
+  offered: GovernedMcpTool[];
   /** The resolved URL is plain HTTP to a host other than loopback. */
   plainHttp?: boolean;
 }
@@ -143,6 +145,7 @@ export class McpGovernor {
         tools: [],
         exposed: [],
         withheld: [],
+        offered: [],
       };
     });
   }
@@ -207,6 +210,7 @@ export class McpGovernor {
       );
     }
     await Promise.all(allowed.map((entry) => this.#startServer(entry)));
+    this.#assemble();
     const failedRequired = this.#entries.find(
       (entry) => entry.state === "failed" && entry.config.required,
     );
@@ -405,7 +409,7 @@ export class McpGovernor {
       }
       const name = exposedToolName(config.id, tool.name);
       entry.exposed.push(name);
-      this.#descriptors.push({
+      entry.offered.push({
         name,
         server: config.id,
         tool: tool.name,
@@ -414,6 +418,34 @@ export class McpGovernor {
         ...(config.parallelToolCalls ? { parallel: true } : {}),
         call: (args, signal) => this.#call(entry, tool.name, args, signal),
       });
+    }
+  }
+
+  /**
+   * Publish the tools of every server in declaration order. The exposed name
+   * `mcp__<server>__<tool>` is not unique across servers whose ids may hold
+   * underscores (`docs` with `get__page`, and `docs__get` with `page`), so the
+   * first server to claim a name keeps it; a later server's tool of the same
+   * name is withheld, never offered in its place. Servers declared by the
+   * distribution come before the ones a project file adds.
+   */
+  #assemble(): void {
+    const taken = new Set<string>();
+    this.#descriptors = [];
+    for (const entry of this.#entries) {
+      for (const descriptor of entry.offered) {
+        if (taken.has(descriptor.name)) {
+          entry.exposed = entry.exposed.filter(
+            (name) => name !== descriptor.name,
+          );
+          entry.withheld.push(descriptor.tool);
+          entry.reason ??= `withheld a tool whose name ${descriptor.name} another server already uses`;
+          if (entry.state === "healthy") entry.state = "degraded";
+          continue;
+        }
+        taken.add(descriptor.name);
+        this.#descriptors.push(descriptor);
+      }
     }
   }
 

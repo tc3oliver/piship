@@ -1,5 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -176,6 +177,135 @@ function harness(
   cleanup.push(() => governor.close());
   return { governor, audit, spawned };
 }
+
+/**
+ * A child process that is only a JSON-RPC peer in memory: it lists the given
+ * tools and records the name of every tool it is asked to call.
+ */
+function memoryRuntime(
+  servers: Record<string, { tools: string[]; called: string[] }>,
+): ProcessRuntime {
+  return {
+    ...localRuntime,
+    spawn: (request) => {
+      const key = request.args.at(-1) as string;
+      const peer = servers[key] as { tools: string[]; called: string[] };
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      let buffer = "";
+      stdin.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString("utf8");
+        for (
+          let end = buffer.indexOf("\n");
+          end >= 0;
+          end = buffer.indexOf("\n")
+        ) {
+          const message = JSON.parse(buffer.slice(0, end)) as {
+            id?: number;
+            method: string;
+            params?: { name?: string };
+          };
+          buffer = buffer.slice(end + 1);
+          if (message.id === undefined) continue;
+          const reply = (result: unknown) =>
+            stdout.write(
+              `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`,
+            );
+          if (message.method === "initialize")
+            reply({
+              protocolVersion: "2025-06-18",
+              capabilities: { tools: {} },
+              serverInfo: { name: key, version: "1" },
+            });
+          else if (message.method === "tools/list")
+            reply({
+              tools: peer.tools.map((name) => ({
+                name,
+                description: `${name} of ${key}`,
+                inputSchema: { type: "object" },
+              })),
+            });
+          else if (message.method === "tools/call") {
+            peer.called.push(message.params?.name ?? "");
+            reply({ content: [{ type: "text", text: `ran on ${key}` }] });
+          }
+        }
+      });
+      return {
+        pid: 1,
+        stdin,
+        stdout,
+        exited: new Promise(() => {}),
+        terminate: () => {
+          stdout.end();
+        },
+      };
+    },
+  };
+}
+
+describe("exposed tool names across servers", () => {
+  it("keeps a tool name for the first server that claims it: a project server cannot take over a declared one's tool", async () => {
+    // `mcp__docs__get__page` is `docs` + `get__page` and also `docs__get` + `page`.
+    const declared = { tools: ["get__page", "search"], called: [] as string[] };
+    const project = { tools: ["page", "other"], called: [] as string[] };
+    const { governor } = harness({
+      servers: [
+        stdioServer("docs", { args: ["docs"] }),
+        // Started first by a faster child or not, the declared server wins.
+        stdioServer("docs__get", { args: ["project"] }),
+      ],
+      runtime: memoryRuntime({ docs: declared, project }),
+    });
+    const reports = await governor.start();
+    const exposed = governor.tools().map((tool) => tool.name);
+    expect(
+      exposed.filter((name) => name === "mcp__docs__get__page"),
+    ).toHaveLength(1);
+    const winner = governor
+      .tools()
+      .find((tool) => tool.name === "mcp__docs__get__page");
+    expect(winner?.server).toBe("docs");
+    await winner?.call({});
+    expect(declared.called).toEqual(["get__page"]);
+    expect(project.called).toEqual([]);
+    // The project server keeps the tool that does not collide, and reports the other.
+    expect(exposed).toContain("mcp__docs__get__other");
+    const second = reports.find((report) => report.id === "docs__get");
+    expect(second?.withheld).toContain("page");
+    expect(second?.tools).not.toContain("mcp__docs__get__page");
+    expect(second?.state).toBe("degraded");
+    expect(reports.find((report) => report.id === "docs")?.state).toBe(
+      "healthy",
+    );
+  });
+
+  it("decides the same way whichever server finishes starting first", async () => {
+    for (const order of [
+      ["docs", "docs__get"],
+      ["docs__get", "docs"],
+    ]) {
+      const peers = {
+        docs: { tools: ["get__page"], called: [] as string[] },
+        project: { tools: ["page"], called: [] as string[] },
+      };
+      const config = {
+        docs: stdioServer("docs", { args: ["docs"] }),
+        docs__get: stdioServer("docs__get", { args: ["project"] }),
+      };
+      const { governor } = harness({
+        servers: order.map((id) => config[id as keyof typeof config]),
+        runtime: memoryRuntime(peers),
+      });
+      await governor.start();
+      const owner = governor
+        .tools()
+        .find((tool) => tool.name === "mcp__docs__get__page");
+      // The first declared server of the list owns the name.
+      expect(owner?.server).toBe(order[0]);
+    }
+  });
+});
 
 describe("McpGovernor over stdio", () => {
   it("starts a server, lists paginated tools, filters them, and calls", async () => {
