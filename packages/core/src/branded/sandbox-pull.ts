@@ -221,7 +221,7 @@ export async function sandboxPull(
   if (top?.code !== 0)
     throw failure(
       "This directory is not inside a git work tree, and sandbox pull applies changes to the project the sandbox session was started for",
-      `Run cd <your project> && ${ctx.metadata.app.command} sandbox pull from that project's root`,
+      `Change to your project's directory, then run ${ctx.metadata.app.command} sandbox pull there`,
     );
   const root = realpathSync.native(top.stdout.toString("utf8").trim());
   const paths = remoteWorkspacePaths(ctx.stateDir, root);
@@ -312,7 +312,7 @@ export async function sandboxPull(
   if (!result.ok)
     throw failure(
       `The sandbox patch is refused as a whole and nothing was applied${result.protectedOnly ? " (this distribution's policy refuses a patch that touches protected files)" : ""}: ${result.refused.slice(0, 5).map(printable).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,
-      `The sandbox is gone; the patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
+      `The patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
       "POLICY_DENIED",
     );
   // A path on this machine the patch cannot be written over, named with the next step.

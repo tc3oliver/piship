@@ -124,6 +124,16 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** The next step for a refused sandbox creation, from its status. */
+function createHint(status: number, template: string): string {
+  // 403 is a permission, not a wrong key (see credentialedFetch).
+  if (status === 401)
+    return "; the service refused the sandbox key: store the right one with sandbox login";
+  if (status === 400 || status === 404)
+    return `; check that sandbox.template (${template}) names a template this service has`;
+  return "";
+}
+
 export class E2bCompatibleBackend implements SandboxBackend {
   readonly id = "e2b-compatible";
   readonly provider = "e2b-compatible" as const;
@@ -149,12 +159,12 @@ export class E2bCompatibleBackend implements SandboxBackend {
       if (response.ok) return { available: true };
       return {
         available: false,
-        reason: `the e2b-compatible endpoint health check returned HTTP ${response.status}`,
+        reason: `the e2b-compatible endpoint health check returned HTTP ${response.status}; check that sandbox.endpoint is the service's API URL`,
       };
     } catch (error) {
       return {
         available: false,
-        reason: `the e2b-compatible endpoint is unreachable: ${errorText(error)}`,
+        reason: `the e2b-compatible endpoint is unreachable: ${errorText(error)}; check sandbox.endpoint and that this machine can reach it`,
       };
     }
   }
@@ -315,7 +325,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
       false,
     );
     if (!response.ok) {
-      const failure = `creating the sandbox failed: ${await describeFailure(response)}`;
+      const failure = `creating the sandbox failed: ${await describeFailure(response)}${snapshot === undefined ? createHint(response.status, this.#options.template ?? "base") : ""}`;
       // Not retried here: the caller starts again from the base template.
       throw snapshot !== undefined &&
         (response.status === 400 || response.status === 404)
@@ -622,7 +632,11 @@ export class E2bCompatibleBackend implements SandboxBackend {
     );
     if (!response.ok || !response.body)
       throw new Error(
-        `starting the command failed: ${await describeFailure(response)}`,
+        `starting the command failed: ${await describeFailure(response)}${
+          response.status === 401 || response.status === 403
+            ? `; the sandbox refused the user "${this.#options.user ?? "user"}": set sandbox.user to the user its commands run as (CubeSandbox: user: root)`
+            : ""
+        }`,
       );
     {
       const reader = new EnvelopeReader();
