@@ -109,6 +109,50 @@ describe("SECRET_KEY_PATTERN", () => {
   });
 });
 
+describe("redactValue and keys that end in a credential word", () => {
+  const sentinel = "zQ9fSentinelNoShape1234";
+  it("redacts environment-style and vendor-style keys, at any depth", () => {
+    const keys = [
+      "DB_PASSWORD",
+      "OPENAI_API_KEY",
+      "GITHUB_TOKEN",
+      "AWS_SECRET_ACCESS_KEY",
+      "NPM_TOKEN",
+      "secretAccessKey",
+      "secretKey",
+      "githubToken",
+      "clientToken",
+      "authKey",
+      "apiSecret",
+      "passphrase",
+      "X-Amz-Security-Token",
+      "X-Goog-Api-Key",
+    ];
+    const value = {
+      env: Object.fromEntries(keys.map((key) => [key, sentinel])),
+      list: [{ deeper: { GITHUB_TOKEN: sentinel } }],
+    };
+    const text = JSON.stringify(redactValue(value));
+    expect(text).not.toContain(sentinel);
+    expect(text.split(REDACTED).length - 1).toBe(keys.length + 1);
+  });
+
+  it("keeps counts, identifiers and public keys readable", () => {
+    const value = {
+      maxTokens: 4096,
+      tokenCount: 3,
+      keyId: "k1",
+      accessKeyId: "AKIDEXAMPLE",
+      publicKey: "ssh-ed25519 AAAA",
+      secretStore: "keychain",
+      credentialId: "c1",
+      passwordless: true,
+      authorizationEndpoint: "https://idp.example/auth",
+    };
+    expect(redactValue(value)).toEqual(value);
+  });
+});
+
 describe("redactValue", () => {
   it("replaces a reference back to an object being copied", () => {
     const value: Record<string, unknown> = { name: "a" };
@@ -196,6 +240,56 @@ describe("redaction of common secret forms", () => {
     expect(output).not.toContain(value);
     expect(output).toContain(label);
     expect(output).toContain(REDACTED);
+  });
+
+  it.each([
+    [
+      "a password in a URL",
+      "postgres://app:{v}@db.internal/app",
+      "postgres://app:",
+    ],
+    [
+      "a proxy password",
+      "HTTPS_PROXY=http://user:{v}@proxy:8080",
+      "http://user:",
+    ],
+    [
+      "a git remote password",
+      "git clone https://me:{v}@git.example/r.git",
+      "https://me:",
+    ],
+    ["--password with a space", "mysql --password {v} -h db", "--password "],
+    ["--api-key with a space", "tool --api-key {v} run", "--api-key "],
+    ["--token with a space", "gh --token {v}", "--token "],
+    ["a passphrase", "passphrase: {v}", "passphrase: "],
+    ["npm token", "npm_{36}", ""],
+    ["Stripe live key", "sk_live_{v}", ""],
+    ["Hugging Face token", "hf_{30}", ""],
+    ["Google OAuth token", "ya29.{v}{v}", ""],
+  ])("redacts %s", (_name, template, label) => {
+    const secret = "Zq9fSentinel0123456789abcdefghij";
+    const input = template
+      .replaceAll("{36}", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
+      .replaceAll("{30}", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5")
+      .replaceAll("{v}", secret);
+    const output = redact(input);
+    expect(output).not.toContain(secret);
+    expect(output).not.toMatch(/a1B2c3D4e5F6g7H8i9J0/);
+    expect(output).toContain(REDACTED);
+    expect(output).toContain(label);
+  });
+
+  it("leaves the option that follows, and options that only start with a credential word", () => {
+    expect(redact("login --password-stdin --user me")).toBe(
+      "login --password-stdin --user me",
+    );
+    expect(redact("run --token --verbose")).toBe("run --token --verbose");
+    expect(
+      redact("Option --api-key is not available to a subagent child"),
+    ).toBe("Option --api-key is not available to a subagent child");
+    expect(redact("ssh://git@host/repo and http://host:8080/path")).toBe(
+      "ssh://git@host/repo and http://host:8080/path",
+    );
   });
 
   it("keeps the parameters after a redacted query token", () => {

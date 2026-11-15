@@ -97,6 +97,27 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
   /\bAIza[A-Za-z0-9_-]{30,}/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
+  // A password inside a URL (`postgres://user:secret@host`, a proxy or git
+  // remote): the part between the first colon after the user and the `@`.
+  // The scheme is bounded and starts a run, so a long run of letters and
+  // hyphens is not rescanned from every position.
+  /((?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]{1,256}:)[^\s/@]+(?=@)/gi,
+  // The value after a credential option written with a space (`--password
+  // s3cret`, `--api-key s3cret`); `--password-stdin` and the next option stay.
+  // The value has a digit or a symbol, so the prose of a message that names
+  // the option ("--api-key is not available") is kept.
+  // shortcut: a value of letters only is not recognised, since it cannot be
+  // told from a word; widen this if it proves too narrow.
+  /(--(?:password|passwd|passphrase|token|secret|api-?key|access-?key|auth-?token|client-?secret|private-?key)\s+)(?!-)(?=\S*[^a-z\s])\S+/gi,
+  // Other vendors' tokens that carry a recognisable prefix: npm, Stripe,
+  // Hugging Face, Google OAuth, SendGrid, PyPI and Docker Hub.
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}/g,
+  /\bhf_[A-Za-z0-9]{30,}/g,
+  /\bya29\.[A-Za-z0-9_-]{20,}/g,
+  /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g,
+  /\bpypi-[A-Za-z0-9_-]{40,}/g,
+  /\bdckr_pat_[A-Za-z0-9_-]{20,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   // A key, header, or query parameter whose name ends in a credential word,
   // with any separator or none (`X-Api-Key`, `client_secret`, `?token=`,
@@ -107,7 +128,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   // a problem starts with ("delete", "the", "revocation:") are kept when more
   // text follows them. A value that is only such a word, or one that starts
   // with it, is still redacted.
-  /((?:token|secret|passw(?:or)?d|credentials?|(?:api|access|secret|private)[-_]?key)(?:\\*")?\s*[:=]\s*(?:\\*")?)((?!(?:delete|the|revocation:)\s)(?:\\[^"\s]|[^"\s,}&\\])+)/gi,
+  /((?:token|secret|passw(?:or)?d|passphrase|credentials?|(?:api|access|secret|private)[-_]?key)(?:\\*")?\s*[:=]\s*(?:\\*")?)((?!(?:delete|the|revocation:)\s)(?:\\[^"\s]|[^"\s,}&\\])+)/gi,
 ];
 
 /**
@@ -119,6 +140,53 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 export const SECRET_KEY_PATTERN =
   /^(?:x[-_])?(?:(?:access|refresh|id|auth|api|bearer|session|csrf|xsrf)[-_]?token|token|credential|secret|client[-_]?secret|api[-_]?key|private[-_]?key|password|passwd|(?:proxy[-_]?)?authorization|(?:set[-_]?)?cookie|bearer)$/i;
 
+const KEY_SECRET_WORDS = new Set([
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "passphrase",
+  "credential",
+  "credentials",
+  "authorization",
+  "cookie",
+  "bearer",
+  "apikey",
+]);
+/** Words that make a trailing `key` a secret (`OPENAI_API_KEY`, `secretKey`), not a lookup key. */
+const KEY_QUALIFIERS = new Set([
+  "api",
+  "access",
+  "private",
+  "secret",
+  "auth",
+  "signing",
+  "encryption",
+  "session",
+  "master",
+]);
+/**
+ * Whether an object key names a credential. The closed list in
+ * `SECRET_KEY_PATTERN` covers the common spellings; this also takes a key whose
+ * last word is a credential word (`GITHUB_TOKEN`, `DB_PASSWORD`, `githubToken`,
+ * `X-Amz-Security-Token`) or a qualified key (`AWS_SECRET_ACCESS_KEY`,
+ * `secretKey`). Counts and identifiers (`maxTokens`, `tokenCount`, `keyId`,
+ * `publicKey`) end in another word and stay readable.
+ */
+export function isSecretKey(key: string): boolean {
+  if (SECRET_KEY_PATTERN.test(key)) return true;
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  const last = words.at(-1);
+  if (last === undefined) return false;
+  if (KEY_SECRET_WORDS.has(last)) return true;
+  const before = words.at(-2);
+  return last === "key" && before !== undefined && KEY_QUALIFIERS.has(before);
+}
+
 /** Remove known secret values and common token shapes from diagnostic text. */
 export function redact(text: string): string {
   let output = text;
@@ -127,7 +195,7 @@ export function redact(text: string): string {
   for (const pattern of SECRET_PATTERNS)
     output = output.replace(pattern, (_match, prefix: string) =>
       typeof prefix === "string" &&
-      /[:=]\s*(?:\\*")?$|authorization/i.test(prefix)
+      /[:=\s]\s*(?:\\*")?$|authorization/i.test(prefix)
         ? `${prefix}${REDACTED}`
         : REDACTED,
     );
@@ -162,7 +230,7 @@ function redactWithin(value: unknown, copying: WeakSet<object>): unknown {
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value))
       output[key] =
-        SECRET_KEY_PATTERN.test(key) && item !== null
+        isSecretKey(key) && item !== null
           ? REDACTED
           : redactWithin(item, copying);
     return output;
