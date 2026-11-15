@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SEED_FILE_CAP,
   type SeedSandbox,
+  seedLookup,
   seedRemoteWorkspace,
 } from "./seed.js";
 import { packTar } from "./tar.js";
@@ -270,6 +271,87 @@ describe("seedRemoteWorkspace", () => {
       await expect(
         seedRemoteWorkspace(fakeSandbox(bin), project, allowAll),
       ).rejects.toThrow(/no git/);
+    },
+  );
+
+  it("takes a tracked file's mode from git's index, on any platform", async () => {
+    initProject();
+    put("gradlew", "#!/bin/sh\n");
+    put("plain.txt", "p");
+    sh(project, "add", "-A");
+    sh(project, "update-index", "--chmod=+x", "gradlew");
+    // Whatever the disk says, the index decides a tracked file.
+    let archive: Buffer = Buffer.alloc(0);
+    const sandbox: SeedSandbox = {
+      ...fakeSandbox(),
+      files: {
+        ...fakeSandbox().files,
+        write: async (_path, data) => {
+          archive = data;
+        },
+      },
+      exec: async () => ({ exitCode: 1 }),
+    };
+    await seedRemoteWorkspace(sandbox, project, allowAll).catch(() => {});
+    const mode = (name: string) => {
+      const at = archive.indexOf(Buffer.from(name));
+      return Number.parseInt(
+        archive.subarray(at + 100, at + 107).toString(),
+        8,
+      );
+    };
+    expect(mode("gradlew")).toBe(0o755);
+    expect(mode("plain.txt")).toBe(0o644);
+  });
+
+  it("warns when policy withheld most of the project", async () => {
+    initProject();
+    for (const name of ["a", "b", "c"]) put(`${name}.txt`, name);
+    const progress: string[] = [];
+    await seedRemoteWorkspace(
+      { ...fakeSandbox(), exec: async () => ({ exitCode: 1 }) },
+      project,
+      async (path) => (path.endsWith("a.txt") ? "allow" : "skip"),
+      { progress: (message) => progress.push(message) },
+    ).catch(() => {});
+    expect(progress.join("\n")).toContain(
+      "Your policy withheld 2 of 3 project files from the sandbox, so the agent will not see them.",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "adds a withheld file to the baseline later without folding in the agent's staged work",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "ask\n");
+      const sandbox = fakeSandbox();
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      const first = seeded.baselineCommit;
+      const lookup = seedLookup(sandbox.files);
+      expect(lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
+      // Work the agent did, already staged by a checkpoint.
+      writeFileSync(join(remote, "agent.txt"), "work\n");
+      sh(remote, "add", "-A");
+      await lookup?.adopt(join(project, "ask.txt"));
+      expect(seeded.baselineCommit).not.toBe(first);
+      expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("ask\n");
+      expect(lookup?.skipped(join(project, "ask.txt"))).toBeUndefined();
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("agent.txt");
+      writeFileSync(join(remote, "ask.txt"), "changed\n");
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit)
+          .split("\n")
+          .sort(),
+      ).toEqual(["agent.txt", "ask.txt"]);
     },
   );
 });

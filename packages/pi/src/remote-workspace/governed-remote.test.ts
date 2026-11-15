@@ -30,7 +30,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { governanceHooks } from "../builtins.js";
 import { GovernanceSession } from "../governance-session.js";
-import { governedTools } from "../governed-tools.js";
+import { governedBashOperations, governedTools } from "../governed-tools.js";
 
 const posix = process.platform !== "win32";
 const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
@@ -40,6 +40,7 @@ interface Log {
   commands: string[];
   failSeedOnce?: boolean;
   failDiff?: boolean;
+  gone?: boolean;
 }
 const log = (): Log =>
   ((globalThis as { __pishipRemote?: Log }).__pishipRemote ??= {
@@ -66,11 +67,13 @@ export default () => ({
   prepare: async () => ({
     files: {
       read: async (path) => {
+        if (log().gone) throw Object.assign(new Error("raw"), { code: "SANDBOX_GONE" });
         log().files.push({ op: "read", path });
         try { return readFileSync(join(remote, path)); }
         catch (error) { throw Object.assign(new Error("no such file"), { code: "ENOENT" }); }
       },
       write: async (path, data) => {
+        if (log().gone) throw Object.assign(new Error("raw"), { code: "SANDBOX_GONE" });
         log().files.push({ op: "write", path });
         mkdirSync(dirname(join(remote, path)), { recursive: true });
         writeFileSync(join(remote, path), data);
@@ -85,6 +88,8 @@ export default () => ({
     },
     exec: (request, io) => {
       log().commands.push(request.command);
+      if (log().gone && !request.command.includes("piship-sandbox-ready"))
+        return Promise.reject(Object.assign(new Error("raw"), { code: "SANDBOX_GONE" }));
       if (request.command.includes("piship-sandbox-ready")) {
         io.onStdout(Buffer.from("piship-sandbox-ready " + (request.env.PISHIP_PROBE_UNLISTED ?? "unset") + "\\n"));
         return Promise.resolve({ exitCode: 0 });
@@ -142,7 +147,13 @@ function context(prompts: string[] = []): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-async function open(options: { subagent?: boolean } = {}) {
+async function open(
+  options: {
+    subagent?: boolean;
+    sandbox?: string[];
+    setup?: (workspace: string) => void;
+  } = {},
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-rw-")));
   roots.push(root);
   log();
@@ -158,6 +169,7 @@ async function open(options: { subagent?: boolean } = {}) {
   writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
   writeFileSync(join(workspace, "secret.env"), "TOKEN=1\n");
   writeFileSync(join(workspace, "ask.txt"), "ask me\n");
+  options.setup?.(workspace);
   sh("add", "-A");
   sh("-c", "user.name=t", "-c", "user.email=t@x.invalid", "commit", "-qm", "i");
   for (const path of ["sandbox/acme.mjs", "resources/sandbox/acme.mjs"]) {
@@ -189,6 +201,7 @@ async function open(options: { subagent?: boolean } = {}) {
       "  provider: custom",
       "  adapter: ./sandbox/acme.mjs",
       "  workspace: remote",
+      ...(options.sandbox ?? []),
       "  network: { mode: deny }",
       "  environment: { allow: [PATH] }",
       "updates:",
@@ -217,6 +230,10 @@ async function open(options: { subagent?: boolean } = {}) {
     ...(options.subagent ? { subagent: { parentSession: "parent" } } : {}),
   });
   sessions.push(session);
+  // A custom adapter declares no workdir; the mapping of sandbox paths reads
+  // the manifest's, as it does for the e2b-compatible provider's default.
+  (session.manifest.sandbox as { workdir?: string }).workdir =
+    "/home/user/workspace";
   const tools = governedTools(session, workspace);
   const tool = (name: string) => {
     const found = tools.find((item) => item.name === name) as ToolDefinition;
@@ -235,7 +252,121 @@ async function open(options: { subagent?: boolean } = {}) {
 const fileCalls = (path: string) =>
   log().files.filter((entry) => entry.path === path);
 
+const approving = (prompts: string[] = []) =>
+  ({
+    hasUI: true,
+    ui: {
+      confirm: async () => true,
+      select: async (title: string, choices: string[]) => {
+        prompts.push(title);
+        return choices[0];
+      },
+      setStatus: () => {},
+      notify: () => {},
+    },
+  }) as unknown as ExtensionContext;
+
 describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
+  it("maps a path the sandbox printed to the project file, judged by policy as the host path", async () => {
+    const { remote, tool } = await open();
+    const sandboxRoot = "/home/user/workspace";
+    expect(
+      JSON.stringify(await tool("read")({ path: `${sandboxRoot}/notes.txt` })),
+    ).toContain("workspace notes");
+    await tool("write")({ path: `${sandboxRoot}/out/n.txt`, content: "n\n" });
+    expect(readFileSync(join(remote, "out", "n.txt"), "utf8")).toBe("n\n");
+    // The mapped path is the host path: its policy applies.
+    await expect(
+      tool("read")({ path: `${sandboxRoot}/secret.env` }),
+    ).rejects.toThrow(/not allowed/);
+    // Not on a segment boundary, or leaving the workdir: still outside.
+    await expect(
+      tool("read")({ path: `${sandboxRoot}2/notes.txt` }),
+    ).rejects.toThrow();
+    await expect(
+      tool("read")({ path: `${sandboxRoot}/../../../etc/hosts` }),
+    ).rejects.toThrow();
+  });
+
+  it("uploads a policy-withheld file once the user approves its read, and keeps it out of the patch unless changed", async () => {
+    const { session, workspace, remote, stateDir, tool } = await open();
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const extension = governanceHooks(session);
+    (typeof extension === "function" ? extension : extension.factory)({
+      on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+        handlers.set(event, handler),
+      registerCommand: () => {},
+    } as never);
+    await tool("read")({ path: "notes.txt" });
+    expect(existsSync(join(remote, "ask.txt"))).toBe(false);
+    const prompts: string[] = [];
+    expect(
+      JSON.stringify(
+        await tool("read")({ path: "ask.txt" }, approving(prompts)),
+      ),
+    ).toContain("ask me");
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("ask me\n");
+    await handlers.get("agent_end")?.({}, context());
+    const paths = remoteWorkspacePaths(stateDir, workspace);
+    // Seeded content is the baseline: nothing changed yet.
+    expect(
+      existsSync(paths.patch) ? readFileSync(paths.patch, "utf8") : "",
+    ).toBe("");
+    await tool("edit")(
+      { path: "ask.txt", edits: [{ oldText: "ask me", newText: "asked" }] },
+      approving(),
+    );
+    await handlers.get("agent_end")?.({}, context());
+    const patch = readFileSync(paths.patch, "utf8");
+    expect(patch).toContain("-ask me");
+    expect(patch).toContain("+asked");
+    expect(patch).not.toContain("new file mode");
+  });
+
+  it("edits a policy-withheld file straight away once the read is approved", async () => {
+    const { remote, tool } = await open();
+    await tool("edit")(
+      { path: "ask.txt", edits: [{ oldText: "ask me", newText: "done" }] },
+      approving(),
+    );
+    expect(readFileSync(join(remote, "ask.txt"), "utf8")).toBe("done\n");
+  });
+
+  it("tells the user what to do when the sandbox expired, in every tool", async () => {
+    const { session, workspace, tool } = await open();
+    await tool("read")({ path: "notes.txt" });
+    log().gone = true;
+    const message =
+      /The sandbox expired or was lost\. Changes up to the last checkpoint are saved: exit, run unit sandbox pull/;
+    await expect(tool("read")({ path: "notes.txt" })).rejects.toThrow(message);
+    await expect(
+      tool("write")({ path: "w.txt", content: "x" }),
+    ).rejects.toThrow(message);
+    await expect(
+      governedBashOperations(session, "bash").exec("ls", workspace, {
+        onData: () => {},
+      }),
+    ).rejects.toThrow(message);
+  });
+
+  it("says why a file is not in the sandbox", async () => {
+    const { tool } = await open({
+      sandbox: ["  remote: { seed: { maxFileMiB: 1 } }"],
+      setup: (workspace) =>
+        writeFileSync(
+          join(workspace, "big.bin"),
+          Buffer.alloc(2 * 1024 * 1024),
+        ),
+    });
+    await expect(tool("read")({ path: "big.bin" })).rejects.toThrow(
+      /big\.bin is not in the sandbox: it is over the per-file upload cap/,
+    );
+  });
+
   it("uploads nothing at activation or in Plan mode, then seeds lazily and once, never prompting", async () => {
     const { session, workspace, remote, tool } = await open();
     expect(readdirSync(remote)).toEqual([]);

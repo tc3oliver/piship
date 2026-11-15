@@ -173,6 +173,18 @@ export class E2bCompatibleBackend implements SandboxBackend {
         throw error;
       });
     let disposed = false;
+    // A remote workspace holds the only copy of the project, so an idle
+    // session must not lose it: renew four times per lifetime, quietly.
+    const keepalive = this.#options.createWorkdir
+      ? setInterval(
+          () =>
+            void this.#renew(created, AbortSignal.timeout(30_000)).catch(
+              () => undefined,
+            ),
+          Math.max(1000, this.#lifetime() * 250),
+        )
+      : undefined;
+    keepalive?.unref();
     return {
       exec: (request, io) => {
         if (disposed) throw new Error("the sandbox was disposed");
@@ -182,6 +194,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
       dispose: async () => {
         if (disposed) return;
         disposed = true;
+        clearInterval(keepalive);
         try {
           const response = await this.#control(
             `sandboxes/${created.sandboxId}`,
@@ -343,10 +356,18 @@ export class E2bCompatibleBackend implements SandboxBackend {
       },
       true,
     );
-    if (!renewed.ok)
-      throw new Error(
-        `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`,
+    if (!renewed.ok) {
+      const gone = renewed.status === 404 || renewed.status === 410;
+      throw Object.assign(
+        new Error(
+          gone
+            ? `the sandbox expired or was lost: ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`
+            : `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`,
+        ),
+        // The session says what to do next: only it knows its command name.
+        gone ? { code: "SANDBOX_GONE" } : {},
       );
+    }
     await renewed.body?.cancel().catch(() => undefined);
     sandbox.renewedAt = Date.now();
   }

@@ -21,6 +21,8 @@ export interface E2bScript {
   /** The envd user the sandbox accepts; others are refused. Default `user`. */
   user?: string;
   create?: number;
+  /** Set to true once the sandbox has expired: its timeout endpoint answers 404. */
+  gone?: boolean;
   /**
    * The API key the control plane requires; a request without it gets 401
    * with a body that echoes what it was sent, as some services do.
@@ -89,6 +91,11 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
               domain: null,
             }),
       );
+    }
+    if (path === "/sandboxes/sbx1/timeout" && script.gone) {
+      response.statusCode = 404;
+      response.setHeader("Content-Type", "application/json");
+      return void response.end('{"code":404,"message":"sandbox not found"}');
     }
     if (path === "/sandboxes/sbx1/timeout" || path === "/sandboxes/sbx1") {
       response.statusCode = 204;
