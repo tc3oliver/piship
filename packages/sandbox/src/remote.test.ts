@@ -360,6 +360,7 @@ describe("e2b-compatible backend against a mock server", () => {
     ).catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
     expect(String((error as Error).message)).not.toContain(key);
+    expect(String((error as Error).message)).toMatch(/with sandbox login/);
     expect(rejected).toBe(1);
     expect(
       mock.requests.filter(
@@ -493,7 +494,9 @@ describe("e2b-compatible backend against a mock server", () => {
     // Without the setting, the service refuses the E2B default user.
     await expect(activate(e2b(cube.url))).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
-      message: expect.stringContaining("HTTP 401"),
+      message: expect.stringMatching(
+        /HTTP 401.*refused the user "user": set sandbox\.user .*user: root/,
+      ),
     });
     const sandbox = await activate(e2b(cube.url, { user: "root" }));
     expect((await run(sandbox, "whoami")).exitCode).toBe(0);
@@ -519,7 +522,7 @@ describe("e2b-compatible backend against a mock server", () => {
     const unhealthy = await e2bServer({ health: 503 });
     await expect(activate(e2b(unhealthy.url))).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
-      message: expect.stringContaining("HTTP 503"),
+      message: expect.stringMatching(/HTTP 503; check that sandbox\.endpoint/),
     });
     expect(
       unhealthy.requests.some((request) => request.path === "/sandboxes"),
@@ -528,6 +531,14 @@ describe("e2b-compatible backend against a mock server", () => {
     await expect(activate(e2b(full.url))).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
       message: expect.stringContaining("no capacity"),
+    });
+    const unknown = await e2bServer({ create: 404 });
+    await expect(
+      activate(e2b(unknown.url, { template: "my-project-template" })),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        "check that sandbox.template (my-project-template) names a template this service has",
+      ),
     });
   });
 
