@@ -199,6 +199,29 @@ describe("validateRemoteWorkspacePatch", () => {
     ).toEqual(["README.md"]);
   });
 
+  it("refuses /dev/null unless the section is a new or deleted file", async () => {
+    // Real git deletes v and creates the file dev/null for this patch.
+    const hunk = "@@ -1 +1,2 @@\n hello\n+x\n";
+    expect(
+      await refusal(`diff --git a/v b/v\n--- a/v\n+++ /dev/null\n${hunk}`),
+    ).toMatch("/dev/null without");
+    expect(
+      await refusal(`diff --git a/v b/v\n--- /dev/null\n+++ b/v\n${hunk}`),
+    ).toMatch("/dev/null without");
+    expect(await refusal(newFile("dev/null"))).toMatch("dev/null");
+    const real = realDiff((dir) => rmSync(join(dir, "a.txt")));
+    expect((await validateRemoteWorkspacePatch(real)).files).toEqual(["a.txt"]);
+  });
+
+  it("compares protected paths after Unicode compatibility folding", async () => {
+    expect((await skipped(newFile(".huſky/x"), [".husky"])).skipped).toEqual([
+      ".huſky/x",
+    ]);
+    expect(
+      (await skipped(newFile(".ɢit/x".replace("ɢ", "G")))).skipped,
+    ).toEqual([".Git/x"]);
+  });
+
   it("refuses a ~N path segment (Windows 8.3 short names)", async () => {
     expect(await refusal(newFile("CLAUDE~1/settings.json"))).toMatch("~N");
     expect(await refusal(newFile("sub/HUSKY~12"))).toMatch("~N");

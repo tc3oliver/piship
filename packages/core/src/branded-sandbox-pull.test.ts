@@ -2,10 +2,12 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  symlinkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -402,6 +404,44 @@ describe("sandbox pull", () => {
     );
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
     expect(existsSync(remoteWorkspacePaths(state, repo).patch)).toBe(true);
+  });
+
+  describe.skipIf(process.platform === "win32")("host symlinks", () => {
+    it("refuses a patch that retargets a tracked symlink", async () => {
+      symlinkSync("t", join(repo, "link"));
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "link");
+      const patch = Buffer.from(
+        "diff --git a/link b/link\n--- a/link\n+++ b/link\n@@ -1 +1 @@\n-t\n\\ No newline at end of file\n+/etc/hosts\n\\ No newline at end of file\n",
+      );
+      writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+        session: "l",
+        baseHead: null,
+        files: 1,
+      });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+        /never writes through or over a symlink/,
+      );
+      expect(readlinkSync(join(repo, "link"))).toBe("t");
+    });
+
+    it("refuses a new file below an untracked symlinked directory", async () => {
+      const outside = join(temp, "outside");
+      mkdirSync(outside);
+      symlinkSync(outside, join(repo, "d"));
+      const patch = Buffer.from(
+        "diff --git a/d/x b/d/x\nnew file mode 100644\n--- /dev/null\n+++ b/d/x\n@@ -0,0 +1 @@\n+x\n",
+      );
+      writeRemoteWorkspaceCheckpoint(state, repo, patch, {
+        session: "l",
+        baseHead: null,
+        files: 1,
+      });
+      await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+        /symbolic link/,
+      );
+      expect(existsSync(join(outside, "x"))).toBe(false);
+    });
   });
 
   describe("parked patches", () => {
