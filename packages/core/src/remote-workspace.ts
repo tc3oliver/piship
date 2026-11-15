@@ -105,7 +105,6 @@ export function writeRemoteWorkspaceCheckpoint(
     version: 1,
     session: info.session,
     projectRoot: realOrResolved(projectRoot),
-    ...(info.pull ? { pull: info.pull } : {}),
     baseHead: info.baseHead,
     createdAt: info.createdAt ?? new Date().toISOString(),
     files: info.files,

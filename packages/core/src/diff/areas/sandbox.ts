@@ -108,4 +108,57 @@ export function sandbox(
     ["high", "Passes an additional environment variable into the sandbox."],
     ["medium", "Passes fewer environment variables into the sandbox."],
   );
+  out.scalar(
+    "sandbox",
+    "sandbox workspace",
+    x?.workspace ?? "local",
+    y?.workspace ?? "local",
+    (_, w) =>
+      w === "remote"
+        ? [
+            "high",
+            "The project is uploaded to the sandbox backend, which holds the only live copy; the host tree changes only on sandbox pull.",
+          ]
+        : ["medium", "The project stays on this host instead of the sandbox."],
+  );
+  for (const [field, fallback] of [
+    ["maxTotalMiB", 200],
+    ["maxFileMiB", 50],
+  ] as const)
+    out.scalar(
+      "sandbox",
+      `sandbox remote.seed.${field}`,
+      x?.remote?.seed?.[field] ?? fallback,
+      y?.remote?.seed?.[field] ?? fallback,
+      (b, a) =>
+        Number(a) > Number(b)
+          ? ["medium", "More of the project may be uploaded to the sandbox."]
+          : ["low", "Less of the project is uploaded to the sandbox."],
+    );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.pull.protectedFiles",
+    x?.remote?.pull?.protectedFiles ?? "skip",
+    y?.remote?.pull?.protectedFiles ?? "skip",
+    (_, v) =>
+      v === "refuse"
+        ? [
+            "low",
+            "sandbox pull refuses a whole patch that touches a protected file.",
+          ]
+        : [
+            "medium",
+            "sandbox pull applies the rest of a patch and skips protected files.",
+          ],
+  );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.pull.confirm",
+    x?.remote?.pull?.confirm ?? "optional",
+    y?.remote?.pull?.confirm ?? "optional",
+    (_, v) =>
+      v === "required"
+        ? ["low", "sandbox pull needs an interactive review; --yes is refused."]
+        : ["medium", "sandbox pull --yes applies a patch without a prompt."],
+  );
 }
