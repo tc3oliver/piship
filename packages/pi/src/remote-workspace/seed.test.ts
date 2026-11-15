@@ -487,7 +487,7 @@ describe("seedRemoteWorkspace", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "finishes an adopt whose call is cancelled after the upload, so the file never reads as the agent's",
+    "finishes an adopt whose call is cancelled after the upload: the baseline exec ignores the signal",
     async () => {
       initProject();
       put("a.txt", "a\n");
@@ -516,6 +516,75 @@ describe("seedRemoteWorkspace", () => {
         async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
       );
       await seeded.lookup?.adopt(join(project, "ask.txt"), abort.signal);
+      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBeUndefined();
+      sh(remote, "add", "-A");
+      expect(
+        sh(remote, "diff", "--cached", "--name-only", seeded.baselineCommit),
+      ).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "sends nothing for an adopt cancelled before the upload, and keeps the file withheld",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "ask\n");
+      const seeded = await seedRemoteWorkspace(
+        fakeSandbox(),
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      const abort = new AbortController();
+      abort.abort();
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt"), abort.signal),
+      ).rejects.toThrow();
+      expect(existsSync(join(remote, "ask.txt"))).toBe(false);
+      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "makes the baseline again when an adopt's baseline failed after the upload, so the file never reads as the agent's",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      put("ask.txt", "ask\n");
+      const base = fakeSandbox();
+      let failBaseline = true;
+      const sandbox: SeedSandbox = {
+        ...base,
+        files: {
+          ...base.files,
+          stat: async (path) =>
+            existsSync(join(remote, path.slice(project.length + 1)))
+              ? { type: "file", size: 0 }
+              : undefined,
+        },
+        exec: (command, cwd, options) => {
+          if (failBaseline && command.includes("piship-baseline.idx")) {
+            failBaseline = false;
+            return Promise.resolve({ exitCode: 1 });
+          }
+          return base.exec(command, cwd, options);
+        },
+      };
+      const seeded = await seedRemoteWorkspace(
+        sandbox,
+        project,
+        async (path) => (path.endsWith("ask.txt") ? "skip" : "allow"),
+      );
+      const first = seeded.baselineCommit;
+      await expect(
+        seeded.lookup?.adopt(join(project, "ask.txt")),
+      ).rejects.toThrow(/copying ask\.txt into the sandbox failed/);
+      // The upload landed; its baseline did not.
+      expect(existsSync(join(remote, "ask.txt"))).toBe(true);
+      expect(seeded.baselineCommit).toBe(first);
+      expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBe("policy");
+      await seeded.lookup?.adopt(join(project, "ask.txt"));
+      expect(seeded.baselineCommit).not.toBe(first);
       expect(seeded.lookup?.skipped(join(project, "ask.txt"))).toBeUndefined();
       sh(remote, "add", "-A");
       expect(
