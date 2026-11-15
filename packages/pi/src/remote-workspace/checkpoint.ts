@@ -125,7 +125,9 @@ export interface RemoteWorkspaceOptions {
    * setup and before anything else runs, the sandbox is saved.
    */
   readonly cache?: SetupCache;
-  readonly snapshot?: () => Promise<{ id: string }>;
+  readonly snapshot?: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<{ id: string }>;
   /** Tests only: how often a running setup says so. */
   readonly setupHeartbeatMs?: number;
   /** Tests only: a smaller checkpoint cap. */
@@ -308,10 +310,11 @@ export class RemoteWorkspace {
         !this.#touched &&
         !cache.unsupported()
       )
-        await cache.save(snapshot, {
-          notify: this.#options.notify,
-          warn: this.#options.warn,
-        });
+        await cache.save(
+          snapshot,
+          { notify: this.#options.notify, warn: this.#options.warn },
+          signal,
+        );
     }
     this.#dirty = false;
     this.#host = host;

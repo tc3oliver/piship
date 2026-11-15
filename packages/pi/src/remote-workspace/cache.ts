@@ -56,6 +56,16 @@ export const CACHE_NOTICE_GONE =
   "The cached sandbox setup was no longer available; setting up again.";
 export const CACHE_NOTICE_SAVED =
   "Saved the sandbox setup; the next session starts from it.";
+export const CACHE_NOTICE_SAVING =
+  "Saving the sandbox setup so the next session can start from it (Esc skips this).";
+export const CACHE_NOTICE_SKIPPED =
+  "Skipped saving the sandbox setup; the next session sets up again.";
+/**
+ * shortcut: support is known only from the backend's reply, and a backend
+ * without snapshots refuses at once, so the progress line waits this long;
+ * a slow refusal would still show it.
+ */
+const SAVE_NOTICE_DELAY_MS = 1500;
 export const CACHE_NOTICE_OVERLAY =
   "The cached sandbox setup could not be applied; setting up again.";
 
@@ -283,14 +293,21 @@ export class SetupCache {
    * is remembered for a day and silent.
    */
   async save(
-    snapshot: () => Promise<{ id: string }>,
+    snapshot: (options?: { signal?: AbortSignal }) => Promise<{ id: string }>,
     say: { notify(message: string): void; warn(message: string): void },
+    signal?: AbortSignal,
   ): Promise<void> {
     const previous = this.#stored.snapshot?.snapshotId;
     const key = this.#key;
+    const notice = setTimeout(
+      () => say.notify(CACHE_NOTICE_SAVING),
+      SAVE_NOTICE_DELAY_MS,
+    );
+    notice.unref();
     try {
       if (!key) throw new Error("no cache key");
-      const { id } = await snapshot();
+      const { id } = await snapshot(signal ? { signal } : undefined);
+      clearTimeout(notice);
       if (!SNAPSHOT_ID.test(id)) throw new Error("the snapshot id is invalid");
       const createdAt = new Date(this.#now()).toISOString();
       // Another session of this project may have saved since this one read
@@ -308,6 +325,12 @@ export class SetupCache {
         if (old && old !== id)
           await this.deleteRemote?.(old).catch(() => undefined);
     } catch (error) {
+      clearTimeout(notice);
+      // Cancelled: nothing is recorded, and the next session sets up again.
+      if (signal?.aborted) {
+        say.notify(CACHE_NOTICE_SKIPPED);
+        return;
+      }
       if ((error as { code?: unknown })?.code === "SNAPSHOT_UNSUPPORTED") {
         const until = this.#now() + CACHE_UNSUPPORTED_MS;
         const stale = new Set([

@@ -232,9 +232,12 @@ export interface ActiveSandbox {
   /**
    * Set only with `remoteWorkspace`, when the backend can save the sandbox's
    * filesystem: returns an id the backend later accepts as a template. It
-   * has a 240 s deadline and refuses once the sandbox is retired or disposed.
+   * has a 240 s deadline, stops early when `signal` aborts, and refuses once
+   * the sandbox is retired or disposed.
    */
-  readonly snapshot?: () => Promise<{ id: string }>;
+  readonly snapshot?: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<{ id: string }>;
   /** The live workspace report, updated after each verification. */
   workspace(): WorkspaceReport | undefined;
   /** Called with each new workspace report a verification produces. */
@@ -765,32 +768,38 @@ function createActiveSandbox(session: Session): ActiveSandbox {
   const sandboxSnapshot = instance?.snapshot?.bind(instance);
   const snapshot: ActiveSandbox["snapshot"] =
     session.remoteWorkspace && enforced && sandboxSnapshot
-      ? async () => {
+      ? async (options) => {
           if (retired || disposed) throw retiredError(report);
+          if (options?.signal?.aborted) throw new Error("aborted");
           const deadline = AbortSignal.timeout(SNAPSHOT_DEADLINE_MS);
+          const signal = options?.signal
+            ? AbortSignal.any([options.signal, deadline])
+            : deadline;
           let onAbort: (() => void) | undefined;
           // The signal only asks: an adapter that ignores it must not hang the session.
           const expired = new Promise<never>((_, reject) => {
             onAbort = () =>
               reject(
-                new PiShipError(
-                  "SANDBOX_UNAVAILABLE",
-                  `The ${report.adapter} sandbox backend did not save a snapshot within ${SNAPSHOT_DEADLINE_MS / 1000} s`,
-                  { component: "sandbox", retryable: true },
-                ),
+                deadline.aborted
+                  ? new PiShipError(
+                      "SANDBOX_UNAVAILABLE",
+                      `The ${report.adapter} sandbox backend did not save a snapshot within ${SNAPSHOT_DEADLINE_MS / 1000} s`,
+                      { component: "sandbox", retryable: true },
+                    )
+                  : new Error("aborted"),
               );
-            deadline.addEventListener("abort", onAbort, { once: true });
+            signal.addEventListener("abort", onAbort, { once: true });
           });
           try {
             const saved = await Promise.race([
-              sandboxSnapshot({ signal: deadline }),
+              sandboxSnapshot({ signal }),
               expired,
             ]);
             if (typeof saved?.id !== "string")
               throw new Error("the backend returned no snapshot id");
             return { id: saved.id };
           } finally {
-            if (onAbort) deadline.removeEventListener("abort", onAbort);
+            if (onAbort) signal.removeEventListener("abort", onAbort);
           }
         }
       : undefined;

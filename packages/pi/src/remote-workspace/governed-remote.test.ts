@@ -34,6 +34,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { governanceHooks } from "../builtins.js";
 import { GovernanceSession } from "../governance-session.js";
 import { governedBashOperations, governedTools } from "../governed-tools.js";
+import {
+  CACHE_NOTICE_OVERLAY,
+  CACHE_NOTICE_SAVING,
+  CACHE_NOTICE_SKIPPED,
+} from "./cache.js";
 
 const posix = process.platform !== "win32";
 const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
@@ -53,6 +58,9 @@ interface Log {
   snapshotFail?: "unsupported" | "error";
   /** Fail the extract once, as an overlay that cannot be applied. */
   failOverlay?: boolean;
+  /** Hold the snapshot, or the overlay's extract, until the call is cancelled. */
+  holdSnapshot?: boolean;
+  holdOverlay?: boolean;
   next: number;
 }
 const log = (): Log =>
@@ -97,7 +105,9 @@ export default () => ({
       cpSync(from, remote, { recursive: true });
     }
     return {
-    snapshot: async () => {
+    snapshot: async ({ signal }) => {
+      if (log().holdSnapshot)
+        await new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted"))));
       if (log().snapshotFail === "unsupported") throw Object.assign(new Error("no snapshots"), { code: "SNAPSHOT_UNSUPPORTED" });
       if (log().snapshotFail) throw new Error("HTTP 503");
       log().atSnapshot.push([...log().commands]);
@@ -136,6 +146,8 @@ export default () => ({
         io.onStdout(Buffer.from("piship-sandbox-ready " + (request.env.PISHIP_PROBE_UNLISTED ?? "unset") + "\\n"));
         return Promise.resolve({ exitCode: 0 });
       }
+      if (log().holdOverlay && request.command.includes("piship-keep.idx"))
+        return new Promise((resolve) => io.signal.addEventListener("abort", () => resolve({ exitCode: null })));
       if (log().failOverlay && request.command.includes("piship-keep.idx")) {
         log().failOverlay = false;
         io.onStdout(Buffer.from("snapshot damaged\\n"));
@@ -1210,6 +1222,64 @@ describe.skipIf(!posix || asRoot)("sandbox.remote.cache", () => {
     expect(existsSync(cacheJson(first.stateDir, first.workspace))).toBe(false);
     await second.session.remote?.checkpoint(true);
     expect(patchOf(second.stateDir, second.workspace)).toBe("");
+  });
+
+  const until = async (found: () => boolean) => {
+    for (let i = 0; i < 500 && !found(); i++)
+      await new Promise((done) => setTimeout(done, 10));
+    expect(found()).toBe(true);
+  };
+
+  it("says when a save takes a while, and Esc skips it: no cache entry, the sandbox keeps working, the next session sets up again", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    const h = hooks(first.session);
+    log().holdSnapshot = true;
+    const abort = new AbortController();
+    const reading = first
+      .tool("read")({ path: "notes.txt" }, context(), abort.signal)
+      .catch(() => undefined);
+    await until(() => h.notices.includes(CACHE_NOTICE_SAVING));
+    abort.abort();
+    await reading;
+    expect(h.notices).toContain(CACHE_NOTICE_SKIPPED);
+    expect(h.notices.some((l) => l.includes("could not be saved"))).toBe(false);
+    expect(log().snapshotsMade).toEqual([]);
+    expect(existsSync(cacheJson(first.stateDir, first.workspace))).toBe(false);
+    // Seeded: the next call neither sets up nor saves again.
+    log().holdSnapshot = false;
+    await first.tool("read")({ path: "notes.txt" });
+    expect(h.notices.filter((l) => l.startsWith("Running setup"))).toHaveLength(
+      1,
+    );
+    const second = await open({ reuse: first });
+    const again = await started(second);
+    expect(log().prepares).toEqual([null, null]);
+    expect(again.notices.some((l) => l.startsWith("Running setup"))).toBe(true);
+  });
+
+  it("keeps the cache when the overlay is cancelled, and overlays it on the next call", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    const second = await open({ reuse: first });
+    const h = hooks(second.session);
+    log().holdOverlay = true;
+    const abort = new AbortController();
+    const reading = second
+      .tool("read")({ path: "notes.txt" }, context(), abort.signal)
+      .catch((error: unknown) => error);
+    await until(() =>
+      log().commands.some((c) => c.includes("piship-keep.idx")),
+    );
+    abort.abort();
+    // Pi's read reports its own "aborted" for a cancelled call.
+    expect(await reading).toBeInstanceOf(Error);
+    expect(h.notices).not.toContain(CACHE_NOTICE_OVERLAY);
+    expect(log().deleted).toEqual([]);
+    expect(stored(first.stateDir, first.workspace).snapshotId).toBe("snap-1");
+    log().holdOverlay = false;
+    await second.tool("read")({ path: "notes.txt" });
+    expect(h.notices.some((l) => l.startsWith("Running setup"))).toBe(false);
+    expect(log().deleted).toEqual([]);
   });
 
   it("takes no snapshot when setup fails, without a setup command, or with cache: off", async () => {
