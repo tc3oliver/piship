@@ -1014,6 +1014,20 @@ describe.skipIf(!posix)(
     });
 
     it("fails the command closed when the check times out, but keeps the sandbox and checks again (#158)", async () => {
+      // The check's deadline is long, so the second check (a real shell that
+      // polls for the host's file every 0.2 s) never meets it, however
+      // loaded the machine. The first check's deadline is fired by hand:
+      // its timer is captured as it is set and run from inside the check.
+      const CHECK_TIMEOUT_MS = 60_000;
+      const deadlines: (() => void)[] = [];
+      const realSetTimeout = globalThis.setTimeout;
+      const capture = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+        ms?: number,
+      ) => {
+        if ((ms ?? 0) >= CHECK_TIMEOUT_MS) deadlines.push(callback);
+        return realSetTimeout(callback, ms);
+      }) as typeof setTimeout);
       let calls = 0;
       const fake = sharedBackend({
         declaration: { mode: "synchronized", propagationMs: 1 },
@@ -1025,15 +1039,19 @@ describe.skipIf(!posix)(
               io.signal.addEventListener("abort", () =>
                 resolvePromise({ exitCode: 0 }),
               );
+              (deadlines.at(-1) as () => void)();
             });
           return runShell(workspace, request, io);
         },
       });
-      const sandbox = await activate(fake, { probeTimeoutMs: 200 });
+      const sandbox = await activate(fake, {
+        probeTimeoutMs: CHECK_TIMEOUT_MS,
+      });
       const error = await run(sandbox, "echo agent").then(
         () => undefined,
         (failure: unknown) => failure,
       );
+      capture.mockRestore();
       expect(error).toMatchObject({
         code: "SANDBOX_UNAVAILABLE",
         message: expect.stringContaining("timed out"),
