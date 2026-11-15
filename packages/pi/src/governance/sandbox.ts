@@ -138,6 +138,19 @@ function releasing(
     provider: backend.provider,
     available: () => backend.available(),
     capabilities: () => backend.capabilities(),
+    ...(backend.deleteSnapshot
+      ? {
+          deleteSnapshot: (
+            id: string,
+            call?: Parameters<NonNullable<SandboxBackend["deleteSnapshot"]>>[1],
+          ) =>
+            (
+              backend.deleteSnapshot as NonNullable<
+                SandboxBackend["deleteSnapshot"]
+              >
+            )(id, call),
+        }
+      : {}),
     prepare: async (request) => {
       let instance: Awaited<ReturnType<SandboxBackend["prepare"]>>;
       try {
@@ -377,6 +390,9 @@ export async function sandboxBackend(
         ? { credentialRejected: credentialing.credentialRejected }
         : {}),
       ...(config.workdir ? { workdir: config.workdir } : {}),
+      ...(config.lifetimeSeconds
+        ? { lifetimeSeconds: config.lifetimeSeconds }
+        : {}),
     };
     switch (config.provider) {
       case "e2b-compatible":

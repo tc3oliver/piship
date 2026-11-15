@@ -175,11 +175,12 @@ export function taskTools(
           started = tasks.start(
             (command, options) => {
               // A remote workspace is seeded before its first command, and a
-              // task that changes it is checkpointed.
-              const run = (
-                gov.remote?.ensureSeeded() ?? Promise.resolve()
-              ).then(() =>
-                gov.sandbox.exec(command, spawn.cwd, {
+              // task that changes it is checkpointed. The task counts as
+              // touching the sandbox only once the seed and its setup are done.
+              return (
+                gov.remote?.ensureSeeded(options.signal) ?? Promise.resolve()
+              ).then(() => {
+                const running = gov.sandbox.exec(command, spawn.cwd, {
                   onData: options.onData,
                   signal: options.signal,
                   timeout: options.timeout,
@@ -193,9 +194,9 @@ export function taskTools(
                   ...(!enforced && platform === "win32"
                     ? { shell: getShellConfig() }
                     : {}),
-                }),
-              );
-              return gov.remote?.track(run) ?? run;
+                });
+                return gov.remote?.track(running) ?? running;
+              });
             },
             spawn.command,
             input.timeout,

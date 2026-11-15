@@ -69,6 +69,7 @@ import { computeCapabilities } from "./governance/capabilities.js";
 import {
   buildEngine,
   discoverProject,
+  filesystemPolicyDigest,
   projectProtection,
   sandboxConfig,
 } from "./governance/engine.js";
@@ -88,6 +89,11 @@ import {
   revokePublishedSubagentGrant,
   type SubagentGrantBinding,
 } from "./launch/subagent-owner.js";
+import {
+  cachedBackend,
+  openSetupCache,
+  type SetupCache,
+} from "./remote-workspace/cache.js";
 import { RemoteWorkspace } from "./remote-workspace/checkpoint.js";
 import { SessionOutputStore } from "./shell-output.js";
 
@@ -234,6 +240,7 @@ export class GovernanceSession {
     readonly sandbox: ActiveSandbox,
     readonly engine: PolicyEngine,
     readonly sessionId: string,
+    cache?: SetupCache,
   ) {
     this.manifest = options.lock.governance.manifest;
     const discovered = new Set(
@@ -302,6 +309,20 @@ export class GovernanceSession {
         ...(this.manifest.sandbox.remote?.pull
           ? { pull: this.manifest.sandbox.remote.pull }
           : {}),
+        ...(this.manifest.sandbox.remote?.refresh === "off"
+          ? { refresh: false }
+          : {}),
+        ...(this.manifest.sandbox.remote?.setup
+          ? {
+              setup: {
+                command: this.manifest.sandbox.remote.setup,
+                timeoutSeconds:
+                  this.manifest.sandbox.remote.setupTimeoutSeconds ?? 900,
+              },
+            }
+          : {}),
+        ...(cache ? { cache } : {}),
+        ...(sandbox.snapshot ? { snapshot: sandbox.snapshot } : {}),
         checkpoints: options.subagent === undefined,
       });
   }
@@ -356,7 +377,16 @@ export class GovernanceSession {
       // The distribution state holds sessions and credential metadata; tool
       // subprocesses never need to read it. The git files that classify the
       // project and the hooks git runs outside the sandbox stay read-only.
-      const backend = await sandboxBackend(options);
+      const declared = await sandboxBackend(options);
+      const cache = declared
+        ? openSetupCache(
+            options,
+            project.root,
+            await filesystemPolicyDigest(options, candidates),
+          )
+        : undefined;
+      const backend =
+        declared && cache ? cachedBackend(declared, cache) : declared;
       sandbox = await activateSandbox(sandboxConfig(options), {
         ...(backend ? { backend } : {}),
         workspace: project.root,
@@ -390,6 +420,7 @@ export class GovernanceSession {
         sandbox,
         engine,
         `${Date.now().toString(36)}-${process.pid}`,
+        cache,
       );
       sandbox.onWorkspaceReport((report) => session.#workspaceReport(report));
       // Lower than declared: the backend named a network probe, and it did

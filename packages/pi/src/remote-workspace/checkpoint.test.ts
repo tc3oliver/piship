@@ -77,6 +77,7 @@ const sandbox: SeedSandbox = {
       const child = spawn("/bin/bash", ["-c", command], { cwd: remote });
       child.stdout.on("data", options.onData);
       child.stderr.on("data", options.onData);
+      options.signal?.addEventListener("abort", () => child.kill());
       child.on("close", (exitCode) => resolve({ exitCode }));
     }),
 };
@@ -110,7 +111,7 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     initProject();
     const ws = workspace("s1");
     await ws.ensureSeeded();
-    expect(notices[0]).toMatch(/^Uploading 1 files \(0\.0 MiB\)/);
+    expect(notices[0]).toMatch(/^Uploading to the sandbox: 1\/1 parts/);
     await ws.checkpoint();
     expect(diffs).toBe(0);
     patch = diff("a.txt");
@@ -123,6 +124,75 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
       /^1 file changed in the sandbox; run piship sandbox pull/,
     );
     expect(diffs).toBe(2);
+  });
+
+  const waitFor = async (found: () => boolean) => {
+    for (let i = 0; i < 200 && !found(); i++)
+      await new Promise((done) => setTimeout(done, 10));
+    expect(found()).toBe(true);
+  };
+
+  it("shows no control sequence from the setup output", async () => {
+    initProject();
+    const ws = workspace("s1", undefined, {
+      setup: {
+        command: "printf '\\033]52;c;ZXZpbA==\\007\\033[2Jboom\\n'; exit 3",
+        timeoutSeconds: 30,
+      },
+    });
+    await ws.ensureSeeded();
+    const shown = warnings.join("\n");
+    expect(shown).toContain("boom");
+    expect(shown.includes("\u001b") || shown.includes("\u0007")).toBe(false);
+    expect(ws.setupFailure).toBeDefined();
+  });
+
+  it("takes no checkpoint and sends no refresh while the setup is still running", async () => {
+    initProject();
+    patch = diff("setup-made.txt");
+    const ws = workspace("s1", undefined, {
+      setup: { command: "sleep 0.6; echo done", timeoutSeconds: 30 },
+    });
+    const seeding = ws.ensureSeeded();
+    await waitFor(() =>
+      notices.some((line) => line.startsWith("Running setup")),
+    );
+    await ws.checkpoint(true);
+    expect(await ws.refresh()).toBeUndefined();
+    expect(diffs).toBe(0);
+    expect(existsSync(slot().patch)).toBe(false);
+    expect(await ws.finish()).toBeUndefined();
+    await seeding;
+    expect(diffs).toBe(0);
+    // Once seeded, a checkpoint counts.
+    await ws.checkpoint(true);
+    expect(diffs).toBe(1);
+  });
+
+  it("cancels a running setup with the abort signal, runs it again on the next call, and says what is happening", async () => {
+    initProject();
+    const ws = workspace("s1", undefined, {
+      setup: { command: "exec sleep 30", timeoutSeconds: 60 },
+      setupHeartbeatMs: 40,
+    });
+    const abort = new AbortController();
+    const seeding = ws.ensureSeeded(abort.signal);
+    const failed = seeding.catch((error: unknown) => error);
+    await waitFor(() =>
+      notices.some((line) => line.startsWith("Still running setup")),
+    );
+    abort.abort();
+    expect(String(await failed)).toMatch(/cancelled.*next tool call/);
+    expect(ws.setupFailure).toBeUndefined();
+    expect(warnings).toEqual([]);
+    notices.length = 0;
+    const again = new AbortController();
+    const retry = ws.ensureSeeded(again.signal).catch(() => undefined);
+    await waitFor(() =>
+      notices.some((line) => line.startsWith("Running setup")),
+    );
+    again.abort();
+    await retry;
   });
 
   it("says in one line what the seed left out, and warns when policy withheld most of the project", async () => {

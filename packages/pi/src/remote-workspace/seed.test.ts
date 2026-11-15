@@ -2,11 +2,11 @@ import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   closeSync,
-  ftruncateSync,
-  openSync,
   existsSync,
+  ftruncateSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -16,9 +16,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SEED_FILE_CAP,
+  SeedRefused,
   type SeedSandbox,
   seedRemoteWorkspace,
 } from "./seed.js";
@@ -54,7 +56,8 @@ const writes: (number | undefined)[] = [];
 function fakeSandbox(path = process.env.PATH ?? ""): SeedSandbox {
   return {
     files: {
-      read: async (path) => readFileSync(join(remote, path)),
+      read: async (path) =>
+        readFileSync(join(remote, path.slice(project.length + 1))),
       write: async (path, data, options) => {
         writes.push(options?.timeoutMs);
         expect(path.startsWith(project)).toBe(true);
@@ -99,12 +102,6 @@ describe("packTar", () => {
       expect(statSync(join(out, long)).size).toBe(0);
     },
   );
-
-  it("refuses a path that cannot fit the ustar fields", () => {
-    expect(() =>
-      packTar([{ path: "x".repeat(101), mode: 0o644, data: Buffer.alloc(0) }]),
-    ).toThrow(/too long/);
-  });
 });
 
 describe("seedRemoteWorkspace", () => {
@@ -137,7 +134,9 @@ describe("seedRemoteWorkspace", () => {
       expect(result.skipped).toEqual([
         { path: "big.bin", reason: "too-large" },
       ]);
-      expect(progress).toEqual(["Uploading 1 files (0.0 MiB) to the sandbox"]);
+      expect(progress).toEqual([
+        "Uploading to the sandbox: 1/1 parts, 0.0 of 0.0 MiB",
+      ]);
     },
   );
 
@@ -273,7 +272,7 @@ describe("seedRemoteWorkspace", () => {
       // A PATH with ls, grep, rm and tar, but no git.
       const bin = join(base, "bin");
       mkdirSync(bin);
-      for (const tool of ["ls", "grep", "rm", "tar"])
+      for (const tool of ["ls", "grep", "rm", "tar", "gzip"])
         symlinkSync(
           execFileSync("sh", ["-c", `command -v ${tool}`], {
             encoding: "utf8",
@@ -285,6 +284,108 @@ describe("seedRemoteWorkspace", () => {
       ).rejects.toThrow(/no git/);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "names gzip when the sandbox lacks it",
+    async () => {
+      initProject();
+      put("a.txt", "a");
+      const bin = join(base, "bin");
+      mkdirSync(bin);
+      for (const tool of ["ls", "grep", "rm", "tar", "git"])
+        symlinkSync(
+          execFileSync("sh", ["-c", `command -v ${tool}`], {
+            encoding: "utf8",
+          }).trim(),
+          join(bin, tool),
+        );
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(bin), project, allowAll),
+      ).rejects.toThrow(/no gzip/);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "uploads bounded gzip parts, and a failure in a later part is cleaned on retry",
+    async () => {
+      initProject();
+      // Two 20 MiB files do not fit one 32 MiB part.
+      put("a.bin", Buffer.alloc(20 * 1024 * 1024, 1));
+      put("b.bin", Buffer.alloc(20 * 1024 * 1024, 2));
+      put("c.txt", "c");
+      const sizes: number[] = [];
+      const real = fakeSandbox();
+      let failSecond = true;
+      const sandbox: SeedSandbox = {
+        ...real,
+        files: {
+          ...real.files,
+          write: async (path, data, options) => {
+            expect([...data.subarray(0, 2)]).toEqual([0x1f, 0x8b]);
+            sizes.push(data.length);
+            if (sizes.length === 2 && failSecond) {
+              failSecond = false;
+              throw new Error("the connection dropped");
+            }
+            await real.files.write(path, data, options);
+          },
+        },
+      };
+      await expect(
+        seedRemoteWorkspace(sandbox, project, allowAll),
+      ).rejects.toThrow(/connection dropped/);
+      // Part 1 was extracted and the marker says the seed did not finish.
+      expect(existsSync(join(remote, "a.bin"))).toBe(true);
+      expect(existsSync(join(remote, ".piship-seed.started"))).toBe(true);
+      const progress: string[] = [];
+      sizes.length = 0;
+      const result = await seedRemoteWorkspace(sandbox, project, allowAll, {
+        progress: (message) => progress.push(message),
+      });
+      expect(sizes).toHaveLength(2);
+      for (const bytes of sizes) expect(bytes).toBeLessThan(1024 * 1024);
+      expect(progress).toEqual([
+        "Uploading to the sandbox: 1/2 parts, 20.0 of 40.0 MiB",
+        "Uploading to the sandbox: 2/2 parts, 40.0 of 40.0 MiB",
+      ]);
+      expect([...result.uploaded].sort()).toEqual(["a.bin", "b.bin", "c.txt"]);
+      expect(existsSync(join(remote, ".piship-seed.started"))).toBe(false);
+      expect(existsSync(join(remote, ".piship-seed.tar"))).toBe(false);
+      expect(sh(remote, "ls-files").split("\n").sort()).toEqual([
+        "a.bin",
+        "b.bin",
+        "c.txt",
+      ]);
+      expect(sh(remote, "status", "--porcelain")).toBe("");
+    },
+    30_000,
+  );
+
+  it("leaves out a file deleted after it was scanned", async () => {
+    initProject();
+    put("a.txt", "aaa");
+    put("b.txt", "bbb");
+    let archive = Buffer.alloc(0);
+    const sandbox: SeedSandbox = {
+      ...fakeSandbox(),
+      files: {
+        ...fakeSandbox().files,
+        write: async (_path, data) => {
+          archive = gunzipSync(data);
+        },
+      },
+      exec: async () => ({ exitCode: 1 }),
+    };
+    let decided = 0;
+    await expect(
+      seedRemoteWorkspace(sandbox, project, async () => {
+        if (++decided === 2) rmSync(join(project, "a.txt"));
+        return "allow";
+      }),
+    ).rejects.toThrow(/seeding the sandbox failed/);
+    expect(archive.includes("bbb")).toBe(true);
+    expect(archive.includes("aaa")).toBe(false);
+  });
 
   it("takes a tracked file's mode from git's index, on any platform", async () => {
     initProject();
@@ -299,7 +400,7 @@ describe("seedRemoteWorkspace", () => {
       files: {
         ...fakeSandbox().files,
         write: async (_path, data) => {
-          archive = data;
+          archive = gunzipSync(data);
         },
       },
       exec: async () => ({ exitCode: 1 }),
@@ -351,4 +452,166 @@ describe("seedRemoteWorkspace", () => {
       ).toEqual(["agent.txt", "ask.txt"]);
     },
   );
+
+  it.skipIf(process.platform === "win32")(
+    "overlays over a seeded tree with awkward names, removing only what is neither uploaded nor ignored",
+    async () => {
+      initProject();
+      const awkward = [
+        "sp ace.txt",
+        "-dash.txt",
+        "q'uote.txt",
+        "nl\nname.txt",
+        "ü/é.txt",
+      ];
+      for (const name of awkward) put(name, "v1\n");
+      put("keep.txt", "k\n");
+      put(".gitignore", "node_modules/\n");
+      sh(project, "add", "-A");
+      sh(project, "commit", "-qm", "init");
+      await seedRemoteWorkspace(fakeSandbox(), project, allowAll);
+      // What a setup command left, and a stray file that is not ignored.
+      mkdirSync(join(remote, "node_modules"));
+      writeFileSync(join(remote, "node_modules", "dep.js"), "dep\n");
+      writeFileSync(join(remote, "stray.txt"), "stray\n");
+      writeFileSync(join(remote, "-stray.txt"), "stray\n");
+      writeFileSync(join(remote, "nl\nstray.txt"), "stray\n");
+      // The host moved on: two awkward files gone, one changed.
+      rmSync(join(project, "-dash.txt"));
+      rmSync(join(project, "nl\nname.txt"));
+      put("sp ace.txt", "v2\n");
+      const result = await seedRemoteWorkspace(
+        fakeSandbox(),
+        project,
+        allowAll,
+        {
+          mode: "overlay",
+        },
+      );
+      const present = (name: string) => existsSync(join(remote, name));
+      expect(present("-dash.txt")).toBe(false);
+      expect(present("nl\nname.txt")).toBe(false);
+      expect(present("stray.txt")).toBe(false);
+      expect(present("-stray.txt")).toBe(false);
+      expect(present("nl\nstray.txt")).toBe(false);
+      expect(readFileSync(join(remote, "sp ace.txt"), "utf8")).toBe("v2\n");
+      expect(
+        present("q'uote.txt") && present("ü/é.txt") && present("keep.txt"),
+      ).toBe(true);
+      expect(readFileSync(join(remote, "node_modules", "dep.js"), "utf8")).toBe(
+        "dep\n",
+      );
+      expect(present(".piship-seed.keep")).toBe(false);
+      expect(present(".piship-seed.started")).toBe(false);
+      // A fresh baseline: one commit, naming exactly the uploaded files.
+      expect(sh(remote, "rev-list", "--count", "HEAD")).toBe("1");
+      expect(sh(remote, "rev-parse", "HEAD")).toBe(result.baselineCommit);
+      expect(sh(remote, "status", "--porcelain")).toBe("");
+      expect(
+        execFileSync("git", ["ls-tree", "-r", "-z", "--name-only", "HEAD"], {
+          cwd: remote,
+          encoding: "utf8",
+        })
+          .split("\0")
+          .filter(Boolean)
+          .sort(),
+      ).toEqual([...result.uploaded].sort());
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "resets a sandbox an overlay left half done, and then seeds it as a fresh one",
+    async () => {
+      initProject();
+      put("a.txt", "a\n");
+      sh(project, "add", "-A");
+      sh(project, "commit", "-qm", "init");
+      mkdirSync(join(remote, "node_modules"));
+      writeFileSync(join(remote, "left.txt"), "left over\n");
+      await expect(
+        seedRemoteWorkspace(fakeSandbox(), project, allowAll),
+      ).rejects.toThrow(/not empty/);
+      await seedRemoteWorkspace(fakeSandbox(), project, allowAll, {
+        mode: "reset",
+      });
+      expect(existsSync(join(remote, "left.txt"))).toBe(false);
+      expect(sh(remote, "ls-files")).toBe("a.txt");
+    },
+  );
+
+  describe.skipIf(process.platform === "win32")("overlay of a snapshot", () => {
+    const seedOnce = async () => {
+      initProject();
+      put("keep.txt", "k\n");
+      put("secret.txt", "tracked\n");
+      sh(project, "add", "-A");
+      sh(project, "commit", "-qm", "init");
+      put(".env", "SECRET=1\n"); // untracked, not yet ignored
+      await seedRemoteWorkspace(fakeSandbox(), project, allowAll);
+      expect(existsSync(join(remote, ".env"))).toBe(true);
+    };
+
+    it("removes a file the snapshot's seed uploaded and the new one does not, even when it is now ignored", async () => {
+      await seedOnce();
+      put(".gitignore", ".env\n");
+      await seedRemoteWorkspace(fakeSandbox(), project, allowAll, {
+        mode: "overlay",
+      });
+      expect(existsSync(join(remote, ".env"))).toBe(false);
+      expect(existsSync(join(remote, "keep.txt"))).toBe(true);
+      expect(sh(remote, "status", "--porcelain")).toBe("");
+      expect(existsSync(join(remote, ".git", "piship-uploaded.json"))).toBe(
+        true,
+      );
+    });
+
+    it("removes a tracked file that is now ignored and withheld by a tighter policy", async () => {
+      await seedOnce();
+      put(".gitignore", "secret.txt\n");
+      const decide = async (path: string) =>
+        path.endsWith("secret.txt") ? ("skip" as const) : ("allow" as const);
+      await seedRemoteWorkspace(fakeSandbox(), project, decide, {
+        mode: "overlay",
+      });
+      expect(existsSync(join(remote, "secret.txt"))).toBe(false);
+      expect(existsSync(join(remote, ".env"))).toBe(true);
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["not JSON", "{oops"],
+      ["the wrong shape", '{"version":1,"paths":"x"}'],
+      ["an unsafe path", '{"version":1,"paths":["../x"]}'],
+    ])(
+      "refuses an overlay when the list is %s, so the caller resets",
+      async (_name, content) => {
+        await seedOnce();
+        const list = join(remote, ".git", "piship-uploaded.json");
+        if (content === undefined) rmSync(list);
+        else writeFileSync(list, content);
+        const error = await seedRemoteWorkspace(
+          fakeSandbox(),
+          project,
+          allowAll,
+          {
+            mode: "overlay",
+          },
+        ).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(SeedRefused);
+        expect(existsSync(join(remote, ".env"))).toBe(true); // untouched until the reset
+      },
+    );
+  });
+
+  it("uploads a file whose name no ustar field holds", async () => {
+    initProject();
+    const name = `${"n".repeat(150)}.txt`;
+    put(name, "long\n");
+    sh(project, "add", "-A");
+    sh(project, "commit", "-qm", "init");
+    const result = await seedRemoteWorkspace(fakeSandbox(), project, allowAll);
+    expect(result.uploaded).toContain(name);
+    expect(readFileSync(join(remote, name), "utf8")).toBe("long\n");
+  });
 });

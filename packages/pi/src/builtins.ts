@@ -237,11 +237,29 @@ async function decideToolCall(
   };
 }
 
+export const SUBAGENT_DISCARD_NOTE =
+  "\n\nNote: this subagent's file changes were not kept (remote workspace). Apply them from its report.";
+
+function setupSentence(gov: GovernanceSession): string {
+  const setup = gov.manifest.sandbox.remote?.setup;
+  if (!setup) return " Dependencies may need installing.";
+  const failure = gov.remote?.setupFailure;
+  return failure
+    ? ` The setup command failed (${failure}); dependencies may be missing, so run it again or install them.`
+    : gov.remote?.setupRestored
+      ? ` The setup command \`${setup}\` ran in an earlier session; its output was restored from a cache, so it did not run again.`
+      : ` The setup command \`${setup}\` ran once after the upload.`;
+}
+
 /** What the model must know when the workspace is a remote sandbox. */
 export function remoteWorkspaceSection(gov: GovernanceSession): string {
   const { workdir, user } = gov.manifest.sandbox;
   const dir = workdir ?? remoteWorkdir(user ?? "user");
-  return `Remote workspace: the project lives in a remote sandbox at ${dir}; file tools and bash act there, and paths printed by commands there correspond to the project root shown as cwd. The user's machine is not changed until they run \`${gov.options.lock.app.command} sandbox pull\`. Ignored files (dependencies, .env) and files the policy withheld were not uploaded, so dependencies may need installing. Git history in the sandbox is a single baseline commit: do not rely on git log or git blame, and do not commit expecting it to reach the user. Edits the user makes on their machine during this session are not visible to you.${
+  return `Remote workspace: the project lives in a remote sandbox at ${dir}; file tools and bash act there, and paths printed by commands there correspond to the project root shown as cwd. The user's machine is not changed until they run \`${gov.options.lock.app.command} sandbox pull\`. Ignored files (dependencies, .env) and files the policy withheld were not uploaded.${setupSentence(gov)} Git history in the sandbox is a single baseline commit: do not rely on git log or git blame, and do not commit expecting it to reach the user. ${
+    gov.manifest.sandbox.remote?.refresh === "off"
+      ? "Edits the user makes on their machine during this session are not visible to you."
+      : "Edits the user makes on their machine are copied into the sandbox before each of your turns, not while you work; if you changed the same file, your copy is kept."
+  }${
     gov.options.subagent
       ? " You are a subagent: your file changes are discarded when you finish, so report findings or patch text instead of editing files."
       : " Changes made by subagents are discarded."
@@ -344,10 +362,41 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
         });
       });
       // Model-facing, and present only in a remote workspace.
-      pi.on("before_agent_start", (event) => {
-        if (gov.remote)
-          event.systemPromptOptions.sections.piship_remote_workspace =
-            remoteWorkspaceSection(gov);
+      pi.on("before_agent_start", async (event) => {
+        if (!gov.remote) return undefined;
+        event.systemPromptOptions.sections.piship_remote_workspace =
+          remoteWorkspaceSection(gov);
+        // Host edits made since the last turn reach the sandbox first.
+        const refreshed = await gov.remote.refresh();
+        return refreshed
+          ? {
+              message: {
+                customType: "piship-remote-refresh",
+                content: refreshed,
+                display: false,
+              },
+            }
+          : undefined;
+      });
+      // A subagent's sandbox is thrown away: its final message tells the parent.
+      pi.on("message_end", (event) => {
+        const message = event.message;
+        if (
+          !gov.options.subagent ||
+          !gov.remote?.touched ||
+          message.role !== "assistant" ||
+          message.content.some((part) => part.type === "toolCall")
+        )
+          return undefined;
+        return {
+          message: {
+            ...message,
+            content: [
+              ...message.content,
+              { type: "text" as const, text: SUBAGENT_DISCARD_NOTE },
+            ],
+          },
+        };
       });
       pi.on("agent_end", async () => {
         calls.clear();

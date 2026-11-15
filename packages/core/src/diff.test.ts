@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DIFF_TESTS, diffLocks, formatDiff } from "./diff/index.js";
 import { PISHIP_VERSION } from "./compatibility.js";
+import { DIFF_TESTS, diffLocks, formatDiff } from "./diff/index.js";
 import type { DistributionLock } from "./index.js";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
@@ -54,7 +54,7 @@ const V1ALPHA5_DEMO = readFileSync(
   .replace("schema: piship/v1", "schema: piship/v1alpha5")
   .replace("action: model.select", "action: model.use")
   // v1alpha5 has no rule packs: restore the hand-written shell rule they replace.
-  .replace(/  # Routine work[\s\S]*?version: 1\n/, "")
+  .replace(/ {2}# Routine work[\s\S]*?version: 1\n/, "")
   .replace(
     "    - id: acme.tools\n",
     '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask\n    - id: acme.tools\n',
@@ -542,6 +542,64 @@ describe("diffLocks", () => {
       risk: "medium",
       after: "local",
     });
+  });
+
+  it("flags the remote setup command, refresh and lifetime", () => {
+    const after = clone(base);
+    const sandbox = after.governance.manifest.sandbox as Record<
+      string,
+      unknown
+    >;
+    sandbox.lifetimeSeconds = 7200;
+    sandbox.remote = {
+      refresh: "off",
+      setup: "npm ci",
+      setupTimeoutSeconds: 1800,
+    };
+    const changes = diffLocks(base, after).changes;
+    const by = (item: string) => changes.find((c) => c.item === item);
+    expect(by("sandbox remote.setup")).toMatchObject({
+      risk: "high",
+      after: "npm ci",
+    });
+    expect(by("sandbox remote.refresh")).toMatchObject({
+      risk: "low",
+      after: "off",
+    });
+    expect(by("sandbox remote.setupTimeoutSeconds")).toMatchObject({
+      after: "1800",
+    });
+    expect(by("sandbox lifetimeSeconds")).toMatchObject({ after: "7200" });
+    expect(changes).toHaveLength(4);
+  });
+
+  it("flags the setup cache, including its e2b-compatible default", () => {
+    const after = clone(base);
+    const sandbox = after.governance.manifest.sandbox as Record<
+      string,
+      unknown
+    >;
+    sandbox.remote = {
+      cache: "snapshot",
+      cacheKeyFiles: ["package-lock.json"],
+    };
+    const by = (item: string) =>
+      diffLocks(base, after).changes.find((c) => c.item === item);
+    expect(by("sandbox remote.cache")).toMatchObject({
+      risk: "medium",
+      before: "off",
+      after: "snapshot",
+    });
+    expect(by("sandbox remote.cacheKeyFiles")).toMatchObject({
+      risk: "low",
+      after: "package-lock.json",
+    });
+    // With a setup on e2b-compatible the default is snapshot, so only turning it off is a change.
+    sandbox.provider = "e2b-compatible";
+    sandbox.remote = { setup: "npm ci" };
+    expect(by("sandbox remote.cache")).toMatchObject({ after: "snapshot" });
+    sandbox.remote = { setup: "npm ci", cache: "off" };
+    expect(by("sandbox remote.cache")).toBeUndefined();
   });
 
   it("flags a sandbox that no longer fails closed", () => {

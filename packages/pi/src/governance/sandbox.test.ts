@@ -102,6 +102,29 @@ describe("the declared sandbox backend", () => {
     ).toBeInstanceOf(KubernetesAgentSandboxBackend);
   });
 
+  it("passes sandbox.lifetimeSeconds to the e2b-compatible backend as the sandbox timeout", async () => {
+    const bodies: unknown[] = [];
+    const backend = await sandboxBackend(
+      options(
+        {
+          provider: "e2b-compatible",
+          endpoint: "https://gateway.acme.example/sandbox",
+          lifetimeSeconds: 7200,
+        },
+        {
+          fetch: async (_url: unknown, init?: RequestInit) => {
+            bodies.push(JSON.parse(String(init?.body ?? "null")));
+            throw new Error("stop after create");
+          },
+        } as Partial<GovernanceOptions>,
+      ),
+    );
+    await backend
+      ?.prepare({ profile: { network: "allow" } } as never)
+      .catch(() => undefined);
+    expect(bodies[0]).toMatchObject({ timeout: 7200 });
+  });
+
   it("reaches a private plain-HTTP endpoint by default, unless https is forced or the runtime credential is sent", async () => {
     const scoped: string[] = [];
     const plainHttpFetch = (plainHttp: (target: URL) => boolean) => {

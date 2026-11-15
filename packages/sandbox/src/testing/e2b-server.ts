@@ -21,6 +21,13 @@ export interface E2bScript {
   /** The envd user the sandbox accepts; others are refused. Default `user`. */
   user?: string;
   create?: number;
+  /** Status of `POST /sandboxes/{id}/snapshots`; default 201 with a new id. */
+  snapshot?: number;
+  /** Status when a sandbox is created from a snapshot id; default: found, or 404. */
+  createFromSnapshot?: number;
+  /** The snapshots that exist (ids `snap-1`, `snap-2`, ...), and those deleted. */
+  snapshots?: string[];
+  deletedSnapshots?: string[];
   /** Set to true once the sandbox has expired: its timeout endpoint answers 404. */
   gone?: boolean;
   /**
@@ -67,7 +74,10 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
       response.statusCode = script.health ?? 204;
       return void response.end();
     }
-    if (path.startsWith("/sandboxes") && script.apiKey !== undefined) {
+    if (
+      (path.startsWith("/sandboxes") || path.startsWith("/templates")) &&
+      script.apiKey !== undefined
+    ) {
       const presented = String(request.headers["x-api-key"] ?? "");
       if (presented !== script.apiKey || rejectOnce.delete(path)) {
         response.statusCode = 401;
@@ -77,12 +87,52 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
         );
       }
     }
+    script.snapshots ??= [];
+    script.deletedSnapshots ??= [];
+    if (request.method === "DELETE" && path.startsWith("/templates/")) {
+      const id = decodeURIComponent(path.slice("/templates/".length));
+      const at = script.snapshots.indexOf(id);
+      if (at >= 0) script.snapshots.splice(at, 1);
+      script.deletedSnapshots.push(id);
+      response.statusCode = at >= 0 ? 204 : 404;
+      return void response.end();
+    }
+    if (request.method === "POST" && path === "/sandboxes/sbx1/snapshots") {
+      response.setHeader("Content-Type", "application/json");
+      response.statusCode = script.snapshot ?? 201;
+      if (response.statusCode >= 400)
+        return void response.end(
+          JSON.stringify({
+            code: response.statusCode,
+            message: "no snapshots",
+          }),
+        );
+      const id = `snap-${script.snapshots.length + script.deletedSnapshots.length + 1}`;
+      script.snapshots.push(id);
+      return void response.end(JSON.stringify({ snapshotID: id, names: [] }));
+    }
     if (request.method === "POST" && path === "/sandboxes") {
-      response.statusCode = script.create ?? 201;
+      const template = (
+        JSON.parse(request.body.toString() || "{}") as {
+          templateID?: string;
+        }
+      ).templateID;
+      const fromSnapshot = template?.startsWith("snap-") === true;
+      const missing =
+        fromSnapshot && !script.snapshots.includes(template as string);
+      response.statusCode =
+        fromSnapshot && (missing || script.createFromSnapshot)
+          ? missing
+            ? 404
+            : (script.createFromSnapshot as number)
+          : (script.create ?? 201);
       response.setHeader("Content-Type", "application/json");
       return void response.end(
-        script.create && script.create >= 400
-          ? JSON.stringify({ code: script.create, message: "no capacity" })
+        response.statusCode >= 400
+          ? JSON.stringify({
+              code: response.statusCode,
+              message: "no capacity",
+            })
           : JSON.stringify({
               sandboxID: "sbx1",
               templateID: "piship-workspace",

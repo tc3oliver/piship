@@ -166,6 +166,18 @@ export interface SandboxPrepareRequest {
    * `prepare()` always gets one, which also aborts at PiShip's deadline.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Remote workspace cache: create the sandbox from this snapshot id (one
+   * the instance's `snapshot()` returned earlier) instead of the configured
+   * template. A backend that cannot find it rejects with `code:
+   * "SNAPSHOT_GONE"`, and PiShip then prepares again without it.
+   */
+  readonly template?: string;
+  /**
+   * `contrast`: a throwaway sandbox for the network-denial probe. It holds
+   * none of the user's files, so a cache never starts it from a snapshot.
+   */
+  readonly purpose?: "contrast";
 }
 
 /** What PiShip passes to a backend's `available()` and an instance's `dispose()`. */
@@ -251,7 +263,16 @@ export interface SandboxInstance {
   epoch?(): string | undefined;
   /** Optional: file access to the sandbox's workspace (remote backends). */
   readonly files?: SandboxFiles;
+  /**
+   * Optional: save the sandbox's filesystem and return an id `prepare` later
+   * accepts as `template`. The sandbox keeps running. A backend without
+   * snapshots rejects with `code: "SNAPSHOT_UNSUPPORTED"`.
+   */
+  snapshot?(options: { signal: AbortSignal }): Promise<{ id: string }>;
 }
+
+/** The ids PiShip accepts for a snapshot, before one is put in a request. */
+export const SNAPSHOT_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
 export interface SandboxBackend {
   /** A short identifier such as `linux-bubblewrap` or `acme-sandbox`. */
@@ -262,6 +283,8 @@ export interface SandboxBackend {
   capabilities(): SandboxCapabilities;
   /** Create or prepare an isolated environment for a session. */
   prepare(request: SandboxPrepareRequest): Promise<SandboxInstance>;
+  /** Optional: delete a snapshot, best effort; needs no live sandbox. */
+  deleteSnapshot?(id: string, options?: SandboxCallOptions): Promise<void>;
 }
 
 const IDENTIFIER = /^[a-z][a-z0-9-]{0,62}$/;

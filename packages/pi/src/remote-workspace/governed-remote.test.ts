@@ -12,6 +12,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,9 +24,11 @@ import type {
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ManagedFetch } from "@piship/contracts";
 import {
+  readRemoteWorkspaceCheckpoint,
   remoteWorkspacePaths,
   resolveLock,
   writeRemoteWorkspaceCheckpoint,
+  writeRemoteWorkspacePulled,
 } from "@piship/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { governanceHooks } from "../builtins.js";
@@ -41,22 +44,42 @@ interface Log {
   failSeedOnce?: boolean;
   failDiff?: boolean;
   gone?: boolean;
+  /** Snapshot cache: what prepare was asked to start from, the snapshots made and deleted. */
+  prepares: (string | null)[];
+  snapshotsMade: string[];
+  deleted: string[];
+  /** The commands that had run when each snapshot was taken. */
+  atSnapshot: string[][];
+  snapshotFail?: "unsupported" | "error";
+  /** Fail the extract once, as an overlay that cannot be applied. */
+  failOverlay?: boolean;
+  next: number;
 }
 const log = (): Log =>
   ((globalThis as { __pishipRemote?: Log }).__pishipRemote ??= {
     files: [],
     commands: [],
+    prepares: [],
+    snapshotsMade: [],
+    deleted: [],
+    atSnapshot: [],
+    next: 0,
   });
 
 function adapter(remote: string): string {
   return `
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const remote = ${JSON.stringify(remote)};
+const snaps = remote + "-snapshots";
 const log = () => globalThis.__pishipRemote;
 export default () => ({
   id: "acme-remote",
+  deleteSnapshot: async (id) => {
+    log().deleted.push(id);
+    rmSync(join(snaps, id), { recursive: true, force: true });
+  },
   available: async () => ({ available: true }),
   capabilities: () => ({
     isolation: "remote",
@@ -64,7 +87,26 @@ export default () => ({
     network: ["deny", "allow"],
     localProcesses: false,
   }),
-  prepare: async () => ({
+  prepare: async (request) => {
+    log().prepares.push(request.template ?? null);
+    // A new sandbox: empty, or the snapshot's filesystem.
+    for (const name of readdirSync(remote)) rmSync(join(remote, name), { recursive: true, force: true });
+    if (request.template) {
+      const from = join(snaps, request.template);
+      if (!existsSync(from)) throw Object.assign(new Error("no such snapshot"), { code: "SNAPSHOT_GONE" });
+      cpSync(from, remote, { recursive: true });
+    }
+    return {
+    snapshot: async () => {
+      if (log().snapshotFail === "unsupported") throw Object.assign(new Error("no snapshots"), { code: "SNAPSHOT_UNSUPPORTED" });
+      if (log().snapshotFail) throw new Error("HTTP 503");
+      log().atSnapshot.push([...log().commands]);
+      const id = "snap-" + ++log().next;
+      mkdirSync(snaps, { recursive: true });
+      cpSync(remote, join(snaps, id), { recursive: true });
+      log().snapshotsMade.push(id);
+      return { id };
+    },
     files: {
       read: async (path) => {
         if (log().gone) throw Object.assign(new Error("raw"), { code: "SANDBOX_GONE" });
@@ -94,7 +136,12 @@ export default () => ({
         io.onStdout(Buffer.from("piship-sandbox-ready " + (request.env.PISHIP_PROBE_UNLISTED ?? "unset") + "\\n"));
         return Promise.resolve({ exitCode: 0 });
       }
-      if (log().failSeedOnce && request.command.includes("tar -xf")) {
+      if (log().failOverlay && request.command.includes("piship-keep.idx")) {
+        log().failOverlay = false;
+        io.onStdout(Buffer.from("snapshot damaged\\n"));
+        return Promise.resolve({ exitCode: 1 });
+      }
+      if (log().failSeedOnce && request.command.includes("tar -xzf")) {
         log().failSeedOnce = false;
         io.onStdout(Buffer.from("disk full\\n"));
         return Promise.resolve({ exitCode: 1 });
@@ -113,7 +160,8 @@ export default () => ({
       });
     },
     dispose: async () => {},
-  }),
+    };
+  },
 });
 `;
 }
@@ -152,67 +200,81 @@ async function open(
     subagent?: boolean;
     sandbox?: string[];
     setup?: (workspace: string) => void;
+    /** A second session of the same project: same host files, state and distribution. */
+    reuse?: { root: string };
   } = {},
 ) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-rw-")));
-  roots.push(root);
+  const root =
+    options.reuse?.root ??
+    realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-rw-")));
+  if (!options.reuse) roots.push(root);
   log();
   const distribution = join(root, "distribution");
   const workspace = join(root, "workspace");
   const remote = join(root, "remote");
-  mkdirSync(distribution, { recursive: true });
-  mkdirSync(remote);
-  mkdirSync(workspace);
-  const sh = (...args: string[]) =>
-    execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
-  sh("init", "-q");
-  writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
-  writeFileSync(join(workspace, "secret.env"), "TOKEN=1\n");
-  writeFileSync(join(workspace, "ask.txt"), "ask me\n");
-  options.setup?.(workspace);
-  sh("add", "-A");
-  sh("-c", "user.name=t", "-c", "user.email=t@x.invalid", "commit", "-qm", "i");
-  for (const path of ["sandbox/acme.mjs", "resources/sandbox/acme.mjs"]) {
-    mkdirSync(dirname(join(distribution, path)), { recursive: true });
-    writeFileSync(join(distribution, path), adapter(remote));
-  }
   const manifest = join(distribution, "piship.yaml");
-  writeFileSync(
-    manifest,
-    [
-      "schema: piship/v1alpha6",
-      "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.5.0" }',
-      "deployment: { mode: personal }",
-      "policy:",
-      "  id: unit",
-      "  version: 1",
-      "  default: deny",
-      "  defaults:",
-      '    - { id: nosecret, action: filesystem.read, resource: "workspace/secret.env", effect: deny }',
-      '    - { id: nowrite, action: filesystem.write, resource: "workspace/locked.txt", effect: deny }',
-      '    - { id: askfile, action: filesystem.read, resource: "workspace/ask.txt", effect: ask }',
-      '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
-      '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: allow }',
-      '    - { id: shell, action: shell.execute, resource: "**", effect: allow }',
-      '    - { id: tools, action: tool.execute, resource: "*", effect: allow }',
-      "sandbox:",
-      "  required: true",
-      "  provider: custom",
-      "  adapter: ./sandbox/acme.mjs",
-      "  workspace: remote",
-      ...(options.sandbox ?? []),
-      "  network: { mode: deny }",
-      "  environment: { allow: [PATH] }",
-      "updates:",
-      "  channel: stable",
-      "audit:",
-      "  enabled: true",
-      "  sinks:",
-      "    - { id: local, type: file, required: false }",
-      "",
-    ].join("\n"),
-  );
+  if (!options.reuse) {
+    mkdirSync(distribution, { recursive: true });
+    mkdirSync(remote);
+    mkdirSync(workspace);
+    const sh = (...args: string[]) =>
+      execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+    sh("init", "-q");
+    writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
+    writeFileSync(join(workspace, "secret.env"), "TOKEN=1\n");
+    writeFileSync(join(workspace, "ask.txt"), "ask me\n");
+    options.setup?.(workspace);
+    sh("add", "-A");
+    sh(
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@x.invalid",
+      "commit",
+      "-qm",
+      "i",
+    );
+    for (const path of ["sandbox/acme.mjs", "resources/sandbox/acme.mjs"]) {
+      mkdirSync(dirname(join(distribution, path)), { recursive: true });
+      writeFileSync(join(distribution, path), adapter(remote));
+    }
+    writeFileSync(
+      manifest,
+      [
+        "schema: piship/v1alpha6",
+        "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+        'runtime: { pi: "1.5.0" }',
+        "deployment: { mode: personal }",
+        "policy:",
+        "  id: unit",
+        "  version: 1",
+        "  default: deny",
+        "  defaults:",
+        '    - { id: nosecret, action: filesystem.read, resource: "workspace/secret.env", effect: deny }',
+        '    - { id: nowrite, action: filesystem.write, resource: "workspace/locked.txt", effect: deny }',
+        '    - { id: askfile, action: filesystem.read, resource: "workspace/ask.txt", effect: ask }',
+        '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
+        '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: allow }',
+        '    - { id: shell, action: shell.execute, resource: "**", effect: allow }',
+        '    - { id: tools, action: tool.execute, resource: "*", effect: allow }',
+        "sandbox:",
+        "  required: true",
+        "  provider: custom",
+        "  adapter: ./sandbox/acme.mjs",
+        "  workspace: remote",
+        ...(options.sandbox ?? []),
+        "  network: { mode: deny }",
+        "  environment: { allow: [PATH] }",
+        "updates:",
+        "  channel: stable",
+        "audit:",
+        "  enabled: true",
+        "  sinks:",
+        "    - { id: local, type: file, required: false }",
+        "",
+      ].join("\n"),
+    );
+  }
   const lock = resolveLock(manifest);
   const stateDir = join(root, "state");
   const session = await GovernanceSession.open({
@@ -286,6 +348,30 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     await expect(
       tool("read")({ path: `${sandboxRoot}/../../../etc/hosts` }),
     ).rejects.toThrow();
+  });
+
+  it("returns an image read from the sandbox as an image, reading the file once", async () => {
+    const { remote, tool } = await open();
+    await tool("read")({ path: "notes.txt" }); // seeds the sandbox first
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    writeFileSync(join(remote, "pic.png"), png);
+    writeFileSync(join(remote, "fake.png"), "not an image\n");
+    const reads = () =>
+      fileCalls("pic.png").filter((call) => call.op === "read").length;
+    const before = reads();
+    const result = (await tool("read")({ path: "pic.png" })) as {
+      content: { type: string }[];
+    };
+    expect(result.content.map((block) => block.type)).toContain("image");
+    expect(reads() - before).toBe(1);
+    const text = (await tool("read")({ path: "fake.png" })) as {
+      content: { type: string; text?: string }[];
+    };
+    expect(JSON.stringify(text)).toContain("not an image");
+    expect(text.content.some((block) => block.type === "image")).toBe(false);
   });
 
   it("uploads a policy-withheld file once the user approves its read, and keeps it out of the patch unless changed", async () => {
@@ -392,7 +478,7 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     expect(existsSync(join(remote, ".git"))).toBe(true);
     await tool("read")({ path: "notes.txt" });
     expect(
-      log().commands.filter((command) => command.includes("tar -xf")),
+      log().commands.filter((command) => command.includes("tar -xzf")),
     ).toHaveLength(1);
     // The host working tree was not touched.
     expect(readFileSync(join(workspace, "notes.txt"), "utf8")).toBe(
@@ -619,7 +705,7 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
       sessionManager: SessionManager.inMemory(tmpdir()),
     } as never);
     expect(JSON.stringify(started)).not.toContain("run on this machine");
-    expect(log().commands.some((command) => command.includes("tar -xf"))).toBe(
+    expect(log().commands.some((command) => command.includes("tar -xzf"))).toBe(
       true,
     );
   });
@@ -644,5 +730,561 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     expect(existsSync(remoteWorkspacePaths(stateDir, workspace).patch)).toBe(
       false,
     );
+  });
+});
+
+/** The session's hooks, with a UI whose notices are collected. */
+function hooks(session: GovernanceSession) {
+  const handlers = new Map<
+    string,
+    (event: unknown, ctx: unknown) => Promise<unknown> | unknown
+  >();
+  const extension = governanceHooks(session);
+  (typeof extension === "function" ? extension : extension.factory)({
+    on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
+      handlers.set(event, handler),
+    registerCommand: () => {},
+  } as never);
+  const notices: string[] = [];
+  const ui = {
+    ...context(),
+    ui: { ...context().ui, notify: (message: string) => notices.push(message) },
+  };
+  handlers.get("session_start")?.({}, ui);
+  const sections: Record<string, string> = {};
+  return {
+    notices,
+    sections,
+    /** A turn's start: returns the message the model gets, if any. */
+    turn: async () =>
+      (await handlers.get("before_agent_start")?.(
+        { systemPromptOptions: { sections } },
+        ui,
+      )) as { message?: { content: string } } | undefined,
+    end: () => handlers.get("agent_end")?.({}, ui),
+    message: (event: unknown) => handlers.get("message_end")?.(event, ui),
+  };
+}
+
+const patchOf = (stateDir: string, workspace: string) => {
+  const paths = remoteWorkspacePaths(stateDir, workspace);
+  return existsSync(paths.patch) ? readFileSync(paths.patch, "utf8") : "";
+};
+const refreshNotices = (notices: string[]) =>
+  notices.filter((line) => /changed on this machine|^Sent /.test(line));
+
+describe.skipIf(!posix || asRoot)("host edits during a remote session", () => {
+  const read = async (tool: (p: unknown) => Promise<unknown>, path: string) =>
+    JSON.stringify(await tool({ path }));
+
+  it("sends a file the user changed on this machine, keeps it out of the patch, and tells the model", async () => {
+    const { session, workspace, remote, stateDir, tool } = await open();
+    const h = hooks(session);
+    await read(tool("read"), "notes.txt");
+    writeFileSync(join(workspace, "notes.txt"), "fixed in the IDE\n");
+    writeFileSync(join(workspace, "fresh.txt"), "new file\n");
+    const result = await h.turn();
+    expect(readFileSync(join(remote, "notes.txt"), "utf8")).toBe(
+      "fixed in the IDE\n",
+    );
+    expect(readFileSync(join(remote, "fresh.txt"), "utf8")).toBe("new file\n");
+    expect(h.notices).toContain(
+      "Sent 2 files you changed on this machine to the sandbox",
+    );
+    expect(result?.message?.content).toContain("notes.txt");
+    await h.end();
+    expect(patchOf(stateDir, workspace)).toBe("");
+    // Nothing changed since: a quiet turn.
+    expect(await h.turn()).toBeUndefined();
+    expect(refreshNotices(h.notices)).toHaveLength(1);
+    // The agent's own later edit is the only change in the patch.
+    await tool("edit")({
+      path: "notes.txt",
+      edits: [{ oldText: "IDE", newText: "editor" }],
+    });
+    await h.end();
+    const patch = patchOf(stateDir, workspace);
+    expect(patch).toContain("+fixed in the editor");
+    expect(patch).not.toContain("new file");
+  });
+
+  it("applies a host deletion the agent did not touch", async () => {
+    const { session, workspace, remote, stateDir, tool } = await open();
+    const h = hooks(session);
+    await read(tool("read"), "notes.txt");
+    rmSync(join(workspace, "notes.txt"));
+    await h.turn();
+    expect(existsSync(join(remote, "notes.txt"))).toBe(false);
+    await h.end();
+    expect(patchOf(stateDir, workspace)).toBe("");
+  });
+
+  it("sends a file the seed left out as too large once the user shrinks it, and not before", async () => {
+    const { session, workspace, remote, tool } = await open({
+      sandbox: ["  remote: { seed: { maxFileMiB: 1 } }"],
+      setup: (workspace) =>
+        writeFileSync(join(workspace, "big.txt"), "x".repeat(2 * 1024 * 1024)),
+    });
+    const h = hooks(session);
+    await read(tool("read"), "notes.txt");
+    expect(existsSync(join(remote, "big.txt"))).toBe(false);
+    expect(await h.turn()).toBeUndefined();
+    expect(existsSync(join(remote, "big.txt"))).toBe(false);
+    writeFileSync(join(workspace, "big.txt"), "now small\n");
+    await h.turn();
+    expect(readFileSync(join(remote, "big.txt"), "utf8")).toBe("now small\n");
+  });
+
+  it("keeps the sandbox copy when the agent changed the same file, and says so once", async () => {
+    const { session, workspace, remote, tool } = await open();
+    const h = hooks(session);
+    await tool("write")({ path: "notes.txt", content: "agent version\n" });
+    writeFileSync(join(workspace, "notes.txt"), "user version\n");
+    const result = await h.turn();
+    expect(readFileSync(join(remote, "notes.txt"), "utf8")).toBe(
+      "agent version\n",
+    );
+    const line =
+      "notes.txt changed on this machine and in the sandbox; the sandbox copy is kept. `unit sandbox pull` will merge or flag it.";
+    expect(refreshNotices(h.notices)).toEqual([line]);
+    expect(result?.message?.content).toContain("your copy was kept");
+    writeFileSync(join(workspace, "notes.txt"), "user version two\n");
+    await h.turn();
+    expect(refreshNotices(h.notices)).toEqual([line]);
+  });
+
+  it("treats a file a mid-session pull wrote to the host as in sync", async () => {
+    const { session, workspace, remote, stateDir, tool } = await open();
+    const h = hooks(session);
+    await tool("write")({ path: "notes.txt", content: "agent version\n" });
+    await h.end();
+    const checkpoint = readRemoteWorkspaceCheckpoint(stateDir, workspace);
+    expect(checkpoint?.patch.length).toBeGreaterThan(0);
+    // What `sandbox pull` does: the patch lands on the host, and a marker names the commit.
+    writeFileSync(join(workspace, "notes.txt"), "agent version\n");
+    writeRemoteWorkspacePulled(stateDir, workspace, {
+      session: session.sessionId,
+      checkpointCommit: checkpoint?.meta.checkpointCommit ?? "",
+    });
+    expect(await h.turn()).toBeUndefined();
+    expect(refreshNotices(h.notices)).toEqual([]);
+    await session.remote?.checkpoint(true);
+    expect(patchOf(stateDir, workspace)).toBe("");
+    // After the baseline moved, a later host edit still reaches the sandbox.
+    writeFileSync(join(workspace, "notes.txt"), "agent version, then user\n");
+    await h.turn();
+    expect(readFileSync(join(remote, "notes.txt"), "utf8")).toBe(
+      "agent version, then user\n",
+    );
+    await h.end();
+    expect(patchOf(stateDir, workspace)).toBe("");
+  });
+
+  it("does nothing with sandbox.remote.refresh: off", async () => {
+    const { session, workspace, remote, tool } = await open({
+      sandbox: ["  remote: { refresh: off }"],
+    });
+    const h = hooks(session);
+    await read(tool("read"), "notes.txt");
+    writeFileSync(join(workspace, "notes.txt"), "fixed in the IDE\n");
+    await h.turn();
+    expect(readFileSync(join(remote, "notes.txt"), "utf8")).toBe(
+      "workspace notes\n",
+    );
+    expect(h.sections.piship_remote_workspace).toContain(
+      "Edits the user makes on their machine during this session are not visible to you.",
+    );
+  });
+
+  it("warns once and carries on when the sandbox cannot be reached", async () => {
+    const { session, workspace, tool } = await open();
+    const h = hooks(session);
+    await read(tool("read"), "notes.txt");
+    writeFileSync(join(workspace, "notes.txt"), "fixed in the IDE\n");
+    log().gone = true;
+    await h.turn();
+    await h.turn();
+    expect(
+      h.notices.filter((line) =>
+        line.startsWith("Edits you made on this machine"),
+      ),
+    ).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!posix || asRoot)("sandbox.remote.setup", () => {
+  const withLock = (workspace: string) => {
+    writeFileSync(join(workspace, "lock.txt"), "lock\n");
+    writeFileSync(join(workspace, ".gitignore"), "deps/\n");
+  };
+
+  it("runs once after the seed and folds its tracked-file changes into the baseline", async () => {
+    const { session, workspace, remote, stateDir, tool } = await open({
+      setup: withLock,
+      sandbox: [
+        '  remote: { setup: "mkdir deps && echo d > deps/a && echo rewritten >> lock.txt" }',
+      ],
+    });
+    const h = hooks(session);
+    await tool("read")({ path: "notes.txt" });
+    await tool("read")({ path: "notes.txt" });
+    expect(h.notices.filter((l) => l.startsWith("Running setup"))).toEqual([
+      "Running setup in the sandbox: mkdir deps && echo d > deps/a && echo rewritten >> lock.txt",
+    ]);
+    expect(h.notices.some((l) => l.startsWith("Setup changed 1 file"))).toBe(
+      true,
+    );
+    expect(readFileSync(join(remote, "deps", "a"), "utf8")).toBe("d\n");
+    await tool("write")({ path: "out.txt", content: "agent\n" });
+    await h.end();
+    const patch = patchOf(stateDir, workspace);
+    expect(patch).toContain("+agent");
+    expect(patch).not.toContain("rewritten");
+    expect(patch).not.toContain("deps");
+    await h.turn();
+    expect(h.sections.piship_remote_workspace).toContain(
+      "ran once after the upload",
+    );
+  });
+
+  it("warns with the exit code and last lines when it fails, and tells the model", async () => {
+    const { session, tool } = await open({
+      sandbox: ['  remote: { setup: "echo no registry; exit 3" }'],
+    });
+    const h = hooks(session);
+    await tool("read")({ path: "notes.txt" });
+    const failed = h.notices.find((l) => l.startsWith("Setup failed"));
+    expect(failed).toContain("echo no registry; exit 3 (exit 3)");
+    expect(failed).toContain("no registry");
+    await h.turn();
+    expect(h.sections.piship_remote_workspace).toContain(
+      "The setup command failed",
+    );
+  });
+});
+
+describe.skipIf(!posix || asRoot)("a subagent child's changes", () => {
+  const final = {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+  };
+  it("are reported to the parent in the final message once it wrote", async () => {
+    const { session, tool } = await open({ subagent: true });
+    const h = hooks(session);
+    expect(h.message({ message: final })).toBeUndefined();
+    await tool("write")({ path: "child.txt", content: "c\n" });
+    const midway = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "1", name: "write", arguments: {} }],
+    };
+    expect(h.message({ message: midway })).toBeUndefined();
+    const out = h.message({ message: final }) as {
+      message: { content: { text: string }[] };
+    };
+    expect(out.message.content.at(-1)?.text).toBe(
+      "\n\nNote: this subagent's file changes were not kept (remote workspace). Apply them from its report.",
+    );
+  });
+
+  it("are not mentioned for the parent session itself", async () => {
+    const { session, tool } = await open();
+    const h = hooks(session);
+    await tool("write")({ path: "p.txt", content: "p\n" });
+    expect(h.message({ message: final })).toBeUndefined();
+  });
+});
+
+describe.skipIf(!posix || asRoot)("sandbox.remote.cache", () => {
+  const SETUP =
+    "mkdir -p node_modules/x && echo d > node_modules/x/a && echo built >> lock.txt";
+  const withFiles = (workspace: string) => {
+    writeFileSync(join(workspace, "lock.txt"), "lock\n");
+    writeFileSync(join(workspace, "old.txt"), "old\n");
+    writeFileSync(join(workspace, ".gitignore"), "node_modules/\n");
+  };
+  const remoteLine = (cache = "snapshot", setup = SETUP) =>
+    `  remote: { setup: "${setup}", cacheKeyFiles: ["lock.txt"], cache: ${cache} }`;
+  const started = async (
+    first: Awaited<ReturnType<typeof open>>,
+  ): Promise<ReturnType<typeof hooks>> => {
+    const h = hooks(first.session);
+    await first.tool("read")({ path: "notes.txt" });
+    return h;
+  };
+  const cacheJson = (stateDir: string, workspace: string) =>
+    join(remoteWorkspacePaths(stateDir, workspace).dir, "cache.json");
+  const stored = (stateDir: string, workspace: string) =>
+    JSON.parse(readFileSync(cacheJson(stateDir, workspace), "utf8"));
+  const saved = "Saved the sandbox setup; the next session starts from it.";
+
+  it("saves after a successful setup and before the agent's first command or write", async () => {
+    const first = await open({
+      setup: withFiles,
+      sandbox: [remoteLine()],
+    });
+    const h = await started(first);
+    expect(log().snapshotsMade).toEqual(["snap-1"]);
+    // Only the seed and the setup command had run: nothing of the agent's.
+    const before = log().atSnapshot[0] ?? [];
+    expect(before.at(-1)).toContain("piship-baseline");
+    expect(before.some((c) => c.includes(SETUP))).toBe(true);
+    expect(before.some((c) => c.includes("agent-ran"))).toBe(false);
+    expect(
+      first.session.remote?.touched,
+      "nothing ran before the snapshot",
+    ).toBe(false);
+    await first.tool("write")({ path: "agent.txt", content: "agent-ran\n" });
+    expect(h.notices.filter((l) => l === saved)).toHaveLength(1);
+    const file = cacheJson(first.stateDir, first.workspace);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(stored(first.stateDir, first.workspace)).toMatchObject({
+      version: 1,
+      snapshotId: "snap-1",
+      key: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(readFileSync(file, "utf8")).not.toMatch(/token|secret|password/i);
+    // The agent's file is not in the snapshot.
+    expect(
+      existsSync(join(first.root, "remote-snapshots", "snap-1", "agent.txt")),
+    ).toBe(false);
+    expect(
+      existsSync(
+        join(
+          first.root,
+          "remote-snapshots",
+          "snap-1",
+          "node_modules",
+          "x",
+          "a",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("saves the snapshot when the session's first action is a background task", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await first.tool("task_start")({ command: "echo hi" }, {
+      ...context(),
+      sessionManager: SessionManager.inMemory(tmpdir()),
+    } as never);
+    expect(log().snapshotsMade).toEqual(["snap-1"]);
+    expect(stored(first.stateDir, first.workspace)).toMatchObject({
+      snapshotId: "snap-1",
+    });
+  });
+
+  it("starts the next session from the snapshot, overlays the host files and runs no setup", async () => {
+    const first = await open({
+      setup: withFiles,
+      sandbox: [remoteLine()],
+    });
+    await started(first);
+    // The host changed meanwhile: a file deleted, another edited, a new one.
+    rmSync(join(first.workspace, "old.txt"));
+    writeFileSync(join(first.workspace, "notes.txt"), "newer notes\n");
+    writeFileSync(join(first.workspace, "added.txt"), "added\n");
+    // A file the snapshot holds that the policy now withholds from the upload.
+    writeFileSync(
+      join(first.root, "remote-snapshots", "snap-1", "secret.env"),
+      "TOKEN=1\n",
+    );
+    log().commands.length = 0;
+    const second = await open({ reuse: first });
+    const h = await started(second);
+    expect(log().prepares).toEqual([null, "snap-1"]);
+    expect(log().commands.some((c) => c.includes(SETUP))).toBe(false);
+    expect(h.notices.some((l) => l.startsWith("Running setup"))).toBe(false);
+    expect(log().snapshotsMade).toEqual(["snap-1"]);
+    const sandbox = (path: string) => join(first.remote, path);
+    expect(readFileSync(sandbox("notes.txt"), "utf8")).toBe("newer notes\n");
+    expect(existsSync(sandbox("added.txt"))).toBe(true);
+    expect(existsSync(sandbox("old.txt"))).toBe(false);
+    expect(existsSync(sandbox("secret.env"))).toBe(false);
+    // The setup output the snapshot carries is still there, ignored.
+    expect(readFileSync(sandbox("node_modules/x/a"), "utf8")).toBe("d\n");
+    // One baseline commit, and nothing of the overlay is a change.
+    const commits = execFileSync("git", ["rev-list", "--count", "HEAD"], {
+      cwd: first.remote,
+      encoding: "utf8",
+    });
+    expect(commits.trim()).toBe("1");
+    expect(existsSync(sandbox(".piship-seed.keep"))).toBe(false);
+    expect(existsSync(sandbox(".piship-seed.started"))).toBe(false);
+    await h.turn();
+    expect(h.sections.piship_remote_workspace).toContain(
+      "restored from a cache",
+    );
+    await second.session.remote?.checkpoint(true);
+    expect(patchOf(second.stateDir, second.workspace)).toBe("");
+    // Later work is the only change in the patch.
+    await second.tool("write")({ path: "later.txt", content: "later\n" });
+    await second.session.remote?.checkpoint(true);
+    const patch = patchOf(second.stateDir, second.workspace);
+    expect(patch).toContain("+later");
+    expect(patch).not.toContain("node_modules");
+    expect(patch).not.toContain("added.txt");
+  });
+
+  it("rebuilds and deletes the old snapshot when a key file changes", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    writeFileSync(join(first.workspace, "lock.txt"), "lock 2\n");
+    const second = await open({ reuse: first });
+    const h = await started(second);
+    expect(log().prepares).toEqual([null, null]);
+    expect(h.notices.some((l) => l.startsWith("Running setup"))).toBe(true);
+    expect(log().snapshotsMade).toEqual(["snap-1", "snap-2"]);
+    expect(log().deleted).toEqual(["snap-1"]);
+    expect(stored(first.stateDir, first.workspace).snapshotId).toBe("snap-2");
+  });
+
+  it("falls back to the base template once, with one notice, when the snapshot is gone", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    rmSync(join(first.root, "remote-snapshots"), { recursive: true });
+    const second = await open({ reuse: first });
+    const h = await started(second);
+    expect(log().prepares).toEqual([null, "snap-1", null]);
+    expect(
+      h.notices.filter(
+        (l) =>
+          l ===
+          "The cached sandbox setup was no longer available; setting up again.",
+      ),
+    ).toHaveLength(1);
+    expect(h.notices.some((l) => l.startsWith("Running setup"))).toBe(true);
+    // A fresh snapshot replaces the lost one.
+    expect(stored(first.stateDir, first.workspace).snapshotId).toBe("snap-2");
+  });
+
+  it("cleans the sandbox, sets up again and drops the snapshot when the overlay fails", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    log().failOverlay = true;
+    const second = await open({ reuse: first });
+    const h = await started(second);
+    expect(log().prepares).toEqual([null, "snap-1"]);
+    expect(
+      h.notices.filter(
+        (l) =>
+          l ===
+          "The cached sandbox setup could not be applied; setting up again.",
+      ),
+    ).toHaveLength(1);
+    expect(h.notices.some((l) => l.startsWith("Running setup"))).toBe(true);
+    expect(readFileSync(join(first.remote, "node_modules/x/a"), "utf8")).toBe(
+      "d\n",
+    );
+    // A sandbox that fell back is not saved, and the unusable snapshot goes.
+    expect(log().snapshotsMade).toEqual(["snap-1"]);
+    expect(log().deleted).toEqual(["snap-1"]);
+    expect(existsSync(cacheJson(first.stateDir, first.workspace))).toBe(false);
+    await second.session.remote?.checkpoint(true);
+    expect(patchOf(second.stateDir, second.workspace)).toBe("");
+  });
+
+  it("takes no snapshot when setup fails, without a setup command, or with cache: off", async () => {
+    const failing = await open({
+      sandbox: [remoteLine("snapshot", "echo no; exit 3")],
+    });
+    await started(failing);
+    expect(log().snapshotsMade).toEqual([]);
+    expect(existsSync(cacheJson(failing.stateDir, failing.workspace))).toBe(
+      false,
+    );
+    const bare = await open({ sandbox: ["  remote: { cache: snapshot }"] });
+    await started(bare);
+    expect(log().snapshotsMade).toEqual([]);
+    const off = await open({ sandbox: [remoteLine("off")] });
+    await started(off);
+    expect(log().snapshotsMade).toEqual([]);
+    expect(existsSync(cacheJson(off.stateDir, off.workspace))).toBe(false);
+  });
+
+  it("remembers an unsupported backend for a day, silently", async () => {
+    log().snapshotFail = "unsupported";
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    const h = await started(first);
+    expect(h.notices.some((l) => /snapshot|sandbox setup/i.test(l))).toBe(
+      false,
+    );
+    const state = stored(first.stateDir, first.workspace);
+    expect(state.snapshotId).toBeUndefined();
+    expect(Date.parse(state.unsupportedUntil) - Date.now()).toBeGreaterThan(
+      23 * 3600 * 1000,
+    );
+    // Even a backend that would now answer is not asked.
+    delete log().snapshotFail;
+    const second = await open({ reuse: first });
+    await started(second);
+    expect(log().snapshotsMade).toEqual([]);
+  });
+
+  it("warns once when saving fails and tries again next session", async () => {
+    log().snapshotFail = "error";
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    const h = await started(first);
+    await first.tool("write")({ path: "a.txt", content: "a\n" });
+    expect(
+      h.notices.filter((l) =>
+        l.startsWith("The sandbox setup could not be saved"),
+      ),
+    ).toHaveLength(1);
+    expect(existsSync(cacheJson(first.stateDir, first.workspace))).toBe(false);
+    delete log().snapshotFail;
+    const second = await open({ reuse: first });
+    await started(second);
+    expect(log().snapshotsMade).toEqual(["snap-1"]);
+  });
+
+  it("ignores a damaged, malformed or expired cache.json", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    const file = cacheJson(first.stateDir, first.workspace);
+    const good = stored(first.stateDir, first.workspace);
+    const second = async (content: string) => {
+      writeFileSync(file, content);
+      log().prepares.length = 0;
+      await started(await open({ reuse: first }));
+      return [...log().prepares];
+    };
+    expect(await second("{not json")).toEqual([null]);
+    expect(
+      await second(JSON.stringify({ ...good, snapshotId: "../x" })),
+    ).toEqual([null]);
+    expect(
+      await second(JSON.stringify({ ...good, snapshotId: "a b" })),
+    ).toEqual([null]);
+    expect(await second(JSON.stringify({ ...good, key: "abc" }))).toEqual([
+      null,
+    ]);
+    expect(await second(JSON.stringify({ ...good, version: 2 }))).toEqual([
+      null,
+    ]);
+    // Expired: not used, and replaced with a new snapshot, deleting the old.
+    const old = new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString();
+    const before = [...log().deleted];
+    expect(await second(JSON.stringify({ ...good, createdAt: old }))).toEqual([
+      null,
+    ]);
+    expect(log().deleted.length).toBeGreaterThan(before.length);
+    // Fresh and valid: used.
+    writeFileSync(
+      file,
+      JSON.stringify(stored(first.stateDir, first.workspace)),
+    );
+    log().prepares.length = 0;
+    await started(await open({ reuse: first }));
+    expect(log().prepares).toHaveLength(1);
+    expect(log().prepares[0]).toMatch(/^snap-/);
+  });
+
+  it("does not use the cache for a subagent child", async () => {
+    const first = await open({ setup: withFiles, sandbox: [remoteLine()] });
+    await started(first);
+    log().prepares.length = 0;
+    const child = await open({ reuse: first, subagent: true });
+    await started(child);
+    expect(log().prepares).toEqual([null]);
   });
 });

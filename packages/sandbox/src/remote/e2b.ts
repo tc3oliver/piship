@@ -7,6 +7,7 @@ import type { AdapterAvailability } from "../adapter.js";
 import {
   HOST_FILESYSTEM_ISOLATION,
   type SandboxBackend,
+  type SandboxCallOptions,
   type SandboxCapabilities,
   type SandboxExecIO,
   type SandboxExecRequest,
@@ -14,6 +15,7 @@ import {
   type SandboxFiles,
   type SandboxInstance,
   type SandboxPrepareRequest,
+  SNAPSHOT_ID,
 } from "../backend.js";
 import {
   credentialedFetch,
@@ -57,6 +59,8 @@ const SANDBOX_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
 const DOMAIN = /^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
 const SIGNAL_TIMEOUT_MS = 5000;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
+/** Saving a snapshot copies the filesystem, which can take minutes. */
+const SNAPSHOT_TIMEOUT_MS = 230_000;
 
 // A remote VM: the host's files are out of reach, but PiShip's path rules
 // are not mapped into it, so no filesystem-* plane is claimed. The network
@@ -158,8 +162,11 @@ export class E2bCompatibleBackend implements SandboxBackend {
   async prepare({
     profile,
     signal,
+    template,
   }: SandboxPrepareRequest): Promise<SandboxInstance> {
-    const created = await this.#create(profile.network, signal);
+    if (template !== undefined && !SNAPSHOT_ID.test(template))
+      throw new Error("the snapshot id is not valid");
+    const created = await this.#create(profile.network, signal, template);
     const workdir = this.#options.workdir ?? "/home/user";
     if (this.#options.createWorkdir)
       await this.#makeWorkdir(created, workdir).catch(async (error) => {
@@ -191,6 +198,39 @@ export class E2bCompatibleBackend implements SandboxBackend {
         return this.#exec(created, workdir, request, io);
       },
       files: this.#files(created, workdir, () => disposed),
+      snapshot: async ({ signal }) => {
+        if (disposed) throw new Error("the sandbox was disposed");
+        await this.#renew(created, signal);
+        const response = await this.#control(
+          `sandboxes/${created.sandboxId}/snapshots`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // No name: a name is a lookup key another holder of the API key
+            // could plant; PiShip only ever uses the id it is given back.
+            body: JSON.stringify({ memory: false }),
+            signal,
+          },
+          false,
+          SNAPSHOT_TIMEOUT_MS,
+        );
+        // The sandbox exists (it was just renewed), so these mean the route does not.
+        if ([404, 405, 501].includes(response.status)) {
+          await response.body?.cancel().catch(() => undefined);
+          throw Object.assign(
+            new Error("the sandbox service does not support snapshots"),
+            { code: "SNAPSHOT_UNSUPPORTED" },
+          );
+        }
+        if (!response.ok)
+          throw new Error(
+            `saving the snapshot failed: ${await describeFailure(response)}`,
+          );
+        const id = (await readJson(response)).snapshotID;
+        if (typeof id !== "string" || !SNAPSHOT_ID.test(id))
+          throw new Error("the sandbox service returned no valid snapshot ID");
+        return { id };
+      },
       dispose: async () => {
         if (disposed) return;
         disposed = true;
@@ -209,6 +249,24 @@ export class E2bCompatibleBackend implements SandboxBackend {
     };
   }
 
+  async deleteSnapshot(
+    id: string,
+    options?: SandboxCallOptions,
+  ): Promise<void> {
+    if (!SNAPSHOT_ID.test(id)) throw new Error("the snapshot id is not valid");
+    const response = await this.#control(
+      `templates/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+      true,
+    );
+    await response.body?.cancel().catch(() => undefined);
+    if (!response.ok && response.status !== 404)
+      throw new Error(`deleting the snapshot failed: HTTP ${response.status}`);
+  }
+
   #url(path: string): URL {
     return new URL(path, this.#endpoint);
   }
@@ -222,6 +280,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
     path: string,
     init: RequestInit,
     repeatable: boolean,
+    timeoutMs?: number,
   ): Promise<Response> {
     return credentialedFetch(
       this.#options,
@@ -229,12 +288,14 @@ export class E2bCompatibleBackend implements SandboxBackend {
       init,
       (credential) => ["X-API-Key", credential],
       repeatable,
+      timeoutMs,
     );
   }
 
   async #create(
     network: "deny" | "allow",
     signal: AbortSignal | undefined,
+    snapshot?: string,
   ): Promise<CreatedSandbox> {
     const response = await this.#control(
       "sandboxes",
@@ -244,7 +305,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
         // Nothing from the host environment is sent: commands receive only the
         // approved environment, one command at a time.
         body: JSON.stringify({
-          templateID: this.#options.template ?? "base",
+          templateID: snapshot ?? this.#options.template ?? "base",
           timeout: this.#lifetime(),
           metadata: { "created-by": "piship" },
           allow_internet_access: network === "allow",
@@ -253,10 +314,14 @@ export class E2bCompatibleBackend implements SandboxBackend {
       },
       false,
     );
-    if (!response.ok)
-      throw new Error(
-        `creating the sandbox failed: ${await describeFailure(response)}`,
-      );
+    if (!response.ok) {
+      const failure = `creating the sandbox failed: ${await describeFailure(response)}`;
+      // Not retried here: the caller starts again from the base template.
+      throw snapshot !== undefined &&
+        (response.status === 400 || response.status === 404)
+        ? Object.assign(new Error(failure), { code: "SNAPSHOT_GONE" })
+        : new Error(failure);
+    }
     const body = await readJson(response);
     const sandboxId = body.sandboxID;
     if (typeof sandboxId !== "string" || !SANDBOX_ID.test(sandboxId))

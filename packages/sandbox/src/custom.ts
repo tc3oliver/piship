@@ -14,6 +14,7 @@ import {
   SANDBOX_PROVIDERS,
   type SandboxBackend,
   type SandboxInstance,
+  SNAPSHOT_ID,
 } from "./backend.js";
 
 /** What a custom adapter module's default-export factory receives. */
@@ -114,6 +115,8 @@ function checkInstance(
     typeof instance.dispose !== "function" ||
     (instance.wrap !== undefined && typeof instance.wrap !== "function") ||
     (instance.epoch !== undefined && typeof instance.epoch !== "function") ||
+    (instance.snapshot !== undefined &&
+      typeof instance.snapshot !== "function") ||
     (instance.files !== undefined &&
       (typeof instance.files !== "object" ||
         instance.files === null ||
@@ -127,6 +130,7 @@ function checkInstance(
   const wrap = instance.wrap?.bind(instance);
   const epoch = instance.epoch?.bind(instance);
   const files = instance.files;
+  const snapshot = instance.snapshot?.bind(instance);
   const disposeMs = deadlines.disposeMs ?? CUSTOM_DISPOSE_TIMEOUT_MS;
   const notify =
     deadlines.notify ??
@@ -157,6 +161,17 @@ function checkInstance(
       });
     },
     ...(wrap ? { wrap: (command) => wrap(command) } : {}),
+    ...(snapshot
+      ? {
+          snapshot: async (options) => {
+            const saved: unknown = await snapshot(options);
+            const id = (saved as { id?: unknown } | null)?.id;
+            if (typeof id !== "string" || !SNAPSHOT_ID.test(id))
+              throw new Error("the adapter's snapshot() returned no valid id");
+            return { id };
+          },
+        }
+      : {}),
     ...(files
       ? {
           files: {
@@ -206,9 +221,21 @@ export function customBackend(
   const id = source.id;
   const availableMs = deadlines.availableMs ?? ADAPTER_CALL_TIMEOUT_MS;
   const prepareMs = deadlines.prepareMs ?? CUSTOM_PREPARE_TIMEOUT_MS;
+  if (
+    source.deleteSnapshot !== undefined &&
+    typeof source.deleteSnapshot !== "function"
+  )
+    throw invalid("deleteSnapshot() must be a function");
+  const deleteSnapshot = source.deleteSnapshot?.bind(source);
   return {
     id,
     provider: "custom",
+    ...(deleteSnapshot
+      ? {
+          deleteSnapshot: (snapshotId, options) =>
+            deleteSnapshot(snapshotId, options),
+        }
+      : {}),
     available: (options) =>
       callWithDeadline((signal) => source.available({ signal }), {
         timeoutMs: availableMs,

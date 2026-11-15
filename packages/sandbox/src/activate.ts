@@ -229,6 +229,12 @@ export interface ActiveSandbox {
   ): Promise<{ exitCode: number | null }>;
   /** Set only with `remoteWorkspace`: the sandbox's files, by host path. */
   readonly files?: ActiveSandboxFiles;
+  /**
+   * Set only with `remoteWorkspace`, when the backend can save the sandbox's
+   * filesystem: returns an id the backend later accepts as a template. It
+   * has a 240 s deadline and refuses once the sandbox is retired or disposed.
+   */
+  readonly snapshot?: () => Promise<{ id: string }>;
   /** The live workspace report, updated after each verification. */
   workspace(): WorkspaceReport | undefined;
   /** Called with each new workspace report a verification produces. */
@@ -338,6 +344,7 @@ function workspacePath(workspace: string, cwd: string): string | undefined {
 const ABANDONED = Symbol("abandoned");
 
 const FILES_DEADLINE_MS = 60_000;
+const SNAPSHOT_DEADLINE_MS = 240_000;
 
 /** The default for `ActivationContext.settleMs`. */
 const DEFAULT_SETTLE_MS = 5000;
@@ -755,6 +762,38 @@ function createActiveSandbox(session: Session): ActiveSandbox {
           };
         })()
       : undefined;
+  const sandboxSnapshot = instance?.snapshot?.bind(instance);
+  const snapshot: ActiveSandbox["snapshot"] =
+    session.remoteWorkspace && enforced && sandboxSnapshot
+      ? async () => {
+          if (retired || disposed) throw retiredError(report);
+          const deadline = AbortSignal.timeout(SNAPSHOT_DEADLINE_MS);
+          let onAbort: (() => void) | undefined;
+          // The signal only asks: an adapter that ignores it must not hang the session.
+          const expired = new Promise<never>((_, reject) => {
+            onAbort = () =>
+              reject(
+                new PiShipError(
+                  "SANDBOX_UNAVAILABLE",
+                  `The ${report.adapter} sandbox backend did not save a snapshot within ${SNAPSHOT_DEADLINE_MS / 1000} s`,
+                  { component: "sandbox", retryable: true },
+                ),
+              );
+            deadline.addEventListener("abort", onAbort, { once: true });
+          });
+          try {
+            const saved = await Promise.race([
+              sandboxSnapshot({ signal: deadline }),
+              expired,
+            ]);
+            if (typeof saved?.id !== "string")
+              throw new Error("the backend returned no snapshot id");
+            return { id: saved.id };
+          } finally {
+            if (onAbort) deadline.removeEventListener("abort", onAbort);
+          }
+        }
+      : undefined;
   const exec: ActiveSandbox["exec"] = async (command, cwd, options) => {
     if (options.signal?.aborted) throw new Error("aborted");
     const remote = session.capabilities?.isolation === "remote";
@@ -856,6 +895,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     wrap,
     exec,
     ...(files ? { files } : {}),
+    ...(snapshot ? { snapshot } : {}),
     workspace: () => workspace,
     onWorkspaceReport: (listener) => {
       listeners.push(listener);
@@ -1330,7 +1370,10 @@ export async function activateSandbox(
             let allowed: SandboxInstance | undefined;
             try {
               const allowProfile = contrastProfile(scratch.path, profile);
-              allowed = await backend.prepare({ profile: allowProfile });
+              allowed = await backend.prepare({
+                profile: allowProfile,
+                purpose: "contrast",
+              });
               const contrast = await checkAttested(
                 allowed,
                 { ...session, profile: allowProfile },

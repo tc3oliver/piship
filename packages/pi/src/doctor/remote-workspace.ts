@@ -10,6 +10,7 @@ export interface RemoteWorkspaceProbe {
   /** The file API answered a `stat` of the project directory. */
   readonly files: boolean;
   readonly tar: boolean;
+  readonly gzip: boolean;
   readonly git: boolean;
   /** `marker`: only what an unfinished PiShip seed leaves. */
   readonly directory: "empty" | "marker" | "not-empty" | "unknown";
@@ -25,11 +26,15 @@ export interface RemoteWorkspaceData {
   /** Unapplied sandbox changes for this project, or undefined when the project is unknown. */
   readonly waiting?: { files: number; patches: number; latest: string };
   readonly command: string;
+  /** `sandbox.remote.setup` and its time limit; shown, never run. */
+  readonly setup?: { command: string; timeoutSeconds: number };
+  /** This project's setup cache state, as one line. */
+  readonly cache?: string;
 }
 
 const escapeDots = (name: string) => name.replaceAll(".", "\\.");
 const SCRIPT = [
-  "for t in tar git; do if command -v $t >/dev/null 2>&1; then echo piship-have:$t; else echo piship-missing:$t; fi; done",
+  "for t in tar gzip git; do if command -v $t >/dev/null 2>&1; then echo piship-have:$t; else echo piship-missing:$t; fi; done",
   `other=$(ls -A | grep -v -e '^${escapeDots(ARCHIVE)}$' -e '^${escapeDots(MARKER)}$')`,
   `if [ -n "$other" ]; then echo piship-dir:not-empty; elif [ -e ${MARKER} ] || [ -e ${ARCHIVE} ]; then echo piship-dir:marker; else echo piship-dir:empty; fi`,
 ].join("\n");
@@ -42,6 +47,7 @@ export async function probeRemoteWorkspace(
   const unknown = {
     files: false,
     tar: false,
+    gzip: false,
     git: false,
     directory: "unknown",
   } as const;
@@ -76,6 +82,7 @@ export async function probeRemoteWorkspace(
   return {
     files: true,
     tar: output.includes("piship-have:tar"),
+    gzip: output.includes("piship-have:gzip"),
     git: output.includes("piship-have:git"),
     directory:
       (dir as RemoteWorkspaceProbe["directory"] | undefined) ?? "unknown",
@@ -101,7 +108,7 @@ export function remoteWorkspaceLines(
     out.ok("remote file API", "the backend exposes read, write and stat");
     if (probe.error) out.warn("remote tools", `not checked: ${probe.error}`);
     else {
-      for (const tool of ["tar", "git"] as const)
+      for (const tool of ["tar", "gzip", "git"] as const)
         if (probe[tool])
           out.ok(`remote ${tool}`, `${tool} found in the sandbox`);
         else
@@ -131,6 +138,16 @@ export function remoteWorkspaceLines(
         ? "outbound allowed: dependencies can be installed at run time"
         : "outbound denied: dependencies must already be in the template, outside the project directory; an install in the sandbox fails",
     );
+  if (data.setup)
+    out[data.network === "deny" ? "warn" : "info"](
+      "remote setup",
+      `${data.setup.command} (runs once after the upload, up to ${data.setup.timeoutSeconds} s${
+        data.network === "deny"
+          ? "; the network is denied, so an install will fail: set sandbox.network.mode: allow or bake the dependencies into the template"
+          : ""
+      })`,
+    );
+  if (data.cache) out.info("remote setup cache", data.cache);
   const { waiting } = data;
   if (!waiting)
     out.info("waiting patch", "not checked: the project is not known");

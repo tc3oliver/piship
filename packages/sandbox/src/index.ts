@@ -49,6 +49,7 @@ export {
   type SandboxPrepareRequest,
   type SandboxProvider,
   type SandboxWorkspaceDeclaration,
+  SNAPSHOT_ID,
   WORKSPACE_CONFINEMENT,
   WORKSPACE_MODES,
   type WorkspaceMode,

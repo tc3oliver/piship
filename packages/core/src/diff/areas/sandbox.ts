@@ -161,4 +161,67 @@ export function sandbox(
         ? ["low", "sandbox pull needs an interactive review; --yes is refused."]
         : ["medium", "sandbox pull --yes applies a patch without a prompt."],
   );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.refresh",
+    x?.remote?.refresh ?? "auto",
+    y?.remote?.refresh ?? "auto",
+    (_, v) =>
+      v === "off"
+        ? ["low", "Host edits no longer reach the sandbox during a session."]
+        : ["medium", "Host edits are uploaded to the sandbox at each turn."],
+  );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.setup",
+    x?.remote?.setup ?? "",
+    y?.remote?.setup ?? "",
+    (_, v) =>
+      v
+        ? ["high", "Runs a command in the sandbox after the upload."]
+        : ["low", "No setup command runs in the sandbox."],
+  );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.setupTimeoutSeconds",
+    x?.remote?.setupTimeoutSeconds ?? 900,
+    y?.remote?.setupTimeoutSeconds ?? 900,
+    (b, a) =>
+      Number(a) > Number(b)
+        ? ["low", "The setup command may run longer."]
+        : ["low", "The setup command is cut off sooner."],
+  );
+  const caches = (sandbox: typeof x) =>
+    sandbox?.remote?.cache ??
+    (sandbox?.remote?.setup && sandbox.provider === "e2b-compatible"
+      ? "snapshot"
+      : "off");
+  out.scalar("sandbox", "sandbox remote.cache", caches(x), caches(y), (_, v) =>
+    v === "snapshot"
+      ? [
+          "medium",
+          "The sandbox is saved after setup and later sessions start from it.",
+        ]
+      : ["low", "Every session runs the setup command again."],
+  );
+  out.scalar(
+    "sandbox",
+    "sandbox remote.cacheKeyFiles",
+    (x?.remote?.cacheKeyFiles ?? []).join(", "),
+    (y?.remote?.cacheKeyFiles ?? []).join(", "),
+    () => [
+      "low",
+      "The files that decide when the saved setup is rebuilt changed.",
+    ],
+  );
+  out.scalar(
+    "sandbox",
+    "sandbox lifetimeSeconds",
+    x?.lifetimeSeconds ?? 3600,
+    y?.lifetimeSeconds ?? 3600,
+    (b, a) =>
+      Number(a) > Number(b)
+        ? ["low", "The sandbox may live longer."]
+        : ["low", "The sandbox is reclaimed sooner."],
+  );
 }

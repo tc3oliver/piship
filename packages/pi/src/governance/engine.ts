@@ -1,10 +1,11 @@
 // Policy engine construction: distribution, team, project, and user rules,
 // the project the session runs in, and the sandbox configuration.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiShipError, redact } from "@piship/contracts";
-import { withSessionExportRules } from "@piship/core";
+import { canonicalJson, withSessionExportRules } from "@piship/core";
 import {
   claudeDirectories,
   discoverProjectResources,
@@ -187,6 +188,38 @@ export function policyContainment(report: ContainmentReport) {
     network: enforced && report.planes.includes("network-deny"),
     shell: enforced,
   };
+}
+
+/**
+ * A digest of the rules that can decide a `filesystem.read` (those naming a
+ * filesystem action or a wildcard), from every layer the engine is built
+ * from: what the setup cache's key holds, so a policy change that alters the
+ * seed's upload set does not restore a snapshot made under the old one.
+ */
+export async function filesystemPolicyDigest(
+  options: GovernanceOptions,
+  candidates: readonly ProjectResourceCandidate[],
+): Promise<string> {
+  const manifest = options.lock.governance.manifest;
+  const relevant = (rules: readonly PolicyRule[]) =>
+    rules.filter(
+      (rule) =>
+        rule.action.startsWith("filesystem") || rule.action.includes("*"),
+    );
+  return createHash("sha256")
+    .update(
+      canonicalJson([
+        options.lock.deployment.mode,
+        relevant(manifest.policy.enforced),
+        relevant(manifest.policy.defaults),
+        relevant(
+          await readTeamRules(options.distributionDir, manifest.policy.adapter),
+        ),
+        relevant(withIgnored(readProjectRestrictions(candidates))),
+        relevant(readUserRules(options.stateDir)),
+      ]),
+    )
+    .digest("hex");
 }
 
 export async function buildEngine(
