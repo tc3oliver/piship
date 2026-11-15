@@ -590,8 +590,9 @@ function readConfig(path: string): string | undefined | "too-large" {
  */
 function stampOf(path: string): string {
   try {
-    const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
+    // bigint: a 64-bit file id (NTFS) loses its low bits as a number.
+    const stat = statSync(path, { bigint: true });
+    return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
   } catch (error) {
     return `absent:${(error as NodeJS.ErrnoException)?.code ?? ""}`;
   }

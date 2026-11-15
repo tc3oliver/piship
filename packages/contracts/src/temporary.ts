@@ -79,7 +79,7 @@ import {
   utimesSync,
   writeFileSync,
   writeSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -227,9 +227,19 @@ export function processHostToken(): string {
   return cachedHost;
 }
 
-function ownedByCurrentUser(stat: Stats): boolean {
-  return process.getuid === undefined || stat.uid === process.getuid();
+function ownedByCurrentUser(stat: BigIntStats): boolean {
+  return process.getuid === undefined || stat.uid === BigInt(process.getuid());
 }
+
+/**
+ * Stats as bigint wherever a file's identity is compared: an NTFS file id is
+ * 64 bits, and as a number it loses its low bits, so two files created close
+ * together compare equal.
+ */
+const BIG = { bigint: true } as const;
+
+/** A bigint stat's time in milliseconds, as a number stat gives it. */
+const ms = (ns: bigint) => Number(ns) / 1e6;
 
 /** What every directory this process holds shares, across module copies. */
 interface Registry {
@@ -391,19 +401,19 @@ function readMarker(
 ): { owner: TemporaryOwner; mtimeMs: number; text: string } | undefined {
   let fd: number | undefined;
   try {
-    const entry = lstatSync(path);
+    const entry = lstatSync(path, BIG);
     if (!entry.isFile() || !ownedByCurrentUser(entry)) return undefined;
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const stat = fstatSync(fd);
+    const stat = fstatSync(fd, BIG);
     if (
       !stat.isFile() ||
-      stat.size > MARKER_LIMIT ||
+      stat.size > BigInt(MARKER_LIMIT) ||
       !ownedByCurrentUser(stat) ||
       (process.platform !== "win32" &&
         (stat.ino !== entry.ino || stat.dev !== entry.dev))
     )
       return undefined;
-    const buffer = Buffer.alloc(stat.size);
+    const buffer = Buffer.alloc(Number(stat.size));
     let read = 0;
     while (read < buffer.length) {
       const count = readSync(fd, buffer, read, buffer.length - read, read);
@@ -412,7 +422,7 @@ function readMarker(
     }
     const text = buffer.subarray(0, read).toString("utf8");
     const owner = parseOwner(text);
-    return owner ? { owner, mtimeMs: stat.mtimeMs, text } : undefined;
+    return owner ? { owner, mtimeMs: ms(stat.mtimeNs), text } : undefined;
   } catch {
     return undefined;
   } finally {
@@ -443,8 +453,8 @@ function abandoned(owner: TemporaryOwner, mtimeMs: number, now: number) {
 
 /** What a directory keeps when its name is swapped for another entry. */
 export interface DirectoryIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 /**
@@ -522,10 +532,10 @@ export function findAbandonedTemporaryDirectories(
   options: ReclaimOptions = {},
 ): AbandonedDirectory[] {
   let names: string[];
-  let rootDevice: number;
+  let rootDevice: bigint;
   try {
     names = readdirSync(root);
-    rootDevice = statSync(root).dev;
+    rootDevice = statSync(root, BIG).dev;
   } catch {
     return [];
   }
@@ -537,7 +547,7 @@ export function findAbandonedTemporaryDirectories(
       continue;
     const path = join(root, name);
     try {
-      const entry = lstatSync(path);
+      const entry = lstatSync(path, BIG);
       // A link, a file, another user's directory, or a mount point is not ours.
       if (
         !entry.isDirectory() ||
@@ -546,7 +556,10 @@ export function findAbandonedTemporaryDirectories(
       )
         continue;
       if (quarantined) {
-        if (now - Math.max(entry.mtimeMs, entry.ctimeMs) > QUARANTINE_IDLE_MS)
+        if (
+          now - Math.max(ms(entry.mtimeNs), ms(entry.ctimeNs)) >
+          QUARANTINE_IDLE_MS
+        )
           found.push({
             path,
             kind: undefined,
@@ -591,7 +604,7 @@ function changed(): Error {
 
 /** Whether `path` is, right now, a real directory with this identity. */
 function isDirectoryWith(path: string, identity: DirectoryIdentity): boolean {
-  const stat = lstatSync(path);
+  const stat = lstatSync(path, BIG);
   return (
     stat.isDirectory() && stat.dev === identity.dev && stat.ino === identity.ino
   );
@@ -706,8 +719,8 @@ export function usesSystemRemover(): boolean {
  */
 function removeContents(
   path: string,
-  entry: Stats,
-  device: number,
+  entry: BigIntStats,
+  device: bigint,
   options: ReclaimOptions,
   keep?: string,
 ): void {
@@ -718,7 +731,7 @@ function removeContents(
   )
     throw new Deferred("the time for this sweep ran out");
   const names = readdirSync(path);
-  const after = lstatSync(path);
+  const after = lstatSync(path, BIG);
   if (
     !after.isDirectory() ||
     after.dev !== entry.dev ||
@@ -728,9 +741,9 @@ function removeContents(
   for (const name of names) {
     if (name === keep) continue;
     const child = join(path, name);
-    let stat: Stats;
+    let stat: BigIntStats;
     try {
-      stat = lstatSync(child);
+      stat = lstatSync(child, BIG);
     } catch (error) {
       if (missing(error)) continue;
       throw error;
@@ -754,7 +767,7 @@ function removePortable(
   identity: DirectoryIdentity,
   options: ReclaimOptions,
 ): void {
-  const top = lstatSync(path);
+  const top = lstatSync(path, BIG);
   if (!isDirectoryWith(path, identity)) throw changed();
   removeContents(path, top, top.dev, options, TEMPORARY_OWNER_FILE);
   if (!isDirectoryWith(path, identity)) throw changed();
