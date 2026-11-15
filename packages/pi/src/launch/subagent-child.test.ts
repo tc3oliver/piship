@@ -587,17 +587,33 @@ describe("the launch", () => {
     expect(error?.message).not.toContain("canary-task");
   });
 
-  it("calls a mistyped command a command, and repeats none of the words", async () => {
+  it("names a mistyped command, and repeats nothing that follows it", async () => {
     delete process.env.PI_CODE_SUBAGENT;
-    const error = await failure([
-      "zQ9fSentinelWord",
-      "explain",
-      "canary-secret",
-    ]);
+    const error = await failure(["polcy", "explain", "zQ9fSentinelWord"]);
     expect(error?.message).toBe(
-      "Unknown command: its first word is not a command of acmecode. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
+      "Unknown command: polcy. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
     );
   });
+
+  it.each([
+    "zQ9fSentinelWord",
+    "sk-live-4f9a8b7c6d5e",
+    "ghp_zQ9fSentinelValue1234567890",
+    "https://example.test/x",
+    "../secret/path",
+    "dGhpc2lzYXNlY3JldA==",
+    "a.b.c",
+    "x".repeat(33),
+  ])(
+    "does not repeat a first word that is not shaped like a command: %s",
+    async (word) => {
+      delete process.env.PI_CODE_SUBAGENT;
+      const error = await failure([word, "explain"]);
+      expect(error?.message).toBe(
+        "Unknown command: its first word is not a command of acmecode. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
+      );
+    },
+  );
 
   it.each([
     [["--token", "zQ9fSentinelValue"]],

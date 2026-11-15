@@ -101,6 +101,9 @@ export function inTemp(
   );
 }
 
+/** What a command's name looks like: the only first word a refusal repeats. */
+const COMMAND_WORD = /^[a-z][a-z0-9-]{0,31}$/;
+
 /**
  * The refusal of arguments the branded command does not take. A child's
  * arguments end in the task, and what follows an option may be a secret, so
@@ -111,11 +114,15 @@ export function unknownOptionMessage(
   args: readonly string[],
   command: string,
 ): string {
-  // A leading word is a mistyped command, not an option: it is not repeated,
-  // as it and what follows may be a secret typed in the wrong place.
+  // A leading word is a mistyped command, not an option. It is repeated only
+  // when it looks like a command word (lowercase letters, hyphens, at most two
+  // digits), so a mistyped `polcy` is named but a token, URL or path is not;
+  // what follows it is never repeated.
   const [first] = args;
   if (first !== undefined && !first.startsWith("-"))
-    return `Unknown command: its first word is not a command of ${command}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
+    return COMMAND_WORD.test(first) && (first.match(/\d/g)?.length ?? 0) <= 2
+      ? `Unknown command: ${first}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`
+      : `Unknown command: its first word is not a command of ${command}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
   const shown =
     args[0] === "--mode" && args[1] === "json" && args[2] === "-p"
       ? "--mode json -p ..."
