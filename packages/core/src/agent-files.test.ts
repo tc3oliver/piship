@@ -927,6 +927,36 @@ describe("parallel session launches", () => {
     await released;
   });
 
+  it("keeps waiting while the lock passes from launch to launch, past one budget", async () => {
+    // Three launches in turn hold the lock 400 ms each, longer in all than
+    // the 600 ms budget, as a burst of parallel sessions does (a
+    // Windows CI run lost 3 of 8 launches this way). The lock changes hands in
+    // place, so no gap lets the waiter in early.
+    const guard = join(agentDir, ".piship-agent-files-lock");
+    const owner = join(guard, "owner.json");
+    const script = `
+      const fs = require("fs");
+      const hold = (n) => fs.writeFileSync(${JSON.stringify(owner)}, JSON.stringify({ pid: process.pid, token: "holder-" + n }));
+      fs.mkdirSync(${JSON.stringify(guard)});
+      hold(1);
+      console.log("held");
+      setTimeout(() => hold(2), 400);
+      setTimeout(() => hold(3), 800);
+      setTimeout(() => fs.rmSync(${JSON.stringify(guard)}, { recursive: true }), 1200);`;
+    const proc = spawn(process.execPath, ["-e", script]);
+    await new Promise((ready) => proc.stdout.once("data", ready));
+    const released = new Promise<void>((done) =>
+      proc.on("close", () => done()),
+    );
+    const started = Date.now();
+    applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+      session: true,
+      lockWaitMs: 600,
+    }).restore();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    await released;
+  });
+
   it("still fails with the busy error once the budget is spent", async () => {
     const { released } = await holder(1500);
     expect(() =>
