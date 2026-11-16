@@ -720,4 +720,17 @@ describe("MCP rules naming no declared server", () => {
       },
     ]);
   });
+
+  it("does not call a rule for a project server dead when project servers can load", () => {
+    const governance = manifest.governance;
+    const explicit = {
+      governance: {
+        ...governance,
+        mcp: { mode: "explicit", project: "allow", servers: [{ id: "docs" }] },
+      },
+    } as unknown as Parameters<typeof unknownMcpServerRules>[0];
+    expect(unknownMcpServerRules(explicit).map((item) => item.path)).toEqual([
+      "policy.defaults[3].resource",
+    ]);
+  });
 });

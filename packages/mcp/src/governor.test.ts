@@ -607,7 +607,9 @@ describe("McpGovernor over stdio", () => {
     const started = Date.now();
     const [report] = await governor.start();
     expect(report?.state).toBe("failed");
-    expect(report?.reason).toMatch(/did not answer initialize within/);
+    expect(report?.reason).toBe(
+      "MCP server hang did not start within its startupTimeout of 0.2s",
+    );
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
@@ -697,6 +699,27 @@ describe("McpGovernor over stdio", () => {
     expect(report?.reason).toContain("stderr");
     expect((report?.reason ?? "").length).toBeLessThanOrEqual(1203);
     expect(JSON.stringify(governor.health())).not.toContain(token);
+  }, 40_000);
+
+  it("reports a multi-line stderr as one line without stack frames", async () => {
+    const { governor } = harness({
+      runtime: defaultProcessRuntime(),
+      servers: [
+        stdioServer("crashy", {
+          args: [
+            "--stderr",
+            "SyntaxError: bad config\n    at JSON.parse (<anonymous>)\n\nNode.js v24\n",
+            "--exit",
+            "1",
+          ],
+          startupTimeoutMs: 30_000,
+        }),
+      ],
+    });
+    const [report] = await governor.start();
+    expect(report?.reason).toMatch(
+      /\(stderr: SyntaxError: bad config \| Node\.js v24\)$/,
+    );
   }, 40_000);
 
   it("keeps the secret out of a short stderr tail", async () => {

@@ -575,12 +575,17 @@ export function unknownMcpServerRules(
     !mcp || mcp.mode === "off" ? [] : mcp.servers.map((server) => server.id),
   );
   const literal = (text: string) => !/[*?[\]{}]/.test(text);
+  // A trusted project's .mcp.json may start a server of any id, so an
+  // undeclared id is not proof that the rule matches nothing.
+  const projectServers = mcp?.mode === "explicit" && mcp.project === "allow";
+  const unknown = (server: string) =>
+    literal(server) && !ids.has(server) && !projectServers;
   return (["enforced", "defaults"] as const).flatMap((list) =>
     policy[list].flatMap((rule, index) => {
       const at = `policy.${list}[${index}].resource`;
       const { resource } = rule;
       if (rule.action === "mcp.server.start") {
-        return literal(resource) && !ids.has(resource)
+        return unknown(resource)
           ? [
               {
                 path: at,
@@ -600,7 +605,7 @@ export function unknownMcpServerRules(
         ];
       const separator = resource.indexOf(":");
       const server = separator < 0 ? resource : resource.slice(0, separator);
-      return literal(server) && !ids.has(server)
+      return unknown(server)
         ? [
             {
               path: at,

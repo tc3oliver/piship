@@ -184,6 +184,24 @@ describe("sandbox adapter locking", () => {
   });
 });
 
+describe("MCP module locking", () => {
+  it("locks a module two servers share once", () => {
+    const dir = mkdtempSync(join(tmpdir(), "piship-core-"));
+    roots.push(dir);
+    writeFileSync(join(dir, "srv.mjs"), "export {};\n");
+    const path = join(dir, "piship.yaml");
+    writeFileSync(
+      path,
+      'schema: piship/v1alpha3\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "1.5.0"\ndeployment:\n  mode: personal\nmcp:\n  servers:\n    one: { transport: stdio, module: ./srv.mjs, args: [one] }\n    two: { transport: stdio, module: ./srv.mjs, args: [two] }\n',
+    );
+    expect(
+      resolveLock(path)
+        .resources.filter((item) => item.kind === "adapters")
+        .map((item) => item.path),
+    ).toEqual(["srv.mjs"]);
+  });
+});
+
 describe("init", () => {
   it.each([
     ["personal", false],
