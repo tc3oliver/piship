@@ -30,118 +30,102 @@ interface E2EFile {
 
 /**
  * Every E2E file, by name without `.test.ts`: the median seconds it took in
- * recent Portable E2E runs on each target, and the lifecycle fixtures its
+ * recent Portable E2E runs on each target (vitest's per-file time, with the
+ * lifecycle fixtures already prebuilt), and the lifecycle fixtures its
  * scenarios use. A file missing here fails the unit test; a fixture missing
  * here is still built, but by the first scenario that needs it, while the
- * shard's other files compete for the cores. managed-clean-machine has no
- * passing run yet: its figures are an estimate from personal-clean-machine.
+ * shard's other files compete for the cores. Last recorded from the five
+ * passing runs 43760056234 to 43827367470 (2026-11-15/16).
  */
 export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
-  // Estimated from one darwin run (two demo builds and launches); skipped on
-  // Windows, where background tasks need an enforced sandbox.
-  "background-tasks": { seconds: { linux: 30, darwin: 36, win32: 2 } },
-  cli: { seconds: { linux: 171, darwin: 110, win32: 241 } },
-  // Estimated, not yet measured: a build of the developer example from its
-  // committed lock, one more with a locked copy, and about a dozen launches.
-  "developer-profile": { seconds: { linux: 260, darwin: 330, win32: 480 } },
-  governance: { seconds: { linux: 54, darwin: 79, win32: 197 } },
-  headless: { seconds: { linux: 59, darwin: 77, win32: 160 } },
+  "background-tasks": { seconds: { linux: 57, darwin: 103, win32: 29 } },
+  cli: { seconds: { linux: 136, darwin: 184, win32: 147 } },
+  "developer-profile": { seconds: { linux: 159, darwin: 323, win32: 125 } },
+  governance: { seconds: { linux: 73, darwin: 126, win32: 57 } },
+  headless: { seconds: { linux: 52, darwin: 95, win32: 71 } },
   "lifecycle-credentials": {
-    seconds: { linux: 122, darwin: 221, win32: 288 },
+    seconds: { linux: 20, darwin: 18, win32: 39 },
     fixtures: ["demo"],
   },
   "lifecycle-install": {
-    seconds: { linux: 39, darwin: 65, win32: 90 },
+    seconds: { linux: 7, darwin: 8, win32: 13 },
     fixtures: ["demo"],
   },
   "lifecycle-integrity": {
-    seconds: { linux: 48, darwin: 76, win32: 131 },
+    seconds: { linux: 9, darwin: 9, win32: 13 },
     fixtures: ["demo"],
   },
   "lifecycle-rollback": {
-    seconds: { linux: 74, darwin: 130, win32: 179 },
+    seconds: { linux: 17, darwin: 20, win32: 36 },
     fixtures: ["demo"],
   },
   "lifecycle-secret-store-file": {
-    seconds: { linux: 97, darwin: 169, win32: 250 },
+    seconds: { linux: 29, darwin: 26, win32: 53 },
     fixtures: ["demo"],
   },
   "lifecycle-secret-store-system": {
-    seconds: { linux: 90, darwin: 180, win32: 260 },
+    seconds: { linux: 37, darwin: 46, win32: 51 },
     fixtures: ["demo-system"],
     store: true,
   },
   "lifecycle-update": {
-    seconds: { linux: 64, darwin: 117, win32: 161 },
+    seconds: { linux: 15, darwin: 18, win32: 30 },
     fixtures: ["demo"],
   },
-  managed: { seconds: { linux: 87, darwin: 106, win32: 252 } },
+  managed: { seconds: { linux: 44, darwin: 79, win32: 147 } },
   "managed-clean-machine": {
-    seconds: { linux: 120, darwin: 250, win32: 330 },
+    seconds: { linux: 34, darwin: 36, win32: 88 },
     fixtures: ["demo-commands"],
     store: true,
   },
-  network: { seconds: { linux: 95, darwin: 121, win32: 197 } },
-  "personal-access-modes": { seconds: { linux: 45, darwin: 52, win32: 125 } },
+  network: { seconds: { linux: 38, darwin: 38, win32: 53 } },
+  "personal-access-modes": { seconds: { linux: 42, darwin: 92, win32: 73 } },
   "personal-clean-machine-local": {
-    seconds: { linux: 104, darwin: 225, win32: 300 },
+    seconds: { linux: 20, darwin: 21, win32: 34 },
     fixtures: ["personal-local"],
   },
   "personal-clean-machine-mypi": {
-    seconds: { linux: 117, darwin: 182, win32: 329 },
+    seconds: { linux: 26, darwin: 23, win32: 34 },
     fixtures: ["personal"],
   },
   "personal-lifecycle": {
-    seconds: { linux: 95, darwin: 119, win32: 244 },
+    seconds: { linux: 23, darwin: 18, win32: 30 },
     fixtures: ["personal"],
   },
-  "personal-local-model": { seconds: { linux: 22, darwin: 31, win32: 63 } },
-  // Estimated from one darwin run (lock, build, install, launch); no fixtures.
-  // Builds a runtime release (cached npm closure) and installs a pack of the
-  // personal example from it into a throwaway home; no fixtures.
-  // Estimated, not yet measured: a runtime release, a derived runtime, three
-  // locks and packs, a per-target release, and a dozen installs and launches.
-  "pack-update": { seconds: { linux: 480, darwin: 360, win32: 800 } },
-  "pack-install": { seconds: { linux: 120, darwin: 90, win32: 250 } },
-  "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
-  // Estimated from one darwin run (5 s): one demo build, a login, a launch and
-  // three pulls; skipped on Windows (the fake backend runs /bin/sh).
-  "remote-workspace": { seconds: { linux: 12, darwin: 8, win32: 2 } },
-  // Estimated from background-tasks (one demo build and launch); skipped on
-  // Windows, where the pack's shell rules need an enforced sandbox.
-  "routine-pack": { seconds: { linux: 30, darwin: 36, win32: 2 } },
-  "registry-gates": { seconds: { linux: 60, darwin: 60, win32: 90 } },
-  // Estimated from one warm darwin run (10 s of tests): a cold runtime build
-  // installs the npm closure and downloads fd and rg; the demo release is the
-  // lifecycle fixture. The pack cases pack examples/personal and enterprise-reference (vendors a Pi package) against that runtime.
+  "personal-local-model": { seconds: { linux: 20, darwin: 37, win32: 16 } },
+  "pack-update": { seconds: { linux: 71, darwin: 76, win32: 177 } },
+  "pack-install": { seconds: { linux: 28, darwin: 33, win32: 117 } },
+  "pi-packages": { seconds: { linux: 15, darwin: 24, win32: 16 } },
+  "remote-workspace": { seconds: { linux: 44, darwin: 92, win32: 77 } },
+  // Skipped on Windows, where the pack's shell rules need an enforced sandbox.
+  "routine-pack": { seconds: { linux: 18, darwin: 37, win32: 2 } },
+  "registry-gates": { seconds: { linux: 4, darwin: 5, win32: 8 } },
   "runtime-release": {
-    seconds: { linux: 110, darwin: 80, win32: 200 },
+    seconds: { linux: 23, darwin: 34, win32: 70 },
     fixtures: ["demo"],
   },
-  "sandbox-credential": { seconds: { linux: 34, darwin: 43, win32: 93 } },
-  "security-controls": { seconds: { linux: 126, darwin: 149, win32: 385 } },
+  "sandbox-credential": { seconds: { linux: 28, darwin: 48, win32: 26 } },
+  "security-controls": { seconds: { linux: 94, darwin: 107, win32: 143 } },
   "security-findings-session": {
-    seconds: { linux: 23, darwin: 32, win32: 49 },
+    seconds: { linux: 28, darwin: 52, win32: 55 },
   },
   "security-lifecycle": {
-    seconds: { linux: 165, darwin: 267, win32: 429 },
+    seconds: { linux: 25, darwin: 22, win32: 43 },
     fixtures: ["demo"],
   },
-  "security-sandbox": { seconds: { linux: 38, darwin: 48, win32: 95 } },
-  "security-sweep": { seconds: { linux: 110, darwin: 128, win32: 297 } },
-  // Estimated, not yet measured: the personal fixtures, one install, update,
-  // rollback, and three doctors with a store, and an install without one.
+  "security-sandbox": { seconds: { linux: 45, darwin: 58, win32: 28 } },
+  "security-sweep": { seconds: { linux: 105, darwin: 170, win32: 178 } },
   "shared-store": {
-    seconds: { linux: 60, darwin: 90, win32: 150 },
+    seconds: { linux: 22, darwin: 32, win32: 30 },
     fixtures: ["personal"],
   },
-  "stale-temporaries": { seconds: { linux: 18, darwin: 24, win32: 40 } },
+  "stale-temporaries": { seconds: { linux: 20, darwin: 39, win32: 12 } },
   "user-switching-file": {
-    seconds: { linux: 80, darwin: 158, win32: 190 },
+    seconds: { linux: 15, darwin: 15, win32: 33 },
     fixtures: ["demo"],
   },
   "user-switching-system": {
-    seconds: { linux: 150, darwin: 200, win32: 250 },
+    seconds: { linux: 22, darwin: 23, win32: 39 },
     fixtures: ["demo-system"],
     store: true,
   },
