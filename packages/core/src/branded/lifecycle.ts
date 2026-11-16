@@ -33,6 +33,7 @@ import {
   updateDistribution,
 } from "../index.js";
 import { activeLock } from "../install/receipt.js";
+import { runtimeLeases } from "../install/runtime-lease.js";
 import { shellArg } from "../invocation.js";
 import {
   type BrandedContext,
@@ -170,6 +171,26 @@ async function auditRefusal(
   await auditLifecycle(ctx, event, "denied", detail).catch((error) =>
     ctx.err(`Error: ${formatError(error)}`),
   );
+}
+
+/** Sessions started before a switch keep the release they started with. */
+function reportRunningSessions(
+  ctx: BrandedContext,
+  from: string,
+  to: string,
+): void {
+  let running = 0;
+  try {
+    running = runtimeLeases(ctx.metadata.app.id).filter(
+      (lease) => lease.live && !lease.self && lease.version === from,
+    ).length;
+  } catch {
+    // Only a hint: the switch is committed.
+  }
+  if (running)
+    ctx.out(
+      `${running} running ${ctx.metadata.app.name} session(s) still use ${from}; restart them to use ${to}.`,
+    );
 }
 
 function recordLifecycleMetric(
@@ -340,6 +361,7 @@ export async function runUpdate(
     `Updated ${app.name} ${result.from} -> ${result.to} (${result.channel}, signed by ${result.keyId}). ${result.from} is kept for ${app.command} rollback; sessions and settings were preserved.`,
   );
   if (switched) ctx.out(switched);
+  reportRunningSessions(ctx, result.from, result.to ?? "");
   // Best effort: the update is committed whatever this summary does.
   try {
     const summary = formatGovernanceSummary(
@@ -389,4 +411,5 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
   ctx.out(
     `Rolled back ${app.name} ${result.from} -> ${result.to}. Sessions and settings were preserved${signIn ? "; your sign-in was left as it is" : ""}.`,
   );
+  reportRunningSessions(ctx, result.from, result.to);
 }

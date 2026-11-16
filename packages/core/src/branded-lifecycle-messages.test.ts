@@ -1,12 +1,14 @@
 // What the branded update and rollback commands tell the person they did:
 // a channel switch, a rollback, the version rolled back from, and the
 // channels a source does publish.
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appsDir,
   HOST_EVIDENCED,
   ID,
   KEY,
@@ -23,7 +25,7 @@ import {
 } from "./branded/lifecycle.js";
 import { signChannel, verifyPayload } from "./index.js";
 import { shellArg } from "./invocation.js";
-import { readInstallReceipt } from "./install/index.js";
+import { lifecycleStatus, readInstallReceipt } from "./install/index.js";
 
 useLifecycleHomes();
 
@@ -52,6 +54,27 @@ async function run(
   const lines: string[] = [];
   await command(context(lines), args);
   return lines.join("\n");
+}
+
+/** Another process that holds a runtime lease on `version`, as a session does. */
+async function session(version: string): Promise<() => Promise<void>> {
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { holdRuntimeLease } from '@piship/core'; holdRuntimeLease(${JSON.stringify(ID)}, ${JSON.stringify(version)}); process.stdout.write('ready'); setInterval(() => {}, 1000);`,
+    ],
+    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  await new Promise<void>((resolve, reject) => {
+    child.stdout?.once("data", () => resolve());
+    child.once("error", reject);
+  });
+  return async () => {
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  };
 }
 
 const sign = (directory: string, channel: string, archive: string) =>
@@ -128,6 +151,41 @@ describe.runIf(HOST_EVIDENCED)("branded update and rollback messages", () => {
     expect(await run(runUpdate, ["--check"])).toContain(
       "AcmePi 1.1.0 (you rolled back from this version) is available on the stable channel",
     );
+  });
+
+  it("says which running sessions keep the release they started with", async () => {
+    await installed();
+    const stop = await session("1.0.0");
+    try {
+      expect(await run(runUpdate)).toContain(
+        "Updated AcmePi 1.0.0 -> 1.1.0 (stable, signed by test-release). 1.0.0 is kept for acmepi rollback; sessions and settings were preserved.\n1 running AcmePi session(s) still use 1.0.0; restart them to use 1.1.0.",
+      );
+      // No session runs 1.1.0: the rollback says nothing about one.
+      expect(await run(runRollback)).not.toContain("running");
+    } finally {
+      await stop();
+    }
+  });
+
+  it("does not call a release a running session holds left over", async () => {
+    await installed();
+    cpSync(join(appsDir(), "1.0.0"), join(appsDir(), "0.9.0"), {
+      recursive: true,
+    });
+    const status = () =>
+      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.0.0")));
+    const stop = await session("0.9.0");
+    try {
+      expect(status().leftovers).toEqual([]);
+      expect(status().runtimeLeases).toEqual({
+        live: 1,
+        stale: 0,
+        held: ["0.9.0"],
+      });
+    } finally {
+      await stop();
+    }
+    expect(status().leftovers).toEqual(["0.9.0"]);
   });
 
   it("names the channels a source publishes when it lacks the selected one", async () => {

@@ -699,12 +699,17 @@ export async function readChannel(
         },
       );
   }
-  const keyIds = verifyThreshold(
-    bytes,
-    envelope,
-    trusted,
-    options.threshold ?? 1,
-  );
+  let keyIds: readonly string[];
+  try {
+    keyIds = verifyThreshold(bytes, envelope, trusted, options.threshold ?? 1);
+  } catch (error) {
+    // Typically a channel not yet re-signed after a root rotated its key.
+    if (!(error instanceof PiShipError)) throw error;
+    throw new PiShipError(error.code, error.message, {
+      component: "signing",
+      userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel), and any new root/<N>.json published before it`,
+    });
+  }
   const keyId = keyIds[0] as string;
   let metadata: unknown;
   try {

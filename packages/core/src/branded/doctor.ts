@@ -173,7 +173,10 @@ function updateDoctor(
     );
   if (status.runtimeLeases) {
     if (status.runtimeLeases.live)
-      ok("runtime leases", `${status.runtimeLeases.live} live session(s)`);
+      ok(
+        "runtime leases",
+        `${status.runtimeLeases.live} live session(s)${status.runtimeLeases.held.length ? ` on ${status.runtimeLeases.held.join(", ")}` : ""}`,
+      );
     if (status.runtimeLeases.stale)
       warn(
         "runtime leases",
