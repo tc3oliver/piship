@@ -42,6 +42,7 @@ import type {
   PackageDependency,
   PackageTrustConfig,
 } from "./types.js";
+import { pishipCommand } from "../invocation.js";
 
 export interface PackageContext {
   /** The distribution directory, which local package paths are confined to. */
@@ -639,7 +640,7 @@ function checkNpmVersion(
       "POLICY_DENIED",
       id,
       `npm ${Number.isNaN(major) ? JSON.stringify(version) : major} runs a git dependency's prepare despite --ignore-scripts; lock packages with npm ${MINIMUM_NPM_MAJOR} or later`,
-      `Install npm ${MINIMUM_NPM_MAJOR} or later (npm install -g npm@${MINIMUM_NPM_MAJOR}) and run piship lock again`,
+      `Install npm ${MINIMUM_NPM_MAJOR} or later (npm install -g npm@${MINIMUM_NPM_MAJOR}) and run ${pishipCommand()} lock again`,
     );
 }
 
@@ -728,7 +729,7 @@ function materialize(
         "INTEGRITY_FAILED",
         id,
         "the package npm lockfile does not match its sha256 in the lock",
-        "Run piship lock again and review the package changes",
+        `Run ${pishipCommand()} lock again and review the package changes`,
       );
     writeFileSync(lockfilePath, pin.lockfile);
   } else {
@@ -892,7 +893,7 @@ export function vendorPiPackage(
       "LOCK_INVALID",
       declaration.id,
       "the lock entry does not match the declaration",
-      "Run piship lock again",
+      `Run ${pishipCommand()} lock again`,
     );
   if (existsSync(directory) && readdirSync(directory).length)
     throw packageError(
@@ -926,7 +927,7 @@ export function vendorPiPackage(
           "INTEGRITY_FAILED",
           declaration.id,
           `the vendored package does not match the lock: ${field} differs`,
-          "Run piship lock again and review the package changes",
+          `Run ${pishipCommand()} lock again and review the package changes`,
         );
     return vendored;
   } catch (error) {

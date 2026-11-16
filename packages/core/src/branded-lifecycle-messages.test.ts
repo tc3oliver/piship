@@ -16,8 +16,13 @@ import {
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
 import type { BrandedContext } from "./branded/context.js";
-import { runRollback, runUpdate } from "./branded/lifecycle.js";
+import {
+  requireInstalled,
+  runRollback,
+  runUpdate,
+} from "./branded/lifecycle.js";
 import { signChannel, verifyPayload } from "./index.js";
+import { shellArg } from "./invocation.js";
 import { readInstallReceipt } from "./install/index.js";
 
 useLifecycleHomes();
@@ -69,6 +74,28 @@ describe("branded update --help", () => {
     expect(lines).toEqual([
       "Usage: acmepi update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]",
     ]);
+  });
+});
+
+describe("branded lifecycle command outside an install", () => {
+  it("names the payload's own install, not a piship command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "piship-not-installed-"));
+    scratch.push(dir);
+    const ctx = {
+      metadata: { app: { id: "notinstalledpi", name: "Not Installed" } },
+      distributionDir: dir,
+    } as unknown as BrandedContext;
+    let error: PiShipError | undefined;
+    try {
+      requireInstalled(ctx, "acmepi update");
+    } catch (caught) {
+      error = caught as PiShipError;
+    }
+    expect(error?.code).toBe("CONFIG_INVALID");
+    expect(error?.message).toContain(
+      `Install it first: node ${shellArg(join(dir, "piship.mjs"))} install ${shellArg(dir)}`,
+    );
+    expect(error?.message).not.toContain("piship install");
   });
 });
 

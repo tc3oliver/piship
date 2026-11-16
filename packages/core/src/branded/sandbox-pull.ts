@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, printable } from "@piship/contracts";
 import { runGit as git } from "../git-run.js";
 import { shellArg } from "../invocation.js";
 import {
@@ -136,15 +136,6 @@ function restoreSnapshot(root: string, snapshot: Snapshot): boolean {
       // not empty or already gone
     }
   return matchesSnapshot(root, snapshot);
-}
-
-/** Terminal control/** Terminal control characters in untrusted text would let a patch rewrite the screen. */
-function printable(text: string): string {
-  return text.replace(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
-    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
-    "?",
-  );
 }
 
 function failure(

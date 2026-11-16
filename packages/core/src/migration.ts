@@ -650,10 +650,6 @@ export function formatMigrationSummary(report: MigrationReport): string {
   return [
     migrationHeader(report),
     ...changed.map(migrationLine),
-    ...(kept
-      ? [
-          `  ${kept} other state item(s) are kept unchanged; piship migrate-check prints them all.`,
-        ]
-      : []),
+    ...(kept ? [`  ${kept} other state item(s) are kept unchanged.`] : []),
   ].join("\n");
 }

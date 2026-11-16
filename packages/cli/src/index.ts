@@ -640,7 +640,7 @@ export function rootPublishSteps(
     "Never delete or replace a published root.",
     ...(addedChannelKeys.length
       ? [
-          `Then sign each channel with the new channel key: piship sign-channel ${directory} <archive>... --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]}`,
+          `Then sign each channel with the new channel key: ${pishipCommand()} sign-channel ${directory} <archive>... --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]}`,
         ]
       : []),
     `Publish the next root by ${by}: clients stop updating after ${expires}.`,
@@ -1811,7 +1811,7 @@ async function runLifecycle(
         .map(([target, reason]) => `\n  excluded  ${target}: ${reason}`)
         .join(
           "",
-        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.\nNext: piship sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>${repeated["--runtime"].map((item) => ` --runtime ${item}`).join("")}`,
+        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.\nNext: ${pishipCommand()} sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>${repeated["--runtime"].map((item) => ` --runtime ${item}`).join("")}`,
     );
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
@@ -1961,7 +1961,7 @@ async function runLifecycle(
       const [signer] = await pemSigners([{ id, file: first }], input, output);
       const publicKey = (signer as KeyedSigner).publicKey;
       output.stdout(
-        `Public key: ${publicKey}\nFingerprint: ${keyFingerprint(publicKey)}\nAdd it to the next root with: piship trust-root next ... --add-key ${id}=${publicKey}\nOr pin it in a new bootstrap with: piship trust-root init --key ${id}=${publicKey} ...`,
+        `Public key: ${publicKey}\nFingerprint: ${keyFingerprint(publicKey)}\nAdd it to the next root with: ${pishipCommand()} trust-root next ... --add-key ${id}=${publicKey}\nOr pin it in a new bootstrap with: ${pishipCommand()} trust-root init --key ${id}=${publicKey} ...`,
       );
       return 0;
     }
@@ -1986,7 +1986,7 @@ async function runLifecycle(
         `Warning: ${first} is inside a git work tree and not git-ignored; do not commit it.`,
       );
     output.stdout(
-      `Wrote the private key to ${first}. Keep it out of the repository and out of CI logs.\nPublic key: ${pair.publicKey}\nFingerprint: ${keyFingerprint(pair.publicKey)}\nPin it in piship.yaml through piship trust-root init --key ${id}=${pair.publicKey} ... (or publish it in the next root with piship trust-root next --add-key).`,
+      `Wrote the private key to ${first}. Keep it out of the repository and out of CI logs.\nPublic key: ${pair.publicKey}\nFingerprint: ${keyFingerprint(pair.publicKey)}\nPin it in piship.yaml through ${pishipCommand()} trust-root init --key ${id}=${pair.publicKey} ... (or publish it in the next root with ${pishipCommand()} trust-root next --add-key).`,
     );
   } else if (command === "sign-channel") {
     const channel = options["--channel"];

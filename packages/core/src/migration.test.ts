@@ -271,6 +271,8 @@ describe("checkStateMigration", () => {
     expect(lines[2]).toContain(
       `${STATE_DATA_CLASSES.length - 1} other state item(s) are kept unchanged`,
     );
+    // An employee running the branded update has no piship command.
+    expect(lines[2]).not.toContain("piship");
   });
 
   it("requires review when sessions exist and the target runs an older Pi", () => {

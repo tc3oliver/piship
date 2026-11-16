@@ -19,7 +19,9 @@ import {
   installHome,
   type DistributionLock,
 } from "../index.js";
+import { pishipCommand, shellArg } from "../invocation.js";
 import { rootDigest } from "../release/root.js";
+import { readInstallReceipt } from "./receipt.js";
 import { keyFingerprint } from "../signing.js";
 
 export const TRUST_STATE_SCHEMA = "piship-update-trust/v1";
@@ -183,6 +185,18 @@ export function removeTrustState(id: string): void {
 }
 
 /**
+ * How the person who hit this uninstalls: the branded command an employee
+ * has, else this PiShip when the receipt cannot be read.
+ */
+function uninstallCommand(id: string): string {
+  try {
+    return `${readInstallReceipt(id).app.command} uninstall`;
+  } catch {
+    return `${pishipCommand()} uninstall ${shellArg(id)}`;
+  }
+}
+
+/**
  * The error for a trust state that cannot be used. It is never rebuilt from
  * the active release lock, which could restore trust a newer root removed;
  * the recovery is an explicit reinstall from a release verified out of band.
@@ -194,7 +208,7 @@ export function damagedTrustState(id: string, problem: string): PiShipError {
     `Update trust state ${path} ${problem}; refusing to update ${id}`,
     {
       component: "update",
-      userAction: `Do not edit or delete it to get past this. Re-establish trust with a release you verify out of band: piship uninstall ${id} (state is kept), then piship install <release archive> --sha256 <published digest> --use-existing-state`,
+      userAction: `Do not edit or delete it to get past this. Re-establish trust with a release you verify out of band: ${uninstallCommand(id)} (state is kept), then extract the release archive and run node <extracted release>/payload/piship.mjs install <release archive> --sha256 <published digest> --use-existing-state`,
       sanitizedDetail: { trustState: path, check: problem },
     },
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asciiOnly, statusMarks } from "./terminal.js";
+import { asciiOnly, printable, statusMarks } from "./terminal.js";
 
 describe("asciiOnly", () => {
   it("falls back to ASCII on a Windows console that names no Unicode terminal", () => {
@@ -39,5 +39,13 @@ describe("statusMarks", () => {
     for (const mark of [...Object.values(unicode), ...Object.values(ascii)])
       expect(mark).toHaveLength(1);
     expect(Object.values(ascii).join("")).toMatch(/^[\x20-\x7e]+$/);
+  });
+});
+
+describe("printable", () => {
+  it("replaces terminal and bidi controls, keeps newline and tab", () => {
+    expect(printable("a\u001b]52;c;eA==\u0007b")).toBe("a?]52;c;eA==?b");
+    expect(printable("x‮y⁦z\u009b")).toBe("x?y?z?");
+    expect(printable("line\n\tnext")).toBe("line\n\tnext");
   });
 });

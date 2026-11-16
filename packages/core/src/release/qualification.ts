@@ -17,8 +17,7 @@ export function localBuildMarkerPath(output: string): string {
 }
 
 /** One line for `piship build` to print: what the output is not. */
-export const UNQUALIFIED_BUILD_NOTICE =
-  "This is an unqualified local build: it is not audited, has no SBOM or notices, and is not signed. Run piship release for the qualified artifact.";
+export const UNQUALIFIED_BUILD_NOTICE = `This is an unqualified local build: it is not audited, has no SBOM or notices, and is not signed. Run ${pishipCommand()} release for the qualified artifact.`;
 
 /**
  * The notice with the command that runs this PiShip on `manifest`, for
@@ -26,7 +25,7 @@ export const UNQUALIFIED_BUILD_NOTICE =
  */
 export function unqualifiedBuildNotice(manifest: string): string {
   return UNQUALIFIED_BUILD_NOTICE.replace(
-    "Run piship release",
+    `Run ${pishipCommand()} release`,
     `Run ${pishipCommand()} release ${shellArg(manifest)}`,
   );
 }

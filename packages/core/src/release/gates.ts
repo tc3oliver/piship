@@ -34,6 +34,7 @@ import { effectivePackageTrust } from "../pi-packages/trust.js";
 import { checkSearchToolSources } from "../search-tools/index.js";
 import { gate } from "./shared.js";
 import { checkLockedPackageSources } from "./sources.js";
+import { pishipCommand } from "../invocation.js";
 
 /** The release name `<id>-<version>-<target>`. */
 export function releaseName(lock: DistributionLock, target: string): string {
@@ -210,7 +211,7 @@ function checkLockedPiPackages(
         "LOCK_INVALID",
         "package",
         `${entry.id} has no stored npm lockfile`,
-        "Run piship lock",
+        `Run ${pishipCommand()} lock`,
       );
     checkLockedPiPackage(entry, readFileSync(lockfile, "utf8"), {
       trust: effectivePackageTrust(
@@ -257,7 +258,7 @@ export function requireReleaseLock(manifestPath: string): DistributionLock {
       "LOCK_INVALID",
       "lock",
       (error as Error).message,
-      "Review the manifest and resource changes, then run piship lock",
+      `Review the manifest and resource changes, then run ${pishipCommand()} lock`,
     );
   }
   if (
@@ -271,7 +272,7 @@ export function requireReleaseLock(manifestPath: string): DistributionLock {
       "CONFIG_INVALID",
       "schema",
       `production releases need a piship/v1alpha5, piship/v1alpha6, or piship/v1 manifest (found ${lock.manifest.schema})`,
-      "Run piship migrate --write, review updates.trust.bootstrap, and lock again",
+      `Run ${pishipCommand()} migrate --write, review updates.trust.bootstrap, and lock again`,
     );
   checkUpdateTrust(lock);
   return lock;

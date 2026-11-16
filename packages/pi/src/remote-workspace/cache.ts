@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { userInfo } from "node:os";
 import { join, relative, sep } from "node:path";
+import { printable } from "@piship/contracts";
 import { remoteWorkspacePaths } from "@piship/core";
 import {
   type SandboxBackend,
@@ -24,7 +25,6 @@ import {
 import type { SandboxConfig } from "@piship/schema";
 import type { GovernanceOptions } from "../governance/options.js";
 import { remoteWorkdir } from "../governance/sandbox.js";
-import { printable } from "./printable.js";
 
 export const CACHE_FORMAT = 1;
 /** A snapshot older than this is not used. */

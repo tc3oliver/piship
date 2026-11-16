@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import { LocalMetrics } from "@piship/audit";
 import {
   createManagedFetch,
@@ -32,6 +33,7 @@ import {
   updateDistribution,
 } from "../index.js";
 import { activeLock } from "../install/receipt.js";
+import { shellArg } from "../invocation.js";
 import {
   type BrandedContext,
   auditAccess,
@@ -57,7 +59,7 @@ export function requireInstalled(ctx: BrandedContext, command: string): void {
   if (!installedHere(ctx))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `${command} works on an installed distribution; this ${ctx.metadata.app.name} runs from ${ctx.distributionDir}. Install it with piship install first`,
+      `${command} works on an installed distribution; this ${ctx.metadata.app.name} runs from ${ctx.distributionDir}. Install it first: node ${shellArg(join(ctx.distributionDir, "piship.mjs"))} install ${shellArg(ctx.distributionDir)}`,
     );
 }
 
@@ -216,12 +218,16 @@ function overPlainHttp(ctx: BrandedContext, from: string | undefined): boolean {
   return url?.protocol === "http:" && !isLoopbackHost(url.hostname);
 }
 
+/** The options `update` accepts, as its usage and the branded help print them. */
+export const UPDATE_OPTIONS =
+  "[--channel <name>] [--from <dir|url>] [--check] [--accept-review]";
+
 export async function runUpdate(
   ctx: BrandedContext,
   args: readonly string[],
 ): Promise<void> {
   const { app } = ctx.metadata;
-  const usage = `Usage: ${app.command} update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]`;
+  const usage = `Usage: ${app.command} update ${UPDATE_OPTIONS}`;
   const options: { channel?: string; source?: string } = {};
   const flags = new Set<string>();
   if (args.includes("--help") || args.includes("-h")) {

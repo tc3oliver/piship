@@ -2278,6 +2278,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const damaged = await rejection(updateDistribution(ID, opts));
     expect(damaged.code).toBe("INTEGRITY_FAILED");
     expect(damaged.message).toMatch(/is damaged/);
+    // The installed command, which an employee has; not piship, which they may not.
+    expect(damaged.userAction).toMatch(/: acmepi uninstall \(state is kept\)/);
     expect(readFileSync(path, "utf8")).toBe("{");
     // Deleting it does not reset trust to the active release lock.
     rmSync(path);

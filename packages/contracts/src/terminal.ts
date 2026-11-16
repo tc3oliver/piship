@@ -39,3 +39,16 @@ export function statusMarks(
     ? { ok: "+", warn: "!", fail: "x", info: "-" }
     : { ok: "✓", warn: "!", fail: "✗", info: "-" };
 }
+
+/**
+ * Untrusted text (from a sandbox, a patch, a file name there) made safe to
+ * show or put in a prompt: control characters (OSC 52 clipboard writes,
+ * screen clears, DCS) and bidi controls become `?`; newline and tab stay.
+ */
+export function printable(text: string): string {
+  return text.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    "?",
+  );
+}
