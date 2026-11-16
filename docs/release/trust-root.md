@@ -142,6 +142,8 @@ piship install acmecode-1.0.0-linux-x64.tar.gz \
   --expect-key sha256:<channel-key-fingerprint>
 ```
 
+Without `--sha256`, installing an archive file prints a one-line warning to stderr that its channel signature was not verified, then installs.
+
 `--expect-key` checks that each given fingerprint is among the channel keys of the lock's bootstrap. A mismatch installs nothing. `piship inspect` and `doctor` show the key IDs and fingerprints; `doctor` also shows the installation's current root version, its origin, its expiry, and the channel keys a newer root removed.
 
 The bootstrap may be a later root: after a rotation, owners may pin the newest root (its version, keys, and roles) as the bootstrap of new releases, so fresh installs start there and fetch only later versions.
