@@ -10,22 +10,32 @@ import {
   type VulnerabilityFinding,
   type VulnerabilityReport,
 } from "./metadata.js";
+import { announceWait } from "../progress.js";
 import { workspacePackages } from "../runtime-dependencies.js";
 import { windowsNpmInvocation } from "../windows-npm.js";
 import { gate, runCommand } from "./shared.js";
 
 const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
 
-/** A short single-line excerpt of npm's output for a gate message. */
-const excerpt = (text: string) =>
-  text
+/**
+ * A single-line excerpt of npm's output for a gate message, cut in the
+ * middle so npm's closing "A complete log of this run can be found in:
+ * <path>" keeps its whole path.
+ */
+export const excerpt = (text: string) => {
+  const line = text
     .replace(/\p{Cc}+/gu, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 300) || "no output";
+    .trim();
+  return (
+    (line.length > 400
+      ? `${line.slice(0, 150)} ... ${line.slice(-250)}`
+      : line) || "no output"
+  );
+};
 
 const SCAN_ACTION =
-  "Restore npm and registry access for the build; releases are not produced without a scan";
+  "Check network access to the npm registry (`npm config get registry`), or point npm at a reachable registry or proxy, such as an intranet mirror (`npm config set registry`, `proxy`, `https-proxy`); packages locked from a mirror need its origin in release.sources. Releases are not produced without a scan";
 
 /** The audit gave no v2 report: fail closed, with npm's own words. */
 const noAuditReport = (detail: string) =>
@@ -102,7 +112,10 @@ const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
 
 /** The scans wait on the registry for minutes and print nothing meanwhile. */
 export function announceScans(progress?: (step: string) => void): void {
-  progress?.("Scanning dependencies with npm audit");
+  announceWait(
+    "Scanning dependencies with npm audit (needs npm registry access)",
+    progress,
+  );
   progress?.(
     "Checking registry signatures with npm audit signatures (up to 5 minutes)",
   );

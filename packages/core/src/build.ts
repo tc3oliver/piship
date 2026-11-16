@@ -24,8 +24,9 @@ import {
 import { bundleDistribution } from "./bundle.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { requireCurrentLock } from "./lock.js";
-import { supervisedNpm } from "./npm-process.js";
+import { npmTimeoutMinutes, supervisedNpm } from "./npm-process.js";
 import { removeTree } from "./parallel-files.js";
+import { announceWait } from "./progress.js";
 import {
   inventory,
   removeForeignPlatformPackages,
@@ -119,7 +120,11 @@ function installRuntime(
   }
   debugTiming("build input copy", phase);
   phase = process.hrtime.bigint();
-  progress?.("Installing the runtime packages (npm ci)");
+  const minutes = npmTimeoutMinutes();
+  announceWait(
+    `Installing the runtime packages (npm ci; needs npm registry access, up to ${minutes} minute${minutes === 1 ? "" : "s"})`,
+    progress,
+  );
   const npmArguments = [
     ...NPM_CI_ARGUMENTS,
     ...(ignoreScripts ? ["--ignore-scripts"] : []),
