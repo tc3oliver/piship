@@ -602,6 +602,15 @@ describe("personal Pi-native governance", () => {
     expect(cut.message).toBe(
       "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
     );
+    // Regression: --smoke-model printed the session's TUI action ("Send the
+    // message again") as well as its own.
+    const rejected = code(
+      '401: {"message":"gateway failure"}\nAction: Send the message again; if it fails again, run acmecode login in a terminal',
+    );
+    expect(rejected.message).toBe(
+      'The acceptance model request failed: 401: {"message":"gateway failure"}',
+    );
+    expect(rejected.code).toBe("CREDENTIAL_REVOKED");
     // Pi sets "aborted" only when the caller's signal aborted the request.
     expect(
       acceptanceFailure({

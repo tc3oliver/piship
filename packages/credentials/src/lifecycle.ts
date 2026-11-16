@@ -2046,6 +2046,9 @@ export class CredentialManager {
       try {
         this.#recordRetry(metadata, reason);
         retryPending = true;
+        // What the failure means for the person: the secret is gone here,
+        // not at the provider, and only expiry or an administrator ends it.
+        problem = `${problem}; the credential may stay valid at the provider ${metadata.expires_at ? `until ${metadata.expires_at}` : "until an administrator revokes it"}`;
       } catch (error) {
         problem = `${problem}; the pending revocation could not be recorded (${redact(error instanceof Error ? error.message : String(error))})`;
       }

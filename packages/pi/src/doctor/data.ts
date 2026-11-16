@@ -455,15 +455,6 @@ async function collectAccess(
   const workload = opened
     ? await opened.usesWorkloadIdentity().catch(() => false)
     : false;
-  const status = opened
-    ? await opened.status().catch(() => undefined)
-    : undefined;
-  const pending = opened
-    ? await opened
-        .credentialManager()
-        .then((manager) => manager.pendingIssuance())
-        .catch(() => null)
-    : null;
   let pendingRevocations: AccessData["pendingRevocations"];
   if (opened?.store)
     try {
@@ -506,6 +497,17 @@ async function collectAccess(
       if (error instanceof PiShipError && error.component === "identity")
         identityError = activationError;
     }
+  // Read after activation, which renews an expired or expiring credential
+  // as a launch would: the state before it would say to sign in again.
+  const status = opened
+    ? await opened.status().catch(() => undefined)
+    : undefined;
+  const pending = opened
+    ? await opened
+        .credentialManager()
+        .then((manager) => manager.pendingIssuance())
+        .catch(() => null)
+    : null;
   // The proxy and the CA bundles are always checked. The endpoint paths only
   // when activation or the gateway probe failed, to say which hop (the
   // proxy, a TLS chain, an endpoint) is at fault: a working activation has
