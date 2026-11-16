@@ -11,6 +11,7 @@
 //   5. read-denied directories replaced by an empty, mode 0000, read-only
 //      tmpfs and read-denied files by /dev/null, last, so a deny always wins
 //      over an allow, including a deny nested inside a writable workspace.
+import { readFileSync } from "node:fs";
 import { dirname, posix } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
@@ -89,17 +90,37 @@ function byDepth(paths: readonly string[]): string[] {
   return [...paths].sort((a, b) => pathDepth(a) - pathDepth(b));
 }
 
+function readSysctl(name: string): string | undefined {
+  try {
+    return readFileSync(`/proc/sys/${name}`, "utf8").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const PERSIST = "(a file in /etc/sysctl.d keeps it after a reboot)";
+
 /**
- * Why bwrap's availability check failed, from what bwrap printed. Wording
+ * Why bwrap's availability check failed, from what bwrap printed and the
+ * kernel settings that turn user namespaces off, with what fixes it. Wording
  * only: the adapter is unavailable whichever cause it names.
  */
-export function bubblewrapFailureReason(detail: string): string {
+export function bubblewrapFailureReason(
+  detail: string,
+  sysctl: (name: string) => string | undefined = readSysctl,
+): string {
   // A namespace was created but a mount was refused: Docker's default seccomp
   // and mount restrictions do this; unprivileged user namespaces are fine.
   const cause =
     /Can't mount proc|Can't mount tmpfs|Failed to make \/ slave/.test(detail)
-      ? "user namespaces work, but a mount was refused, as inside a container whose seccomp or mount restrictions forbid it"
-      : "unprivileged user namespaces may be disabled";
+      ? "user namespaces work, but a mount was refused, as inside a container whose seccomp or mount restrictions forbid it; run it on the host or use a remote sandbox backend"
+      : sysctl("kernel/apparmor_restrict_unprivileged_userns") === "1"
+        ? `AppArmor blocks unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns is 1); allow them with \`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\` ${PERSIST} or an AppArmor profile for bwrap`
+        : sysctl("user/max_user_namespaces") === "0"
+          ? `user namespaces are turned off (user.max_user_namespaces is 0); allow them with \`sudo sysctl -w user.max_user_namespaces=15000\` ${PERSIST}`
+          : sysctl("kernel/unprivileged_userns_clone") === "0"
+            ? `unprivileged user namespaces are turned off (kernel.unprivileged_userns_clone is 0); allow them with \`sudo sysctl -w kernel.unprivileged_userns_clone=1\` ${PERSIST}`
+            : "unprivileged user namespaces may be disabled";
   return `bubblewrap cannot create a sandbox (${cause}): ${detail}`;
 }
 
@@ -211,7 +232,7 @@ export class BubblewrapAdapter implements SandboxAdapter {
       return {
         available: false,
         reason:
-          "bubblewrap (bwrap) was not found on PATH; install the bubblewrap package",
+          "bubblewrap (bwrap) was not found on PATH; install the bubblewrap package (`sudo apt install bubblewrap`, `sudo dnf install bubblewrap`)",
       };
     this.#executable = bwrap;
     const modern = await runCheck(bwrap, [

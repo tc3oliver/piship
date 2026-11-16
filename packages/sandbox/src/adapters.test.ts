@@ -580,7 +580,36 @@ describe("bubblewrapFailureReason", () => {
 
   it("keeps the user-namespace hint for a uid map failure", () => {
     expect(
-      bubblewrapFailureReason("bwrap: setting up uid map: Permission denied"),
+      bubblewrapFailureReason(
+        "bwrap: setting up uid map: Permission denied",
+        () => undefined,
+      ),
     ).toContain("unprivileged user namespaces may be disabled");
+  });
+
+  it("names the kernel setting that turns user namespaces off and the command that allows them", () => {
+    const reason = (settings: Record<string, string>) =>
+      bubblewrapFailureReason(
+        "bwrap: setting up uid map: Permission denied",
+        (name) => settings[name],
+      );
+    expect(
+      reason({ "kernel/apparmor_restrict_unprivileged_userns": "1" }),
+    ).toContain(
+      "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+    );
+    expect(reason({ "user/max_user_namespaces": "0" })).toContain(
+      "sudo sysctl -w user.max_user_namespaces=15000",
+    );
+    expect(reason({ "kernel/unprivileged_userns_clone": "0" })).toContain(
+      "sudo sysctl -w kernel.unprivileged_userns_clone=1",
+    );
+    // A refused mount is the container's, whatever the host's settings.
+    expect(
+      bubblewrapFailureReason(
+        "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+        () => "1",
+      ),
+    ).toContain("run it on the host or use a remote sandbox backend");
   });
 });
