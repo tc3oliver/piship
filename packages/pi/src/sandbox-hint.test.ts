@@ -115,6 +115,27 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     expect(hintFor("all good\n")).toBeUndefined();
   });
 
+  it("names the network denial for a network command that printed nothing", () => {
+    const silent = (command: string, network: "deny" | "allow" = "deny") =>
+      new SandboxFailureScanner({
+        profile: profile(network),
+        mode: "personal",
+        command,
+      }).hint();
+    for (const command of [
+      "curl -s https://example.com",
+      "cd app && wget -q http://example.com/x",
+      "git fetch origin",
+      "node fetch.js https://api.example.com",
+    ])
+      expect(silent(command), command).toMatch(
+        /^\[PiShip sandbox: shell commands have no network access, so a command that needs the network fails here even when it was approved\. Change sandbox\.network\.mode in your piship\.yaml\./,
+      );
+    expect(silent("npm test")).toBeUndefined();
+    expect(silent("make curlish")).toBeUndefined();
+    expect(silent("curl -s https://example.com", "allow")).toBeUndefined();
+  });
+
   it("finds an error split across chunks", () => {
     const p = profile();
     const scanner = new SandboxFailureScanner({ profile: p, mode: "managed" });
@@ -149,10 +170,15 @@ describe.skipIf(process.platform === "win32")(
       } as unknown as GovernanceSession;
     }
 
-    async function runCommand(exitCode: number, text: string) {
+    async function runCommand(
+      exitCode: number,
+      text: string,
+      source: "bash" | "user-bash" = "bash",
+      command = "npm install",
+    ) {
       let output = "";
-      await governedBashOperations(session(exitCode, text), "bash").exec(
-        "npm install",
+      await governedBashOperations(session(exitCode, text), source).exec(
+        command,
         "/",
         {
           onData: (data) => {
@@ -172,6 +198,44 @@ describe.skipIf(process.platform === "win32")(
         /\[PiShip sandbox: .*sandbox\.filesystem\.write\.allow/,
       );
       expect(output.match(/PiShip sandbox/g)).toHaveLength(1);
+    });
+
+    it("tells the model not to retry, and leaves that out for the user's own ! command", async () => {
+      const model = await runCommand(
+        6,
+        "",
+        "bash",
+        "curl -s https://example.com",
+      );
+      expect(model).toContain("Do not retry it or work around the sandbox");
+      const user = await runCommand(
+        6,
+        "",
+        "user-bash",
+        "curl -s https://example.com",
+      );
+      expect(user).toContain("shell commands have no network access");
+      expect(user).not.toContain("Do not retry");
+    });
+
+    it("shows the user's own ! command as theirs in the prompt", async () => {
+      const prompts: string[] = [];
+      for (const source of ["bash", "user-bash"] as const) {
+        const gov = session(0, "");
+        (gov as unknown as { decide: unknown }).decide = async (
+          _action: string,
+          _resource: string,
+          _channel: unknown,
+          events: { prompt: string },
+        ) => {
+          prompts.push(events.prompt);
+          return { outcome: "allow" };
+        };
+        await governedBashOperations(gov, source).exec("ls", "/", {
+          onData: () => {},
+        });
+      }
+      expect(prompts).toEqual(["bash: ls", "your own ! command: ls"]);
     });
 
     it("adds nothing when the command succeeded", async () => {

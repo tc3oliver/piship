@@ -1,6 +1,7 @@
 // `/grant`: the user's own task grants for this session. Only this typed
 // command creates one; tool output and project files cannot.
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatError } from "@piship/contracts";
@@ -98,6 +99,14 @@ async function add(
     target === undefined || target === "."
       ? gov.project.root
       : resolve(gov.options.cwd, target);
+  // A mistyped subcommand (`/grant lsit`) would otherwise grant a folder of
+  // that name. A remote workspace may hold folders this host does not.
+  if (
+    target !== undefined &&
+    !gov.remote &&
+    !statSync(root, { throwIfNoEntry: false })?.isDirectory()
+  )
+    throw new Error(`${target} is not a folder here. ${USAGE}`);
   if (!ctx.hasUI) throw new Error("/grant needs an interactive session");
   // Shell coverage needs shell.execute among the actions the manifest lets a grant cover.
   const actions = gov.manifest.policy.taskGrants?.actions;
@@ -159,7 +168,10 @@ export async function grantCommand(
   let message: string;
   let level: "info" | "warning" | "error" = "info";
   try {
-    if (first === "list") {
+    if (first === "help" || first === "-h" || first === "--help") {
+      if (rest.length) throw new Error(USAGE);
+      message = USAGE;
+    } else if (first === "list") {
       const grants = gov.listGrants();
       message = grants.length
         ? grants

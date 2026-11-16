@@ -1048,6 +1048,27 @@ describe("/grant", () => {
     expect(grantMinutes("0m")).toBeUndefined();
   });
 
+  it("prints its usage for help, and refuses a folder that does not exist, without a dialog", async () => {
+    const { session } = await open();
+    const { ctx, dialogs, notices } = ui();
+    for (const args of ["help", "-h", "--help"])
+      await grantCommand(session, args, ctx);
+    expect(notices.map((notice) => notice.level)).toEqual([
+      "info",
+      "info",
+      "info",
+    ]);
+    for (const notice of notices)
+      expect(notice.message).toMatch(/^Usage: \/grant \[add\] \[path\]/);
+    notices.length = 0;
+    for (const args of ["lsit", "add missing-folder"])
+      await grantCommand(session, args, ctx);
+    expect(notices.map((notice) => notice.level)).toEqual(["error", "error"]);
+    expect(notices[0]?.message).toMatch(/^lsit is not a folder here\. Usage:/);
+    expect(dialogs).toEqual([]);
+    expect(session.listGrants()).toEqual([]);
+  });
+
   it("refuses home-relative tilde paths before asking for approval", async () => {
     const { session } = await open();
     const { ctx, dialogs, notices } = ui();

@@ -478,6 +478,10 @@ describe.skipIf(!posix || asRoot)(
         exitCode: 126,
         output: expect.stringContaining("Plan mode does not run commands"),
       });
+      // Told to the person who typed it, not to the model.
+      expect(
+        (await userBash(hooks, workspace, "echo plan", ctx)).output,
+      ).toContain("your own ! commands included");
       // No sentinel; the location itself was made up front.
       expect(readdirSync(location)).toEqual([]);
       expect(checks()).toEqual([]);

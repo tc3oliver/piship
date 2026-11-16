@@ -11,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   fstatSync,
   mkdirSync,
   openSync,
@@ -27,7 +28,7 @@ import { hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { processAlive } from "@piship/contracts";
+import { PiShipError, processAlive } from "@piship/contracts";
 import {
   recordedIdentity,
   recordedProcessGone,
@@ -97,6 +98,7 @@ function readHeader(path: string): Entry | undefined {
 export function mostRecentSession(
   sessionDir: string,
   cwd: string,
+  id?: string,
 ): string | undefined {
   const project = resolve(cwd);
   let files: { path: string; mtime: number }[];
@@ -117,6 +119,7 @@ export function mostRecentSession(
       continue;
     }
     const recorded = header?.cwd;
+    if (id !== undefined && header?.id !== id) continue;
     if (
       typeof recorded === "string" &&
       recorded !== "" &&
@@ -700,6 +703,8 @@ export function openSession(
     readonly newSession: boolean;
     readonly command: string;
     readonly disposable?: boolean;
+    /** `--session <id>`: this project's session with that ID, or a refusal. */
+    readonly resume?: string;
   },
 ): OpenedSession {
   const ownership = new SessionOwnership();
@@ -711,9 +716,26 @@ export function openSession(
   };
   const recent = options.newSession
     ? undefined
-    : mostRecentSession(sessionDir, cwd);
+    : mostRecentSession(sessionDir, cwd, options.resume);
+  if (options.resume !== undefined) {
+    // An explicit resume never quietly becomes another session.
+    const refuse = (why: string) =>
+      new PiShipError("CONFIG_INVALID", `Session ${options.resume} ${why}`, {
+        userAction: `Start ${options.command} in that session's project directory, or without --session to continue this project's most recent session`,
+      });
+    if (!recent) throw refuse("is not a session of this project");
+    if (!ownership.claim(recent))
+      throw refuse(`is open in another ${options.command} process: ${recent}`);
+    const problem = inspectSession(recent);
+    if (problem) {
+      ownership.release();
+      throw refuse(
+        `is not resumed: ${problem.kind === "oversized" ? `it is ${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit` : `it is damaged (${printable(problem.reason)})`}. The file was not loaded or changed: ${recent}`,
+      );
+    }
+  }
   if (!recent) return { sessionManager: fresh(), ownership };
-  if (!ownership.claim(recent)) {
+  if (options.resume === undefined && !ownership.claim(recent)) {
     const owner = ownership.otherOwner(recent);
     return {
       sessionManager: fresh(),
@@ -724,7 +746,8 @@ export function openSession(
     };
   }
   try {
-    const problem = inspectSession(recent);
+    const problem =
+      options.resume === undefined ? inspectSession(recent) : undefined;
     if (problem) {
       // A session that cannot be resumed must not block the launch: the file
       // may hold the user's work, so it is left untouched, and the new
@@ -746,4 +769,23 @@ export function openSession(
     ownership.release();
     throw error;
   }
+}
+
+/**
+ * The line that follows Pi's own resume hint when a session ends: Pi names
+ * its own command, which would open the session outside this distribution's
+ * policy. Nothing when Pi prints no hint (an unsaved session).
+ */
+export function brandedResumeLine(
+  sessionManager: Pick<
+    SessionManager,
+    "isPersisted" | "getSessionFile" | "getSessionId"
+  >,
+  command: string,
+): string | undefined {
+  const file = sessionManager.isPersisted()
+    ? sessionManager.getSessionFile()
+    : undefined;
+  if (!file || !existsSync(file)) return undefined;
+  return `Resume it governed with: ${command} --session ${sessionManager.getSessionId()} (the pi command above starts it without ${command}'s policy)`;
 }

@@ -913,6 +913,7 @@ export class LocalSecretCredentialProvider implements CredentialProvider {
         "The entered secret is empty or malformed",
         {
           component: "credential",
+          userAction: `Enter the whole key: at least 8 characters${this.options.maxLength !== undefined ? ` and at most ${this.options.maxLength}` : ""}, printable ASCII, no spaces`,
         },
       );
     return {

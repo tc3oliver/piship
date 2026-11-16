@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -31,6 +31,7 @@ import {
   stopLiveProcesses,
 } from "../../../../tests/helpers/processes.js";
 import {
+  brandedResumeLine,
   inspectSession,
   MAX_RESUME_BYTES,
   mostRecentSession,
@@ -152,6 +153,58 @@ function expectRefused(file: string, pattern: RegExp) {
   expect(readdirSync(join(sessionDir, OWNER_DIRECTORY))).toEqual([]);
   return opened;
 }
+
+describe("--session <id>", () => {
+  const resume = (id: string) =>
+    openSession(project, sessionDir, {
+      newSession: false,
+      command: "mypi",
+      resume: id,
+    });
+
+  it("resumes the named session, not the most recent one", () => {
+    const older = persistedSession();
+    const newer = persistedSession();
+    utimesSync(older.file, new Date(1000), new Date(1000));
+    const opened = resume(older.id);
+    try {
+      expect(opened.notice).toBeUndefined();
+      expect(opened.sessionManager.getSessionFile()).toBe(older.file);
+      expect(opened.sessionManager.getSessionFile()).not.toBe(newer.file);
+    } finally {
+      opened.ownership.release();
+    }
+  });
+
+  it("refuses an ID that is not a session of this project, and starts none", () => {
+    const other = persistedSession(join(temp, "other-project"));
+    expect(() => resume(other.id)).toThrow(
+      `Session ${other.id} is not a session of this project`,
+    );
+    expect(() => resume("missing")).toThrow("is not a session of this project");
+    expect(
+      readdirSync(sessionDir).filter((name) => name.endsWith(".jsonl")),
+    ).toEqual([basename(other.file)]);
+  });
+
+  it("refuses a damaged session instead of quietly starting another", () => {
+    const { file, id, lines: entries } = persistedSession();
+    rewrite(file, [...entries, "{not json"]);
+    expect(() => resume(id)).toThrow(/is not resumed: it is damaged/);
+    expect(readdirSync(join(sessionDir, OWNER_DIRECTORY))).toEqual([]);
+  });
+
+  it("names the branded command after Pi's own resume hint", () => {
+    const { file, id } = persistedSession();
+    const manager = SessionManager.open(file, sessionDir, project);
+    expect(brandedResumeLine(manager, "mypi")).toBe(
+      `Resume it governed with: mypi --session ${id} (the pi command above starts it without mypi's policy)`,
+    );
+    expect(
+      brandedResumeLine(SessionManager.inMemory(project), "mypi"),
+    ).toBeUndefined();
+  });
+});
 
 describe("resuming a persisted session", () => {
   it("resumes a valid session written by Pi unchanged", () => {

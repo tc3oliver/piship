@@ -30,7 +30,7 @@ A report never claims more than the backend enforces. The `filesystem-read-deny`
 
 ## Configuration
 
-Only `sandbox.required: true` activates a sandbox, and a non-native provider is accepted only when the sandbox is required. A backend that cannot be used fails the launch with `SANDBOX_UNAVAILABLE`; there is no fallback to another backend or to running uncontained. The `filesystem`, `network`, and `environment` fields ([manifest](manifest.md#sandbox)) apply to every provider. A declared `filesystem.read.deny`, `filesystem.write.allow`, or `environment.allow` replaces its default list instead of extending it, so restate the defaults you want to keep.
+Only `sandbox.required: true` activates a sandbox, and a non-native provider is accepted only when the sandbox is required. A backend that cannot be used fails the launch with `SANDBOX_UNAVAILABLE`; there is no fallback to another backend or to running uncontained. The `filesystem`, `network`, and `environment` fields ([manifest](manifest.md#sandbox)) apply to every provider. A declared `filesystem.read.deny`, `filesystem.write.allow`, or `environment.allow` replaces its default list instead of extending it, so restate the defaults you want to keep. A `policy.enforced` `filesystem.read` deny refuses Pi's file tools only: a command (`cat .env` in `bash`, or a user's `!` command) reads files through the sandbox, so list the directory in `filesystem.read.deny` too. `piship validate` warns about an enforced read deny that no `filesystem.read.deny` directory covers; a pattern such as `**/.env` has no directory to list, so the warning stays.
 
 ```yaml
 sandbox:

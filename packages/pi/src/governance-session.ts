@@ -68,7 +68,11 @@ import {
   type GovernanceManifest,
 } from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
-import { approvalSubject, terminalApproval } from "./governance/approval.js";
+import {
+  approvalSubject,
+  terminalApproval,
+  whyAsked,
+} from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
 import {
   buildEngine,
@@ -726,13 +730,13 @@ export class GovernanceSession {
         ...(tool
           ? [
               `tool.execute ${tool.tool}`,
-              ...(tool.decision.reason ? [tool.decision.reason] : []),
-              `Rule: ${tool.decision.ruleId}`,
+              ...whyAsked(tool.decision.ruleId, tool.decision.reason),
             ]
           : []),
         `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? own.resource)}`,
-        ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
-        ...(own.effect === "ask" ? [`Rule: ${own.ruleId}`] : []),
+        ...(!tool || own.effect === "ask"
+          ? whyAsked(own.ruleId, own.reason, own.effect === "ask")
+          : []),
       ].join("\n"),
     };
     // A grant wider than the target shown says so, for each ask, where the

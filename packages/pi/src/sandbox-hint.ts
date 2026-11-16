@@ -14,6 +14,10 @@ const FILESYSTEM_ERROR =
   /\b(EROFS|EPERM|EACCES)\b|Read-only file system|Permission denied|Operation not permitted/i;
 const NETWORK_ERROR =
   /\b(ENOTFOUND|EAI_AGAIN)\b|Could not resolve host|Temporary failure in name resolution|Name or service not known|nodename nor servname/i;
+// A command that reaches the network by itself, even when it prints nothing
+// (`curl -s` fails with exit code 6 and no output).
+const NETWORK_COMMAND =
+  /(?:^|[\s;&|(])(?:curl|wget|ssh|scp|sftp|rsync|ping|telnet|ftp|nc)\b|(?:^|[\s;&|(])git\s+(?:clone|fetch|pull|ls-remote)\b|[a-z]+:\/\//i;
 const HOST = /(?:ENOTFOUND|EAI_AGAIN|resolve host:?)\s+([A-Za-z0-9.-]+)/i;
 // The first absolute path a failing line names, quoted or bare.
 const QUOTED_PATH = /['"`](\/[^'"`\n]+)['"`]/;
@@ -30,6 +34,8 @@ export interface SandboxHintContext {
     Partial<Pick<SandboxProfile, "writeProtect">>;
   /** Who can change the manifest: `managed` names the distribution owner. */
   readonly mode: "managed" | "personal";
+  /** The command, to name the network denial when its output says nothing. */
+  readonly command?: string;
 }
 
 /** The one next action: who changes which manifest key. */
@@ -43,7 +49,7 @@ export function manifestChange(
 }
 
 /** The shell cannot get past the sandbox, so a retry only repeats the failure. */
-const SANDBOX_NO_RETRY =
+export const SANDBOX_NO_RETRY =
   "Do not retry it or work around the sandbox; tell the user what failed.";
 
 function readable(path: string): boolean {
@@ -117,6 +123,12 @@ export class SandboxFailureScanner {
     }
     if (this.#networkSeen && profile.network === "deny")
       return `[PiShip sandbox: ${this.#network ? `${this.#network} cannot be reached` : "the host cannot be reached"} because shell commands have no network access. ${manifestChange(mode, "sandbox.network.mode")} ${SANDBOX_NO_RETRY}]`;
+    if (
+      profile.network === "deny" &&
+      this.context.command !== undefined &&
+      NETWORK_COMMAND.test(this.context.command)
+    )
+      return `[PiShip sandbox: shell commands have no network access, so a command that needs the network fails here even when it was approved. ${manifestChange(mode, "sandbox.network.mode")} ${SANDBOX_NO_RETRY}]`;
     return undefined;
   }
 }

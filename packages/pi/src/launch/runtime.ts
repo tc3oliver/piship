@@ -174,6 +174,8 @@ export interface SessionOptions {
   readonly sessionDir: string;
   /** Start a new session instead of resuming the most recent one. */
   readonly newSession: boolean;
+  /** `--session <id>`: resume this session of the project, or refuse. */
+  readonly resume?: string;
   /** A session that holds no user work: a damaged one is replaced, not refused. */
   readonly disposable?: boolean;
   /** A subagent child: no resume, and its options only narrow the session. */
@@ -624,6 +626,7 @@ export async function startGoverned(
       : openSession(process.cwd(), session.sessionDir, {
           newSession: session.newSession,
           command: ctx.metadata.app.command,
+          ...(session.resume !== undefined ? { resume: session.resume } : {}),
           ...(session.disposable ? { disposable: true } : {}),
         });
     ownership = opened.ownership;

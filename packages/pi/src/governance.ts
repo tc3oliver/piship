@@ -186,6 +186,7 @@ export function governModelRuntime(
     getAvailableSnapshot: runtime.getAvailableSnapshot.bind(runtime),
     checkAuth: runtime.checkAuth.bind(runtime),
     getProviders: runtime.getProviders.bind(runtime),
+    getProviderAuthStatus: runtime.getProviderAuthStatus.bind(runtime),
     getAuth: runtime.getAuth.bind(runtime) as (
       model: unknown,
       overrides?: unknown,
@@ -409,9 +410,20 @@ export function governModelRuntime(
     // distribution signs in with its own command, so only its provider is
     // listed, with a method that has no `login`: Pi shows it as configured
     // outside Pi, under a name that says where to sign in.
+    // Pi shows "<name> is configured outside pi." for it.
     const signIn = managed.command
-      ? ` (run ${managed.command} login in a terminal)`
+      ? `, which ${managed.command} login and ${managed.command} logout manage in a terminal,`
       : "";
+    // The credential was acquired before the session started, so the
+    // provider is configured, by the branded command rather than by /login.
+    target.getProviderAuthStatus = (providerId: string) =>
+      providerId === managed.providerId
+        ? {
+            configured: true,
+            source: "runtime",
+            label: managed.command ? `${managed.command} login` : "PiShip",
+          }
+        : original.getProviderAuthStatus(providerId);
     target.getProviders = () =>
       original.getProviders().flatMap((provider) =>
         provider.id === managed.providerId

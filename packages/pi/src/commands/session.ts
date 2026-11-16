@@ -1,6 +1,6 @@
 // The Pi session commands: the interactive TUI and the `--smoke` acceptance run.
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   createFindTool,
   createGrepTool,
@@ -34,7 +34,11 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
-import { liveOwner, SessionOwnership } from "../launch/session-file.js";
+import {
+  brandedResumeLine,
+  liveOwner,
+  SessionOwnership,
+} from "../launch/session-file.js";
 import type { SubagentChild } from "../launch/subagent-child.js";
 import { endInsideDispose } from "./dispose-hook.js";
 
@@ -57,6 +61,18 @@ function sessionDirectory(
     : base;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
+}
+
+/** Whether two paths name the same directory (a missing one by its resolved path). */
+function samePath(a: string, b: string): boolean {
+  const real = (path: string) => {
+    try {
+      return realpathSync.native(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  return real(a) === real(b);
 }
 
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";
@@ -439,12 +455,23 @@ export async function runInteractive(
   ctx: LaunchContext,
   requestedModel: string | undefined,
   newSession: boolean,
+  resume?: { readonly id: string; readonly dir?: string },
 ): Promise<void> {
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
   startupMark("access_prepared");
   const sessionDir = sessionDirectory(ctx, prepared, "user");
+  // Pi's resume hint names a directory; only this distribution's own is
+  // read, so `--session-dir` cannot point the session at other files.
+  if (resume?.dir !== undefined && !samePath(resume.dir, sessionDir))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `--session-dir must be this distribution's session directory, ${sessionDir}`,
+      {
+        userAction: `Run ${ctx.metadata.app.command} --session ${resume.id} without --session-dir`,
+      },
+    );
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
   const gov = await openGovernance(
@@ -456,10 +483,20 @@ export async function runInteractive(
   const { runtime, theme, ownership } = await startGoverned(
     ctx,
     prepared,
-    { sessionDir, newSession },
+    { sessionDir, newSession, ...(resume ? { resume: resume.id } : {}) },
     gov,
   );
   startupMark("pi_initialized");
+  // Pi prints "To resume this session: pi ..." as it exits, naming Pi's own
+  // command, which would open the session without this distribution's
+  // policy. The branded command that resumes it governed follows it.
+  process.once("exit", () => {
+    const line = brandedResumeLine(
+      runtime.session.sessionManager,
+      ctx.metadata.app.command,
+    );
+    if (line && process.stdout.isTTY) process.stdout.write(`${line}\n`);
+  });
   let sessionFailed = false;
   // Pi's shutdown awaits runtime.dispose() and then calls process.exit(), so
   // the governance session ends inside that dispose (see dispose-hook.ts).
