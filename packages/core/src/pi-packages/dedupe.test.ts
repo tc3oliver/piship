@@ -504,18 +504,18 @@ console.log(JSON.stringify({ def, kind, cjs: require("dual").kind }));\n`,
       expect(kept(cli, cli)).toEqual(["bin"]);
     });
 
-    it("when its code finds modules or files at run time", () => {
-      for (const body of [
-        'import { createRequire } from "node:module";\nexport const helper = createRequire(import.meta.url);\n',
-        "export const helper = require.resolve('x');\n",
-        "export const helper = (name) => import(name);\n",
-        "export const helper = (name) => require(name);\n",
-        "export const helper = process.mainModule;\n",
-        "export const helper = 'node_modules';\n",
-      ]) {
-        const searching = leaf("leaf", "1.0.0", {}, { "lib/helper.js": body });
-        expect(kept(searching, searching)).toEqual(["runtime-discovery"]);
-      }
+    // One case per test: six on-disk dedupe runs in one test outlasted the
+    // test timeout on a loaded machine.
+    it.each([
+      'import { createRequire } from "node:module";\nexport const helper = createRequire(import.meta.url);\n',
+      "export const helper = require.resolve('x');\n",
+      "export const helper = (name) => import(name);\n",
+      "export const helper = (name) => require(name);\n",
+      "export const helper = process.mainModule;\n",
+      "export const helper = 'node_modules';\n",
+    ])("when its code finds modules or files at run time: %s", (body) => {
+      const searching = leaf("leaf", "1.0.0", {}, { "lib/helper.js": body });
+      expect(kept(searching, searching)).toEqual(["runtime-discovery"]);
     });
 
     it("does not read a comment as code", () => {

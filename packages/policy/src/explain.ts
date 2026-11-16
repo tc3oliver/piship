@@ -93,6 +93,17 @@ export function formatDecision(
     section("Layer", decision.layer),
   ];
   if (decision.reason) blocks.push(section("Reason", decision.reason));
+  const tool =
+    decision.action === "mcp.tool.call"
+      ? /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(decision.resource)
+      : null;
+  if (tool)
+    blocks.push(
+      section(
+        "Hint",
+        `${decision.resource} is the model-facing tool name; an mcp.tool.call resource is <server>:<tool>, so ask for ${tool[1]}:${tool[2]} (the model-facing name is the tool.execute resource)`,
+      ),
+    );
   const others = explanation.matches.filter(
     (match) =>
       !(match.ruleId === decision.ruleId && match.layer === decision.layer),
