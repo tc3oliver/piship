@@ -1427,8 +1427,10 @@ function discoverImports(
       evaluation,
       source.path,
     );
+    // A file already listed (CLAUDE.md importing @AGENTS.md, a cycle) loads once.
+    if (seen.has(resolvedPath)) continue;
     out.push(candidate);
-    if (candidate.effect === "deny" || seen.has(resolvedPath)) continue;
+    if (candidate.effect === "deny") continue;
     seen.add(resolvedPath);
     if (isFile(resolvedPath))
       discoverImports(
@@ -1570,6 +1572,8 @@ export function discoverProjectResources(
       return;
     }
     const resolvedPath = real(path);
+    // CLAUDE.md linked to AGENTS.md, or already imported: one file loads once.
+    if (spec.kind === "instructions" && seen.has(resolvedPath)) return;
     const inside = isWithin(identity.root, resolvedPath);
     // A directory is only inside the root when every link within it is too.
     const escaping =

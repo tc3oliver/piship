@@ -277,6 +277,7 @@ export async function runSmoke(
         resumed,
         safeTool: "read",
         agentDir: ctx.agentDir,
+        distributionDir: ctx.distributionDir,
         cacheDir,
         logsDir,
         dataDir,

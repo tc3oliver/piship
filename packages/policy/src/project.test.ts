@@ -1765,7 +1765,6 @@ describe("discoverProjectResources", () => {
     expect(imports.map((item) => [item.path, item.effect])).toEqual([
       ["docs/style.md", "allow"],
       ["nested.md", "allow"],
-      ["style.md", "allow"],
       ["../../etc/passwd", "deny"],
       ["~/.ssh/id_ed25519", "deny"],
       ["/etc/hosts", "deny"],
@@ -1774,6 +1773,42 @@ describe("discoverProjectResources", () => {
     const passwd = imports.find((item) => item.path === "../../etc/passwd");
     expect(passwd?.reason).toContain("outside the project root");
     expect(passwd?.importedFrom).toBe(`${posix(root)}/AGENTS.md`);
+  });
+
+  it("lists an instruction file once when CLAUDE.md imports or links to AGENTS.md", () => {
+    const root = dir("imports-once");
+    gitRepo(root, "https://git.acme.example/team/imports-once");
+    write(join(root, "AGENTS.md"), "# Rules\n@docs/a.md\n");
+    write(join(root, "CLAUDE.md"), "@AGENTS.md\n@docs/a.md\n");
+    // A cycle: a.md and b.md import each other.
+    write(join(root, "docs", "a.md"), "@b.md\n");
+    write(join(root, "docs", "b.md"), "@a.md\n");
+    const found = discoverProjectResources(
+      identifyProject(root, trust),
+      managed,
+      { homeDir: home },
+    );
+    const instructions = found.filter((item) =>
+      ["instructions", "instruction-import"].includes(item.kind),
+    );
+    expect(
+      instructions.map((item) => [item.kind, basename(item.resolvedPath)]),
+    ).toEqual([
+      ["instructions", "AGENTS.md"],
+      ["instruction-import", "a.md"],
+      ["instruction-import", "b.md"],
+      ["instructions", "CLAUDE.md"],
+    ]);
+    const linked = dir("linked-once");
+    gitRepo(linked, "https://git.acme.example/team/linked-once");
+    write(join(linked, "AGENTS.md"), "# Rules\n");
+    if (!trySymlink("AGENTS.md", join(linked, "CLAUDE.md"), "file")) return;
+    const once = discoverProjectResources(
+      identifyProject(linked, trust),
+      managed,
+      { homeDir: home },
+    ).filter((item) => item.kind === "instructions");
+    expect(once.map((item) => basename(item.path))).toEqual(["AGENTS.md"]);
   });
 
   it("denies .pi/extensions in an unknown repository in managed mode and asks in personal mode", () => {
