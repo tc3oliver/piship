@@ -5,7 +5,7 @@
 // PiShip runs so the full output is owned by the session (governedBashTool).
 // Custom tools passed to the SDK take precedence over any extension tool of
 // the same name.
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import {
   access,
   type FileHandle,
@@ -679,17 +679,24 @@ export const DIRECTORY_LIST_LIMIT = 2000;
  * decided as `filesystem.read`, or the listing is refused. Plan mode has no
  * shell, so this is how it finds files.
  */
-async function listDirectory(
+export async function listDirectory(
   handle: FileHandle,
   path: string,
 ): Promise<Buffer> {
-  const entries = await readdir(path, { withFileTypes: true });
-  const [held, current] = await Promise.all([
-    handle.stat({ bigint: true }),
-    stat(path, { bigint: true }).catch(() => undefined),
-  ]);
-  if (current?.dev !== held.dev || current.ino !== held.ino)
-    throw blocked(`${path} changed while it was being listed.`);
+  const held = await handle.stat({ bigint: true });
+  const same = async () => {
+    const current = await stat(path, { bigint: true }).catch(() => undefined);
+    return current?.dev === held.dev && current.ino === held.ino;
+  };
+  const changed = () => blocked(`${path} changed while it was being listed.`);
+  // Linux lists the opened directory itself. Node cannot list a directory
+  // by descriptor elsewhere (macOS /dev/fd/N is not one), so there the path
+  // must name the opened directory before and after it is read.
+  const byHandle = `/proc/self/fd/${handle.fd}`;
+  const fd = process.platform === "linux" && existsSync(byHandle);
+  if (!fd && !(await same())) throw changed();
+  const entries = await readdir(fd ? byHandle : path, { withFileTypes: true });
+  if (!(await same())) throw changed();
   const names = entries
     .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
     .sort();

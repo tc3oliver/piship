@@ -21,6 +21,15 @@ export function npmTimeoutMinutes(
     : DEFAULT_MINUTES;
 }
 
+/**
+ * How long to wait for a supervised npm run elsewhere (the build's
+ * background thread): a minute past npm's own limit, so the supervisor's
+ * timeout is what ends a hung npm.
+ */
+export function npmWaitLimitMs(env: NodeJS.ProcessEnv = process.env): number {
+  return (npmTimeoutMinutes(env) + 1) * 60_000;
+}
+
 const SUPERVISOR = `
 const { spawn, spawnSync } = require("node:child_process");
 const { writeSync } = require("node:fs");

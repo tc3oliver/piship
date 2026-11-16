@@ -10,6 +10,7 @@ import {
 import {
   NPM_TIMED_OUT,
   npmTimeoutMinutes,
+  npmWaitLimitMs,
   supervisedNpm,
 } from "./npm-process.js";
 import { runCommand } from "./pi-packages/command.js";
@@ -71,6 +72,14 @@ describe("npm under its supervisor", () => {
     expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "x" })).toBe(10);
     expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "100000" })).toBe(
       35791,
+    );
+  });
+
+  it("waits a minute past npm's own limit for a supervised npm elsewhere", () => {
+    expect(npmWaitLimitMs({})).toBe(11 * 60_000);
+    // A raised limit is honored, not cut at the former hour.
+    expect(npmWaitLimitMs({ PISHIP_NPM_TIMEOUT_MINUTES: "90" })).toBe(
+      91 * 60_000,
     );
   });
 
