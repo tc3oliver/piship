@@ -89,7 +89,15 @@ This walkthrough plays both the owner and the user on one machine, with a local 
    node packages/cli/dist/bin.js keygen ~/acme-keys/release.pem --id acme-release-2026
    ```
 
-2. Add `trust.bootstrap` under `updates` in the copied `piship.yaml` with the printed entries. Only public keys go in the manifest; the private keys stay out of the repository, CI logs, and any shared location, and the root key stays offline:
+2. Generate `trust.bootstrap` from the two printed public keys and put the printed `trust:` block under `updates` in the copied `piship.yaml`. Only public keys go in the manifest; the private keys stay out of the repository, CI logs, and any shared location, and the root key stays offline:
+
+   ```bash
+   node packages/cli/dist/bin.js trust-root init \
+     --key acme-root-2026=<root public key> --key acme-release-2026=<release public key> \
+     --root-keys acme-root-2026 --channel-keys acme-release-2026 --expires-days 365
+   ```
+
+   It prints a block of this shape:
 
    ```yaml
    updates:

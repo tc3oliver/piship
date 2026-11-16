@@ -158,7 +158,7 @@ export function migrateToV1alpha5(
     );
     if (json.updates?.source !== undefined)
       changes.push(
-        "updates.source is kept, but update fails closed and piship release refuses the distribution until updates.trust.bootstrap is configured",
+        "updates.source is kept, but update fails closed and piship release builds only update-disabled releases until updates.trust.bootstrap is configured",
       );
     return changes;
   }

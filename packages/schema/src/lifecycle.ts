@@ -471,7 +471,7 @@ export function channelTrustKeys(
  * without bootstrap trust (update fails closed), and a managed distribution
  * whose root and channel roles reuse a public key, as the compatibility
  * trust set of a migrated v1alpha4 manifest does. `piship release` refuses
- * both for a managed distribution.
+ * the second for a managed distribution.
  */
 export function updateTrustWarnings(
   mode: "personal" | "managed",
@@ -484,7 +484,7 @@ export function updateTrustWarnings(
     warnings.push({
       path: "updates.trust.bootstrap",
       message:
-        "updates.source is set without bootstrap trust, so update fails closed and piship release refuses the distribution; add updates.trust.bootstrap or remove updates.source",
+        "updates.source is set without bootstrap trust, so update fails closed and piship release builds an update-disabled release; add updates.trust.bootstrap or remove updates.source",
     });
   const shared = bootstrap ? sharedRoleKeyIds(bootstrap) : [];
   if (mode === "managed" && shared.length)
