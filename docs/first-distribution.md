@@ -44,7 +44,7 @@ $PISHIP init ./my_agent --id my-agent
 
 Without `--id` the error suggests the id to use. `init` writes a personal distribution; `--managed` writes a company template that asks for anything unlisted and opts into the `piship.routine@1` rule pack, so routine work (workspace edits, tests, builds, read-only git, search) does not prompt once `sandbox.required` is true.
 
-A personal distribution bundles Pi's search tools, `fd` and `rg` (`runtime.searchTools`), which `piship lock` downloads from GitHub. So `init` first checks, with a request of at most 3 seconds that follows `HTTPS_PROXY` and `NO_PROXY`, that github.com answers from where it runs. If it does not (an intranet without GitHub access, say), `init` leaves out `runtime.searchTools` and `https://github.com` in `release.sources`, so the first `lock` needs no download, and says so on stderr. Pi's `@` file completion and its find and grep tools then need `fd` and `rg` on `PATH`. Add the two entries later to bundle them ([bundled search tools](manifest.md#bundled-search-tools-v1alpha6)).
+A personal distribution bundles Pi's search tools, `fd` and `rg` (`runtime.searchTools`), which `piship lock` downloads from GitHub. So `init` first checks, with a request of at most 3 seconds that follows `HTTPS_PROXY` and `NO_PROXY`, that github.com answers from where it runs. If it does not (an intranet without GitHub access, say), `init` leaves out `runtime.searchTools` and `https://github.com` in `release.sources`, so the first `lock` needs no download, and says so on stderr. It checks registry.npmjs.org the same way and only says so on stderr when it does not answer, because the first build needs it (step 3). Pi's `@` file completion and its find and grep tools then need `fd` and `rg` on `PATH`. Add the two entries later to bundle them ([bundled search tools](manifest.md#bundled-search-tools-v1alpha6)).
 
 The manifest does not state `runtime.pi`. Left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest. State it only to refuse any other Pi.
 
@@ -54,7 +54,7 @@ The manifest does not state `runtime.pi`. Left out, the build uses the Pi versio
 $PISHIP validate my-agent/piship.yaml
 ```
 
-`validate` reads the manifest and its resources and writes nothing. It reports every problem it finds in one run, each with the line and column in the YAML, and suggests a fix for the common mistakes: a misspelled field names the nearest valid one, an unquoted `version: 1.0` says to quote it, and `schema: piship/v2` names the current schema. Warnings do not fail it: an unused entry under `variables`, a setting that fails on some machines, and a declared skill that Pi would skip (a skills directory with no `SKILL.md`, or a `SKILL.md` without a description) are printed on stderr and the exit code stays 0.
+`validate` reads the manifest and its resources and writes nothing. Every command that takes a manifest (`validate`, `lock`, `build`, `test`, `dev`) also takes its directory (`my-agent`), and with no argument uses `./piship.yaml`; options may come before or after it. It reports every problem it finds in one run, each with the line and column in the YAML, and suggests a fix for the common mistakes: a misspelled field names the nearest valid one, an unquoted `version: 1.0` says to quote it, and `schema: piship/v2` names the current schema. Warnings do not fail it: an unused entry under `variables`, a setting that fails on some machines, and a declared skill that Pi would skip (a skills directory with no `SKILL.md`, or a `SKILL.md` without a description) are printed on stderr and the exit code stays 0.
 
 ## 3. Test it
 
@@ -62,7 +62,9 @@ $PISHIP validate my-agent/piship.yaml
 $PISHIP test my-agent/piship.yaml
 ```
 
-`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed` and a short summary of what Pi loaded.
+`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming `build` and the install command.
+
+The first build or test downloads the runtime packages from the npm registry (registry.npmjs.org, or the registry npm is configured to use), which can take a few minutes; later builds use the cache. In a terminal it shows each step as it goes, such as `Installing the runtime packages (npm ci)...`.
 
 The first time, there is no `piship.lock` yet, so `test` writes one and says so (`Created <path>/piship.lock: none existed, so nothing was reviewed yet`). The lock records the digest of every resource and the pinned runtime; review it, and commit it with `piship.yaml`.
 
@@ -96,7 +98,7 @@ $PISHIP build my-agent/piship.yaml
 node dist/my-agent/piship.mjs install dist/my-agent
 ```
 
-The payload carries its own copy of the manager, so you run `piship.mjs` from the build output. Install places the command in `~/.local/bin` (set `PISHIP_BIN_HOME` to change it) and tells you if that directory is not on your `PATH`. State that `test` created is adopted by the first install, so no flag is needed.
+The payload carries its own copy of the manager, so you run `piship.mjs` from the build output. Pass the build output, not the source directory: `install my-agent` from the directory above the source says to build it first and names `dist/my-agent`, and so does `doctor my-agent` unless a distribution with that id is installed, which it then checks. Install places the command in `~/.local/bin` (set `PISHIP_BIN_HOME` to change it) and tells you if that directory is not on your `PATH`. State that `test` created is adopted by the first install, so no flag is needed.
 
 ```bash
 my-agent --help
@@ -107,7 +109,7 @@ A personal distribution signs in inside Pi: run `my-agent` and use `/login`. A m
 
 To install a rebuilt copy over the one you have, run the install again with `--replace`; its state is kept.
 
-Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too).
+Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too). Uninstall keeps the state and prints the `purge` command that deletes it. Commands that take an id (`uninstall`, `purge`, `update`) want `my-agent`, not a path: given `my-agent/piship.yaml` they say so and name the manifest's `app.id`.
 
 ## Where to go next
 

@@ -31,6 +31,7 @@ import {
   type InstallReceipt,
 } from "./receipt.js";
 import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
+import { pishipCommand } from "../invocation.js";
 
 export interface UninstallOptions {
   /**
@@ -261,7 +262,7 @@ function assertOwnedShim(
   if (editedCommandShim(path, target)) {
     if (options.removeEditedShim) return;
     throw new Error(
-      `Command shim ${path} was changed after ${id} installed it. It still runs this install's launcher, so it is PiShip's shim with edits, but uninstall does not delete a changed file on its own. If you no longer need the changes, run piship uninstall ${id} --remove-edited-shim (with --purge --yes too, if you were purging); otherwise restore the original shim or move the file aside, then run uninstall again. Nothing was removed.`,
+      `Command shim ${path} was changed after ${id} installed it. It still runs this install's launcher, so it is PiShip's shim with edits, but uninstall does not delete a changed file on its own. If you no longer need the changes, run ${pishipCommand()} uninstall ${id} --remove-edited-shim (with --purge --yes too, if you were purging); otherwise restore the original shim or move the file aside, then run uninstall again. Nothing was removed.`,
     );
   }
   throw new Error(

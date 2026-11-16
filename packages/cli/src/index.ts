@@ -40,6 +40,7 @@ import {
   initTrustRoot,
   inspection,
   installDistribution,
+  isDistributionId,
   isEncryptedPrivateKey,
   isLocalBuildOnThisHost,
   isUnqualifiedPayload,
@@ -95,6 +96,7 @@ import {
   type Manifest,
   checkManifestMigration,
   migrateManifestSource,
+  nearestField,
   readManifestSource,
 } from "@piship/schema";
 import { writeFileSync } from "node:fs";
@@ -133,15 +135,15 @@ const commands = Object.keys(summaries) as (keyof typeof summaries)[];
 /** Usage of the commands that take one target and fixed options. */
 export const simpleUsage: Record<string, string> = {
   init: "init <directory> [--personal | --managed] [--id <id>]",
-  dev: "dev <manifest> [--smoke]",
-  validate: "validate <manifest>",
-  lock: "lock <manifest>",
-  build: "build <manifest> [--rebuild] [--reclaim-staging]",
-  test: "test <manifest> [--model-request] [--json]",
+  dev: "dev [<manifest>] [--smoke]",
+  validate: "validate [<manifest>]",
+  lock: "lock [<manifest>]",
+  build: "build [<manifest>] [--rebuild] [--reclaim-staging]",
+  test: "test [<manifest>] [--model-request] [--json]",
   inspect: "inspect <manifest|artifact|id> [--json]",
   doctor: "doctor <artifact|id> [--json]",
   purge: "purge <id> --yes [--without-logout]",
-  migrate: "migrate <manifest> [--write | --check]",
+  migrate: "migrate [<manifest>] [--write | --check]",
   config: "config explain <manifest|artifact|id>",
 };
 /**
@@ -805,10 +807,84 @@ function runLauncherLive(
     });
   });
 }
-function artifactFor(target: string): string {
+/** A directory with piship.yaml and no built payload's metadata: a distribution's source. */
+function isDistributionSource(path: string): boolean {
+  return (
+    existsSync(join(path, "piship.yaml")) && !existsSync(join(path, "metadata"))
+  );
+}
+/** The commands that take a manifest: given nothing, ./piship.yaml; given a source directory, its piship.yaml. */
+const manifestCommands = [
+  "validate",
+  "lock",
+  "build",
+  "test",
+  "dev",
+  "migrate",
+  "inspect",
+];
+function manifestPath(target: string | undefined): string | undefined {
+  if (target === undefined)
+    return existsSync("piship.yaml") ? "piship.yaml" : undefined;
+  return isDistributionSource(target) ? join(target, "piship.yaml") : target;
+}
+/** Why a distribution's source directory is not something to install or check, and what to run. */
+function notBuilt(target: string, command: string): Error {
+  let id = "<id>";
+  try {
+    id = readManifest(join(target, "piship.yaml")).app.id;
+  } catch {
+    // The advice still holds with a placeholder.
+  }
+  const self = pishipCommand();
+  return new Error(
+    `${target} is the source of a distribution (it holds piship.yaml), not a built one. Build it with ${self} build ${shellArg(target)}, then run ${self} ${command} ${shellArg(join("dist", id))}.`,
+  );
+}
+function artifactFor(target: string, command: string): string {
   const path = resolve(target);
-  if (existsSync(path) && statSync(path).isDirectory()) return path;
+  if (existsSync(path) && statSync(path).isDirectory()) {
+    if (!isDistributionSource(path)) return path;
+    // `doctor my-agent` next to the source of the installed my-agent means the install.
+    if (isDistributionId(target)) {
+      try {
+        return readInstallReceipt(target).payload;
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !error.message.startsWith("No PiShip installation recorded")
+        )
+          throw error;
+      }
+    }
+    throw notBuilt(target, command);
+  }
   return installedReceipt(target).payload;
+}
+/**
+ * Options may come before the positional (`build --rebuild x`): the first
+ * positional argument, then the other arguments in their order, `valued`
+ * options with their value.
+ */
+function positionalFirst(
+  args: readonly string[],
+  valued: readonly string[] = [],
+): [string | undefined, ...string[]] {
+  const positional: string[] = [];
+  const options: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg.startsWith("-")) positional.push(arg);
+    else {
+      options.push(arg);
+      if (valued.includes(arg) && index + 1 < args.length) {
+        index += 1;
+        options.push(args[index] ?? "");
+      }
+    }
+  }
+  const [first, ...others] = positional;
+  return [first, ...others, ...options];
 }
 /** A target that is not an existing path is an installed id: say so when it is neither. */
 function installedReceipt(target: string) {
@@ -843,16 +919,20 @@ function parseInitOptions(
 }
 /**
  * Whether `piship init --personal` can bundle `fd` and `rg`, which `piship
- * lock` then downloads from GitHub. `PISHIP_INIT_PROBE=reachable|unreachable`
+ * lock` then downloads from GitHub, or, given `url`, whether that host (the
+ * npm registry) answers. `PISHIP_INIT_PROBE=reachable|unreachable`
  * answers in place of the network request: a test hook, so a test never
  * touches the network. Any other value probes.
  */
-async function searchToolsDownloadable(): Promise<boolean> {
+async function searchToolsDownloadable(url?: string): Promise<boolean> {
   const hook = process.env.PISHIP_INIT_PROBE;
   if (hook === "reachable") return true;
   if (hook === "unreachable") return false;
-  return probeSearchToolUpstream();
+  return probeSearchToolUpstream(url === undefined ? {} : { url });
 }
+/** Printed when `init` cannot reach the registry the first build installs the runtime from. */
+const NPM_REGISTRY_UNREACHABLE =
+  "registry.npmjs.org is not reachable from here. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails until npm can reach it or the registry npm is configured to use.";
 /** Printed when `init` leaves `runtime.searchTools` out. */
 const SEARCH_TOOLS_SKIPPED =
   "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.";
@@ -935,11 +1015,11 @@ export async function runCli(
   args: readonly string[],
   output: CliOutput,
 ): Promise<number> {
-  const [command, target, ...rest] = args;
+  const [command] = args;
   // `piship help [command]` is `piship [command] --help`.
   if (command === "help")
     return runCli(
-      target === undefined ? ["--help"] : [target, "--help"],
+      args[1] === undefined ? ["--help"] : [args[1], "--help"],
       output,
     );
   if (command === undefined || command === "--help" || command === "-h") {
@@ -954,7 +1034,10 @@ export async function runCli(
     return 0;
   }
   if (!commands.includes(command as (typeof commands)[number])) {
-    output.stderr(`Unknown command: ${command}. Run piship --help.`);
+    const near = nearestField(command, commands);
+    output.stderr(
+      `Unknown command: ${command}.${near ? ` Did you mean ${near}?` : ""} Run ${pishipCommand()} --help.`,
+    );
     return 2;
   }
   // Before anything touches the file system asynchronously: the pool size is
@@ -999,6 +1082,13 @@ export async function runCli(
       return 1;
     }
   }
+  const [given, ...rest] =
+    command === "config"
+      ? [args[1], ...args.slice(2)]
+      : positionalFirst(args.slice(1), command === "init" ? ["--id"] : []);
+  const target = manifestCommands.includes(command)
+    ? manifestPath(given)
+    : given;
   if (command === "config") {
     if (target !== "explain" || rest.length !== 1) {
       output.stderr(
@@ -1050,7 +1140,10 @@ export async function runCli(
           [],
           1,
           args.slice(1),
-        ),
+        ) ??
+          (!target && manifestCommands.includes(command)
+            ? "No piship.yaml in this directory; pass the manifest or its directory."
+            : undefined),
       ),
     );
     return 2;
@@ -1061,13 +1154,19 @@ export async function runCli(
       const { managed, id } = parseInitOptions(rest) ?? { managed: false };
       // Probed before anything is written; a directory that init will refuse
       // costs the probe at most its timeout.
-      const bundleSearchTools = managed || (await searchToolsDownloadable());
+      const [bundleSearchTools, npm] = managed
+        ? [true, true]
+        : await Promise.all([
+            searchToolsDownloadable(),
+            searchToolsDownloadable("https://registry.npmjs.org/"),
+          ]);
       const created = initDistribution(target, {
         managed,
         bundleSearchTools,
         ...(id === undefined ? {} : { id }),
       });
       if (!bundleSearchTools) output.stderr(SEARCH_TOOLS_SKIPPED);
+      if (!npm) output.stderr(NPM_REGISTRY_UNREACHABLE);
       const self = pishipCommand();
       const at = shellArg(created);
       output.stdout(
@@ -1121,6 +1220,7 @@ export async function runCli(
                 `Update transport ${manifest.lifecycle.updates.transport}${manifest.lifecycle.updates.transport === "http-allowed" ? ": the update channel may use plain HTTP to a private or internal host; integrity by signature only" : ""}.`,
               ]
             : []),
+          `Next: ${pishipCommand()} test ${shellArg(target)} writes piship.lock if needed, builds, and runs the acceptance smoke; ${pishipCommand()} lock ${shellArg(target)} only writes the lock.`,
         ].join("\n"),
       );
       for (const warning of [
@@ -1205,7 +1305,7 @@ export async function runCli(
           output.stderr(`Note: ${piPinReview(pin)}`);
       }
     } else if (command === "config") {
-      const configTarget = rest[0] ?? "";
+      const configTarget = manifestPath(rest[0]) ?? "";
       const path = resolve(configTarget);
       if (existsSync(path) && statSync(path).isFile()) {
         // Explain straight from the manifest; no artifact is assembled.
@@ -1243,7 +1343,7 @@ export async function runCli(
           ),
         );
       } else {
-        const artifact = artifactFor(configTarget);
+        const artifact = artifactFor(configTarget, command);
         const app = payloadApp(artifact);
         const result = runLauncher(artifact, app.command, [
           "config",
@@ -1256,6 +1356,7 @@ export async function runCli(
     } else if (command === "lock") {
       const progress = progressReporter(output.stderr);
       await downloadSearchToolArchives(target, progress ? { progress } : {});
+      const first = !existsSync(join(dirname(target), "piship.lock"));
       const written = lockManifest(target);
       const locked = readManifest(target);
       for (const warning of [
@@ -1264,7 +1365,9 @@ export async function runCli(
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       output.stdout(
-        `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
+        first
+          ? `Wrote ${written}\nNext: ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke; ${pishipCommand()} build ${shellArg(target)} assembles the payload to install.`
+          : `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
       );
     } else if (command === "build") {
       const progress = progressReporter(output.stderr);
@@ -1313,7 +1416,7 @@ export async function runCli(
               );
             })()
           : (() => {
-              const artifact = artifactFor(target);
+              const artifact = artifactFor(target, command);
               const lock = verifyPayload(artifact);
               return inspection(
                 lock,
@@ -1331,9 +1434,13 @@ export async function runCli(
       for (const warning of checkSkills(manifest, target))
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       await prepareLock(target, manifest, output);
-      await downloadLockedSearchTools(requireCurrentLock(target));
-      // Local iteration: the supply-chain gates run on build and release.
       const progress = progressReporter(output.stderr);
+      await downloadLockedSearchTools(
+        requireCurrentLock(target),
+        undefined,
+        progress ? { progress } : {},
+      );
+      // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,
         runtimeCache: true,
@@ -1384,11 +1491,11 @@ export async function runCli(
         output.stdout(
           rest.includes("--json")
             ? result.stdout.trim()
-            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed\n${formatSmokeSummary(result.stdout.trim())}`,
+            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed\n${formatSmokeSummary(result.stdout.trim())}\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`,
         );
       else if (!interactive) output.stdout(result.stdout.trim());
     } else if (command === "doctor") {
-      const artifact = artifactFor(target);
+      const artifact = artifactFor(target, command);
       const app = payloadApp(artifact);
       const lock = verifyPayload(artifact);
       const json = rest[0] === "--json";
@@ -1452,6 +1559,7 @@ async function runLifecycle(
 ): Promise<number> {
   const [first = "", second = ""] = positional;
   if (command === "install") {
+    if (isDistributionSource(resolve(first))) throw notBuilt(first, command);
     // The build said what it is; saying it again at the install that follows
     // on the same machine only repeats it.
     if (
@@ -1612,7 +1720,7 @@ async function runLifecycle(
     const removeEditedShim = flags.has("--remove-edited-shim");
     if (!flags.has("--purge"))
       output.stdout(
-        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}`,
+        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}\nTo delete it: ${pishipCommand()} purge ${shellArg(first)} --yes`,
       );
     else {
       if (!flags.has("--yes"))

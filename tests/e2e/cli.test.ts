@@ -388,6 +388,7 @@ describe("CLI", () => {
     });
     expect(acceptance.status, acceptance.stderr).toBe(0);
     expect(acceptance.stdout).toContain("Personal acceptance passed");
+    expect(acceptance.stdout).toMatch(/^Next: .* build .* install /m);
     process.stderr.write(acceptance.stderr);
     const built = join(temp, "dist", "mypi");
     expect(
@@ -792,7 +793,9 @@ describe("CLI", () => {
     );
     writeFileSync(targetPath, originalTarget);
     writeFileSync(inventoryPath, originalInventory);
-    expect(command("uninstall", "mypi").status).toBe(0);
+    const uninstalled = command("uninstall", "mypi");
+    expect(uninstalled.status).toBe(0);
+    expect(uninstalled.stdout).toMatch(/To delete it: .*purge mypi --yes/);
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(installedCommand)).toBe(false);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
