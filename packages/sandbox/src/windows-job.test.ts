@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawnManaged, spawnProcess } from "./process.js";
+import {
+  LANGUAGE_MODE_MARKER,
+  spawnManaged,
+  spawnProcess,
+  windowsJobError,
+} from "./process.js";
 import { windowsJobCommand } from "./windows-job.js";
 
 const target = {
@@ -211,3 +216,27 @@ describe.runIf(process.platform === "win32")(
     });
   },
 );
+
+describe("Constrained Language Mode", () => {
+  it("is checked with a cmdlet before Add-Type, and named in the error", () => {
+    const { args } = windowsJobCommand(target, host);
+    const script = Buffer.from(args.at(-1) ?? "", "base64").toString("utf16le");
+    const check = script.indexOf("$ExecutionContext.SessionState.LanguageMode");
+    expect(check).toBeGreaterThan(0);
+    expect(check).toBeLessThan(script.indexOf("Add-Type -TypeDefinition"));
+    expect(script).toContain(
+      `Write-Error -Message ('PISHIP_WINDOWS_JOB_ERROR: ${LANGUAGE_MODE_MARKER} '`,
+    );
+    // PowerShell 5.1 formats a Write-Error record over several lines.
+    expect(
+      windowsJobError(
+        `powershell : PISHIP_WINDOWS_JOB_ERROR: ${LANGUAGE_MODE_MARKER} ConstrainedLanguage\r\n    + CategoryInfo : NotSpecified`,
+      ),
+    ).toMatch(
+      /^PowerShell Constrained Language Mode blocked the Windows Job Object supervisor/,
+    );
+    expect(
+      windowsJobError("PISHIP_WINDOWS_JOB_ERROR: CreateProcess failed: 2"),
+    ).toBe("ENOENT or Windows Job Object startup failed");
+  });
+});
