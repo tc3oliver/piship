@@ -620,6 +620,16 @@ describe("validate", () => {
     expect(result.stderr).toContain(
       "Warning: variables[0]: ACME_UNUSED is declared but not referenced",
     );
+    // lock prints the same warnings validate does.
+    const stderr: string[] = [];
+    const locked = await runCli(["lock", join(temp, "piship.yaml")], {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    expect(locked, stderr.join("\n")).toBe(0);
+    expect(stderr.join("\n")).toContain(
+      "Warning: variables[0]: ACME_UNUSED is declared but not referenced",
+    );
   });
 
   it("prints no variable lines for plain URLs", async () => {

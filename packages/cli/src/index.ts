@@ -90,11 +90,7 @@ import {
 } from "@piship/core";
 import { formatError, PiShipError, redact } from "@piship/contracts";
 import {
-  inactivePackRules,
   launchWarnings,
-  unknownMcpServerRules,
-  unknownToolDenials,
-  unmatchablePathRules,
   runtimeVariableUse,
   referencedVariables,
   readManifest,
@@ -1484,11 +1480,9 @@ export async function runCli(
       const first = !existsSync(join(dirname(target), "piship.lock"));
       const written = lockManifest(target);
       const locked = readManifest(target);
+      // The same warnings validate prints; dev and test lock without them.
       for (const warning of [
-        ...unknownToolDenials(locked),
-        ...unknownMcpServerRules(locked),
-        ...unmatchablePathRules(locked),
-        ...inactivePackRules(locked),
+        ...launchWarnings(locked),
         ...unapprovedLoadWarnings(locked),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
@@ -1753,7 +1747,7 @@ async function runLifecycle(
       progress: progressReporter(output.stderr),
     });
     output.stdout(
-      `Built qualified release ${built.name} (built for channel ${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThe release is not signed yet: users get it through a signed channel or verified provenance.\nNext: piship verify-release ${built.archive} (ideally on another machine), then piship sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>`,
+      `Built qualified release ${built.name} (built for channel ${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThe release is not signed yet: users get it through a signed channel or verified provenance.\nNext: ${pishipCommand()} verify-release ${shellArg(built.archive)} (ideally on another machine), then ${pishipCommand()} sign-channel <channel-dir> ${shellArg(built.archive)} --channel candidate --key <private-key-file> --key-id <id>`,
     );
     // Where the runtime came from is no part of the release, so it goes to
     // stderr and to the build-info file beside the archive.
@@ -1767,7 +1761,7 @@ async function runLifecycle(
       progress: progressReporter(output.stderr),
     });
     output.stdout(
-      `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThe runtime release is not signed: publish it with verified provenance.\nNext: piship verify-release ${built.archive}, then piship pack <piship.yaml> --runtime ${built.archive} (one --runtime per target)`,
+      `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThe runtime release is not signed: publish it with verified provenance.\nNext: ${pishipCommand()} verify-release ${shellArg(built.archive)}, then ${pishipCommand()} pack <piship.yaml> --runtime ${shellArg(built.archive)} (one --runtime per target)`,
     );
     output.stderr(runtimeCacheLine(built.runtimeCache));
   } else if (

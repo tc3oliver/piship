@@ -257,6 +257,17 @@ describe("DoctorReport", () => {
     expect(report.render()).toContain(`  ! ${"c".padEnd(20)} d`);
   });
 
+  it("lines up an error's Action line under its value", () => {
+    const report = new DoctorReport("AcmeCode Doctor");
+    report
+      .section("Audit")
+      .bad("state", "AUDIT_UNAVAILABLE: sink down\nAction: Restore it");
+    expect(report.render().split("\n").slice(-2)).toEqual([
+      `  ✗ ${"state".padEnd(20)} AUDIT_UNAVAILABLE: sink down`,
+      `${" ".repeat(25)}Action: Restore it`,
+    ]);
+  });
+
   it("renders ASCII marks, in the same columns, where the console cannot show check marks", () => {
     const report = new DoctorReport("AcmeCode Doctor");
     const out = report.section("Gateway");

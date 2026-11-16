@@ -122,6 +122,19 @@ describe("install from a pack", () => {
       expect(tampered.status).not.toBe(0);
       expect(tampered.stderr).toContain("pins");
       expect(existsSync(command)).toBe(false);
+      // A mistyped path is named, with the archive to get and where it goes.
+      const missing = spawnSync("sh", [script], {
+        encoding: "utf8",
+        env: { ...env, PISHIP_RUNTIME_ARCHIVE: join(root, "absent.tar.gz") },
+      });
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain(
+        `PISHIP_RUNTIME_ARCHIVE is ${join(root, "absent.tar.gz")}, which does not exist.`,
+      );
+      expect(missing.stderr).toContain(`${basename(runtime)} (SHA-256 `);
+      expect(missing.stderr).toContain(
+        "Get it from whoever gave you this pack",
+      );
       copyFileSync(runtime, join(unpacked, basename(runtime)));
       const installed = spawnSync("sh", [script, "--use-existing-state"], {
         encoding: "utf8",
