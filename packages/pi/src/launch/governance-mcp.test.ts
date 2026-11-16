@@ -149,12 +149,14 @@ describe("launch MCP options", () => {
     await expect(claims()).rejects.toMatchObject({
       code: "IDENTITY_REQUIRED",
       message: expect.stringContaining("signed out"),
+      userAction: expect.stringContaining("again"),
     });
     // Another user signed in meanwhile: never this launch's old claim.
     fake.stored = metadata("u-2");
     await expect(claims()).rejects.toMatchObject({
       code: "IDENTITY_REQUIRED",
       message: expect.stringContaining("Another identity signed in"),
+      userAction: expect.stringContaining("again"),
     });
     expect(fake.expensive).toBe(0);
   });

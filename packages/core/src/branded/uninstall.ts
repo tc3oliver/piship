@@ -1,4 +1,4 @@
-// `<command> uninstall [--purge --yes]`: the branded way to remove an
+// `<command> uninstall [--without-logout] [--purge --yes]`: the branded way to remove an
 // installed distribution, without finding the release directory's piship.mjs.
 import { type Dirent, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ import { requireInstalled } from "./lifecycle.js";
 const FLAGS = ["--purge", "--yes", "--without-logout", "--remove-edited-shim"];
 /** The options `uninstall` accepts, as its usage and the branded help print them. */
 export const UNINSTALL_OPTIONS =
-  "[--purge --yes] [--without-logout] [--remove-edited-shim]";
+  "[--without-logout] [--purge --yes] [--remove-edited-shim]";
 
 /** Measuring a directory stops after this many entries or this long. */
 const MEASURE_ENTRIES = 50_000;

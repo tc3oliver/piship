@@ -395,8 +395,8 @@ export async function launchPiDistribution(
     const managedHelp = metadata.access
       ? `\n\nCommands:\n  ${accessCommands}\n  update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke]${yoloHelp}`
-        : `\n\nCommands:\n  doctor [--json] | version | uninstall ${UNINSTALL_OPTIONS}`;
+        ? `\n\nCommands:\n  doctor [--json] | models | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}`
+        : `\n\nCommands:\n  doctor [--json] | models | version | uninstall ${UNINSTALL_OPTIONS}`;
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );

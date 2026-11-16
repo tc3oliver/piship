@@ -82,6 +82,9 @@ export interface ChannelSelection {
   readonly notices: readonly string[];
 }
 
+const CHANNEL_MISMATCH_ACTION =
+  "Try again later; if it keeps failing, tell whoever publishes this distribution";
+
 /** Resolve the channel a user may use under the distribution's policy. */
 export function selectChannel(
   updates: UpdatesManifest,
@@ -838,6 +841,7 @@ async function performUpdate(
           throw new PiShipError(
             "INTEGRITY_FAILED",
             `The ${entry.version} pack does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
+            { userAction: CHANNEL_MISMATCH_ACTION },
           );
         candidate = {
           lock: composed.lock,
@@ -876,6 +880,7 @@ async function performUpdate(
           throw new PiShipError(
             "INTEGRITY_FAILED",
             `The ${entry.version} release does not match its signed channel entry: ${problems.map((item) => item[2]).join(", ")}`,
+            { userAction: CHANNEL_MISMATCH_ACTION },
           );
         assertSupportedPi(
           "release",
