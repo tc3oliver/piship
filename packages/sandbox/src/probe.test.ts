@@ -13,10 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useCompiledJobHelper } from "../../../tests/helpers/windows-job-helper.js";
 import { platformInjectedVariables } from "./activate.js";
 import type { SandboxAdapter } from "./adapter.js";
 import { probeSandbox } from "./probe.js";
 import type { SandboxProfile } from "./profile.js";
+
+useCompiledJobHelper();
 
 type Mutant =
   | "faithful"
