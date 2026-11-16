@@ -269,6 +269,45 @@ describe("governed built-in tools", () => {
     ).rejects.toThrow(/rule secrets/);
   });
 
+  it("lists a directory it may read, sorted with folders marked, and refuses one policy denies", async () => {
+    const { session, workspace, home } = await open();
+    mkdirSync(join(workspace, "listed", "sub"), { recursive: true });
+    writeFileSync(join(workspace, "listed", "b.txt"), "b");
+    writeFileSync(join(workspace, "listed", "a.txt"), "a");
+    mkdirSync(join(workspace, "empty"));
+    symlinkSync(
+      join(home, ".ssh"),
+      join(workspace, "keys"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const read = tool(governedTools(session, workspace), "read");
+    expect(text(await run(read, { path: "listed" }))).toBe(
+      "a.txt\nb.txt\nsub/\n",
+    );
+    expect(text(await run(read, { path: "empty" }))).toContain(
+      "(empty directory)",
+    );
+    // Decided as filesystem.read on the directory, through its real path.
+    await expect(run(read, { path: join(home, ".ssh") })).rejects.toThrow(
+      /rule secrets/,
+    );
+    await expect(run(read, { path: "keys" })).rejects.toThrow(/rule secrets/);
+  });
+
+  it("lists a directory in Plan mode, where there is no shell", async () => {
+    const { session, workspace } = await open();
+    session.workflowMode = "plan";
+    const hooks = load(governanceHooks(session));
+    expect(
+      await hooks.handlers.get("tool_call")?.(
+        { toolName: "read", input: { path: "." } },
+        context(),
+      ),
+    ).toBeUndefined();
+    const read = tool(governedTools(session, workspace), "read");
+    expect(text(await run(read, { path: "." }))).toContain("notes.txt");
+  });
+
   it("never reads a file swapped in through a directory symlink after the decision", async () => {
     const { session, workspace, home } = await open([], {
       userRules: [

@@ -11,6 +11,7 @@ import {
   type FileHandle,
   mkdir,
   open,
+  readdir,
   readlink,
   stat,
 } from "node:fs/promises";
@@ -90,7 +91,7 @@ export const PLAN_RULE = "piship-workflow.plan";
  * session, so Plan mode explores with `read` and leaves the shell to Build.
  */
 const PLAN_SHELL_REFUSAL =
-  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool; the user can switch to Build mode with /build to run it.";
+  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool (it also lists a directory); the user can switch to Build mode with /build to run it.";
 /** Told to the model after a Plan-mode refusal, so it does not loop on it. */
 const PLAN_NO_RETRY =
   "Do not retry it or work around Plan mode with another tool; finish the plan and tell the user it needs Build mode.";
@@ -669,6 +670,38 @@ async function readBounded(
   return Buffer.concat(chunks, total);
 }
 
+/** Most entries a directory read lists. */
+export const DIRECTORY_LIST_LIMIT = 2000;
+
+/**
+ * A directory given to the read tool, listed: its entry names sorted, a
+ * folder marked with a trailing slash. It is the opened directory that was
+ * decided as `filesystem.read`, or the listing is refused. Plan mode has no
+ * shell, so this is how it finds files.
+ */
+async function listDirectory(
+  handle: FileHandle,
+  path: string,
+): Promise<Buffer> {
+  const entries = await readdir(path, { withFileTypes: true });
+  const [held, current] = await Promise.all([
+    handle.stat({ bigint: true }),
+    stat(path, { bigint: true }).catch(() => undefined),
+  ]);
+  if (current?.dev !== held.dev || current.ino !== held.ino)
+    throw blocked(`${path} changed while it was being listed.`);
+  const names = entries
+    .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+    .sort();
+  const lines = names.slice(0, DIRECTORY_LIST_LIMIT);
+  if (names.length > DIRECTORY_LIST_LIMIT)
+    lines.push(
+      `[${names.length - DIRECTORY_LIST_LIMIT} more entries not shown; read a subfolder]`,
+    );
+  if (!names.length) lines.push("(empty directory)");
+  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
+}
+
 /** Open for writing without following a final symlink; create only when absent. */
 async function openFile(path: string, flags: number): Promise<FileHandle> {
   const plain = flags | NOFOLLOW | NONBLOCK;
@@ -1243,6 +1276,8 @@ export function governedTools(
       constants.O_RDONLY,
     );
     try {
+      if ((await handle.stat()).isDirectory())
+        return await listDirectory(handle, absolute(path));
       return await readBounded(handle, path, tool);
     } finally {
       await handle.close();
