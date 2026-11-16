@@ -240,3 +240,24 @@ export function e2eShard(
   }
   return shards[index - 1]?.paths ?? [];
 }
+
+/**
+ * The fixtures global setup prebuilds: those of the files the run selected
+ * (`selected`, the files a filename filter matched, or every file), split as
+ * the sequencer splits them when `shard` is set. Undefined, meaning every
+ * fixture, for a full run without a filter or shard, or when a filter
+ * matched no file (a pattern this split cannot resolve builds as before).
+ */
+export function prebuildFixtures(
+  all: readonly string[],
+  selected: readonly string[] | undefined,
+  shard: { readonly index: number; readonly count: number } | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Set<LifecycleFixture> | undefined {
+  if (selected?.length === 0) return undefined;
+  if (!selected && !shard) return undefined;
+  const files = selected ?? all;
+  return e2eFixtures(
+    shard ? e2eShard(files, shard.index, shard.count, platform) : files,
+  );
+}
