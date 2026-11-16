@@ -4,7 +4,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { manifestContainment, unenforcedRules } from "@piship/policy";
+import {
+  manifestContainment,
+  unenforcedAction,
+  unenforcedRules,
+} from "@piship/policy";
 import {
   defaultMcpServerClass,
   type ReleaseManifest,
@@ -301,6 +305,7 @@ export function checkPolicyGates(lock: DistributionLock): void {
       "POLICY_UNENFORCEABLE",
       "policy",
       unenforced.map((item) => item.message).join("; "),
+      unenforcedAction(unenforced),
     );
   const routes = virtualRouteProblems(lock);
   if (routes.length)

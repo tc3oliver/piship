@@ -303,6 +303,7 @@ describe("effective model catalog (§10)", () => {
     await expect(distribution.activate()).rejects.toMatchObject({
       code: "MODEL_UNAVAILABLE",
       message: "No allowed model is currently available",
+      userAction: expect.stringContaining("Try again later"),
     });
   });
 

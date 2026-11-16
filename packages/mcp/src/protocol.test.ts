@@ -73,7 +73,10 @@ describe("JSON-RPC validation", () => {
     const client = new JsonRpcClient(transport, "bad");
     await expect(
       client.request("tools/list", undefined, { timeoutMs: 1000 }),
-    ).rejects.toMatchObject({ code: "MCP_UNHEALTHY" });
+    ).rejects.toMatchObject({
+      code: "MCP_UNHEALTHY",
+      userAction: expect.stringContaining("MCP section of doctor"),
+    });
     expect(client.closed).toBeInstanceOf(PiShipError);
   });
 

@@ -53,6 +53,9 @@ describe("the launcher when the release's package.json is damaged", () => {
       expect(check.status, check.stderr).toBe(0);
       expect(source).toContain('error?.code !== "ERR_INVALID_PACKAGE_CONFIG"');
       expect(source).toContain(`piship repair ${ID} <release archive>`);
+      expect(source).toContain(
+        `node <extracted release>/payload/piship.mjs repair ${ID} <extracted release>`,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -2809,6 +2809,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       updateDistribution(ID, { runCheck: fakeRun, source: join(temp(), "x") }),
     );
     expect(missing.message).toMatch(/does not exist/);
+    expect(missing.userAction).toMatch(/--from or updates\.source/);
     const cwd = process.cwd();
     process.chdir(dirname(channelDir));
     try {
@@ -3072,6 +3073,9 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     );
     expect(error.code).toBe("ROLLBACK_FAILED");
     expect(error.message).toMatch(/has no retained release/);
+    expect(error.userAction).toMatch(
+      /run \S+ update to move to another version/,
+    );
   });
 
   it("leaves retained-file auditing to explicit verification", async () => {

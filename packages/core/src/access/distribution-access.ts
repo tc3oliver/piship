@@ -1820,6 +1820,7 @@ export class DistributionAccess {
           "No allowed model is currently available",
           {
             component: "inference",
+            userAction: `Try again later; if it persists, ask your administrator to check the gateway serves ${config.allowedModels.join(", ") || "the allowed models"}`,
             sanitizedDetail: {
               models: models.map((model) => ({
                 id: model.id,
@@ -1832,7 +1833,10 @@ export class DistributionAccess {
         throw new PiShipError(
           "MODEL_DENIED",
           "No default model is configured",
-          { component: "inference" },
+          {
+            component: "inference",
+            userAction: `Start ${this.options.app.command} --model <model> with one of: ${allowed.join(", ")}`,
+          },
         );
       let resolved: ModelDefinition | undefined;
       try {
@@ -1877,7 +1881,12 @@ export class DistributionAccess {
         throw new PiShipError(
           "MODEL_DENIED",
           `Model ${requested} is not allowed by this distribution`,
-          { component: "inference" },
+          {
+            component: "inference",
+            userAction: config.allowedModels.length
+              ? `Choose one of: ${config.allowedModels.join(", ")}`
+              : `Ask the distribution owner to allow a model; ${this.options.app.command} models lists what is configured`,
+          },
         );
       const resolved = await inference.resolveModel(requested, {
         models: [],

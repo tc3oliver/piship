@@ -395,7 +395,10 @@ describe("McpGovernor over stdio", () => {
       ?.call({ id: "1" })
       .catch((e: unknown) => e as PiShipError);
     expect(error).toBeInstanceOf(PiShipError);
-    expect(error).toMatchObject({ code: "MCP_DENIED" });
+    expect(error).toMatchObject({
+      code: "MCP_DENIED",
+      userAction: expect.stringContaining("Ask the distribution owner"),
+    });
     expect(authorize).toHaveBeenLastCalledWith({
       action: "mcp.tool.call",
       resource: "docs:delete_document",
