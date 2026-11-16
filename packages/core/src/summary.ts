@@ -1,5 +1,6 @@
 // Human-readable summaries of what `piship inspect`, `test`, and `doctor`
 // report. Their full JSON stays available behind `--json`.
+import { isAbsolute, relative } from "node:path";
 import { channelTrustFromLock } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
 import { keyFingerprint } from "./signing.js";
@@ -174,6 +175,7 @@ interface Smoke {
   readonly piVersion?: string;
   readonly sessionId?: string;
   readonly resumed?: boolean;
+  readonly distributionDir?: string;
   readonly instructions?: readonly string[];
   readonly skills?: readonly string[];
   readonly extensions?: number;
@@ -220,8 +222,18 @@ export function formatSmokeSummary(output: string): string {
     const at = slashed.lastIndexOf("/extensions/");
     return at < 0 ? base(slashed) : slashed.slice(at + "/extensions/".length);
   };
+  // A distribution file is named by its declared path, any other from the
+  // working directory, so two files of one name stay apart.
+  const instruction = (path: string) => {
+    const dir = smoke.distributionDir;
+    if (!dir) return base(path);
+    const inside = relative(dir, path);
+    if (inside && !inside.startsWith("..") && !isAbsolute(inside))
+      return inside.replaceAll("\\", "/").replace(/^resources\//, "");
+    return relative(process.cwd(), path).replaceAll("\\", "/") || base(path);
+  };
   const loaded = [
-    ["instructions", (smoke.instructions ?? []).map(base)],
+    ["instructions", (smoke.instructions ?? []).map(instruction)],
     ["skills", smoke.skills ?? []],
     ["extensions", (smoke.extensionPaths ?? []).map(extension)],
     ["prompts", smoke.prompts ?? []],

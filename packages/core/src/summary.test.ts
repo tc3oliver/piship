@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DistributionLock } from "./lock-schema.js";
 import {
@@ -46,6 +48,24 @@ describe("formatSmokeSummary", () => {
       "policy acme, project unknown, sandbox os, audit healthy, 1 resource(s) not loaded",
     );
     expect(text).toMatch(/mcp\s+notes healthy/);
+  });
+
+  it("names instructions by declared path or from the working directory", () => {
+    const dist = join(tmpdir(), "dist", "mypi");
+    const text = formatSmokeSummary(
+      JSON.stringify({
+        ...smoke,
+        distributionDir: dist,
+        instructions: [
+          join(dist, "resources", "resources", "AGENTS.md"),
+          join(process.cwd(), "AGENTS.md"),
+          join(process.cwd(), "docs", "AGENTS.md"),
+        ],
+      }),
+    );
+    expect(text).toContain(
+      "instructions 3: resources/AGENTS.md, AGENTS.md, docs/AGENTS.md",
+    );
   });
 
   it("names extensions from their folder, caps long lists, and lists packages", () => {

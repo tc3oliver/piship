@@ -440,6 +440,8 @@ function loadProject(
     case "instructions":
     case "instruction-import":
     case "system-prompt":
+      if (session.loader.instructions.some((item) => item.path === path))
+        return;
       session.loader.instructions.push({
         path,
         content: readFileSync(path, "utf8"),
