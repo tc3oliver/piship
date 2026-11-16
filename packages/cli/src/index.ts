@@ -423,8 +423,8 @@ export const lifecycleCommands: Record<
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive|pack>... --channel <name> --key <private-key-file> --key-id <id> [--key <private-key-file> --key-id <id>]... [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>] [--runtime <archive|dir>]...",
-    positional: [2, 64],
+      "sign-channel <channel-dir> [<archive|pack>...] --channel <name> --key <private-key-file> --key-id <id> [--key <private-key-file> --key-id <id>]... [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>] [--runtime <archive|dir>]...",
+    positional: [1, 64],
     values: [
       "--channel",
       "--passphrase-env",
@@ -608,7 +608,7 @@ export function publishSteps(
     `  1. the archives this run added: ${added.length ? added.join(", ") : "none"}${kept.length ? ` (already in the channel directory before this run; upload only if not yet published: ${kept.join(", ")})` : ""}`,
     `  2. ${channel}.json.sig and ${channel}.json together`,
     "Remove an older archive only after no published channel lists it.",
-    `Sign ${channel} again by ${by}: clients refuse it after ${expires}.`,
+    `Sign ${channel} again by ${by}: clients refuse it after ${expires}. sign-channel with no archive re-signs it.`,
   ].join("\n");
 }
 
@@ -636,7 +636,7 @@ export function rootPublishSteps(
     "Never delete or replace a published root.",
     ...(addedChannelKeys.length
       ? [
-          `Then sign each channel with the new channel key: ${pishipCommand()} sign-channel ${directory} <archive>... --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]}`,
+          `Then sign each channel with the new channel key: ${pishipCommand()} sign-channel ${directory} --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]} (with no archive it re-signs what the channel lists)`,
         ]
       : []),
     `Publish the next root by ${by}: clients stop updating after ${expires}.`,
