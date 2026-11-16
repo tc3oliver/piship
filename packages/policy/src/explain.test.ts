@@ -11,7 +11,6 @@ import {
   decisionToJSON,
   denialHint,
   formatDecision,
-  formatDecisionJSON,
 } from "./index.js";
 
 const base = realpathSync(
@@ -65,7 +64,7 @@ describe("formatDecision", () => {
     );
   });
   it("renders a JSON form", () => {
-    const json = JSON.parse(formatDecisionJSON(explanation));
+    const json = JSON.parse(JSON.stringify(decisionToJSON(explanation)));
     expect(json).toMatchObject({
       effect: "deny",
       ruleId: "acme.docs.destructive",
@@ -145,7 +144,7 @@ describe("an ask a task grant approves", () => {
     expect(text).toMatch(/^GRANT-APPROVED\n/);
     expect(text).toContain("Effect:\n  ask (approved by task grant a1b2)");
     expect(
-      JSON.parse(formatDecisionJSON(ask, { grantId: "a1b2" })),
+      JSON.parse(JSON.stringify(decisionToJSON(ask, { grantId: "a1b2" }))),
     ).toMatchObject({ effect: "ask", grantId: "a1b2" });
     const allow = new PolicyEngine({
       policy: makePolicy({ default: "allow" }),
@@ -153,7 +152,7 @@ describe("an ask a task grant approves", () => {
     }).explain({ action: "model.select", resource: "m" });
     expect(formatDecision(allow, { grantId: "a1b2" })).toMatch(/^ALLOWED\n/);
     expect(
-      JSON.parse(formatDecisionJSON(allow, { grantId: "a1b2" })),
+      JSON.parse(JSON.stringify(decisionToJSON(allow, { grantId: "a1b2" }))),
     ).not.toHaveProperty("grantId");
   });
 });

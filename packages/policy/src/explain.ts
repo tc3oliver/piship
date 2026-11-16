@@ -178,13 +178,6 @@ export function decisionToJSON(
   };
 }
 
-export function formatDecisionJSON(
-  explanation: PolicyExplanation,
-  options: DecisionFormatOptions = {},
-): string {
-  return JSON.stringify(decisionToJSON(explanation, options), null, 2);
-}
-
 /**
  * One sentence on how to change a blocking decision, chosen by the layer of
  * the deciding rule. A personal hint may name the user's own policy file (an

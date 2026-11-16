@@ -27,8 +27,6 @@ import {
   AuditLog,
   type AuditSinkConfig,
   auditLogFiles,
-  describeAuditStatus,
-  formatAuditFailureMatrix,
   requiredAuditLoss,
 } from "./index.js";
 
@@ -680,7 +678,6 @@ describe("AuditLog http sink", () => {
       delivered: 2,
     });
     expect(() => log.assertAvailable()).not.toThrow();
-    expect(describeAuditStatus(status).join("\n")).toContain("dropped 2");
 
     collector.status = 200;
     log.emit({ event: "tool.denied", user: null, session: null });
@@ -792,7 +789,6 @@ describe("AuditLog http sink", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
     }
-    expect(describeAuditStatus(log.status()).join("\n")).toMatch(/fail closed/);
     // Emission itself never throws.
     expect(() =>
       log.emit({ event: "tool.denied", user: null, session: null }),
@@ -954,7 +950,6 @@ describe("AuditLog disabled and emission safety", () => {
     await log.flush();
     expect(log.status()).toEqual({ state: "disabled", sinks: [], rejected: 0 });
     expect(() => log.assertAvailable()).not.toThrow();
-    expect(describeAuditStatus(log.status())).toEqual(["audit: disabled"]);
     await log.close();
   });
 
@@ -974,8 +969,10 @@ describe("AuditLog disabled and emission safety", () => {
 
   it("documents the failure matrix", () => {
     expect(AUDIT_FAILURE_MATRIX.length).toBeGreaterThan(4);
-    const text = formatAuditFailureMatrix();
-    expect(text).toContain("AUDIT_UNAVAILABLE");
-    expect(text.split("\n")).toHaveLength(AUDIT_FAILURE_MATRIX.length);
+    expect(
+      AUDIT_FAILURE_MATRIX.some((rule) =>
+        rule.behavior.includes("AUDIT_UNAVAILABLE"),
+      ),
+    ).toBe(true);
   });
 });

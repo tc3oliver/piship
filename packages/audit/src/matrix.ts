@@ -1,5 +1,3 @@
-import type { AuditStatus } from "./log.js";
-
 export interface AuditFailureRule {
   readonly condition: string;
   readonly sink: "optional" | "required" | "any";
@@ -100,30 +98,3 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
     governedActions: "fail closed",
   },
 ]);
-
-/** Plain-text rendering of the failure matrix for docs and doctor. */
-export function formatAuditFailureMatrix(): string {
-  return AUDIT_FAILURE_MATRIX.map(
-    (rule) =>
-      `${rule.sink} sink, ${rule.condition}: ${rule.behavior} [log ${rule.logState}; governed actions ${rule.governedActions}]`,
-  ).join("\n");
-}
-
-/** Doctor lines for an audit status. Messages are already redacted. */
-export function describeAuditStatus(status: AuditStatus): string[] {
-  if (status.state === "disabled") return ["audit: disabled"];
-  const lines = [`audit: ${status.state}`];
-  for (const sink of status.sinks) {
-    const kind = `${sink.type}, ${sink.required ? "required" : "optional"}`;
-    let line = `audit sink ${sink.id} (${kind}): ${sink.state}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}`;
-    if (sink.lastError) line += `; last error: ${sink.lastError}`;
-    lines.push(line);
-  }
-  if (status.rejected)
-    lines.push(`audit: ${status.rejected} malformed event(s) rejected`);
-  if (status.state === "failed")
-    lines.push(
-      "audit: governed actions fail closed (AUDIT_UNAVAILABLE) until the required sink recovers",
-    );
-  return lines;
-}
