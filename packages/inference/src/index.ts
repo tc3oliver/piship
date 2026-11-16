@@ -192,6 +192,9 @@ export function isUpstreamProviderError(body: unknown): boolean {
 /** The upper bound on a retry time relayed from the upstream provider. */
 const MAX_UPSTREAM_RETRY_AFTER_MS = 60 * 60 * 1000;
 
+const CHECK_GATEWAY =
+  "Ask your administrator to check that inference.baseUrl points at a healthy OpenAI-compatible gateway";
+
 /**
  * Map a gateway answer to the error contract and retry rules. `body`, the
  * parsed answer when there is one, tells a provider's 401 or 403 relayed by
@@ -239,6 +242,8 @@ export function classifyGatewayStatus(
       "The inference gateway denied this model or user",
       {
         component: "inference",
+        userAction:
+          "Choose another allowed model, or ask your administrator for access to this one",
       },
     );
   if (status === 404)
@@ -247,6 +252,8 @@ export function classifyGatewayStatus(
       "The inference gateway does not serve this model",
       {
         component: "inference",
+        userAction:
+          "Choose another allowed model, or try again later; if it persists, ask your administrator to check the gateway",
       },
     );
   if (status === 429)
@@ -255,6 +262,8 @@ export function classifyGatewayStatus(
       "The inference gateway is rate limiting requests",
       {
         component: "inference",
+        userAction:
+          "Wait, then try again; if it keeps happening, ask your administrator about the gateway's rate limits",
         retryable: true,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       },
@@ -273,6 +282,7 @@ export function classifyGatewayStatus(
     `The inference gateway returned HTTP ${status}`,
     {
       component: "inference",
+      userAction: CHECK_GATEWAY,
     },
   );
 }
@@ -347,6 +357,7 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
         "The inference gateway model list is not JSON",
         {
           component: "inference",
+          userAction: CHECK_GATEWAY,
         },
       );
     }
@@ -356,6 +367,7 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
         "The inference gateway model list has no data array",
         {
           component: "inference",
+          userAction: CHECK_GATEWAY,
         },
       );
     return body.data
@@ -426,6 +438,7 @@ export class PiNativeInferenceProvider implements InferenceProvider {
         `Model ${requested} is not in the owner allowlist`,
         {
           component: "inference",
+          userAction: `Choose one of: ${allowed.join(", ")}`,
         },
       );
     const [provider = "", ...rest] = requested.split("/");

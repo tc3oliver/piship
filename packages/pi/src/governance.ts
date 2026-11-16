@@ -119,12 +119,18 @@ export interface GovernedRuntime {
   withAccessAction(message: unknown): unknown;
 }
 
-function denied(provider: string, id: string, reason?: string): PiShipError {
+function denied(
+  provider: string,
+  id: string,
+  reason?: string,
+  command?: string,
+): PiShipError {
   return new PiShipError(
     "MODEL_DENIED",
     `Model ${provider}/${id} is not allowed by this distribution${reason ? ` (${reason})` : ""}`,
     {
       component: "inference",
+      userAction: `Choose an allowed model with /model${command ? `; ${command} models lists them` : ""}`,
     },
   );
 }
@@ -294,7 +300,7 @@ export function governModelRuntime(
     detail?: Readonly<Record<string, string>>,
   ): never => {
     policy?.denied?.(action, model.provider, model.id, detail);
-    throw denied(model.provider, model.id, detail?.reason);
+    throw denied(model.provider, model.id, detail?.reason, managed?.command);
   };
   const guard = (model: ModelRef & { api?: string; baseUrl?: string }) => {
     const rule = isVirtual(model) ? undefined : routeOf(model);
@@ -797,7 +803,10 @@ export function acceptanceFailure(message: unknown): PiShipError {
     return new PiShipError(
       "REQUEST_CANCELLED",
       `The acceptance model request was cancelled: ${detail}`,
-      { component: "inference" },
+      {
+        component: "inference",
+        userAction: "Run the command again and let the request finish",
+      },
     );
   const failure = requestFailure(message);
   const transport =
@@ -811,6 +820,7 @@ export function acceptanceFailure(message: unknown): PiShipError {
       {
         component: "inference",
         retryable: true,
+        userAction: "Check the network connection, then try again",
         sanitizedDetail: { transport },
       },
     );
@@ -824,7 +834,9 @@ export function acceptanceFailure(message: unknown): PiShipError {
     {
       component: "inference",
       retryable: classified?.retryable ?? false,
-      ...(classified?.userAction ? { userAction: classified.userAction } : {}),
+      userAction:
+        classified?.userAction ??
+        "Try again; if it keeps failing, ask your administrator to check the gateway",
     },
   );
 }

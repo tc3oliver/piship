@@ -12,6 +12,12 @@ import {
 import { sha256File } from "../archive.js";
 import type { ChannelRelease } from "./channel.js";
 
+const CHECK_REACH =
+  "Check the network connection and that the update source is up, then run update again";
+const FIX_REDIRECTS =
+  "Ask the distribution owner to fix the update source's redirects";
+const CHECK_SOURCE =
+  "Check that --from or updates.source names the directory that holds the channel files and archives";
 /** Channel metadata and signatures are small; anything larger is refused. */
 const MAX_METADATA_BYTES = 1024 * 1024;
 const METADATA_TIMEOUT_MS = 30_000;
@@ -93,7 +99,7 @@ async function saveBody(
       throw new PiShipError(
         "UPDATE_FAILED",
         `Update source stopped sending ${name} before the deadline`,
-        { retryable: true },
+        { retryable: true, userAction: CHECK_REACH },
       );
     // A local failure writing the file (a full disk) is not the network's.
     if (failure.syscall !== undefined && failure.code !== undefined)
@@ -154,7 +160,7 @@ async function fetchSource(
         throw new PiShipError(
           "UPDATE_FAILED",
           `Update source did not answer for ${name} within ${timeout / 1000} s`,
-          { retryable: true },
+          { retryable: true, userAction: CHECK_REACH },
         );
       throw error;
     }
@@ -171,11 +177,16 @@ async function fetchSource(
         throw new PiShipError(
           "UPDATE_FAILED",
           `Update source answered HTTP ${response.status} for ${name} without a valid Location`,
+          { userAction: FIX_REDIRECTS },
         );
       if (url.protocol === "https:" && next.protocol === "http:")
         throw new PiShipError(
           "UPDATE_FAILED",
           `Update source redirected ${name} from https to http://${next.host}; PiShip never follows an https update source to plain HTTP`,
+          {
+            userAction:
+              "Ask the distribution owner to serve the update source over HTTPS throughout",
+          },
         );
       if (next.origin !== url.origin)
         throw new PiShipError(
@@ -190,6 +201,7 @@ async function fetchSource(
         throw new PiShipError(
           "UPDATE_FAILED",
           `Update source redirected ${name} more than ${MAX_REDIRECTS} times`,
+          { userAction: FIX_REDIRECTS },
         );
       checkSourceUrl(next, transport);
       target = next;
@@ -248,7 +260,9 @@ export async function readSourceFile(
   }
   const path = join(resolve(source), name);
   if (!existsSync(path))
-    throw new PiShipError("UPDATE_FAILED", `Update source has no ${name}`);
+    throw new PiShipError("UPDATE_FAILED", `Update source has no ${name}`, {
+      userAction: CHECK_SOURCE,
+    });
   if (statSync(path).size > MAX_METADATA_BYTES)
     throw tooLarge(name, MAX_METADATA_BYTES);
   return readFileSync(path);
@@ -366,6 +380,7 @@ export function checkUpdateSource(
     throw new PiShipError(
       "UPDATE_FAILED",
       `Update source directory ${directory} does not exist`,
+      { userAction: CHECK_SOURCE },
     );
   return directory;
 }

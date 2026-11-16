@@ -268,7 +268,7 @@ try {
   // Node reads the payload's package.json before any PiShip code runs; a damaged one is a damaged release, not a crash.
   if (error?.code !== "ERR_INVALID_PACKAGE_CONFIG") throw error;
   console.error("INTEGRITY_FAILED: The installed release of ${id} is damaged: " + String(error.message).split("\\n")[0]);
-  console.error("Action: Restore it from a trusted release of the same version with: piship repair ${id} <release archive>");
+  console.error("Action: Restore it from a trusted release of the same version with: piship repair ${id} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>");
   process.exit(1);
 }
 `);

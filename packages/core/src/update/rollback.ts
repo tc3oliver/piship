@@ -66,11 +66,15 @@ async function performRollback(
       throw new PiShipError(
         "ROLLBACK_FAILED",
         `${receipt.app.id} has no retained release to roll back to`,
+        {
+          userAction: `Only a release a previous update kept can be rolled back to; run ${receipt.app.command} update to move to another version`,
+        },
       );
     if (compareVersions(receipt.previous, receipt.active) > 0)
       throw new PiShipError(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} is newer than the active ${receipt.active}; use update instead`,
+        { userAction: `Run ${receipt.app.command} update` },
       );
     options.progress?.(`Verifying the retained ${receipt.previous} release`);
     let target: DistributionLock;
@@ -84,7 +88,7 @@ async function performRollback(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} failed verification: ${(error as Error).message}`,
         {
-          userAction: `The damaged release is not activated. Restore it with: piship repair ${id} <release archive of ${receipt.previous}>, then roll back again`,
+          userAction: `The damaged release is not activated. Restore it with: piship repair ${id} <release archive of ${receipt.previous}>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>; then roll back again`,
         },
       );
     }
@@ -92,6 +96,9 @@ async function performRollback(
       throw new PiShipError(
         "ROLLBACK_FAILED",
         `The retained release uses command ${target.app.command}; reinstall instead`,
+        {
+          userAction: `To go back to ${receipt.previous}, reinstall it: piship uninstall ${id} (state is kept), then piship install <release archive of ${receipt.previous}>`,
+        },
       );
     options.faults?.("verified");
     const stateDir = runtimeStateDirectory({ value: id });
@@ -116,6 +123,9 @@ async function performRollback(
           .filter((item) => item.verdict === "unsupported")
           .map((item) => `${item.name} (${item.reason})`)
           .join("; ")}`,
+        {
+          userAction: `Keep using ${receipt.active}; rolling back would lose data the retained release cannot read. Ask the distribution owner if you need an older version`,
+        },
       );
     const notices = migration.items
       .filter((item) => item.verdict === "requires-review")

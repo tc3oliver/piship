@@ -115,3 +115,10 @@ export function unenforcedRules(
     }
   return findings;
 }
+
+/** The next step for unacknowledged unenforceable findings. */
+export function unenforcedAction(
+  findings: readonly UnenforcedFinding[],
+): string {
+  return `Remove each rule it names, or add ${findings.map((item) => `"${item.key}"`).join(", ")} to policy.acknowledgeUnenforced to record that the gap is known`;
+}

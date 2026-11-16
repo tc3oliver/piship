@@ -194,6 +194,15 @@ describe("managed model governance on the pinned Pi runtime", () => {
     expect(() =>
       runtime.streamSimple(unlisted, { messages: [] } as never),
     ).toThrow("not allowed");
+    expect(() =>
+      runtime.streamSimple(unlisted, { messages: [] } as never),
+    ).toThrow(
+      expect.objectContaining({
+        code: "MODEL_DENIED",
+        userAction:
+          "Choose an allowed model with /model; acme models lists them",
+      }),
+    );
     await expect(
       runtime.login("openai", "api_key", {} as never),
     ).rejects.toMatchObject({ code: "POLICY_DENIED" });
@@ -577,6 +586,7 @@ describe("personal Pi-native governance", () => {
     expect(cut).toMatchObject({
       code: "GATEWAY_PROTOCOL_ERROR",
       retryable: false,
+      userAction: expect.stringContaining("check the gateway"),
     });
     expect(cut.message).toBe(
       "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",

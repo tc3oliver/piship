@@ -3,6 +3,7 @@ import { PiShipError } from "@piship/contracts";
 import {
   manifestContainment,
   type UnenforcedFinding,
+  unenforcedAction,
   unenforcedRules,
 } from "@piship/policy";
 import type { Manifest } from "@piship/schema";
@@ -113,7 +114,10 @@ export function checkEnforceability(manifest: Manifest): UnenforcedFinding[] {
     throw new PiShipError(
       "POLICY_UNENFORCEABLE",
       errors.map((item) => item.message).join("\n"),
-      { component: "policy" },
+      {
+        component: "policy",
+        userAction: unenforcedAction(errors),
+      },
     );
   return findings;
 }

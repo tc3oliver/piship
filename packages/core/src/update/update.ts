@@ -119,7 +119,10 @@ function resolveSource(
     throw new PiShipError(
       "UPDATE_FAILED",
       `${lock.app.name} declares no update source; pass --from <directory|url>`,
-      { component: "update" },
+      {
+        component: "update",
+        userAction: `Run ${lock.app.command} update --from <directory|url> with the update source your distribution owner publishes`,
+      },
     );
   let resolved: string;
   try {
@@ -278,6 +281,10 @@ function installationTrust(
     throw new PiShipError(
       "UPDATE_FAILED",
       `${lock.app.name} trusts no release keys (updates.trust), so no update can be verified`,
+      {
+        userAction:
+          "Ask the distribution owner for a release that declares updates.trust.bootstrap, and install it",
+      },
     );
   return { state, migrated: true };
 }
@@ -461,7 +468,11 @@ async function performUpdate(
     if (!updates)
       throw new PiShipError(
         "UPDATE_FAILED",
-        `${lock.app.name} ${lock.app.version} has no update policy (manifest ${lock.manifest.schema}); install a piship/v1alpha4 release`,
+        `${lock.app.name} ${lock.app.version} has no update policy (manifest ${lock.manifest.schema}); install a release built from a piship/v1alpha4 or later manifest`,
+        {
+          userAction:
+            "Ask the distribution owner for a release that declares updates, and install it",
+        },
       );
     const selection = selectChannel(updates, options.channel, receipt.channel);
     const { channel } = selection;

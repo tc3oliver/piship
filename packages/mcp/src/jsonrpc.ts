@@ -22,6 +22,8 @@ export function mcpUnhealthy(
   return new PiShipError("MCP_UNHEALTHY", message, {
     component: "mcp",
     retryable: options.retryable ?? false,
+    userAction:
+      "Check the server's command or URL and the MCP section of doctor; ask the distribution owner if the server itself is misconfigured",
     ...(options.detail ? { sanitizedDetail: options.detail } : {}),
   });
 }
@@ -30,6 +32,8 @@ export function mcpDenied(message: string, reason?: string): PiShipError {
   return new PiShipError("MCP_DENIED", message, {
     component: "mcp",
     retryable: false,
+    userAction:
+      "Ask the distribution owner or administrator to allow this MCP server or call",
     ...(reason ? { sanitizedDetail: { reason: truncate(reason) } } : {}),
   });
 }

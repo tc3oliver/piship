@@ -930,6 +930,11 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /^Release gate policy: policy.enforced rule acme.web.deny \(deny web.request:\*\*\)/,
     );
+    expect(error).toMatchObject({
+      userAction: expect.stringContaining(
+        '"web.request:**" to policy.acknowledgeUnenforced',
+      ),
+    });
     // An acknowledged rule passes; the acknowledgement is in the lock.
     const acknowledged = checkReleaseInputs(
       managed(

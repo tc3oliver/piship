@@ -149,6 +149,11 @@ describe("model catalog", () => {
       code: "GATEWAY_RATE_LIMITED",
       retryable: true,
       retryAfterMs: 3000,
+      userAction: expect.stringContaining("try again"),
+    });
+    expect(classifyGatewayStatus(418)).toMatchObject({
+      code: "GATEWAY_PROTOCOL_ERROR",
+      userAction: expect.stringContaining("inference.baseUrl"),
     });
     const inAMinute = new Date(Date.now() + 60_000).toUTCString();
     const dated = classifyGatewayStatus(429, { "retry-after": inAMinute });
