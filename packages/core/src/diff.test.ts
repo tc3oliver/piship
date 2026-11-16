@@ -208,7 +208,9 @@ describe("diffLocks", () => {
       (item: { path: string }) => item.path === "resources/mcp/docs-server.mjs",
     );
     module.sha256 = "b".repeat(64);
-    expect(diffLocks(base, changed).changes).toEqual([
+    const report = diffLocks(base, changed);
+    expect(report.requiredTests).toContain(DIFF_TESTS.installed);
+    expect(report.changes).toEqual([
       expect.objectContaining({
         area: "mcp",
         kind: "changed",

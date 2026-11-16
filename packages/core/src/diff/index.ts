@@ -64,9 +64,14 @@ function requiredTests(changes: readonly DiffChange[]): string[] {
         tests.add(DIFF_TESTS.installed);
         tests.add(DIFF_TESTS.governance);
         break;
+      case "mcp":
+        // An MCP server module is executable code like an extension.
+        if (change.item.startsWith("adapters "))
+          tests.add(DIFF_TESTS.installed);
+        tests.add(DIFF_TESTS.governance);
+        break;
       case "policy":
       case "tools":
-      case "mcp":
       case "audit":
       case "data":
         tests.add(DIFF_TESTS.governance);

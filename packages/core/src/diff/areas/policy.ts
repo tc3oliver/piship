@@ -70,24 +70,21 @@ export function policy(
             "Users can no longer switch on auto mode; a switch that is on stops applying.",
           ],
   );
-  // Absent is off, so declaring `mode: off` changes nothing.
+  // Absent is session in a personal distribution and off in a managed one, as at runtime.
   const bg = bp?.taskGrants;
   const ag = ap?.taskGrants;
-  out.scalar(
-    "policy",
-    "policy taskGrants.mode",
-    bg?.mode ?? "off",
-    ag?.mode ?? "off",
-    (_, y) =>
-      y === "session"
-        ? [
-            "medium",
-            `Lets a session offer task grants${ag?.actions ? ` for ${[...ag.actions].sort(compare).join(", ")}` : ""}, which approve asks for a bounded time; deny and enforced rules still apply.`,
-          ]
-        : [
-            "medium",
-            "Task grants are no longer offered; a grant in use stops applying.",
-          ],
+  const bMode = bg?.mode ?? (modes.before === "personal" ? "session" : "off");
+  const aMode = ag?.mode ?? (modes.after === "personal" ? "session" : "off");
+  out.scalar("policy", "policy taskGrants.mode", bMode, aMode, (_, y) =>
+    y === "session"
+      ? [
+          "medium",
+          `Lets a session offer task grants${ag?.actions ? ` for ${[...ag.actions].sort(compare).join(", ")}` : ""}, which approve asks for a bounded time; deny and enforced rules still apply.`,
+        ]
+      : [
+          "medium",
+          "Task grants are no longer offered; a grant in use stops applying.",
+        ],
   );
   const cap = (value: string) =>
     value === "" ? DEFAULT_TASK_GRANT_TTL_MINUTES : Number(value);
@@ -103,7 +100,7 @@ export function policy(
     widerCap,
   );
   // Turning grants on or off already names the actions in the mode change.
-  if ((bg?.mode ?? "off") === (ag?.mode ?? "off"))
+  if (bMode === aMode)
     out.scalar(
       "policy",
       "policy taskGrants.actions",

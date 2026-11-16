@@ -77,6 +77,26 @@ describe("policy.taskGrants in piship diff", () => {
     expect(changes(undefined, { mode: "off" })).toEqual([]);
   });
 
+  it("treats absent as session in a personal distribution", () => {
+    const personal = (taskGrants?: object) => {
+      const lock = demoLock(taskGrants);
+      return { ...lock, deployment: { ...lock.deployment, mode: "personal" } };
+    };
+    const personalChanges = (before?: object, after?: object) =>
+      diffLocks(
+        personal(before) as never,
+        personal(after) as never,
+      ).changes.filter((change) => change.item.startsWith("policy taskGrants"));
+    expect(personalChanges(undefined, { mode: "session" })).toEqual([]);
+    expect(personalChanges(undefined, { mode: "off" })).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.mode",
+        before: "session",
+        after: "off",
+      }),
+    ]);
+  });
+
   it("reports declared headless authority changes as high risk", () => {
     const grant = {
       id: "ci-fix",
