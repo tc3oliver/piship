@@ -52,3 +52,47 @@ itIsolated(isolator)(
   },
   30_000,
 );
+
+itIsolated(isolator)(
+  "killGroup stops a background job the command forks as the kill lands",
+  async () => {
+    // A SIGKILL to a process group can miss a child the shell is forking at
+    // that moment (seen on macOS), which then wrote its marker and failed the
+    // kit's timeout behavior for a backend that does stop the group.
+    const leaks: number[] = [];
+    for (let batch = 0; batch < 20; batch++)
+      await Promise.all(
+        Array.from({ length: 20 }, async (_, index) => {
+          const root = realpathSync(mkdtempSync(join(tmpdir(), "killpg-")));
+          try {
+            let run: ReturnType<typeof runIsolated> | undefined;
+            const started = new Promise<void>((resolve) => {
+              run = runIsolated(
+                { root, network: "deny", hostProcesses: true },
+                root,
+                `echo started; ( until [ -e ${root}/go ]; do sleep 0.01; done; printf late > ${root}/marker ) & wait`,
+                {},
+                () => resolve(),
+                () => undefined,
+              );
+            });
+            await started;
+            await sleep(index % 4);
+            run?.killGroup();
+            // Well past killGroup's second signal, even on a loaded host.
+            await sleep(400);
+            writeFileSync(join(root, "go"), "");
+            // A job that outlived the kill holds the output pipes, so the
+            // run ends only after it wrote its marker.
+            await run?.exited;
+            if (existsSync(join(root, "marker")))
+              leaks.push(batch * 20 + index);
+          } finally {
+            rmSync(root, { recursive: true, force: true });
+          }
+        }),
+      );
+    expect(leaks).toEqual([]);
+  },
+  60_000,
+);
