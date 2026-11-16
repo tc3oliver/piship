@@ -61,16 +61,33 @@ describe("stage timing", () => {
 
   it("lists stages longest first with their start offsets, then one JSON line", async () => {
     const output = capture(true);
+    // A controlled clock: real sleeps reorder the stages on a loaded runner.
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     try {
       const timer = createStageTimer();
-      const first = timer.run("short", () => sleep(5));
-      const second = timer.run("long", () => sleep(60));
+      let finishShort = () => {};
+      let finishLong = () => {};
+      const first = timer.run(
+        "short",
+        () => new Promise<void>((done) => (finishShort = done)),
+      );
+      const second = timer.run(
+        "long",
+        () => new Promise<void>((done) => (finishLong = done)),
+      );
       const end = timer.start("middle");
-      await sleep(30);
+      now = 5;
+      finishShort();
+      await first;
+      now = 30;
       end();
-      await Promise.all([first, second]);
+      now = 60;
+      finishLong();
+      await second;
       timer.report("release");
     } finally {
+      clock.mockRestore();
       output.end();
     }
     const lines = output.lines();
