@@ -11,7 +11,16 @@ npm ci
 npm run check
 ```
 
-`npm run check` covers formatting, lint, types, package boundaries, tests, and build. For CLI changes, run `npm run test:e2e`. For Pi integration changes, run `npm run test:compatibility`.
+`npm run check` covers formatting, lint, types, package boundaries, build, and the unit tests; it takes about four minutes on a recent laptop, nearly all of it the unit tests. With an older Node.js, `npm ci` stops with `EBADENGINE` (`engine-strict` is on). For CLI changes, run `npm run test:e2e`; for Pi integration changes, `npm run test:compatibility`. Both run the built packages (`packages/*/dist`, which `npm run check` and `npm run build` write), so run `npm run build` again after every source change before either.
+
+Run one test file with the config of its tier:
+
+```bash
+npx vitest run packages/schema/src/access.test.ts                                     # a unit test
+npm run build && npx vitest run --config vitest.e2e.config.ts tests/e2e/cli.test.ts  # an E2E test
+```
+
+An E2E file run alone still builds the shared release fixtures first, about a minute. `npm test` is the unit tier only and leaves out `tests/e2e`, `tests/compatibility`, and the enterprise reference tests.
 
 CI evidence is routed to three tiers ([AGENTS.md](AGENTS.md#ci-evidence-tiers)); moving a check between tiers changes when it runs, never what it covers.
 
