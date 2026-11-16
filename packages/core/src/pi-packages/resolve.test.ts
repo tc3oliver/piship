@@ -566,6 +566,22 @@ describe("npm packages", () => {
     SLOW,
   );
 
+  it(
+    "say briefly that a package or version is not published",
+    () => {
+      for (const [name, version] of [
+        ["@company/pi-missing", "1.0.0"],
+        ["@company/pi-platform", "9.9.9"],
+      ] as const)
+        expect(() =>
+          resolvePiPackage(npmPackage(name, version), context()),
+        ).toThrow(
+          `${name}@${version} is not published on the npm registry; check the package name and version`,
+        );
+    },
+    SLOW,
+  );
+
   it("refuse a range in managed before any registry call", () => {
     expect(() =>
       resolvePiPackage(npmPackage("@company/pi-platform", "^1.4.0"), context()),

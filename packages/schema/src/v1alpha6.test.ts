@@ -982,6 +982,26 @@ describe("piship/v1alpha6 validation", () => {
       "release.vulnerabilities.registry",
       "https",
     ],
+    ...["latest", "next", "beta.1"].map(
+      (version) =>
+        [
+          personal({
+            resources: {
+              packages: [
+                {
+                  id: "p",
+                  source: "npm",
+                  package: "p",
+                  version,
+                  class: "user",
+                },
+              ],
+            },
+          }),
+          "resources.packages[0].version",
+          `${version} is a dist-tag`,
+        ] as [Json, string, string],
+    ),
   ])("rejects %j at %s", (input, field, message) => {
     rejects(input, field, message);
   });

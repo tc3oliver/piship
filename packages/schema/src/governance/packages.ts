@@ -41,6 +41,17 @@ const HOST =
  * An https URL without credentials, query, or fragment: a credential or a
  * token in a URL would end up in the manifest and the lock.
  */
+/** A dist-tag (`latest`, `next`) moves, so `piship lock` refuses it; say so before it runs. */
+function npmVersion(value: unknown, path: string): string {
+  const version = plainString(value, path, 128);
+  if (/^[A-Za-z][\w.-]*$/.test(version) && !/^[xX](\.|$)/.test(version))
+    fail(
+      path,
+      `${version} is a dist-tag; declare an exact version such as 1.4.2 (a personal distribution may also use a semver range such as ^1.4.0)`,
+    );
+  return version;
+}
+
 function httpsUrl(value: unknown, path: string): string {
   const text = plainString(value, path, 2048);
   let url: URL;
@@ -256,7 +267,7 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
         ...common,
         source,
         package: name,
-        version: plainString(item.version, `${path}.version`, 128),
+        version: npmVersion(item.version, `${path}.version`),
         ...(item.registry === undefined
           ? {}
           : { registry: httpsUrl(item.registry, `${path}.registry`) }),

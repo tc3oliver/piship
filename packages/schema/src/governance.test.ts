@@ -688,7 +688,7 @@ describe("v1alpha3 resources", () => {
     rejects(
       resources({ skills: ["./skills"] }),
       "resources.skills",
-      "piship migrate",
+      "skills: { user: [./resources/...] }",
     );
   });
   it.each([
@@ -1170,6 +1170,31 @@ describe("v1alpha3 policy", () => {
   ])("rejects invalid rule field %s (%#)", (field, patch) => {
     rejects(policy({ enforced: [rule(patch)] }), `policy.enforced[0].${field}`);
   });
+  it("reports every bad field of one rule", () => {
+    let error: unknown;
+    try {
+      parseManifest(
+        policy({ enforced: [rule({ id: "Bad_ID", effect: "block" })] }),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ManifestError);
+    expect((error as ManifestError).errors.map((item) => item.field)).toEqual([
+      "policy.enforced[0].id",
+      "policy.enforced[0].effect",
+    ]);
+  });
+  it.each([
+    ["shell.exec", "shell.execute"],
+    ["tool.exeucte", "tool.execute"],
+  ])("suggests the nearest action for %s", (action, near) => {
+    rejects(
+      policy({ enforced: [rule({ action })] }),
+      "policy.enforced[0].action",
+      `did you mean ${near}?`,
+    );
+  });
   it.each(["mcp.*", "mcp.server.*", "memory.*", "filesystem.*", "*"])(
     "accepts wildcard action %s",
     (action) => {
@@ -1367,7 +1392,7 @@ describe("v1alpha3 MCP", () => {
     rejects(
       server({ transport: "stdio", command: "docs" }, { mode: "off" }),
       "mcp.servers",
-      "off cannot declare servers",
+      "off cannot declare servers; set mcp.mode to explicit or allowlist",
     );
   });
   it.each([
