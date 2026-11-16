@@ -6,7 +6,8 @@ import {
   type PolicyEffect,
   SESSION_EXPORT_RESOURCES,
 } from "@piship/contracts";
-import type { DeploymentMode } from "../access.js";
+import { AccessFieldError, type DeploymentMode } from "../access.js";
+import { nearestField } from "../suggest.js";
 import {
   CLAUDE_TRUST_DIMENSIONS,
   type DeclaredTaskGrant,
@@ -65,9 +66,15 @@ function ruleAction(value: unknown, path: string): PolicyRule["action"] {
     return action as PolicyRule["action"];
   if (action.endsWith(".*") && ACTION_PREFIXES.has(action.slice(0, -2)))
     return action as PolicyRule["action"];
+  // A truncated name (`shell.exec`) is further than two edits from its action.
+  const near =
+    nearestField(action, POLICY_ACTIONS) ??
+    (action.includes(".")
+      ? POLICY_ACTIONS.find((known) => known.startsWith(action))
+      : undefined);
   fail(
     path,
-    `Expected a policy action (${POLICY_ACTIONS.join(", ")}), a known <prefix>.*, or *`,
+    `Expected a policy action (${POLICY_ACTIONS.join(", ")}), a known <prefix>.*, or *${near ? `; did you mean ${near}?` : ""}`,
   );
 }
 
@@ -149,27 +156,52 @@ function parseRule(entry: unknown, path: string): PolicyRule {
     "effect",
     "reason",
   ]);
-  const id = plainString(rule.id, `${path}.id`, 128);
-  if (!RULE_ID.test(id))
-    fail(
-      `${path}.id`,
-      "Rule IDs use lowercase letters, digits, and . _ - (at most 128)",
-    );
-  const action = ruleAction(rule.action, `${path}.action`);
-  const resource = resourceGlob(rule.resource, `${path}.resource`);
-  if (action === "session.export" && !coversSessionExport(resource))
-    fail(
-      `${path}.resource`,
-      `A session.export rule names ${SESSION_EXPORT_RESOURCES.join(", ")}, or a glob covering one of them`,
-    );
+  // Every bad field of the rule is reported together, not only the first.
+  const errors: AccessFieldError[] = [];
+  const field = <T>(run: () => T): T | undefined => {
+    try {
+      return run();
+    } catch (error) {
+      if (!(error instanceof AccessFieldError)) throw error;
+      errors.push(error, ...error.more);
+      return undefined;
+    }
+  };
+  const id = field(() => {
+    const value = plainString(rule.id, `${path}.id`, 128);
+    if (!RULE_ID.test(value))
+      fail(
+        `${path}.id`,
+        "Rule IDs use lowercase letters, digits, and . _ - (at most 128)",
+      );
+    return value;
+  });
+  const action = field(() => ruleAction(rule.action, `${path}.action`));
+  const resource = field(() => {
+    const value = resourceGlob(rule.resource, `${path}.resource`);
+    if (action === "session.export" && !coversSessionExport(value))
+      fail(
+        `${path}.resource`,
+        `A session.export rule names ${SESSION_EXPORT_RESOURCES.join(", ")}, or a glob covering one of them`,
+      );
+    return value;
+  });
+  const effect = field(() => oneOf(rule.effect, `${path}.effect`, EFFECTS));
+  const reason =
+    rule.reason === undefined
+      ? undefined
+      : field(() => plainString(rule.reason, `${path}.reason`, 240));
+  const [first, ...more] = errors;
+  if (first) {
+    first.more = more;
+    throw first;
+  }
   return {
-    id,
-    action,
-    resource,
-    effect: oneOf(rule.effect, `${path}.effect`, EFFECTS),
-    ...(rule.reason === undefined
-      ? {}
-      : { reason: plainString(rule.reason, `${path}.reason`, 240) }),
+    id: id as string,
+    action: action as PolicyRule["action"],
+    resource: resource as string,
+    effect: effect as PolicyRule["effect"],
+    ...(reason === undefined ? {} : { reason }),
   };
 }
 

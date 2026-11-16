@@ -90,6 +90,34 @@ The first time, there is no `piship.lock` yet, so `test` writes one and says so 
 piship dev my-agent/piship.yaml
 ```
 
+To add to the distribution, put the file under `resources/` and declare it in `piship.yaml` under its trust class (`user` in a personal distribution). Paths start with `./` and stay inside the distribution directory:
+
+```yaml
+resources:
+  instructions:
+    user: [./resources/AGENTS.md]            # one Markdown file
+  skills:
+    user: [./resources/skills]               # skill directories, each with a SKILL.md
+  extensions:
+    user: [./resources/extensions/hello.ts]  # a file, or a directory with index.ts
+  packages:                                  # Pi packages from npm, git, or a local path
+    - { id: web, source: npm, package: "<npm name>", version: 1.2.3, class: user }
+mcp:
+  mode: explicit                             # `off`, the template's value, declares no server
+  servers:
+    notes:
+      transport: stdio
+      module: ./resources/mcp/notes-server.mjs
+models:
+  default: anthropic/claude-sonnet-4-5       # provider/model, as Pi lists it
+  allowed: [anthropic/claude-sonnet-4-5]
+policy:
+  defaults:
+    - { id: ask-push-main, action: git.push, resource: origin/main, effect: ask }
+```
+
+Each field is described in the manifest reference: [resources](manifest.md#resources-and-trust-classes), [Pi packages](manifest.md#pi-packages-v1alpha6), [MCP](manifest.md#mcp), [models](manifest.md#access-fields-v1alpha2-and-later), and [policy](manifest.md#policy). The [personal example](../examples/personal/piship.yaml) declares instructions, skills, an extension, prompts, a theme, and an MCP server. `test` reports what loaded (`resources  instructions 1, skills 1, extensions 1, ...` and one line per MCP server), and the built command's `policy explain <action> <resource>` shows which rule decides an action (`dist/<id>/bin/<command> policy explain git.push origin/main`).
+
 After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
 ```bash

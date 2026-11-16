@@ -1484,7 +1484,7 @@ describe("init", () => {
     });
     expect(status).toBe(1);
     expect(stderr.join("\n")).toMatch(
-      /missing resource at resources\.instructions \(line \d+, column \d+\)/,
+      /missing resource at resources\.instructions\.user\[0\] \(line \d+, column \d+\)/,
     );
   });
 

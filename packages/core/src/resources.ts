@@ -65,11 +65,15 @@ function adapterDeclarations(manifest: Manifest): [string, string][] {
     output.push(["sandbox.adapter", governance.sandbox.adapter]);
   return output;
 }
-/** Declared roots per kind, including capability-provider roots for v1alpha3. */
+/**
+ * Declared roots per kind, including capability-provider roots for v1alpha3,
+ * each with the manifest field that declares it.
+ */
 function declaredRoots(
   manifest: Manifest,
-): [LockedResource["kind"], string, string | undefined][] {
-  const output: [LockedResource["kind"], string, string | undefined][] = [];
+): [LockedResource["kind"], string, string | undefined, string][] {
+  const output: [LockedResource["kind"], string, string | undefined, string][] =
+    [];
   const governance = manifest.governance;
   for (const kind of [
     "instructions",
@@ -78,14 +82,25 @@ function declaredRoots(
     "prompts",
     "themes",
   ] as const) {
-    if (governance)
+    if (governance) {
+      const seen = new Map<string, number>();
       for (const item of governance.resources.declared.filter(
         (entry) => entry.kind === kind,
-      ))
-        output.push([kind, item.path, item.class]);
-    else
-      for (const declared of manifest.resources[kind])
-        output.push([kind, declared, undefined]);
+      )) {
+        const index = seen.get(item.class) ?? 0;
+        seen.set(item.class, index + 1);
+        const field = `resources.${kind}.${item.class}[${index}]`;
+        output.push([
+          kind,
+          item.path,
+          item.class,
+          item.class === "certified" ? `${field}.path` : field,
+        ]);
+      }
+    } else
+      manifest.resources[kind].forEach((declared, index) => {
+        output.push([kind, declared, undefined, `resources.${kind}[${index}]`]);
+      });
   }
   for (const capability of governance?.capabilities ?? [])
     if (capability.provider?.path)
@@ -93,6 +108,7 @@ function declaredRoots(
         "providers",
         capability.provider.path,
         capability.provider.class,
+        "resources.providers",
       ]);
   return output;
 }
@@ -120,18 +136,18 @@ function resolveResourceFiles(
 ): LockedResource[] {
   const base = dirname(resolve(manifestPath));
   const output: LockedResource[] = [];
-  for (const [kind, declared, cls] of declaredRoots(manifest)) {
+  for (const [kind, declared, cls, field] of declaredRoots(manifest)) {
     const absolute = resolve(base, declared);
     if (!absolute.startsWith(`${base}${sep}`))
       throw new ManifestError(
         "unsafe path/name",
-        `resources.${kind}`,
+        field,
         `Path escapes manifest directory: ${declared}`,
       );
-    if (!resourcePresent(absolute, `resources.${kind}`, declared))
+    if (!resourcePresent(absolute, field, declared))
       throw new ManifestError(
         "missing resource",
-        `resources.${kind}`,
+        field,
         `${declared} does not exist`,
       );
     let component = base;
@@ -140,14 +156,14 @@ function resolveResourceFiles(
       if (lstatSync(component).isSymbolicLink())
         throw new ManifestError(
           "unsafe path/name",
-          `resources.${kind}`,
+          field,
           `Resource symlinks are not allowed: ${declared}`,
         );
     }
     if (kind === "instructions" && !lstatSync(absolute).isFile())
       throw new ManifestError(
         "invalid field",
-        `resources.${kind}`,
+        field,
         `${declared} must be a file`,
       );
     const files: string[] = [];
@@ -155,7 +171,7 @@ function resolveResourceFiles(
     if (files.length === 0)
       throw new ManifestError(
         "missing resource",
-        `resources.${kind}`,
+        field,
         `${declared} is empty`,
       );
     if (
@@ -164,8 +180,23 @@ function resolveResourceFiles(
     )
       throw new ManifestError(
         "invalid field",
-        `resources.${kind}`,
+        field,
         `${declared} has no JavaScript or TypeScript extension entry`,
+      );
+    // Pi loads a directory through its index file or package.json `pi.extensions`.
+    if (
+      (kind === "extensions" || kind === "providers") &&
+      lstatSync(absolute).isDirectory() &&
+      !["index.ts", "index.js", "package.json"].some((entry) =>
+        files.includes(
+          `${relative(base, absolute).split(sep).join("/")}/${entry}`,
+        ),
+      )
+    )
+      throw new ManifestError(
+        "invalid field",
+        field,
+        `${declared} is a directory without index.ts or index.js; name the extension file itself, add an index file, or list the entries in a package.json "pi.extensions"`,
       );
     for (const file of files)
       output.push({

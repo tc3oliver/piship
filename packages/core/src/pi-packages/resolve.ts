@@ -431,6 +431,11 @@ function npmView(
       ...npmArgs(declaration, git),
     ],
     { cwd, env: environment(context, git) },
+    // npm's own 404 text is long and ends mid-sentence once truncated.
+    (stderr) =>
+      /\bE404\b|\bETARGET\b/.test(stderr)
+        ? `${spec} is not published on ${declaration.registry ?? "the npm registry"}; check the package name and version of this resources.packages entry`
+        : undefined,
   ).toString();
   try {
     return JSON.parse(output);

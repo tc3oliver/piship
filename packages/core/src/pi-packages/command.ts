@@ -58,8 +58,12 @@ export function mustRun(
   command: "npm" | "git" | "tar",
   args: readonly string[],
   options: CommandOptions,
+  explain?: (stderr: string) => string | undefined,
 ): Buffer {
   const result = run(command, args, options);
+  const explained =
+    result.status !== 0 && explain ? explain(result.stderr) : undefined;
+  if (explained) throw packageError("UPDATE_FAILED", id, explained);
   // The subcommand, past git's leading `-c <name=value>` and `-C <dir>`.
   const subcommand = args.find(
     (arg, index) =>

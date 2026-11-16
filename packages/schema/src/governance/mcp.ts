@@ -352,7 +352,10 @@ export function parseMcp(
     parseServer(id, entry, variables, mode, v6),
   );
   if (mcpMode === "off" && servers.length)
-    conflict("mcp.servers", "mcp.mode off cannot declare servers");
+    conflict(
+      "mcp.servers",
+      `mcp.mode off cannot declare servers; set mcp.mode to ${managed ? "allowlist" : "explicit or allowlist"}`,
+    );
   const fallback: TrustSetting = managed ? "deny" : "allow";
   return {
     mode: mcpMode,
