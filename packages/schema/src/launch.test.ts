@@ -3,6 +3,7 @@ import {
   launchWarnings,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA4,
+  PISHIP_SCHEMA_V1ALPHA6,
   parseManifest,
   runtimeVariableUse,
 } from "./index.js";
@@ -597,5 +598,27 @@ describe("filesystem rules that can never match", () => {
       expect(paths(resource), resource).toEqual([]);
     expect(paths(".env", "allow")).toEqual([]);
     expect(paths(".env", "deny", "skill.load")).toEqual([]);
+  });
+});
+
+describe("policy.packs without sandbox.required", () => {
+  const routine = (required: boolean): Json =>
+    managed({
+      schema: PISHIP_SCHEMA_V1ALPHA6,
+      policy: { packs: [{ pack: "piship.routine", version: 1 }] },
+      sandbox: { required },
+    });
+  it("warns that the pack's sandbox-gated shell rules are inactive", () => {
+    expect(warnings(routine(false))).toContainEqual({
+      path: "policy.packs",
+      message: expect.stringMatching(
+        /^piship\.routine@1: its \d+ sandbox-gated rules .* are inactive because sandbox\.required is not true.*set sandbox\.required: true/,
+      ),
+    });
+  });
+  it("is quiet once sandbox.required is true", () => {
+    expect(
+      warnings(routine(true)).filter((item) => item.path === "policy.packs"),
+    ).toEqual([]);
   });
 });

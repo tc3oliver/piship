@@ -632,6 +632,29 @@ export function unmatchablePathRules(
 }
 
 /**
+ * An opted-in rule pack whose sandbox-gated rules stay inactive because
+ * `sandbox.required` is not true: its shell commands fall back to the policy
+ * default (usually a prompt for each one).
+ */
+export function inactivePackRules(manifest: Manifest): ValidationDiagnostic[] {
+  const governance = manifest.governance;
+  if (!governance || governance.sandbox.required === true) return [];
+  return (governance.policy.packs ?? []).flatMap(({ pack, version }) => {
+    const gated = governance.policy.defaults.filter(
+      (rule) => rule.contained && rule.id.startsWith(`${pack}.`),
+    );
+    return gated.length
+      ? [
+          {
+            path: "policy.packs",
+            message: `${pack}@${version}: its ${gated.length} sandbox-gated rules (such as ${(gated.find((rule) => rule.resource === "git status") ?? gated[0])?.id}) are inactive because sandbox.required is not true, so commands like git status and npm test fall back to policy.default (${governance.policy.default}); set sandbox.required: true to activate them`,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -641,6 +664,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...unusedVariables(manifest),
     ...unknownToolDenials(manifest),
     ...unmatchablePathRules(manifest),
+    ...inactivePackRules(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

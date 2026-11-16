@@ -747,7 +747,7 @@ function parseManifestSource(
 ): Manifest {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, { uniqueKeys: true, lineCounter });
-  yamlProblems(document, label);
+  yamlProblems(document, label, source);
   try {
     return parseManifest(plainValue(document), options);
   } catch (error) {
@@ -771,14 +771,21 @@ export function locateInSource(
   return locateErrors(error, document, lineCounter);
 }
 /** Throw every syntax error of a YAML document as one ManifestError. */
-function yamlProblems(document: Document, label: string): void {
+function yamlProblems(document: Document, label: string, source: string): void {
   if (!document.errors.length) return;
   throw ManifestError.combine(
     document.errors.map((item) => {
+      // A pasted snippet (trust-root init's updates:) often repeats a section.
+      const key =
+        item.code === "DUPLICATE_KEY"
+          ? source.slice(item.pos[0]).split(/[:\n]/, 1)[0]?.trim()
+          : undefined;
       const problem = new ManifestError(
         "YAML parse failure",
         label,
-        item.message,
+        key
+          ? `${key}: appears twice in the same mapping (again at line ${item.linePos?.[0].line}); merge the two ${key}: blocks into one`
+          : item.message,
       );
       const start = item.linePos?.[0];
       if (start) problem.position = { line: start.line, column: start.col };
@@ -823,10 +830,9 @@ export function readManifestSource(path: string): string {
 }
 /** Read and parse YAML without schema validation (used by migration). */
 export function readManifestDocument(path: string): unknown {
-  const document = parseDocument(readManifestSource(path), {
-    uniqueKeys: true,
-  });
-  yamlProblems(document, path);
+  const source = readManifestSource(path);
+  const document = parseDocument(source, { uniqueKeys: true });
+  yamlProblems(document, path, source);
   return plainValue(document);
 }
 
@@ -860,7 +866,7 @@ export function migrateManifestSource(
 ): MigrationPlan {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, { uniqueKeys: true, lineCounter });
-  yamlProblems(document, "manifest");
+  yamlProblems(document, "manifest", source);
   const current = (() => {
     try {
       return parseManifest(plainValue(document));
