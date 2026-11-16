@@ -664,6 +664,18 @@ describe("v1alpha3 full managed example", () => {
       },
     });
   });
+  it("warns about capture classes no audit event records", () => {
+    const warnings = launchWarnings(parseManifest(full)).filter((warning) =>
+      warning.path.startsWith("audit.capture"),
+    );
+    // promptContent is on in `full`; commandText is captured, so no warning.
+    expect(warnings).toEqual([
+      {
+        path: "audit.capture.promptContent",
+        message: expect.stringContaining("nothing is captured for it"),
+      },
+    ]);
+  });
   it("counts governance runtime references as used variables", () => {
     expect(
       launchWarnings(

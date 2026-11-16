@@ -301,7 +301,7 @@ Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or
 | `audit.enabled` | `true` (managed), `false` (personal) | Enabled audit needs at least one sink |
 | `audit.sinks` | one optional `file` sink named `local` when enabled | `id`, `type` (`file`, written to `<state>/logs/audit.jsonl`, or `http`, which POSTs event batches to `url`), `url` (`http` only; may be a `${NAME}` runtime reference), and `required` (default `false`) |
 | `audit.buffer` | `maxEvents: 1000`, `flushInterval: 2s` | Bounded in-memory buffer per sink |
-| `audit.capture` | all `false` | `promptContent`, `responseContent`, `commandText`, `sourceContent`: opt-in content classes. Events are metadata only otherwise |
+| `audit.capture` | all `false` | `promptContent`, `responseContent`, `commandText`, `sourceContent`: opt-in content classes. Events are metadata only otherwise. Only `commandText` is recorded today (`bash`, `!`, and background task commands); the other three are accepted but no event carries them yet, and `validate` warns when one is set |
 
 ### Pi packages (v1alpha6)
 
