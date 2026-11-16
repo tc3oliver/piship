@@ -42,9 +42,11 @@ import {
   testSandboxAdapter,
 } from "./index.js";
 
-// A kit run mostly waits out its marker and settle windows, so its concurrent
-// tests run ten at a time rather than Vitest's default five.
-vi.setConfig({ maxConcurrency: 10 });
+// A kit run mostly waits out its marker and settle windows, so on Linux its
+// concurrent tests run ten at a time rather than Vitest's default five. The
+// macOS runners have fewer cores, and ten at once there starved a kit run
+// past its timeout settle window, so macOS keeps the default.
+vi.setConfig({ maxConcurrency: process.platform === "darwin" ? 5 : 10 });
 
 // ------------------------------------------------------------ the isolator
 //
