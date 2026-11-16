@@ -202,6 +202,76 @@ describe("diffLocks", () => {
     expect(report.requiredTests).toContain(DIFF_TESTS.installed);
   });
 
+  it("labels an MCP server module as that server's code, not an extension", () => {
+    const changed = clone(base);
+    const module = changed.resources.find(
+      (item: { path: string }) => item.path === "resources/mcp/docs-server.mjs",
+    );
+    module.sha256 = "b".repeat(64);
+    const report = diffLocks(base, changed);
+    expect(report.requiredTests).toContain(DIFF_TESTS.installed);
+    expect(report.changes).toEqual([
+      expect.objectContaining({
+        area: "mcp",
+        kind: "changed",
+        item: "adapters resources/mcp/docs-server.mjs",
+        risk: "high",
+        reason: "Changes the module of MCP server docs (executable code).",
+      }),
+    ]);
+    // A new server's module is the server's own addition: listed once.
+    const added = clone(base);
+    const docs = added.governance.manifest.mcp.servers.find(
+      (server: { id: string }) => server.id === "docs",
+    );
+    added.governance.manifest.mcp.servers.push({
+      ...docs,
+      id: "notes",
+      module: "./resources/mcp/notes.mjs",
+    });
+    added.resources.push({
+      kind: "adapters",
+      path: "resources/mcp/notes.mjs",
+      sha256: "c".repeat(64),
+    });
+    const items = diffLocks(base, added).changes.map((change) => change.item);
+    expect(items).toContain("mcp server notes");
+    expect(items).not.toContain("adapters resources/mcp/notes.mjs");
+  });
+
+  it("warns when the locks differ but app.version does not", () => {
+    const after = clone(base);
+    after.resources.find(
+      (item: { path: string }) => item.path === "resources/mcp/docs-server.mjs",
+    ).sha256 = "b".repeat(64);
+    const note = /app\.version is 1\.0\.0 in both locks: bump it/;
+    expect(formatDiff(diffLocks(base, after))).toMatch(note);
+    after.app.version = "1.0.1";
+    expect(formatDiff(diffLocks(base, after))).not.toMatch(note);
+  });
+
+  it("notes that a remote-only company matcher is a claim in managed mode", () => {
+    const after = clone(base);
+    after.governance.manifest.policy.projectTrust.company.match.push(
+      { remote: "git.other.example/**" },
+      { remote: "git.third.example/**", path: "/srv/src/**" },
+    );
+    const reasons = Object.fromEntries(
+      diffLocks(base, after).changes.map((change) => [
+        change.item,
+        change.reason,
+      ]),
+    );
+    expect(
+      reasons["policy projectTrust.company.match remote=git.other.example/**"],
+    ).toMatch(/remote alone is a claim/);
+    expect(
+      reasons[
+        "policy projectTrust.company.match remote=git.third.example/** path=/srv/src/**"
+      ],
+    ).not.toMatch(/claim/);
+  });
+
   it("flags a trust class widening as high", () => {
     const after = clone(base);
     const resource = after.resources.find(

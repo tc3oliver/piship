@@ -1,5 +1,6 @@
 import { asciiOnly, redact } from "@piship/contracts";
 import {
+  DEFAULT_TASK_GRANT_TTL_MINUTES,
   effectiveHttpTransport,
   type GovernanceManifest,
   type HttpTransport,
@@ -102,7 +103,7 @@ function governanceRows(
             `${[
               policy.taskGrants.maxTtlMinutes
                 ? `ttl <= ${policy.taskGrants.maxTtlMinutes} min`
-                : "no ttl cap",
+                : `ttl <= ${DEFAULT_TASK_GRANT_TTL_MINUTES} min (default)`,
               policy.taskGrants.actions
                 ? `actions ${policy.taskGrants.actions.join(", ")}`
                 : "any action",

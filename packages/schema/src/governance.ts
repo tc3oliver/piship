@@ -463,6 +463,9 @@ export interface DeclaredTaskGrant {
   readonly inheritToSubagents: boolean;
 }
 
+/** The longest a task grant may last when `maxTtlMinutes` is absent. */
+export const DEFAULT_TASK_GRANT_TTL_MINUTES = 8 * 60;
+
 /** `policy.taskGrants`: the cap on task grants a session may offer. */
 export interface TaskGrantsPolicy {
   readonly mode: TaskGrantMode;

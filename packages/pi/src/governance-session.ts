@@ -62,7 +62,11 @@ import {
   realpathNearest,
   type WorkspaceReport,
 } from "@piship/sandbox";
-import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
+import {
+  type BuiltinExtension,
+  DEFAULT_TASK_GRANT_TTL_MINUTES,
+  type GovernanceManifest,
+} from "@piship/schema";
 import type { TaskRegistry } from "./background-tasks.js";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
@@ -156,8 +160,6 @@ const WORKSPACE_STRENGTH = {
   remote: 2,
 } as const;
 
-/** The longest a task grant may last unless `policy.taskGrants` sets a cap. */
-const GRANT_MAX_TTL_MS = 8 * 60 * 60 * 1000;
 /** A grant ID is shown to the user and recorded in audit, so it is plain. */
 const GRANT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** The most task grants one session holds at once. */
@@ -1254,7 +1256,7 @@ export class GovernanceSession {
   /** The longest a grant may last here, in milliseconds. */
   get grantMaxTtlMs(): number {
     const minutes = this.manifest.policy.taskGrants?.maxTtlMinutes;
-    return minutes === undefined ? GRANT_MAX_TTL_MS : minutes * 60_000;
+    return (minutes ?? DEFAULT_TASK_GRANT_TTL_MINUTES) * 60_000;
   }
 
   #manifestBinding: SubagentGrantBinding | undefined;

@@ -46,8 +46,55 @@ describe("policy.taskGrants in piship diff", () => {
     ]);
   });
 
+  it("reports enabling grants with actions as one relaxation naming them", () => {
+    expect(
+      changes(undefined, {
+        mode: "session",
+        actions: ["shell.execute", "mcp.tool.call"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.mode",
+        risk: "medium",
+        reason: expect.stringContaining(
+          "offer task grants for mcp.tool.call, shell.execute",
+        ),
+      }),
+    ]);
+  });
+
+  it("compares a ttl cap against the 8 hour default when absent", () => {
+    const base = { mode: "session" };
+    expect(changes(base, { ...base, maxTtlMinutes: 600 })[0]).toMatchObject({
+      risk: "medium",
+    });
+    expect(changes(base, { ...base, maxTtlMinutes: 60 })[0]).toMatchObject({
+      risk: "low",
+    });
+  });
+
   it("treats declaring off as no change", () => {
     expect(changes(undefined, { mode: "off" })).toEqual([]);
+  });
+
+  it("treats absent as session in a personal distribution", () => {
+    const personal = (taskGrants?: object) => {
+      const lock = demoLock(taskGrants);
+      return { ...lock, deployment: { ...lock.deployment, mode: "personal" } };
+    };
+    const personalChanges = (before?: object, after?: object) =>
+      diffLocks(
+        personal(before) as never,
+        personal(after) as never,
+      ).changes.filter((change) => change.item.startsWith("policy taskGrants"));
+    expect(personalChanges(undefined, { mode: "session" })).toEqual([]);
+    expect(personalChanges(undefined, { mode: "off" })).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.mode",
+        before: "session",
+        after: "off",
+      }),
+    ]);
   });
 
   it("reports declared headless authority changes as high risk", () => {
@@ -136,6 +183,11 @@ describe("policy.taskGrants in reports", () => {
       value: "session",
       note: "ttl <= 30 min; actions git.push; no wildcard hosts",
     });
+    expect(
+      (await explain(demoLock({ mode: "session" }))).find(
+        (row) => row.key === "policy.taskGrants",
+      )?.note,
+    ).toMatch(/^ttl <= 480 min \(default\);/);
     expect(
       (await explain(demoLock())).find(
         (row) => row.key === "policy.taskGrants",

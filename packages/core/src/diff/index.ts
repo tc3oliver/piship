@@ -64,9 +64,14 @@ function requiredTests(changes: readonly DiffChange[]): string[] {
         tests.add(DIFF_TESTS.installed);
         tests.add(DIFF_TESTS.governance);
         break;
+      case "mcp":
+        // An MCP server module is executable code like an extension.
+        if (change.item.startsWith("adapters "))
+          tests.add(DIFF_TESTS.installed);
+        tests.add(DIFF_TESTS.governance);
+        break;
       case "policy":
       case "tools":
-      case "mcp":
       case "audit":
       case "data":
         tests.add(DIFF_TESTS.governance);
@@ -149,6 +154,14 @@ export function formatDiff(report: DiffReport): string {
     `${report.after.id} ${report.before.version} -> ${report.after.version} (risk: ${report.risk})`,
     `Pi ${transition(report.before.pi, report.after.pi)}, PiShip ${transition(report.before.piship, report.after.piship)}`,
   ];
+  // Install refuses the same version without --replace and update only moves up.
+  if (
+    report.changes.length > 0 &&
+    report.before.version === report.after.version
+  )
+    lines.push(
+      `app.version is ${report.after.version} in both locks: bump it, or this release is not offered as an update.`,
+    );
   if (report.changes.length === 0) lines.push("No release-impact changes.");
   else {
     lines.push("Changes:");
