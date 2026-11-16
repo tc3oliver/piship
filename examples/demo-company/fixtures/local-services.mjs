@@ -821,7 +821,13 @@ export function cliOptions(args) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const options = cliOptions(process.argv.slice(2));
+  let options;
+  try {
+    options = cliOptions(process.argv.slice(2));
+  } catch (error) {
+    console.error(`local-services: ${error.message}`);
+    process.exit(2);
+  }
   const services = await startLocalServices(options.start);
   const command = options.prefix === "ACMECODE" ? "acmecode" : "<command>";
   console.log(
