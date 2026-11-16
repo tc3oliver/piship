@@ -1088,6 +1088,19 @@ describe("/grant", () => {
     expect(
       (await open({ taskGrants: { mode: "off" } })).session.grantsAllowed,
     ).toBe(false);
+    // Who can turn them on: the personal user's own piship.yaml, else IT.
+    for (const [mode, action] of [
+      [
+        "personal",
+        /set policy\.taskGrants\.mode to session in your piship\.yaml/,
+      ],
+      ["managed", /ask your administrator to enable policy\.taskGrants/],
+    ] as const) {
+      const off = await open({ mode, taskGrants: { mode: "off" } });
+      await expect(
+        off.session.addGrant(grant({ paths: [off.workspace] })),
+      ).rejects.toMatchObject({ userAction: expect.stringMatching(action) });
+    }
     const { session, workspace } = await open({
       mode: "managed",
       taskGrants: {

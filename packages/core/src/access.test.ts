@@ -242,6 +242,42 @@ describe("configuration precedence", () => {
           "acme config explain shows which settings you can change; ask your administrator to change theme",
       }),
     );
+    // A personal user changes their own piship.yaml; there is no administrator.
+    expect(() =>
+      setPreference(
+        path,
+        access,
+        undefined,
+        "theme",
+        "light",
+        undefined,
+        "acme",
+        "personal",
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        userAction:
+          "acme config explain shows which settings you can change; to change theme, edit config.enforced or config.userOverridable in your piship.yaml",
+      }),
+    );
+    expect(() =>
+      setPreference(
+        path,
+        access,
+        undefined,
+        "inference.baseUrl",
+        "x",
+        undefined,
+        "acme",
+        "personal",
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        userAction: expect.stringMatching(
+          /^inference\.baseUrl is set in your piship\.yaml/,
+        ),
+      }),
+    );
     for (const key of [
       "inference.baseUrl",
       "credential.provider",

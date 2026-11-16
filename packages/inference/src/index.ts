@@ -193,9 +193,9 @@ export function isUpstreamProviderError(body: unknown): boolean {
 const MAX_UPSTREAM_RETRY_AFTER_MS = 60 * 60 * 1000;
 
 const CHECK_GATEWAY =
-  "Ask your administrator to check that inference.baseUrl points at a healthy OpenAI-compatible gateway";
+  "Check that inference.baseUrl points at a healthy OpenAI-compatible gateway, or ask whoever runs the gateway";
 const RETRY_GATEWAY =
-  "Check the network connection, then try again; if it keeps failing, ask your administrator whether the inference gateway is up";
+  "Check the network connection, then try again; if it keeps failing, ask whoever runs the inference gateway whether it is up";
 
 /**
  * Map a gateway answer to the error contract and retry rules. `body`, the
@@ -245,7 +245,7 @@ export function classifyGatewayStatus(
       {
         component: "inference",
         userAction:
-          "Choose another allowed model, or ask your administrator for access to this one",
+          "Choose another allowed model, or ask whoever runs the gateway for access to this one",
       },
     );
   if (status === 404)
@@ -255,7 +255,7 @@ export function classifyGatewayStatus(
       {
         component: "inference",
         userAction:
-          "Choose another allowed model, or try again later; if it persists, ask your administrator to check the gateway",
+          "Choose another allowed model, or try again later; if it persists, ask whoever runs the gateway to check it",
       },
     );
   if (status === 429)
@@ -265,7 +265,7 @@ export function classifyGatewayStatus(
       {
         component: "inference",
         userAction:
-          "Wait, then try again; if it keeps happening, ask your administrator about the gateway's rate limits",
+          "Wait, then try again; if it keeps happening, ask whoever runs the gateway about its rate limits",
         retryable: true,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       },
