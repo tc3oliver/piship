@@ -78,6 +78,16 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
+/** Constrained Language Mode refuses Add-Type, and the script says so. */
+export const LANGUAGE_MODE_MARKER = "PISHIP_LANGUAGE_MODE";
+
+/** What a Windows Job Object supervisor's error line means for the user. */
+export function windowsJobError(stderr: string): string {
+  return stderr.includes(LANGUAGE_MODE_MARKER)
+    ? "PowerShell Constrained Language Mode blocked the Windows Job Object supervisor, so the command did not start. Let PiShip build its compiled helper instead (it needs the .NET Framework 4 compiler and a state home this user can write; doctor's child supervisor row says what is missing), or ask IT for an exception"
+    : "ENOENT or Windows Job Object startup failed";
+}
+
 function killTree(pid: number, platform: NodeJS.Platform): void {
   if (platform === "win32") {
     try {
@@ -431,13 +441,11 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     live.set(pid, platform);
   }
   if (options.onStdout) child.stdout?.on("data", options.onStdout);
-  let jobError = false;
+  let jobError: string | undefined;
   child.stderr?.on("data", (chunk: Buffer) => {
-    if (
-      platform === "win32" &&
-      chunk.toString("utf8").includes("PISHIP_WINDOWS_JOB_ERROR")
-    )
-      jobError = true;
+    const text = chunk.toString("utf8");
+    if (platform === "win32" && text.includes("PISHIP_WINDOWS_JOB_ERROR"))
+      jobError = windowsJobError(text);
     else options.onStderr?.(chunk);
   });
   child.stdin?.on("error", () => {});
@@ -502,7 +510,7 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
       ? {
           code: null,
           signal: null,
-          error: "ENOENT or Windows Job Object startup failed",
+          error: jobError,
         }
       : {}),
     timedOut,

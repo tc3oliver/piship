@@ -5,6 +5,12 @@ const SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $PSModuleAutoLoadingPreference = 'None'
+# Constrained Language Mode refuses Add-Type and method calls on most types,
+# [Console] included, so it is reported with a cmdlet before anything else.
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+  Write-Error -Message ('PISHIP_WINDOWS_JOB_ERROR: PISHIP_LANGUAGE_MODE ' + $ExecutionContext.SessionState.LanguageMode) -ErrorAction Continue
+  exit 127
+}
 try {
   Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')
   Add-Type -TypeDefinition @'
