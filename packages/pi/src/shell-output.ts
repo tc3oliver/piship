@@ -103,18 +103,22 @@ export class OutputFile {
     if (!stream) return;
     // Installed before the first write: an asynchronous ENOSPC or EIO stops
     // persistence and is reported in the result, never thrown at the process.
-    stream.on("error", (error: NodeJS.ErrnoException) => {
-      this.#failure ??= error.code ?? "write failed";
-      this.#stream = undefined;
-      stream.destroy();
-      // Free what was written; the session directory goes at close anyway.
-      try {
-        rmSync(this.path, { force: true });
-      } catch {
-        // Removed at session close.
-      }
-    });
+    stream.on("error", (error: NodeJS.ErrnoException) =>
+      this.#fail(stream, error),
+    );
     this.#stream = stream;
+  }
+
+  #fail(stream: Writable, error: NodeJS.ErrnoException): void {
+    this.#failure ??= error.code ?? "write failed";
+    this.#stream = undefined;
+    stream.destroy();
+    // Free what was written; the session directory goes at close anyway.
+    try {
+      rmSync(this.path, { force: true });
+    } catch {
+      // Removed at session close.
+    }
   }
 
   /** Why the full output is not saved, or undefined when it is. */
@@ -147,7 +151,11 @@ export class OutputFile {
   close(): Promise<void> {
     const stream = this.#stream;
     this.#stream = undefined;
-    if (!stream || stream.destroyed) return Promise.resolve();
+    if (!stream) return Promise.resolve();
+    // destroy(error) sets `errored` at once but emits 'error' a tick later;
+    // record it now so the result never names the file it removes.
+    if (stream.errored) this.#fail(stream, stream.errored);
+    if (stream.destroyed) return Promise.resolve();
     return new Promise((resolve) => {
       stream.once("close", () => resolve());
       stream.end();

@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   freeBytes,
@@ -100,6 +101,28 @@ describe("SessionOutputStore", () => {
     expect(statSync(path).size).toBeLessThan(3 * 1024 * 1024);
     await store.dispose();
     expect(existsSync(path)).toBe(false);
+  });
+
+  // destroy(error) marks the stream destroyed at once but emits 'error' on a
+  // later tick; close() must still report the failure, not the deleted file.
+  it("reports a write error whose stream was destroyed just before close", async () => {
+    let sink: Writable | undefined;
+    const store = new SessionOutputStore({
+      root,
+      openSink: () => {
+        sink = new Writable({ write: (_c, _e, callback) => callback() });
+        return sink;
+      },
+    });
+    const output = new ShellOutput(store);
+    output.append(lines(4000));
+    output.finish();
+    sink?.destroy(Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }));
+    await output.close();
+    expect(output.file?.failure).toBe("ENOSPC");
+    expect(output.snapshot().fullOutputPath).toBeUndefined();
+    expect((await output.readFullOutput(1024)).truncated).toBe(true);
+    await store.dispose();
   });
 
   it("removes only its own directory", async () => {
