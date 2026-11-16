@@ -718,7 +718,7 @@ const allowedOptions: Record<string, readonly string[]> = {
     "--rebuild --reclaim-staging",
     "--reclaim-staging --rebuild",
   ],
-  purge: ["--yes", "--yes --without-logout"],
+  purge: ["--yes", "--yes --without-logout", "--without-logout --yes"],
   init: ["--personal", "--managed"],
   migrate: ["--write", "--check"],
   test: [
@@ -1139,7 +1139,7 @@ export async function runCli(
   if (command === undefined || command === "--help" || command === "-h") {
     const width = Math.max(...commands.map((item) => item.length)) + 2;
     output.stdout(
-      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  --help     Show this help\n  --version  Show PiShip version`,
+      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  -h, --help     Show this help\n  -v, --version  Show PiShip version`,
     );
     return 0;
   }
@@ -1514,14 +1514,14 @@ export async function runCli(
         `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
       );
     } else if (command === "purge") {
-      if (rest[0] !== "--yes")
+      if (!rest.includes("--yes"))
         throw new Error(
           "Purge deletes this distribution's state; repeat with --yes after checking the id",
         );
       output.stdout(
         purgeReport(
           await purgeDistributionState(target, {
-            withoutLogout: rest[1] === "--without-logout",
+            withoutLogout: rest.includes("--without-logout"),
           }),
           output,
         ),

@@ -259,6 +259,22 @@ describe("uninstall --purge", () => {
     expect(existsSync(state)).toBe(false);
   });
 
+  it("purge accepts --yes and --without-logout in either order", async () => {
+    installRecorder();
+    const state = seedState();
+    const lines: string[] = [];
+    const output = {
+      stdout: (message: string) => lines.push(message),
+      stderr: (message: string) => lines.push(message),
+    };
+    expect(await runCli(["uninstall", ID], output)).toBe(0);
+    expect(
+      await runCli(["purge", ID, "--without-logout", "--yes"], output),
+      lines.join("\n"),
+    ).toBe(0);
+    expect(existsSync(state)).toBe(false);
+  });
+
   it("refuses while signed in, naming logout, and purges --without-logout with a warning", async () => {
     const { payload } = installRecorder();
     const state = seedState();

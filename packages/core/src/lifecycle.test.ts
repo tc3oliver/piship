@@ -4326,7 +4326,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     // Windows keeps a running command's files open, so the command cannot
     // remove itself there (the test below).
     it.skipIf(process.platform === "win32")(
-      "refuses a signed-in distribution until logout, deleting nothing, unless told to leave the sign-in",
+      "refuses a signed-in distribution until logout, deleting nothing",
       async () => {
         const { receipt, ctx, out } = await installed();
         write(
@@ -4341,12 +4341,16 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
           /still signed in \(a runtime credential\)/,
         );
         expect(error.userAction).toMatch(
-          /Run acmepi logout, then acmepi uninstall again/,
+          /Run acmepi logout, then acmepi uninstall again$/,
         );
         expect(existsSync(receipt.commandPath)).toBe(true);
-        await runUninstall(ctx, ["--without-logout"]);
-        expect(existsSync(receipt.commandPath)).toBe(false);
-        expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
+        // --without-logout belongs to --purge --yes, as in the authoring CLI.
+        const alone = await rejection(runUninstall(ctx, ["--without-logout"]));
+        expect(alone.message).toMatch(
+          /Usage: acmepi uninstall .*--purge --yes/,
+        );
+        expect(existsSync(receipt.commandPath)).toBe(true);
+        expect(out.join("\n")).not.toMatch(/Uninstalled/);
       },
     );
 

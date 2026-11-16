@@ -138,13 +138,19 @@ export function governanceOptions(
               throw new PiShipError(
                 "IDENTITY_REQUIRED",
                 "You signed out since launch",
-                { component: "identity" },
+                {
+                  component: "identity",
+                  userAction: `Sign in, then start ${ctx.metadata.app.command} again`,
+                },
               );
             if (!samePrincipal(principalKey(stored), principal))
               throw new PiShipError(
                 "IDENTITY_REQUIRED",
                 "Another identity signed in since launch",
-                { component: "identity" },
+                {
+                  component: "identity",
+                  userAction: `Start ${ctx.metadata.app.command} again to use the identity that is signed in now`,
+                },
               );
             return activated.identity?.claims ?? {};
           },

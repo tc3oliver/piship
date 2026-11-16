@@ -253,7 +253,7 @@ describe("--help", () => {
   it("documents --yolo for a personal distribution", async () => {
     const text = await help(PERSONAL);
     expect(text).toContain(
-      "[--new-session] [--task-grant <id>] [--yolo] [--smoke]",
+      "[--new-session] [--task-grant <id>] [--yolo] [--smoke | --smoke-model]",
     );
     expect(text).toContain(
       "--yolo approves every ask without a prompt for this session only, audited; deny still applies",
