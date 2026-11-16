@@ -19,6 +19,9 @@ import { parsePs, spawnManaged, trackDescendants } from "./process.js";
 const node = process.execPath;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const PROCESS_TIMEOUT_TEST_MS = process.platform === "win32" ? 20_000 : 15_000;
+// The tree is up well within this; a slower start fails the "started" or
+// heartbeat assertion rather than passing.
+const POSIX_TIMEOUT_MS = 2500;
 
 // A child that starts a heartbeat-writing grandchild in its own process group.
 const TREE = `
@@ -89,7 +92,7 @@ describe("spawnManaged", () => {
         // The Windows helper and child can take over 5 s to start on a busy
         // runner. Keep the readiness assertion and the actual timeout/tree
         // reclaim checks; allow a separate startup budget on Windows.
-        timeoutMs: process.platform === "win32" ? 10_000 : 5000,
+        timeoutMs: process.platform === "win32" ? 10_000 : POSIX_TIMEOUT_MS,
         graceMs: 300,
         onStdout: (chunk) => {
           output += chunk.toString();
@@ -611,7 +614,7 @@ describe.skipIf(process.platform !== "darwin")(
         cwd: dir,
         env,
         sandbox,
-        timeoutMs: 5000,
+        timeoutMs: POSIX_TIMEOUT_MS,
         graceMs: 300,
       }).exited;
       expect(exit.timedOut).toBe(true);
@@ -638,7 +641,7 @@ describe.skipIf(process.platform !== "darwin")(
         cwd: dir,
         env,
         sandbox,
-        timeoutMs: 5000,
+        timeoutMs: POSIX_TIMEOUT_MS,
         graceMs: 300,
       }).exited;
       expect(exit.timedOut).toBe(true);

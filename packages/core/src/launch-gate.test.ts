@@ -29,7 +29,10 @@ import {
   rejection,
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
-import { holdRuntimeLease } from "./install/runtime-lease.js";
+import {
+  holdRuntimeLease,
+  LAUNCH_GATE_WAIT_MS,
+} from "./install/runtime-lease.js";
 import { readInstallReceipt, uninstallDistribution } from "./install/index.js";
 import { LIFECYCLE_LOCK_REUSE_MS } from "./install/lifecycle-lock.js";
 import { processIdentity, recordedProcessGone } from "./process-identity.js";
@@ -345,7 +348,12 @@ await new Promise((resolve) => {
     expect(launched.status).toBe(1);
     expect(launched.stderr).toContain(GATE_TAIL);
     expect(launched.stderr).toContain(`held by process ${holder}.`);
+    // Core keeps the default wait: an operation gives a registering launcher
+    // 3 s before it refuses.
+    expect(LAUNCH_GATE_WAIT_MS).toBe(3_000);
+    const started = Date.now();
     const error = refusal(() => uninstallDistribution(ID));
+    expect(Date.now() - started).toBeGreaterThanOrEqual(LAUNCH_GATE_WAIT_MS);
     expect(error.message).toContain(gatePath());
     expect(error.message).toContain(`held by process ${holder}`);
   }, 120_000);
@@ -422,7 +430,9 @@ describe.runIf(HOST_EVIDENCED)(
     }, 120_000);
 
     it("fails as retryable, naming the gate and its holder, while a launcher keeps it", async () => {
-      const { opts } = await installed();
+      const installation = await installed();
+      // The default wait is covered above; here only the refusal matters.
+      const opts = { ...installation.opts, launchGateWaitMs: 100 };
       const holder = livePid();
       gate({ pid: holder, identity: processIdentity(holder) ?? null });
       const update = await rejection(updateDistribution(ID, opts));
@@ -434,7 +444,7 @@ describe.runIf(HOST_EVIDENCED)(
       await updateDistribution(ID, opts);
       gate({ pid: holder, identity: processIdentity(holder) ?? null });
       const rollback = await rejection(
-        rollbackDistribution(ID, { runCheck: fakeRun }),
+        rollbackDistribution(ID, { runCheck: fakeRun, launchGateWaitMs: 100 }),
       );
       expect(rollback).toMatchObject({
         code: "ROLLBACK_FAILED",

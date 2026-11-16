@@ -133,6 +133,8 @@ export interface LifecycleOptions {
   readonly progress?: (step: string) => void;
   /** Test seam: throw at a phase to simulate interruption. */
   readonly faults?: (phase: LifecyclePhase) => void;
+  /** Test seam: how long to wait for a held launch gate (default 3 s). */
+  readonly launchGateWaitMs?: number;
   /** @deprecated Client activation no longer boots a candidate; qualification runs in CI. */
   readonly runCheck?: ReleaseTestRunner;
   /**
@@ -428,6 +430,7 @@ export interface LifecycleLock extends LifecycleHold {
 export function acquireLock(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
+  launchGateWaitMs?: number,
 ): LifecycleLock {
   assertDisjointRoots();
   const path = join(appDirectory(id), ".lifecycle.lock");
@@ -449,7 +452,7 @@ export function acquireLock(
   // reclaiming payloads. A launch already registering finishes before this
   // operation mutates state; a new registration is serialized at commit.
   try {
-    const gate = acquireLaunchGate(id, code);
+    const gate = acquireLaunchGate(id, code, launchGateWaitMs);
     gate.release();
   } catch (error) {
     hold.release();
@@ -468,7 +471,7 @@ export function acquireLock(
               "Run the command again once no other update, rollback, or uninstall is running",
           },
         );
-      const gate = acquireLaunchGate(id, code);
+      const gate = acquireLaunchGate(id, code, launchGateWaitMs);
       try {
         if (!hold.stillHeld())
           throw new PiShipError(

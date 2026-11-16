@@ -458,7 +458,7 @@ async function performUpdate(
   const now = options.now ?? (() => new Date());
   // One fixed time for every expiry check of this attempt.
   const updateTime = now();
-  const lifecycle = acquireLock(id);
+  const lifecycle = acquireLock(id, "UPDATE_FAILED", options.launchGateWaitMs);
   try {
     // Read under the lock, so a concurrent commit cannot leave it stale.
     const receipt = readInstallReceipt(id);
