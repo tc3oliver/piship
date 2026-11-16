@@ -100,10 +100,25 @@ function locateOne(
   const position: SourcePosition = { line, column: col };
   return error.locatedAt(
     position,
-    found.exact && !unknownField
-      ? quotedNumber(error.reason, found.value)
-      : error.reason,
+    found.exact
+      ? unknownField
+        ? error.reason
+        : quotedNumber(error.reason, found.value)
+      : missingField(error),
   );
+}
+
+/**
+ * A value complaint about a field that is not in the source: validators
+ * check optional fields only when present, so an absent one is required.
+ */
+function missingField(error: ManifestError): string {
+  const { reason, field } = error;
+  if (!reason.startsWith("Expected") || reason.includes("missing"))
+    return reason;
+  const cut = Math.max(field.lastIndexOf("."), field.lastIndexOf("["));
+  const parent = cut > 0 ? field.slice(0, cut) : "";
+  return `Missing required field${parent && parent !== "manifest" ? ` in ${parent}` : ""}; ${reason[0]?.toLowerCase()}${reason.slice(1)}`;
 }
 
 /** The same errors with the line and column of each field. */
