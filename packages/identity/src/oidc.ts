@@ -1,4 +1,3 @@
-import * as client from "openid-client";
 import {
   type IdentityProvider,
   type IdentitySession,
@@ -10,6 +9,7 @@ import {
   parseRetryAfter,
   SecretValue,
 } from "@piship/contracts";
+import * as client from "openid-client";
 import { retainClaims } from "./claims.js";
 import { startLoopbackReceiver } from "./loopback.js";
 
@@ -231,7 +231,11 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
       throw new PiShipError(
         "CONFIG_INVALID",
         `The identity provider's ${key} is plain HTTP to ${url.hostname}, which is public; plain HTTP is accepted only to a private or internal host`,
-        { component: "identity" },
+        {
+          component: "identity",
+          userAction:
+            "Ask your administrator to have the identity provider publish https endpoints in its discovery document",
+        },
       );
     endpoints.push(value);
   }

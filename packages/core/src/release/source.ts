@@ -419,6 +419,10 @@ export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
     throw new PiShipError(
       "CONFIG_INVALID",
       "Update source URLs may not carry credentials",
+      {
+        userAction:
+          "Remove the user:password@ part from the update source URL; a credential in it would be stored and logged with the URL",
+      },
     );
 }
 

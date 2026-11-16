@@ -1265,12 +1265,24 @@ export class GovernanceSession {
     const declared = this.manifest.policy.taskGrants?.declared?.find(
       (entry) => entry.id === id,
     );
-    if (!declared || !this.grantsAllowed)
+    if (!declared || !this.grantsAllowed) {
+      const command = this.options.lock.app.command;
+      const ids = this.grantsAllowed
+        ? (this.manifest.policy.taskGrants?.declared ?? []).map(
+            (entry) => entry.id,
+          )
+        : [];
       throw new PiShipError(
         "POLICY_DENIED",
         `Task grant ${id} is not declared or enabled by this locked distribution`,
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction: ids.length
+            ? `Use a declared task grant (${ids.join(", ")}) with ${command} --task-grant <id>, or start without --task-grant`
+            : `Start ${command} without --task-grant; this distribution enables no declared task grant`,
+        },
       );
+    }
     const root = realpathNearest(this.project.root);
     const policyDigest = createHash("sha256")
       .update(JSON.stringify(this.manifest.policy))
@@ -1284,7 +1296,10 @@ export class GovernanceSession {
       throw new PiShipError(
         "POLICY_DENIED",
         "A managed task grant requires an authenticated principal",
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction: `Run ${this.options.lock.app.command} login, then start again with --task-grant`,
+        },
       );
     if (
       inherited &&
@@ -1300,7 +1315,10 @@ export class GovernanceSession {
       throw new PiShipError(
         "POLICY_DENIED",
         "The parent task grant is no longer valid for this principal, project, policy or release",
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction: `The grant expired or its release, policy or sign-in changed: start ${this.options.lock.app.command} again with --task-grant ${id} for a fresh one`,
+        },
       );
     const paths = declared.scope.paths?.map((path) => {
       const absolute = resolve(root, path);
@@ -1405,7 +1423,11 @@ export class GovernanceSession {
       throw new PiShipError(
         "POLICY_DENIED",
         "Task grants are not enabled by this distribution",
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction:
+            "Answer each prompt as it comes; ask your administrator to enable policy.taskGrants for task grants",
+        },
       );
     this.#checkGrantSlot(grant.id);
     // Both clocks at one instant: the monotonic deadline is the same lifetime.

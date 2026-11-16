@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 import {
   normalizePolicyAction,
   PiShipError,
-  type PolicyAction,
   POLICY_ACTIONS,
+  type PolicyAction,
   redact,
 } from "@piship/contracts";
 import { type GovernedLock, governedLock } from "@piship/core";
@@ -27,6 +27,10 @@ function requireGovernedLock(
     throw new PiShipError(
       "CONFIG_INVALID",
       `${ctx.metadata.app.command} ${command} needs a piship/v1alpha3 distribution`,
+      {
+        userAction:
+          "This release has no governance to inspect; ask the distribution owner for one built from a piship/v1alpha3 or later manifest",
+      },
     );
   return lock;
 }

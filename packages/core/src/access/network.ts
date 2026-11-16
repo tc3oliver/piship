@@ -148,11 +148,15 @@ export function resolveRuntimeReferences(
       try {
         checkUrl(resolved, field, plainHttp);
       } catch (error) {
+        const names = referencedVariables(value);
         throw new PiShipError(
           "CONFIG_INVALID",
           `${field} resolved to an unacceptable URL: ${(error as Error).message}`,
           {
             component: "config",
+            userAction: names.length
+              ? `Ask your administrator for the correct value of ${names.join(", ")}, then set it in the environment that starts this command`
+              : `Ask your administrator to correct ${field} in the distribution`,
           },
         );
       }

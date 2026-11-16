@@ -1662,7 +1662,10 @@ export function readProjectRestrictions(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Invalid policy rules in ${candidate.path}: the file is not valid JSON`,
-      { component: "policy" },
+      {
+        component: "policy",
+        userAction: `Fix the JSON syntax in ${candidate.path}, then start again`,
+      },
     );
   }
   return parseRuleList(value, candidate.path, { narrowingOnly: true });

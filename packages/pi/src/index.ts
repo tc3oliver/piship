@@ -160,6 +160,9 @@ export async function launchPiDistribution(
         throw new PiShipError(
           "CONFIG_INVALID",
           "--task-grant needs a declared grant ID",
+          {
+            userAction: `Name one of the distribution's declared task grants: ${metadata.app.command} --task-grant <id>`,
+          },
         );
       args = args.slice(2);
     } else if (args[0] === "--yolo" && !yolo) {
@@ -184,6 +187,9 @@ export async function launchPiDistribution(
     throw new PiShipError(
       "CONFIG_INVALID",
       "--task-grant applies only to a session",
+      {
+        userAction: `Start a session with ${metadata.app.command} --task-grant <id>, without a subcommand`,
+      },
     );
   if (yolo) {
     // It changes how a session decides asks: for a subcommand, --version, or

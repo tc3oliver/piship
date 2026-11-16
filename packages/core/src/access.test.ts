@@ -11,42 +11,42 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import { LocalMetrics } from "@piship/audit";
 import {
   type AdapterContext,
   PiShipError,
   SecretValue,
 } from "@piship/contracts";
-import { PISHIP_VERSION } from "./compatibility.js";
 import { MemorySecretStore } from "@piship/credentials";
 import { computeCapabilityStates } from "@piship/policy";
 import {
-  type CapabilityConfig,
-  parseManifest,
-  PISHIP_SCHEMA_V1ALPHA2,
-  readManifest,
   type AccessManifest,
+  type CapabilityConfig,
   type Manifest,
+  PISHIP_SCHEMA_V1ALPHA2,
+  parseManifest,
+  readManifest,
 } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
+import { loadAdapter } from "./access/adapters.js";
+import { formatExplanation } from "./access/explain.js";
 import {
   type AccessEvent,
-  boundedCredentialProvider,
-  DistributionAccess,
   accessStatePaths,
+  boundedCredentialProvider,
   configuredModel,
+  DistributionAccess,
   explainConfiguration,
   networkPolicyFor,
   recordGatewayResult,
   resolveRuntimeReferences,
 } from "./access/index.js";
-import { loadAdapter } from "./access/adapters.js";
-import { formatExplanation } from "./access/explain.js";
 import { setVariablesHint } from "./access/network.js";
+import { PISHIP_VERSION } from "./compatibility.js";
 import {
   readPreferences,
   resolveEffectiveConfig,
@@ -226,6 +226,22 @@ describe("configuration precedence", () => {
     expect(() =>
       setPreference(path, access, undefined, "theme", "light"),
     ).toThrow("enforced by the distribution");
+    expect(() =>
+      setPreference(
+        path,
+        access,
+        undefined,
+        "theme",
+        "light",
+        undefined,
+        "acme",
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        userAction:
+          "acme config explain shows which settings you can change; ask your administrator to change theme",
+      }),
+    );
     for (const key of [
       "inference.baseUrl",
       "credential.provider",

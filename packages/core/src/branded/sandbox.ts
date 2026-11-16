@@ -29,7 +29,10 @@ function notStored(ctx: BrandedContext): PiShipError {
   return new PiShipError(
     "POLICY_DENIED",
     `${ctx.metadata.app.name} does not use a stored sandbox credential (sandbox.credential: stored)`,
-    { component: "sandbox" },
+    {
+      component: "sandbox",
+      userAction: `Nothing to sign in or out of here: start ${ctx.metadata.app.command} as usual; it needs no stored sandbox secret`,
+    },
   );
 }
 
