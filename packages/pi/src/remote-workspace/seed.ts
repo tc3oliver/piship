@@ -6,8 +6,8 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
+import { printable } from "@piship/contracts";
 import type { ActiveSandbox } from "@piship/sandbox";
-import { printable } from "./printable.js";
 import { packTar, type TarEntry } from "./tar.js";
 
 export const SEED_TOTAL_CAP = 200 * 1024 * 1024;

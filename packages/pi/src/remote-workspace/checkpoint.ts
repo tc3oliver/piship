@@ -12,6 +12,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { printable } from "@piship/contracts";
 import {
   clearRemoteWorkspacePulled,
   REMOTE_PATCH_MAX_BYTES,
@@ -22,7 +23,6 @@ import {
   writeRemoteWorkspaceCheckpoint,
 } from "@piship/core";
 import { CACHE_NOTICE_OVERLAY, type SetupCache } from "./cache.js";
-import { printable } from "./printable.js";
 import { HostRefresh, foldBaseline, run } from "./refresh.js";
 import {
   SEED_FILE_CAP,

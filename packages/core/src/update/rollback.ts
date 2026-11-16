@@ -101,7 +101,7 @@ async function performRollback(
         "ROLLBACK_FAILED",
         `The retained release uses command ${target.app.command}; reinstall instead`,
         {
-          userAction: `To go back to ${receipt.previous}, reinstall it: piship uninstall ${id} (state is kept), then piship install <release archive of ${receipt.previous}>`,
+          userAction: `To go back to ${receipt.previous}, reinstall it: ${receipt.app.command} uninstall (state is kept), then download the ${receipt.previous} release archive from the distribution's update source, extract it, and run node <extracted release>/payload/piship.mjs install <extracted release>`,
         },
       );
     options.faults?.("verified");

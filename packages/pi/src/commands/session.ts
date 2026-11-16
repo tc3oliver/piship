@@ -1,6 +1,6 @@
 // The Pi session commands: the interactive TUI and the `--smoke` acceptance run.
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   createFindTool,
   createGrepTool,
@@ -33,6 +33,7 @@ import {
   prepareAccess,
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
+import { samePath } from "../launch/project-trust.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
 import {
   brandedResumeLine,
@@ -61,18 +62,6 @@ function sessionDirectory(
     : base;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
-}
-
-/** Whether two paths name the same directory (a missing one by its resolved path). */
-function samePath(a: string, b: string): boolean {
-  const real = (path: string) => {
-    try {
-      return realpathSync.native(path);
-    } catch {
-      return resolve(path);
-    }
-  };
-  return real(a) === real(b);
 }
 
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";

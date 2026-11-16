@@ -19,6 +19,7 @@ import type {
   PackageDependency,
   PackageTrustConfig,
 } from "./types.js";
+import { pishipCommand } from "../invocation.js";
 
 /** Payload directory vendored packages live in: `<dir>/<id>/…`. */
 export const PI_PACKAGE_VENDOR_DIRECTORY = "pi-packages";
@@ -152,7 +153,7 @@ export function checkLockedPiPackage(
       "LOCK_INVALID",
       locked.id,
       "the package npm lockfile does not match its sha256 in the lock",
-      "Run piship lock again and review the package changes",
+      `Run ${pishipCommand()} lock again and review the package changes`,
     );
   let parsed: unknown;
   try {

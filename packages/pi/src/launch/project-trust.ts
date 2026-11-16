@@ -10,7 +10,8 @@ import { resolve } from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import type { GovernanceSession } from "../governance-session.js";
 
-function samePath(left: string, right: string): boolean {
+/** Whether two paths name the same directory (a missing one by its resolved path). */
+export function samePath(left: string, right: string): boolean {
   const real = (path: string): string => {
     try {
       return realpathSync(path);

@@ -268,6 +268,26 @@ describe("--help", () => {
     );
   });
 
+  it("lists every option update and uninstall accept", async () => {
+    // The options runUpdate and runUninstall parse; a new one must reach the help.
+    const update = ["--channel", "--from", "--check", "--accept-review"];
+    const uninstall = [
+      "--purge",
+      "--yes",
+      "--without-logout",
+      "--remove-edited-shim",
+    ];
+    for (const kind of [PERSONAL, MANAGED_ALLOWED]) {
+      const text = await help(kind);
+      const updateLine = /update (\[.*?) \| rollback/.exec(text)?.[1] ?? "";
+      for (const option of update) expect(updateLine).toContain(option);
+      const uninstallLine = /uninstall (\[[^|\n]*)/.exec(text)?.[1] ?? "";
+      for (const option of uninstall) expect(uninstallLine).toContain(option);
+    }
+    const ungoverned = await help({ mode: "personal", ungoverned: true });
+    for (const option of uninstall) expect(ungoverned).toContain(option);
+  });
+
   it("does not offer --yolo where it cannot work", async () => {
     for (const kind of [
       { mode: "managed" } as Kind,

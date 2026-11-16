@@ -36,6 +36,7 @@ import {
 } from "./resolve.js";
 import { effectivePackageTrust } from "./trust.js";
 import type { LockedPiPackage } from "./types.js";
+import { pishipCommand } from "../invocation.js";
 
 /**
  * Where `piship lock` stores each package's generated npm root, beside
@@ -257,7 +258,7 @@ export function vendorPiPackages(
         "LOCK_INVALID",
         entry.id,
         "the lock records a package the manifest no longer declares",
-        "Run piship lock",
+        `Run ${pishipCommand()} lock`,
       );
     const files = packageLockFiles(base, entry.id);
     if (!existsSync(files.lockfile))
@@ -265,7 +266,7 @@ export function vendorPiPackages(
         "LOCK_INVALID",
         entry.id,
         `the package npm lockfile is missing from ${PACKAGE_LOCK_DIRECTORY}`,
-        "Run piship lock",
+        `Run ${pishipCommand()} lock`,
       );
     const lockfile = readFileSync(files.lockfile, "utf8");
     if (options.supplyChainGates !== false && lock.release)

@@ -20,6 +20,8 @@ import {
   runUninstall,
   runUpdate,
   sessionAutoApproveTarget,
+  UNINSTALL_OPTIONS,
+  UPDATE_OPTIONS,
   yoloRefusal,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
@@ -391,10 +393,10 @@ export async function launchPiDistribution(
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback | uninstall [--purge --yes]\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke]${yoloHelp}`
-        : "\n\nCommands:\n  doctor [--json] | version | uninstall [--purge --yes]";
+        ? `\n\nCommands:\n  doctor [--json] | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke]${yoloHelp}`
+        : `\n\nCommands:\n  doctor [--json] | version | uninstall ${UNINSTALL_OPTIONS}`;
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );

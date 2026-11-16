@@ -726,7 +726,7 @@ describe("installation trust state", () => {
       expect(error?.code).toBe("INTEGRITY_FAILED");
       expect(error?.message).toMatch(problem);
       expect(error?.userAction).toMatch(
-        /piship uninstall acmepi .*then piship install <release archive> --sha256/,
+        /^(?!.*piship install).*uninstall .*payload\/piship\.mjs install <release archive> --sha256/,
       );
       // Reading never repairs or replaces it.
       expect(readFileSync(path, "utf8")).toBe(content);

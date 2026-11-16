@@ -18,6 +18,9 @@ import type { BrandedContext } from "./context.js";
 import { requireInstalled } from "./lifecycle.js";
 
 const FLAGS = ["--purge", "--yes", "--without-logout", "--remove-edited-shim"];
+/** The options `uninstall` accepts, as its usage and the branded help print them. */
+export const UNINSTALL_OPTIONS =
+  "[--purge --yes] [--without-logout] [--remove-edited-shim]";
 
 /** Measuring a directory stops after this many entries or this long. */
 const MEASURE_ENTRIES = 50_000;
@@ -111,7 +114,7 @@ export async function runUninstall(
   const { app } = ctx.metadata;
   const flags = new Set(args);
   const purge = flags.has("--purge");
-  const usage = `Usage: ${app.command} uninstall [--purge --yes] [--without-logout] [--remove-edited-shim]`;
+  const usage = `Usage: ${app.command} uninstall ${UNINSTALL_OPTIONS}`;
   if (
     flags.size !== args.length ||
     args.some((arg) => !FLAGS.includes(arg)) ||

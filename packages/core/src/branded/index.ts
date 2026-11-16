@@ -18,12 +18,12 @@ export {
   type DoctorVerificationState,
   verificationStates,
 } from "./doctor.js";
-export { runRollback, runUpdate } from "./lifecycle.js";
+export { runRollback, runUpdate, UPDATE_OPTIONS } from "./lifecycle.js";
 export {
   inlineLoginOffered,
   loginInline,
   runLogin,
   runLogout,
 } from "./login.js";
-export { runUninstall } from "./uninstall.js";
+export { runUninstall, UNINSTALL_OPTIONS } from "./uninstall.js";
 export { runSandbox } from "./sandbox.js";
