@@ -16,7 +16,7 @@ import {
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { processHostToken } from "@piship/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   HOST_EVIDENCED,
   ID,
@@ -122,6 +122,10 @@ describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
       const child = spawn(process.execPath, [join(appsDir(), "launch.mjs")], {
         stdio: "ignore",
       });
+      // A timed-out test skips `finally`; stop the launcher regardless.
+      onTestFinished(() => {
+        child.kill();
+      });
       try {
         await waitForFile(gatePath());
         const launching = join(appsDir(), ".runtime-leases", ".launching");
@@ -197,6 +201,9 @@ await new Promise((resolve) => {
       [readInstallReceipt(ID).launcher as string],
       { stdio: "ignore" },
     );
+    onTestFinished(() => {
+      child.kill();
+    });
     try {
       await waitForFile(ready);
       // The gate is free for the next launcher, the marker is gone, and the
@@ -263,6 +270,9 @@ await new Promise((resolve) => {
       ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
+    onTestFinished(() => {
+      wrapper.kill();
+    });
     let stdout = "";
     wrapper.stdout.on("data", (chunk) => {
       stdout += chunk;
