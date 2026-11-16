@@ -1046,7 +1046,7 @@ async function prepareLock(
   if (status === "stale" && lockNeedsNetwork(manifest)) {
     if (!relockKeepingPackages(target))
       throw new Error(
-        `Lockfile is stale: a Pi package declaration, packageTrust, the release settings, or a stored package lockfile changed since piship.lock was written. Locking resolves Pi packages over the network and pins them, so relock on purpose: ${lockCommand}`,
+        `Lockfile is stale: a Pi package declaration, packageTrust, the release settings, or a stored package lockfile changed, or PiShip was upgraded, since piship.lock was written. Locking resolves Pi packages over the network and pins them, so relock on purpose: ${lockCommand}`,
       );
   } else lockManifest(target);
   // `target` is the manifest file; the lock sits beside it.

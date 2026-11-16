@@ -526,6 +526,9 @@ export async function signChannel(
     // expiry): every archive it lists is verified again from the channel
     // directory, exactly as an added one is, and must match its entry.
     const resign = !options.archives.length && !options.packs?.length;
+    // A forged channel fails here, before any untrusted archive is parsed.
+    if (resign && existsSync(path))
+      existingChannel(path, options.channel, ownerKeys, true);
     const listed = resign
       ? listedArchives(path, directory, options.channel)
       : undefined;
