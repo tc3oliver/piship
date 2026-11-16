@@ -138,7 +138,7 @@ ${access ? `  - ACMEPI_GATEWAY_URL\n${ACCESS}` : ""}resources:
     user: [./resources/AGENTS.md]
 updates:
   channel: stable
-  channels: [stable]
+  channels: [stable, candidate]
   source: \${ACMEPI_UPDATE_SOURCE}
 ${transport ? `  transport: ${transport}\n` : ""}  rollback: true
   trust:

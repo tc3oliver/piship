@@ -5032,7 +5032,7 @@ describe("launch-time payload verification", () => {
       "Remove the unexpected files it names, or restore it",
     );
     expect(error.userAction).toContain(
-      "without a PiShip CLI: node <extracted release>/payload/piship.mjs repair <id> <extracted release>",
+      "from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair <id> <extracted release>; with the PiShip CLI",
     );
   });
 

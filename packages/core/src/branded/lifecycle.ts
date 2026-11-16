@@ -224,6 +224,10 @@ export async function runUpdate(
   const usage = `Usage: ${app.command} update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]`;
   const options: { channel?: string; source?: string } = {};
   const flags = new Set<string>();
+  if (args.includes("--help") || args.includes("-h")) {
+    ctx.out(usage);
+    return;
+  }
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     const value = args[index + 1];
@@ -236,6 +240,8 @@ export async function runUpdate(
   }
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");
+  const before = readInstallReceipt(app.id);
+  const followed = before.channel ?? ctx.metadata.updates?.channel;
   const revokeCredential = credentialRevoker(ctx);
   const network = lifecycleNetwork(ctx);
   // Proxy, CA, and TLS policy apply. Only the update host the distribution
@@ -293,16 +299,27 @@ export async function runUpdate(
       check: result.status,
       ...viaHttp,
     });
+  // A check reports without switching; an update saves the channel it used.
+  const switched =
+    !check && followed !== undefined && followed !== result.channel
+      ? `Now following ${result.channel} (was ${followed}); run ${app.command} update --channel ${followed} to return.`
+      : undefined;
   if (result.status === "up-to-date") {
     ctx.out(
       `${app.name} ${result.from} is up to date on the ${result.channel} channel.`,
     );
+    if (switched) ctx.out(switched);
     return;
   }
   if (result.migration) ctx.out(formatMigrationSummary(result.migration));
   if (result.status === "available") {
+    // Only a rollback retains a release newer than the active one.
+    const rolledBack =
+      result.to === before.previous
+        ? " (you rolled back from this version)"
+        : "";
     ctx.out(
-      `${app.name} ${result.to} is available on the ${result.channel} channel (signed by ${result.keyId}); run ${app.command} update to install it.`,
+      `${app.name} ${result.to}${rolledBack} is available on the ${result.channel} channel (signed by ${result.keyId}); run ${app.command} update${check && result.channel !== followed ? ` --channel ${result.channel}` : ""} to install it.`,
     );
     return;
   }
@@ -316,6 +333,7 @@ export async function runUpdate(
   ctx.out(
     `Updated ${app.name} ${result.from} -> ${result.to} (${result.channel}, signed by ${result.keyId}). ${result.from} is kept for ${app.command} rollback; sessions and settings were preserved.`,
   );
+  if (switched) ctx.out(switched);
   // Best effort: the update is committed whatever this summary does.
   try {
     const summary = formatGovernanceSummary(
@@ -353,7 +371,16 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
     to: result.to,
   });
   for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
+  const access = ctx.metadata.access;
+  // A cleared credential is reported as a notice, so the claim is made only without one.
+  const signIn =
+    result.notices.length === 0 &&
+    ((access?.identity?.mode !== undefined &&
+      access.identity.mode !== "none") ||
+      (access?.credential?.provider !== undefined &&
+        access.credential.provider !== "pi-native" &&
+        access.credential.provider !== "none"));
   ctx.out(
-    `Rolled back ${app.name} ${result.from} -> ${result.to}. Sessions and settings were preserved; credentials were not restored.`,
+    `Rolled back ${app.name} ${result.from} -> ${result.to}. Sessions and settings were preserved${signIn ? "; your sign-in was left as it is" : ""}.`,
   );
 }
