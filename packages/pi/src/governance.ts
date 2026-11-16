@@ -815,7 +815,10 @@ export function isModelDenial(message: unknown): boolean {
  * status (a stream that failed after it started) is a protocol error.
  * Pi's message carries no response headers, so there is no retry time.
  */
-export function acceptanceFailure(message: unknown): PiShipError {
+export function acceptanceFailure(
+  message: unknown,
+  personal = false,
+): PiShipError {
   const value = message as
     | { stopReason?: string; errorMessage?: string }
     | undefined;
@@ -847,14 +850,16 @@ export function acceptanceFailure(message: unknown): PiShipError {
       {
         component: "inference",
         retryable: true,
-        userAction: "Check the network connection, then try again",
+        userAction: personal
+          ? "Check that the model provider is reachable (for a local server, that it is running at inference.baseUrl), then try again"
+          : "Check the network connection, then try again",
         sanitizedDetail: { transport },
       },
     );
   const classified =
     failure?.status === undefined
       ? null
-      : classifyGatewayStatus(failure.status, {}, failure.body);
+      : classifyGatewayStatus(failure.status, {}, failure.body, personal);
   return new PiShipError(
     classified?.code ?? "GATEWAY_PROTOCOL_ERROR",
     `The acceptance model request failed: ${detail}`,
@@ -863,7 +868,9 @@ export function acceptanceFailure(message: unknown): PiShipError {
       retryable: classified?.retryable ?? false,
       userAction:
         classified?.userAction ??
-        "Try again; if it keeps failing, ask your administrator to check the gateway",
+        (personal
+          ? "Try again; if it keeps failing, check that the model provider or server is up"
+          : "Try again; if it keeps failing, ask your administrator to check the gateway"),
     },
   );
 }

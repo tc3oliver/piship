@@ -168,6 +168,41 @@ describe("model catalog", () => {
       retryable: false,
     });
   });
+  it("says a spent quota does not come back by waiting", () => {
+    const quota = {
+      error: {
+        message: "You exceeded your current quota",
+        type: "insufficient_quota",
+        code: "insufficient_quota",
+      },
+    };
+    expect(classifyGatewayStatus(429, {}, quota)).toMatchObject({
+      code: "GATEWAY_RATE_LIMITED",
+      retryable: false,
+      userAction: expect.stringContaining("waiting does not help"),
+    });
+    expect(classifyGatewayStatus(429, {}, quota, true)?.userAction).toBe(
+      "Check the plan and billing of the account the API key belongs to; waiting does not help",
+    );
+  });
+  it("words personal actions without an administrator", () => {
+    for (const [status, body] of [
+      [401, undefined],
+      [403, undefined],
+      [404, undefined],
+      [429, undefined],
+      [418, undefined],
+      [401, { error: { message: "litellm.AuthenticationError: x" } }],
+    ] as const) {
+      const managed = classifyGatewayStatus(status, {}, body);
+      const personal = classifyGatewayStatus(status, {}, body, true);
+      expect(personal?.code).toBe(managed?.code);
+      expect(personal?.userAction).not.toMatch(/administrator|re-acquire/);
+    }
+    expect(classifyGatewayStatus(401, {}, undefined, true)?.userAction).toBe(
+      "Check the API key and store the right one (run login, or fix the variable or file it comes from)",
+    );
+  });
   // Bodies as LiteLLM v1.103.0 answered them (tests/enterprise-reference/
   // gateway-evidence.test.ts).
   const litellm = (type: string, message: string, code: string) => ({
@@ -463,6 +498,36 @@ describe("OpenAI-compatible endpoint", () => {
       provider(new SecretValue("sk-local-owner-key")).probe(),
     ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
     services = await startLocalServices();
+  });
+  it("reads a model list that is not there as a wrong base URL, and a refused connection with an action", async () => {
+    const personal = (baseUrl: string) =>
+      new OpenAICompatibleInferenceProvider({
+        providerId: "mypi-local",
+        baseUrl,
+        api: "openai-completions",
+        catalog,
+        allowed: ["acme/coder"],
+        liveCatalog: true,
+        fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+        secret: () => new SecretValue("sk-local-owner-key"),
+        personal: true,
+      });
+    // Regression: a base URL without its /v1 read as "does not serve this
+    // model".
+    await expect(
+      personal(`${services.gatewayUrl}/nope`).probe(),
+    ).rejects.toMatchObject({
+      code: "GATEWAY_PROTOCOL_ERROR",
+      message: expect.stringContaining("no model list"),
+      userAction: expect.stringContaining("/v1"),
+    });
+    await expect(
+      personal("http://127.0.0.1:9/v1").probe(),
+    ).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      userAction: expect.stringContaining("model server is running"),
+    });
   });
   it("reports a gateway that does not answer in time as unreachable", async () => {
     const timedOut = new OpenAICompatibleInferenceProvider({
