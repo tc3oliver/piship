@@ -28,7 +28,7 @@ import {
   type SandboxInstance,
   type SandboxProfile,
 } from "@piship/adapter-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   describeIsolated,
   findBwrap,
@@ -41,6 +41,10 @@ import {
   type SandboxKitOptions,
   testSandboxAdapter,
 } from "./index.js";
+
+// A kit run mostly waits out its marker and settle windows, so its concurrent
+// tests run ten at a time rather than Vitest's default five.
+vi.setConfig({ maxConcurrency: 10 });
 
 // ------------------------------------------------------------ the isolator
 //
@@ -1622,7 +1626,7 @@ describeIsolated(isolator)(
       ).toMatchObject({ status: "passed" });
     }, 120_000);
 
-    it("accepts independently verified sandbox retirement on cancellation", async () => {
+    it.concurrent("accepts independently verified sandbox retirement on cancellation", async () => {
       const report = await run(
         { variant: "shared", fault: "retires sandbox on cancellation" },
         { only: ["cancellation"] },

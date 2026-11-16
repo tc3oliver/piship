@@ -49,7 +49,7 @@ function leaseRoot(id: string): string {
  * How long a lifecycle operation waits for the launch gate: a launcher holds
  * it only while it registers, which takes well under a second.
  */
-const LAUNCH_GATE_WAIT_MS = 3_000;
+export const LAUNCH_GATE_WAIT_MS = 3_000;
 
 /**
  * Shared by launcher registration and every destructive payload operation. A
@@ -59,6 +59,7 @@ const LAUNCH_GATE_WAIT_MS = 3_000;
 export function acquireLaunchGate(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
+  waitMs = LAUNCH_GATE_WAIT_MS,
 ) {
   const path = join(installHome(), "receipts", `.${id}.launch.lock`);
   return acquireLifecycleLock(
@@ -73,7 +74,7 @@ export function acquireLaunchGate(
         },
       ),
     () => new Error(`Could not lock launcher registration for ${id}`),
-    LAUNCH_GATE_WAIT_MS,
+    waitMs,
   );
 }
 

@@ -54,7 +54,11 @@ async function performRollback(
   options: LifecycleOptions,
 ): Promise<RollbackResult> {
   requireManaged(readInstallReceipt(id));
-  const lifecycle = acquireLock(id, "ROLLBACK_FAILED");
+  const lifecycle = acquireLock(
+    id,
+    "ROLLBACK_FAILED",
+    options.launchGateWaitMs,
+  );
   try {
     const receipt = readInstallReceipt(id);
     const current = activeLock(receipt);
