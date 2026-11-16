@@ -83,6 +83,8 @@ acmecode policy explain shell.execute "git status"
 
 玩完先 `acmecode logout`，再執行 `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` 清乾淨。
 
+在 Windows 上，這個 demo 需要原生 sandbox，而 Windows 沒有：改一行設定的方法見 [demo README](examples/demo-company/README.md#deterministic-local-path)，或先從下面的個人版範例開始。在 PowerShell 裡，安裝好的指令是 `$HOME\.local\bin\<name>.cmd`；把這個資料夾加進 `PATH`（`install` 會印出要加的那一行），之後直接用名稱執行，例如 `acmecode login`。
+
 CLI 沒有發佈到 npm，請用 `node packages/cli/dist/bin.js` 執行；用 `npx` 或 `npm exec` 會跑去公開的 registry 找。遇到錯誤可以查 [troubleshooting](docs/troubleshooting.md)，每個錯誤代碼和處理方式都在裡面。完整步驟見 [公司 demo](examples/demo-company/README.md)。
 
 ## 交給你的 coding agent 設定
@@ -128,7 +130,7 @@ https://github.com/tc3oliver/piship/blob/main/docs/agent-setup.md 並照著做�
 <summary><b>展開 piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha6
+schema: piship/v1
 
 app:
   id: acmecode
