@@ -685,6 +685,46 @@ export function unmatchablePathRules(
 }
 
 /**
+ * Enforced `filesystem.read` denies that no `sandbox.filesystem.read.deny`
+ * directory covers. They refuse Pi's file tools, but a command (`bash`, a
+ * user's `!` command) reads files through the sandbox, so `cat .env` still
+ * works. One warning names every such rule; it never refuses the manifest.
+ */
+export function uncontainedReadDenials(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const governance = manifest.governance;
+  if (!governance) return [];
+  const directories = governance.sandbox.filesystem.read.deny.map((entry) => {
+    let end = entry.length;
+    while (end > 0 && entry[end - 1] === "/") end--;
+    return entry.slice(0, end);
+  });
+  const uncovered = governance.policy.enforced.filter((rule) => {
+    if (
+      rule.effect !== "deny" ||
+      !["filesystem.read", "filesystem.*", "*"].includes(rule.action)
+    )
+      return false;
+    // The literal directory before the first glob character.
+    const literal = rule.resource.split(/[*?[{]/)[0] as string;
+    const prefix = literal.slice(0, literal.lastIndexOf("/") + 1);
+    const path = rule.resource === literal ? literal : prefix;
+    return !directories.some(
+      (dir) => dir !== "" && (path === dir || path.startsWith(`${dir}/`)),
+    );
+  });
+  return uncovered.length
+    ? [
+        {
+          path: "policy.enforced",
+          message: `${uncovered.map((rule) => `${rule.id} (${rule.resource})`).join(", ")}: these filesystem.read denies refuse the file tools only; a command such as cat in bash or a ! command can still read the files unless sandbox.filesystem.read.deny lists their directory (docs/sandbox.md#configuration)`,
+        },
+      ]
+    : [];
+}
+
+/**
  * An opted-in rule pack whose sandbox-gated rules stay inactive because
  * `sandbox.required` is not true: its shell commands fall back to the policy
  * default (usually a prompt for each one).
@@ -718,6 +758,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...unknownToolDenials(manifest),
     ...unknownMcpServerRules(manifest),
     ...unmatchablePathRules(manifest),
+    ...uncontainedReadDenials(manifest),
     ...inactivePackRules(manifest),
     ...findings({
       mode: manifest.deployment.mode,

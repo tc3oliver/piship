@@ -163,6 +163,42 @@ describe("--yolo as a leading option", () => {
   });
 });
 
+describe("--session as a leading option", () => {
+  it.each([
+    [["--session", "01a1e33e-8a50-72b1"]],
+    [["--yolo", "--session", "01a1e33e-8a50-72b1"]],
+    [["--session-dir", "/tmp/sessions", "--session", "abc"]],
+    [["--model", "acme/coder", "--session", "abc"]],
+  ])("is accepted as a session option: %j", async (args) => {
+    const error = await failure(PERSONAL, args);
+    expect(error?.code).toBe("CONFIG_INVALID");
+    expect(error?.message).toContain("needs a terminal");
+    expect(stateCreated()).toBe(false);
+  });
+
+  it.each([
+    [["--session"]],
+    [["--session", "--new-session"]],
+    [["--session", "a b"]],
+    [["--session-dir", "/tmp"]],
+    [["--session", "abc", "--new-session"]],
+    [["--new-session", "--session", "abc"]],
+    [["--session", "abc", "doctor"]],
+    [["--session", "abc", "--smoke"]],
+  ])(
+    "is refused without an ID, with --new-session, or with a subcommand: %j",
+    async (args) => {
+      const error = await failure(PERSONAL, args);
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error?.code).toBe("CONFIG_INVALID");
+      expect(error?.message).toMatch(
+        /^--session (needs a session ID|resumes one session)/,
+      );
+      expect(stateCreated()).toBe(false);
+    },
+  );
+});
+
 describe("--yolo where the distribution does not allow it", () => {
   it.each([
     ["managed, policy.userAuto absent", { mode: "managed" } as Kind],

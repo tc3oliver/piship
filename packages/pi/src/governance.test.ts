@@ -282,9 +282,16 @@ describe("managed model governance on the pinned Pi runtime", () => {
     expect(providers.map((provider) => provider.id)).toEqual(["acmecode"]);
     expect(providers[0]?.auth.oauth).toBeUndefined();
     expect(providers[0]?.auth.apiKey?.login).toBeUndefined();
+    // Pi shows "<name> is configured outside pi." for it.
     expect(providers[0]?.auth.apiKey?.name).toBe(
-      "AcmeCode sign-in (run acme login in a terminal)",
+      "AcmeCode sign-in, which acme login and acme logout manage in a terminal,",
     );
+    // Configured, by the branded command: the picker does not say "not configured".
+    expect(runtime.getProviderAuthStatus("acmecode")).toEqual({
+      configured: true,
+      source: "runtime",
+      label: "acme login",
+    });
     session.dispose();
   });
 

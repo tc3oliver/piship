@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { type ApprovalChannel, redact } from "@piship/contracts";
+import { BUILTIN_DEFAULT_RULE } from "@piship/policy";
 
 /** Longest subject shown in an approval prompt. */
 const APPROVAL_SUBJECT_MAX = 2000;
@@ -10,6 +11,22 @@ export function approvalSubject(subject: string): string {
   return shown.length > APPROVAL_SUBJECT_MAX
     ? `${shown.slice(0, APPROVAL_SUBJECT_MAX)}…`
     : shown;
+}
+
+/**
+ * Why a prompt asks: the rule's reason and ID, or, for the policy default
+ * (which is no rule), one line that says so.
+ */
+export function whyAsked(
+  ruleId: string,
+  reason: string | undefined,
+  named = true,
+): string[] {
+  if (ruleId === BUILTIN_DEFAULT_RULE)
+    return [
+      "No rule covers it, and this distribution asks by default (policy.default).",
+    ];
+  return [...(reason ? [reason] : []), ...(named ? [`Rule: ${ruleId}`] : [])];
 }
 
 /** A y/N prompt on the terminal before the TUI starts; headless has none. */

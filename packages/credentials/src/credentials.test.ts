@@ -2096,6 +2096,17 @@ describe("credential lifecycle", () => {
         { allowAcquire: true, forceRefresh: true },
       ),
     ).rejects.toThrow("malformed");
+    // At login the refusal says what a valid key looks like.
+    await expect(
+      new LocalSecretCredentialProvider().acquire(null, {
+        ...ctx,
+        readSecret: async () => "sk-walk",
+      }),
+    ).rejects.toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      userAction:
+        "Enter the whole key: at least 8 characters, printable ASCII, no spaces",
+    });
     // A user-owned secret cannot be renewed, so a rejection is not persisted.
     expect(credentials.renewable).toBe(false);
     await credentials.markRejected();

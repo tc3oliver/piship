@@ -144,6 +144,9 @@ export async function launchPiDistribution(
   let newSession = false;
   let yolo = false;
   let taskGrantId: string | undefined;
+  // `--session <id>` (and Pi's resume hint's `--session-dir <dir>`, which
+  // must be this distribution's own) resumes one session, governed.
+  let resume: { id: string; dir?: string } | undefined;
   // The session options come first, in any order.
   for (;;) {
     if (args[0] === "--model" && requestedModel === undefined) {
@@ -168,9 +171,39 @@ export async function launchPiDistribution(
     } else if (args[0] === "--yolo" && !yolo) {
       yolo = true;
       args = args.slice(1);
+    } else if (args[0] === "--session" && !resume?.id) {
+      const id = args[1] ?? "";
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id))
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          "--session needs a session ID",
+          {
+            userAction: `Run ${metadata.app.command} --session <id> with the ID the last session printed when it ended`,
+          },
+        );
+      resume = { ...resume, id };
+      args = args.slice(2);
+    } else if (args[0] === "--session-dir" && resume?.dir === undefined) {
+      const dir = args[1];
+      if (!dir)
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          "--session-dir needs a directory",
+        );
+      resume = { id: resume?.id ?? "", dir };
+      args = args.slice(2);
     } else break;
   }
-  const sessionOption = !!requestedModel || newSession || yolo || !!taskGrantId;
+  if (resume && (!resume.id || newSession || args.length > 0))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--session resumes one session: it needs a session ID and cannot be combined with --new-session or a subcommand",
+      {
+        userAction: `Run ${metadata.app.command} --session <id> on its own or with --model`,
+      },
+    );
+  const sessionOption =
+    !!requestedModel || newSession || yolo || !!taskGrantId || !!resume;
   if (taskGrantId && (yolo || !metadata.governance))
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -363,7 +396,7 @@ export async function launchPiDistribution(
         ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback | uninstall [--purge --yes]${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke]${yoloHelp}`
         : "\n\nCommands:\n  doctor [--json] | version | uninstall [--purge --yes]";
     ctx.out(
-      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
+      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
     return;
   }
@@ -433,5 +466,5 @@ export async function launchPiDistribution(
       command === "--smoke-model",
       newSession,
     );
-  return runInteractive(ctx, requestedModel, newSession);
+  return runInteractive(ctx, requestedModel, newSession, resume);
 }

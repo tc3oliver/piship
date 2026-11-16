@@ -527,6 +527,59 @@ describe("tool.execute denials", () => {
   });
 });
 
+describe("enforced read denies that commands can get around", () => {
+  const uncovered = (enforced: Json[], sandbox: Json = {}) =>
+    warnings(
+      managed({
+        policy: { default: "ask", enforced },
+        ...(Object.keys(sandbox).length ? { sandbox } : {}),
+      }),
+    ).filter((warning) => warning.path === "policy.enforced");
+  const rule = (id: string, resource: string, extra: Json = {}) => ({
+    id,
+    action: "filesystem.read",
+    resource,
+    effect: "deny",
+    ...extra,
+  });
+
+  it("names, in one warning, each deny no sandbox read-deny directory covers", () => {
+    expect(
+      uncovered([
+        rule("acme.env", "**/.env"),
+        rule("acme.vault", "/srv/vault/**", { action: "filesystem.*" }),
+        rule("acme.ssh", "~/.ssh/**"),
+      ]),
+    ).toEqual([
+      {
+        path: "policy.enforced",
+        message: expect.stringMatching(
+          /^acme\.env \(\*\*\/\.env\), acme\.vault \(\/srv\/vault\/\*\*\): these filesystem\.read denies refuse the file tools only; a command such as cat .*sandbox\.filesystem\.read\.deny lists their directory/,
+        ),
+      },
+    ]);
+  });
+
+  it("is quiet when a read-deny directory covers the rule, and for asks, allows, and writes", () => {
+    expect(
+      uncovered(
+        [
+          rule("acme.vault", "/srv/vault/**"),
+          rule("acme.key", "/srv/vault/key"),
+        ],
+        { filesystem: { read: { deny: ["/srv/vault/"] } } },
+      ),
+    ).toEqual([]);
+    expect(
+      uncovered([
+        rule("acme.ask", "**/.env", { effect: "ask" }),
+        rule("acme.allow", "**/.env", { effect: "allow" }),
+        rule("acme.write", "**/.env", { action: "filesystem.write" }),
+      ]),
+    ).toEqual([]);
+  });
+});
+
 describe("filesystem rules that can never match", () => {
   const paths = (
     resource: string,

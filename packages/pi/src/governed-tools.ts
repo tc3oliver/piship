@@ -64,7 +64,11 @@ import type { GovernanceSession } from "./governance-session.js";
 import { SUBAGENT_TOKEN_ENV } from "./launch/subagent-owner.js";
 import { sniffImage } from "./image-sniff.js";
 import { skipExplanation } from "./remote-workspace/seed.js";
-import { manifestChange, SandboxFailureScanner } from "./sandbox-hint.js";
+import {
+  manifestChange,
+  SANDBOX_NO_RETRY,
+  SandboxFailureScanner,
+} from "./sandbox-hint.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 import { taskTools } from "./task-tools.js";
 
@@ -92,6 +96,9 @@ export const PLAN_RULE = "piship-workflow.plan";
  */
 const PLAN_SHELL_REFUSAL =
   "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool (it also lists a directory); the user can switch to Build mode with /build to run it.";
+/** The same refusal for the user's own `!` command: they are the one to switch. */
+const USER_PLAN_SHELL_REFUSAL =
+  "Plan mode does not run commands, your own ! commands included, because PiShip cannot tell a read-only command from one that changes files. Switch to Build mode with /build to run it.";
 /** Told to the model after a Plan-mode refusal, so it does not loop on it. */
 const PLAN_NO_RETRY =
   "Do not retry it or work around Plan mode with another tool; finish the plan and tell the user it needs Build mode.";
@@ -193,6 +200,60 @@ class BlockedError extends Error {}
 /** Told to the model after a policy refusal, so it does not loop on it. */
 const NO_RETRY =
   "Do not retry it or work around the rule; tell the user what was blocked.";
+const ASK_USER_NEXT =
+  "Do not retry it unless the user asks; ask how they want to proceed.";
+
+/**
+ * The text of a refusal as the user reads it: the instructions to the model
+ * are left out, and "the user can" becomes what the user does. The model
+ * still receives the full text.
+ */
+export function userText(text: string): string {
+  let shown = text;
+  for (const directive of [
+    NO_RETRY,
+    PLAN_NO_RETRY,
+    SANDBOX_NO_RETRY,
+    ASK_USER_NEXT,
+  ])
+    shown = shown.split(` ${directive}`).join("").split(directive).join("");
+  return shown
+    .split("The user can switch to Build mode with /build.")
+    .join("Switch to Build mode with /build.")
+    .split(
+      "Explore with the read tool (it also lists a directory); the user can switch to Build mode with /build to run it.",
+    )
+    .join("Switch to Build mode with /build to run it.")
+    .split(
+      "The user can run this command in their own terminal, outside the sandbox; do not retry it here.",
+    )
+    .join("Run this command in your own terminal, outside the sandbox.")
+    .split(" declined by the user (")
+    .join(" declined (");
+}
+
+/** A tool whose result shows the user `userText`, not the model's text. */
+function withUserText<T extends ToolDefinition>(tool: T): T {
+  const render = tool.renderResult;
+  if (!render) return tool;
+  return {
+    ...tool,
+    renderResult: (result, options, theme, context) =>
+      render(
+        {
+          ...result,
+          content: result.content.map((part) =>
+            part.type === "text"
+              ? { ...part, text: userText(part.text) }
+              : part,
+          ),
+        },
+        options,
+        theme,
+        context,
+      ),
+  } as T;
+}
 
 /**
  * Why `subject` (`This command`, `filesystem.write <path>`, a tool name) did
@@ -208,9 +269,7 @@ export function policyRefusal(
 ): string {
   const asked = `${decision.policyId} rule ${decision.ruleId} asks for approval`;
   // The user's own answer: no rule to change, so only "ask them" is left.
-  const askUser = model
-    ? " Do not retry it unless the user asks; ask how they want to proceed."
-    : "";
+  const askUser = model ? ` ${ASK_USER_NEXT}` : "";
   if (decision.approval === "denied")
     return model
       ? `${subject} was declined by the user (${asked}).${askUser}`
@@ -737,13 +796,14 @@ export async function gateCommand(
       enforcement: "control-plane",
       detail: { action: "shell.execute" },
     });
-    return PLAN_SHELL_REFUSAL;
+    return source === "bash" ? PLAN_SHELL_REFUSAL : USER_PLAN_SHELL_REFUSAL;
   }
   const events = {
     allowed: "tool.allowed",
     denied: "tool.denied",
     resource: source,
-    prompt: `${source}: ${command}`,
+    // The user typed a `!` command themselves; the prompt says so.
+    prompt: `${source === "bash" ? "bash" : "your own ! command"}: ${command}`,
     detail: { commandBytes: Buffer.byteLength(command) },
     content: { command },
   } as const;
@@ -903,6 +963,7 @@ export function governedBashOperations(
           ? new SandboxFailureScanner({
               profile: gov.sandbox.profile,
               mode: gov.options.lock.deployment.mode,
+              command,
             })
           : undefined;
       try {
@@ -919,7 +980,10 @@ export function governedBashOperations(
         if (output.exceeded()) return { exitCode: null };
         if (scanner && result.exitCode) {
           const hint = scanner.hint();
-          if (hint) options.onData(Buffer.from(`\n${hint}\n`));
+          if (hint)
+            options.onData(
+              Buffer.from(`\n${source === "bash" ? hint : userText(hint)}\n`),
+            );
         }
         return result;
       } catch (error) {
@@ -1407,7 +1471,11 @@ export function governedTools(
     const exposure = table?.get(tool.name) ?? "direct";
     return exposure === "hidden"
       ? []
-      : [withChannel(gov, { ...tool, exposure } as ToolDefinition)];
+      : [
+          withUserText(
+            withChannel(gov, { ...tool, exposure } as ToolDefinition),
+          ),
+        ];
   });
   // MCP tools have no file or command decision to defer their ask to.
   gov.resourceTools = new Set(
