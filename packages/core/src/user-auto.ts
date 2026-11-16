@@ -188,7 +188,7 @@ export function describeUserAuto(status: UserAutoStatus): string {
     case "reset":
       return "off: it was turned on under a previously signed-in identity, so it was reset; turn it on again to use it";
     case "inert":
-      return "off: the switch is on, but this release does not allow auto mode (policy.userAuto), so it has no effect";
+      return "off: the switch is on, but this release does not allow auto mode (policy.userAuto), so it has no effect; turn it off, or enable policy.userAuto in the distribution's piship.yaml";
     case "not-allowed":
       return "not allowed by this distribution";
   }

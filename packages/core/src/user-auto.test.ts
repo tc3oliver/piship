@@ -318,7 +318,7 @@ describe("userAutoStatus", () => {
       "on: asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply",
       "off (the distribution allows it)",
       "off: it was turned on under a previously signed-in identity, so it was reset; turn it on again to use it",
-      "off: the switch is on, but this release does not allow auto mode (policy.userAuto), so it has no effect",
+      "off: the switch is on, but this release does not allow auto mode (policy.userAuto), so it has no effect; turn it off, or enable policy.userAuto in the distribution's piship.yaml",
       "not allowed by this distribution",
     ]);
   });

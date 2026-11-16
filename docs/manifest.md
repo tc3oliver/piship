@@ -69,6 +69,24 @@ In both modes, `http-broker` needs an identity; `pi-native` credentials and `pi-
 
 A personal manifest defaults to `identity.mode: none` with `pi-native` credentials and inference. It may instead use `local-secret` or `none` credentials with an `openai-compatible` endpoint, including a local model server. The personal file store does not require `acknowledgePlaintext`.
 
+An `openai-compatible` endpoint needs `models.allowed` and a `models.catalog` entry for every allowed model in personal mode too. A minimal local-model manifest:
+
+```yaml
+inference:
+  provider: openai-compatible
+  baseUrl: http://localhost:11434/v1
+models:
+  default: local/coder
+  allowed: [local/coder]
+  catalog:
+    local/coder:
+      name: Local Coder
+      contextWindow: 32000
+      maxOutputTokens: 2048
+```
+
+See `examples/personal/local-model` for the full file.
+
 ## piship/v1alpha3 governance fields
 
 These fields apply to `piship/v1alpha3` and every later schema, `piship/v1` included; v1alpha6 changes MCP `tools` and adds the fields under [v1alpha6 fields](#v1alpha6-fields). Every governance section is optional; the defaults below apply when it is omitted, and several depend on `deployment.mode`. Governance fields never hold secrets: secret-looking keys, credential-looking environment variable names, and values shaped like tokens or private keys are rejected. What each control actually enforces is described in [security](security.md#governance).

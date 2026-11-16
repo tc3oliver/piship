@@ -272,6 +272,12 @@ describe("denialHint", () => {
     );
   });
 
+  it("points a personal user at their own piship.yaml for an enforced rule", () => {
+    expect(denialHint(at("distribution-enforced"), "personal")).toMatch(
+      /cannot be changed here; it lives in the distribution's piship\.yaml.*policy explain shell\.execute/,
+    );
+  });
+
   it("offers no workaround for an enforced or team rule", () => {
     for (const layer of ["distribution-enforced", "team-project"] as const)
       for (const mode of ["personal", "managed"] as const)
@@ -295,6 +301,15 @@ describe("denialHint", () => {
       denialHint(
         { ...at("builtin"), ruleId: "builtin:unknown-action" },
         "personal",
+        { policyFile },
+      ),
+    ).toBe(
+      "This action is not known to this release; check its spelling in the rule.",
+    );
+    expect(
+      denialHint(
+        { ...at("builtin"), ruleId: "builtin:unknown-action" },
+        "managed",
         { policyFile },
       ),
     ).toBe("");

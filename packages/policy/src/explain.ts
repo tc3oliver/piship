@@ -230,7 +230,7 @@ export function denialHint(
     case "distribution-enforced":
       return deployment === "managed"
         ? "This rule is distribution-owned and cannot be changed here; contact the distribution owner."
-        : "This rule is distribution-owned and cannot be changed here.";
+        : `This rule is distribution-owned and cannot be changed here; it lives in the distribution's piship.yaml, which you own in personal mode (${explain}).`;
     case "team-project":
       return "This rule comes from the project or team policy; ask its owner to change it.";
     case "user-preference":
@@ -241,7 +241,10 @@ export function denialHint(
         where.policyFile &&
         decision.ruleId !== BUILTIN_UNKNOWN_ACTION_RULE
         ? `Nothing allows this yet; add a rule to ${file} (${explain}).${grant}`
-        : "";
+        : deployment === "personal" &&
+            decision.ruleId === BUILTIN_UNKNOWN_ACTION_RULE
+          ? "This action is not known to this release; check its spelling in the rule."
+          : "";
     default:
       return deployment === "managed"
         ? "This is a distribution default; contact the distribution owner."
