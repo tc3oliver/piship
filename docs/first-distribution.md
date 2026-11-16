@@ -118,7 +118,7 @@ policy:
 
 Each field is described in the manifest reference: [resources](manifest.md#resources-and-trust-classes), [Pi packages](manifest.md#pi-packages-v1alpha6), [MCP](manifest.md#mcp), [models](manifest.md#access-fields-v1alpha2-and-later), and [policy](manifest.md#policy). The [personal example](../examples/personal/piship.yaml) declares instructions, skills, an extension, prompts, a theme, and an MCP server. `test` reports what loaded (`resources  instructions 1, skills 1, extensions 1, ...` and one line per MCP server), and the built command's `policy explain <action> <resource>` shows which rule decides an action (`dist/<id>/bin/<command> policy explain git.push origin/main`).
 
-After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
+After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`). With Pi packages declared, that happens only while no package input changed (a package declaration, `packageTrust`, the release settings, or a stored package lockfile): packages are resolved over the network and pinned in the lock, so after such a change `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
 ```bash
 piship lock my-agent/piship.yaml

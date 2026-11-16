@@ -31,7 +31,7 @@
 | 登入 | 自己做 | OIDC + PKCE，在 YAML 裡設定 |
 | 供應商 API key | 放在每台筆電上，不然就要自己做 proxy | 只留在 gateway；筆電拿到的是短效憑證 |
 | 誰能用哪些模型 | 改程式碼 | manifest 裡的一份允許清單 |
-| 沙箱 | 自己做 | bubblewrap、Seatbelt，或你們的遠端沙箱 |
+| 沙箱 | 自己做 | bubblewrap（Linux）、Seatbelt（macOS），或你們的遠端沙箱 |
 | 工具、檔案、shell、MCP 的規則 | 自己做 | 寫在設定裡，執行時強制套用，還查得到原因 |
 | 裝到 500 台筆電 | 自己做打包和更新機制 | 簽章發版、驗證後更新、可以 rollback |
 
@@ -239,7 +239,7 @@ agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。
 PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還沒：
 
 - 更早的基準版本（v0.7.1 到 v0.9.1，用 Pi 0.87.1 到 1.0.2，各自有 GitHub pre-release）：見 [docs/status.md](docs/status.md)。
-- **v0.11.0** 是[前一個基準版本](docs/status.md#v0110-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：穩定的 `piship/v1` 與 `piship-lock/v1` 契約、developer 發行版與 `--yolo`、打包並精簡的 payload（相依套件共用），以及共用的檔案儲存區。v0.10.0 從未發佈，它的內容包含在 v0.11.0 裡（[changelog](CHANGELOG.md)）。
+- **v0.11.0** 是[較早的基準版本](docs/status.md#v0110-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：穩定的 `piship/v1` 與 `piship-lock/v1` 契約、developer 發行版與 `--yolo`、打包並精簡的 payload（相依套件共用），以及共用的檔案儲存區。v0.10.0 從未發佈，它的內容包含在 v0.11.0 裡（[changelog](CHANGELOG.md)）。
 - **v0.12.0** 是[前一個基準版本](docs/status.md#v0120-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.12.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：修正從安裝到日常使用會遇到的當機、死路與重複提示，預設允許以純 HTTP 連到私有主機，記住專案信任的回答，以及 `<command> uninstall`。manifest 可以省略 `runtime.pi`，在 v0.12.0 之前建置的已安裝 runtime 需要先經過一次 bridge release（[changelog](CHANGELOG.md)）。
 - **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：pi-code 的 `subagent` 工具透過受管控的 launcher 運作，在建置時轉譯 TypeScript Pi 套件（`pretranspile`），以及 Pi 1.1.0 的版本鎖定。啟用 `pretranspile` 的 release 不會被 v0.13.0 之前建置的 runtime 接受（[changelog](CHANGELOG.md)）。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
