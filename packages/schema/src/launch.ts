@@ -748,6 +748,25 @@ export function inactivePackRules(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * `audit.capture` classes no runtime flow records: only `commandText` (shell
+ * and background task commands) is ever captured, so an administrator who
+ * opts in to the others must not believe the content is being kept.
+ */
+export function inertCaptureClasses(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const audit = manifest.governance?.audit;
+  if (!audit?.enabled) return [];
+  return (["promptContent", "responseContent", "sourceContent"] as const)
+    .filter((key) => audit.capture[key])
+    .map((key) => ({
+      path: `audit.capture.${key}`,
+      message:
+        "no audit event records this content class yet, so nothing is captured for it; only commandText (bash, ! and background task commands) is recorded",
+    }));
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -760,6 +779,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...unmatchablePathRules(manifest),
     ...uncontainedReadDenials(manifest),
     ...inactivePackRules(manifest),
+    ...inertCaptureClasses(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,
