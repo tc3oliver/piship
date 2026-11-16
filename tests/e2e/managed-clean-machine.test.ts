@@ -493,7 +493,7 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     // rollback: 1.0.0 again, with the session and the live credential kept.
     const rollback = await run(["rollback"]);
     expect(rollback.stdout).toContain("Rolled back AcmeCode 1.1.0 -> 1.0.0");
-    expect(rollback.stdout).toContain("credentials were not restored");
+    expect(rollback.stdout).toContain("your sign-in was left as it is");
     expect((await run(["version"])).stdout).toContain("AcmeCode 1.0.0");
     const rolledBack = await smoke();
     expect(rolledBack).toMatchObject({ sessionId, resumed: true });

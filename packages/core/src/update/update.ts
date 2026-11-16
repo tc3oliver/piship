@@ -60,7 +60,7 @@ import {
 } from "../install/compose.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import { raiseThreadpool } from "../threadpool.js";
-import { isUrlSource } from "../release/source.js";
+import { isUrlSource, readOptionalSourceFile } from "../release/source.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -310,6 +310,53 @@ function newestFor(
     .sort((a, b) => compareVersions(b.version, a.version))[0];
 }
 
+/**
+ * When the source has no file for the selected channel, name the allowed
+ * channels it does publish, so the person can switch to one.
+ */
+async function withPublishedChannels(
+  error: unknown,
+  options: {
+    readonly source: string;
+    readonly channel: string;
+    readonly allowed: readonly string[];
+    readonly command: string;
+    readonly fetcher: typeof fetch | undefined;
+    readonly transport: UpdatesManifest["transport"];
+  },
+): Promise<unknown> {
+  if (
+    !(error instanceof PiShipError) ||
+    error.message !== `Update source has no ${options.channel}.json`
+  )
+    return error;
+  const published: string[] = [];
+  for (const other of options.allowed) {
+    if (other === options.channel) continue;
+    try {
+      const file = await readOptionalSourceFile(
+        options.source,
+        `${other}.json`,
+        MAX_PROBE_BYTES,
+        options.fetcher,
+        options.transport,
+      );
+      if (file) published.push(other);
+    } catch {
+      // Only a hint: a channel that cannot be read is not named.
+    }
+  }
+  if (!published.length) return error;
+  return new PiShipError(
+    error.code,
+    `${error.message}; it publishes ${published.map((item) => `${item}.json`).join(", ")}`,
+    {
+      userAction: `Run ${options.command} update --channel ${published[0]} to follow that channel, or ask the distribution owner to publish ${options.channel}`,
+    },
+  );
+}
+const MAX_PROBE_BYTES = 1024 * 1024;
+
 /** An update never activates a release or pack that records its Pi version as unsupported. */
 export function assertSupportedPi(
   kind: "release" | "pack",
@@ -554,6 +601,15 @@ async function performUpdate(
       now: () => updateTime,
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
       ...(transport ? { transport } : {}),
+    }).catch(async (error: unknown) => {
+      throw await withPublishedChannels(error, {
+        source,
+        channel,
+        allowed: updates.channels,
+        command: lock.app.command,
+        fetcher: options.fetcher,
+        transport,
+      });
     });
     const record = (result: string, extra: Partial<InstallReceipt> = {}) =>
       lifecycle.commit({

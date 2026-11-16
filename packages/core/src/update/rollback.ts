@@ -92,7 +92,7 @@ async function performRollback(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} failed verification: ${(error as Error).message}`,
         {
-          userAction: `The damaged release is not activated. Restore it with: piship repair ${id} <release archive of ${receipt.previous}>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>; then roll back again`,
+          userAction: `The damaged release is not activated. Download the ${receipt.previous} release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>; with the PiShip CLI: piship repair ${id} <release archive of ${receipt.previous}>. Then roll back again`,
         },
       );
     }

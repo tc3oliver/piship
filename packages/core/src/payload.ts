@@ -524,7 +524,7 @@ function repairAction(root?: string, onlyUnexpected = false): string {
     basename(dirname(dirname(root))) === "apps" &&
     /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
   const name = installed ? id : "<id>";
-  return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version with: piship repair ${name} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${name} <extracted release> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
+  return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version: download that version's release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${name} <extracted release>; with the PiShip CLI: piship repair ${name} <release archive> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
 }
 /**
  * Compare the SHA-256 of every payload file, computed from the bytes as they
