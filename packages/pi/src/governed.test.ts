@@ -33,6 +33,7 @@ import { resolveLock, treeDigest } from "@piship/core";
 import { normalizePathResource } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useCompiledJobHelper } from "../../../tests/helpers/windows-job-helper.js";
 import {
   askUserTool,
   DEFAULT_PLAN_PROMPT,
@@ -56,6 +57,8 @@ import {
 } from "./governed-tools.js";
 import { modelPolicy } from "./launch/governance.js";
 import { SessionOutputStore } from "./shell-output.js";
+
+useCompiledJobHelper();
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
