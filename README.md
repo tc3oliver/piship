@@ -54,6 +54,8 @@ PiShip does not replace your identity provider, gateway, or sandbox. It connects
 
 You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces; macOS has its sandbox built in.
 
+Building your own instead? [Your first distribution](docs/first-distribution.md) goes from `init` to an installed command in five steps, and a personal distribution needs no identity provider or gateway.
+
 ```bash
 git clone https://github.com/tc3oliver/piship.git
 cd piship && npm ci && npm run build
@@ -234,7 +236,7 @@ To start your own, run `node packages/cli/dist/bin.js init ./my-agent --personal
 
 Pi owns the agent: the agent loop, tools, sessions, TUI, and model runtime. PiShip owns the distribution around it: the manifest, the pinned Pi version, sign-in and credentials, the gateway, model governance, policy, sandbox, audit, and build, release, and update. PiShip uses only Pi's public API and never patches it.
 
-The sandbox follows the same split: PiShip decides whether a command may run, the sandbox isolates it. The native sandboxes are probed at every launch. With a remote sandbox only shell commands run remotely, and Pi's file tools still edit the local checkout, so the sandbox has to mount or sync the workspace for both to see the same files ([details](docs/sandbox.md#workspace)).
+The sandbox follows the same split: PiShip decides whether a command may run, the sandbox isolates it. The native sandboxes are probed at every launch. With a remote sandbox only shell commands run remotely by default, and Pi's file tools still edit the local checkout, so the sandbox has to mount or sync the workspace for both to see the same files ([details](docs/sandbox.md#workspace)). With `sandbox.workspace: remote` (`e2b-compatible` and `custom`, preview) the sandbox holds the project instead: file tools and commands both work there, and `sandbox pull` brings the changes back ([remote workspace](docs/sandbox.md#remote-workspace)).
 
 ## Status
 
@@ -244,6 +246,7 @@ PiShip is pre-release and not on npm. What is proven, and what is not:
 - **v0.11.0** is the [previous baseline](docs/status.md#v0110-previous-production-validation-baseline) on Pi 1.0.3, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0): the stable `piship/v1` and `piship-lock/v1` contracts, the developer distribution and `--yolo`, a bundled, stripped payload with shared dependencies, and the shared file store. v0.10.0 was never published; it shipped inside v0.11.0 ([changelog](CHANGELOG.md)).
 - **v0.12.0** is the [previous baseline](docs/status.md#v0120-previous-production-validation-baseline) on Pi 1.0.3, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.12.0): fixes for the crashes, dead ends, and repeated prompts from install to daily use, plain HTTP to private hosts by default, remembered project-trust answers, and `<command> uninstall`. `runtime.pi` may be left out of a manifest, which needs one bridge release for an installed runtime built before v0.12.0 ([changelog](CHANGELOG.md)).
 - **v0.13.0** is the [production-validation baseline](docs/status.md#v0130-production-validation-baseline) on Pi 1.1.0, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0): pi-code's `subagent` tool through the governed launcher, build-time transpilation of TypeScript Pi packages (`pretranspile`), and the Pi 1.1.0 pin. A release that enables `pretranspile` is not accepted by a runtime built before v0.13.0 ([changelog](CHANGELOG.md)).
+- `main` pins Pi 1.5.0 (the badge above), unreleased and not yet release-qualified; the remote workspace and Company Packs are also on `main` only ([status](docs/status.md#other-changes-on-main-unreleased)).
 - Personal distributions are supported. Managed access, governance, and the release lifecycle are candidates.
 - Managed flows pass on Linux, macOS, and Windows against local fixtures, and on Ubuntu against Keycloak, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack.
 - Not proven yet: a production company identity provider or gateway; live E2B, CubeSandbox, or Kubernetes Agent Sandbox; a native sandbox on Windows (use a remote one there).

@@ -2,7 +2,7 @@
 
 This page takes you from nothing to an installed, branded Pi command: `init`, `validate`, `test`, `build`, `install`. It builds a personal distribution, which signs in with Pi's own providers; a company distribution adds identity, a credential broker, and a gateway ([enterprise integration](enterprise-integration.md)). The commands below were run in this order on a clean checkout.
 
-You need Node.js 22.19 or newer and a PiShip checkout that has been built once:
+You need Node.js 22.19 or newer (and npm 11 or newer once you add Pi packages, for `piship lock`) and a PiShip checkout that has been built once:
 
 ```bash
 git clone https://github.com/tc3oliver/piship ~/src/piship

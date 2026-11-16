@@ -8,7 +8,7 @@ v0.13.0 is the production-validation baseline: tag `v0.13.0` at commit `7f9e167`
 
 ## Direction
 
-The engineering milestones on the way to a stable distribution framework, v0.10 and v0.11, are done and shipped in v0.11.0. What is left is 1.0.0, a decision and not engineering: there is no separate "v1.0 engineering" milestone, because everything it would have held is in v0.11. The work that continues is production validation and the open items under [before broad rollout](#before-broad-rollout).
+The engineering milestones on the way to a stable distribution framework, v0.10 and v0.11, are done and shipped in v0.11.0. What is left is 1.0.0, a decision and not engineering: there is no separate "v1.0 engineering" milestone, because everything it would have held is in v0.11. The work that continues is production validation and the open items under [before broad rollout](#before-broad-rollout). Since v0.13.0, `main` has also gained Company Packs, a remote workspace (preview), background tasks, and the Pi 1.5.0 pin; they ship in the next release ([status](status.md#other-changes-on-main-unreleased)).
 
 ### v0.10 — Portability and Windows hot-path performance (done)
 
@@ -23,7 +23,7 @@ The last major engineering milestone before 1.0.0, published as [v0.11.0](status
 - **Production readiness.** Clean-machine qualification of a managed, a personal, and a developer distribution, traced step by step to the test and the workflow that proves it ([qualification matrix](maintainers/v0.11-qualification-matrix.md)), and the Windows file-count pressure of the developer profile.
 - **Security and supply chain.** A [security review](security.md#v011-security-review) of the store, dependency sharing, closure bundling, and the migration, with a responsibility boundary table; and supply-chain qualification on Linux, macOS, and Windows: reproducibility, `verify-release`, tamper rejection, SBOM, notices, vulnerability and registry-signature checks, provenance, and attestation. The SBOM describes the logical dependency graph, not a file list, so sharing and bundling cannot hide a dependency, a license, a source, or an integrity value.
 
-Not part of v0.11: a Windows sandbox adapter, remote workspace synchronization, vendor KMS or HSM integrations, full TUF, a registry marketplace, npm publication, new platform targets, and Pi runtime seams that upstream does not expose.
+Not part of v0.11: a Windows sandbox adapter, remote workspace synchronization (a remote workspace landed on `main` after v0.13.0), vendor KMS or HSM integrations, full TUF, a registry marketplace, npm publication, new platform targets, and Pi runtime seams that upstream does not expose.
 
 ### 1.0.0 — GA and versioning decision (next, not an engineering milestone)
 
