@@ -560,6 +560,59 @@ export function unknownToolDenials(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * An MCP rule whose resource names no declared server matches nothing: an
+ * `mcp.server.start` resource is a server id and an `mcp.tool.call` one is
+ * `<server>:<tool>`. The model-facing name (`mcp__docs__search`) is the
+ * common slip; it is the `tool.execute` resource, not this one.
+ */
+export function unknownMcpServerRules(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  const mcp = manifest.governance?.mcp;
+  const ids = new Set(
+    !mcp || mcp.mode === "off" ? [] : mcp.servers.map((server) => server.id),
+  );
+  const literal = (text: string) => !/[*?[\]{}]/.test(text);
+  return (["enforced", "defaults"] as const).flatMap((list) =>
+    policy[list].flatMap((rule, index) => {
+      const at = `policy.${list}[${index}].resource`;
+      const { resource } = rule;
+      if (rule.action === "mcp.server.start") {
+        return literal(resource) && !ids.has(resource)
+          ? [
+              {
+                path: at,
+                message: `${rule.id} (${rule.effect} mcp.server.start) names ${resource}, which is not a server declared under mcp.servers, so it matches nothing; the resource is the server id`,
+              },
+            ]
+          : [];
+      }
+      if (rule.action !== "mcp.tool.call") return [];
+      const tool = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(resource);
+      if (tool)
+        return [
+          {
+            path: at,
+            message: `${rule.id} (${rule.effect} mcp.tool.call) names the model-facing tool ${resource}, so it matches nothing; write it as ${tool[1]}:${tool[2]} (<server>:<tool>)`,
+          },
+        ];
+      const separator = resource.indexOf(":");
+      const server = separator < 0 ? resource : resource.slice(0, separator);
+      return literal(server) && !ids.has(server)
+        ? [
+            {
+              path: at,
+              message: `${rule.id} (${rule.effect} mcp.tool.call) names ${resource}, but ${server} is not a server declared under mcp.servers, so it matches nothing; the resource is <server>:<tool>`,
+            },
+          ]
+        : [];
+    }),
+  );
+}
+
+/**
  * Why a filesystem rule pattern can never match a decided path, which is
  * absolute (`/...` or `C:/...`), symlink-resolved, with `/` separators and no
  * `.`, `..`, empty, or trailing segment; undefined when it can. Path tokens
@@ -663,6 +716,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
     ...unusedVariables(manifest),
     ...unknownToolDenials(manifest),
+    ...unknownMcpServerRules(manifest),
     ...unmatchablePathRules(manifest),
     ...inactivePackRules(manifest),
     ...findings({

@@ -2,11 +2,17 @@
 // and policy.
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { type ApprovalChannel, redact } from "@piship/contracts";
+import {
+  type ApprovalChannel,
+  type PolicyAction,
+  redact,
+} from "@piship/contracts";
 import { type McpServerConfig, parseExternalMcpDefinitions } from "@piship/mcp";
 import {
   assessExtensionProjectTrust,
+  BUILTIN_DEFAULT_RULE,
   claudeDirectories,
+  decisionRule,
   type ExtensionTrustAssessment,
   type ProjectResourceCandidate,
   resourceTrustDecision,
@@ -38,6 +44,38 @@ function trustKind(
     : kind === "prompts"
       ? "prompts"
       : "instructions";
+}
+
+/** The policy action that decides a loadable project item. */
+export function projectItemAction(kind: string): PolicyAction {
+  return (
+    KIND_ACTION[
+      kind === "instruction-import" || kind === "system-prompt"
+        ? "instructions"
+        : kind
+    ] ?? "resource.load"
+  );
+}
+
+/**
+ * The policy request a launch makes for a project item once project trust
+ * admits it, or undefined for an item it decides another way (MCP, Claude
+ * Code configuration, items this release never loads, or a trust deny).
+ */
+export function projectItemRequest(
+  root: string,
+  candidate: ProjectResourceCandidate,
+): { action: PolicyAction; resource: string } | undefined {
+  if (
+    !LOADABLE.includes(candidate.kind) ||
+    candidate.effect === "deny" ||
+    candidate.effect === "company-approved"
+  )
+    return undefined;
+  return {
+    action: projectItemAction(candidate.kind),
+    resource: `project:${relativeShown(root, candidate.path)}`,
+  };
 }
 
 export async function resolveProject(
@@ -130,22 +168,14 @@ export async function resolveProject(
           );
         } else {
           const decision = await session.decide(
-            KIND_ACTION[
-              kind === "instruction-import" || kind === "system-prompt"
-                ? "instructions"
-                : kind
-            ] ?? "resource.load",
+            projectItemAction(kind),
             resource,
             channel,
           );
           loaded = decision.outcome === "allow";
           if (!loaded) {
-            reason = `policy ${decision.ruleId}`;
-            leftOut.add(
-              shown,
-              candidate.resolvedPath,
-              `denied by policy rule ${decision.ruleId}`,
-            );
+            reason = decisionRule(decision);
+            leftOut.add(shown, candidate.resolvedPath, deniedHint(decision));
           }
         }
       }
@@ -329,8 +359,8 @@ async function resolveExtensionConfig(
         channel,
       );
       if (decision.outcome === "allow") continue;
-      blocked = `policy ${decision.ruleId}`;
-      hint = `denied by policy rule ${decision.ruleId}`;
+      blocked = decisionRule(decision);
+      hint = deniedHint(decision);
       blocker = item;
       break;
     }
@@ -385,8 +415,19 @@ async function resolveExtensionConfig(
 }
 
 /** A project path as shown to people and audit: relative to the project root. */
+/** Why policy left an item out, naming the rule or saying none matched. */
+function deniedHint(decision: { ruleId: string; effect: string }): string {
+  return decision.ruleId === BUILTIN_DEFAULT_RULE
+    ? `no policy rule allows it; the policy default is ${decision.effect}`
+    : `denied by policy rule ${decision.ruleId}`;
+}
+
 function projectPath(session: GovernanceSession, path: string): string {
-  const rel = relative(session.project.root, path);
+  return relativeShown(session.project.root, path);
+}
+
+function relativeShown(root: string, path: string): string {
+  const rel = relative(root, path);
   return rel && !rel.startsWith("..") ? rel.split(sep).join("/") : path;
 }
 

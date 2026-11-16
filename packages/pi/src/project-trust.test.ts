@@ -440,7 +440,9 @@ describe("managed mode", () => {
       defaultEffect: "deny",
     });
     expect(session.projectTrust.trusted).toBe(false);
-    expect(session.projectTrust.reason).toMatch(/^policy /);
+    expect(session.projectTrust.reason).toBe(
+      "No rule matched; the policy default is deny",
+    );
   });
 
   it("fails closed for a project with no configuration unless every dimension is approved", async () => {

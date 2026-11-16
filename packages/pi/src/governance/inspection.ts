@@ -1,10 +1,12 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { redact } from "@piship/contracts";
+import { type PolicyDecision, redact } from "@piship/contracts";
 import { type UserAutoStatus, userAutoStatus } from "@piship/core";
 import {
   assessExtensionProjectTrust,
+  BUILTIN_DEFAULT_RULE,
   type CapabilityState,
+  decisionRule,
   type ExtensionTrustAssessment,
   type PolicyEngine,
   type ProjectIdentity,
@@ -30,6 +32,7 @@ import {
   KIND_ACTION,
   type ResourceEvidence,
 } from "./options.js";
+import { projectItemRequest } from "./project.js";
 import { fileMatches, packageRoot, payloadTree } from "./resources.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -47,6 +50,11 @@ export interface GovernanceInspection {
   readonly capabilities: readonly CapabilityState[];
   /** Declared resources as trust and integrity see them, before approvals. */
   readonly resources: readonly ResourceEvidence[];
+  /**
+   * The policy decision a launch would make for each project item that
+   * project trust admits, keyed by the candidate's path.
+   */
+  readonly projectDecisions: ReadonlyMap<string, PolicyDecision>;
   /** The user's auto mode as a session would apply it. */
   readonly userAuto: UserAutoStatus;
 }
@@ -57,6 +65,13 @@ export interface GovernanceInspection {
  * reported containment is the real one; a required sandbox that is
  * unavailable is reported, not thrown.
  */
+/** The rule and its effect; the default's reason already names the effect. */
+function policyReason(decision: PolicyDecision): string {
+  return decision.ruleId === BUILTIN_DEFAULT_RULE
+    ? decisionRule(decision)
+    : `policy ${decision.ruleId} (${decision.effect})`;
+}
+
 export async function inspectGovernance(
   options: GovernanceOptions,
 ): Promise<GovernanceInspection> {
@@ -150,10 +165,8 @@ export async function inspectGovernance(
     resources.push({
       ...base,
       loaded,
-      reason:
-        decision.effect === "allow"
-          ? reason
-          : `policy ${decision.ruleId} (${decision.effect})`,
+      ...(loaded && decision.effect === "ask" ? { asks: true } : {}),
+      reason: decision.effect === "allow" ? reason : policyReason(decision),
       integrity,
       compatible,
     });
@@ -189,10 +202,9 @@ export async function inspectGovernance(
       resources.push({
         ...base,
         loaded: decision.effect !== "deny",
+        ...(decision.effect === "ask" ? { asks: true } : {}),
         reason:
-          decision.effect === "allow"
-            ? trust.reason
-            : `policy ${decision.ruleId} (${decision.effect})`,
+          decision.effect === "allow" ? trust.reason : policyReason(decision),
         integrity: "verified",
       });
     }
@@ -207,10 +219,8 @@ export async function inspectGovernance(
       class: "builtin",
       path: name,
       loaded: decision.effect !== "deny",
-      reason:
-        decision.effect === "allow"
-          ? "builtin"
-          : `policy ${decision.ruleId} (${decision.effect})`,
+      ...(decision.effect === "ask" ? { asks: true } : {}),
+      reason: decision.effect === "allow" ? "builtin" : policyReason(decision),
       integrity: "not-applicable",
     });
   }
@@ -219,9 +229,15 @@ export async function inspectGovernance(
     options.lock.governance.providers.some(
       (item) => item.capability === "workflow" && item.class !== "builtin",
     );
+  const projectDecisions = new Map<string, PolicyDecision>();
+  for (const candidate of candidates) {
+    const request = projectItemRequest(project.root, candidate);
+    if (request) projectDecisions.set(candidate.path, engine.evaluate(request));
+  }
   return {
     project,
     candidates,
+    projectDecisions,
     extensionTrust: assessExtensionProjectTrust(candidates, {
       policy: manifest.policy,
       identity: project,

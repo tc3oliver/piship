@@ -5,7 +5,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { type GovernanceLock, treeDigest } from "@piship/core";
-import { projectDimensionEffect, resourceTrustDecision } from "@piship/policy";
+import {
+  decisionRule,
+  projectDimensionEffect,
+  resourceTrustDecision,
+} from "@piship/policy";
 import type {
   DeclaredResource,
   GovernanceManifest,
@@ -80,7 +84,7 @@ export async function resolveResources(
         session.startupChannel(),
       );
       loaded = decision.outcome === "allow";
-      if (!loaded) reason = `policy ${decision.ruleId}`;
+      if (!loaded) reason = decisionRule(decision);
     }
     session.emit(loaded ? "resource.load" : "resource.denied", {
       resource: `builtin:${name}`,
@@ -263,7 +267,7 @@ export async function loadPackageFiles(
     );
     if (decision.outcome !== "allow") {
       session.emit("resource.denied", { resource, detail });
-      record(false, `policy ${decision.ruleId}`);
+      record(false, decisionRule(decision));
       continue;
     }
     const emit = () =>
@@ -367,7 +371,7 @@ async function declaredResource(
     session.startupChannel(),
   );
   if (decision.outcome !== "allow")
-    return deny(`policy ${decision.ruleId}`, { integrity, compatible });
+    return deny(decisionRule(decision), { integrity, compatible });
   session.emit("resource.load", {
     resource,
     policy: decision.policyId,

@@ -6,6 +6,7 @@ import {
   PISHIP_SCHEMA_V1ALPHA6,
   parseManifest,
   runtimeVariableUse,
+  unknownMcpServerRules,
 } from "./index.js";
 
 type Json = Record<string, unknown>;
@@ -620,5 +621,50 @@ describe("policy.packs without sandbox.required", () => {
     expect(
       warnings(routine(true)).filter((item) => item.path === "policy.packs"),
     ).toEqual([]);
+  });
+});
+
+describe("MCP rules naming no declared server", () => {
+  const rule = (id: string, action: string, resource: string) => ({
+    id,
+    action,
+    resource,
+    effect: "allow",
+  });
+  const manifest = {
+    governance: {
+      mcp: { mode: "allowlist", servers: [{ id: "docs" }] },
+      policy: {
+        enforced: [rule("ok.glob", "mcp.tool.call", "**")],
+        defaults: [
+          rule("ok.start", "mcp.server.start", "docs"),
+          rule("ok.tool", "mcp.tool.call", "docs:search"),
+          rule("ok.any", "mcp.tool.call", "*:search"),
+          rule("model.name", "mcp.tool.call", "mcp__docs__search"),
+          rule("typo.tool", "mcp.tool.call", "doc:search"),
+          rule("typo.start", "mcp.server.start", "doc"),
+        ],
+      },
+    },
+  } as unknown as Parameters<typeof unknownMcpServerRules>[0];
+
+  it("warns about the model-facing name and unknown servers only", () => {
+    expect(unknownMcpServerRules(manifest)).toEqual([
+      {
+        path: "policy.defaults[3].resource",
+        message:
+          "model.name (allow mcp.tool.call) names the model-facing tool mcp__docs__search, so it matches nothing; write it as docs:search (<server>:<tool>)",
+      },
+      {
+        path: "policy.defaults[4].resource",
+        message:
+          "typo.tool (allow mcp.tool.call) names doc:search, but doc is not a server declared under mcp.servers, so it matches nothing; the resource is <server>:<tool>",
+      },
+      {
+        path: "policy.defaults[5].resource",
+        message:
+          "typo.start (allow mcp.server.start) names doc, which is not a server declared under mcp.servers, so it matches nothing; the resource is the server id",
+      },
+    ]);
   });
 });
