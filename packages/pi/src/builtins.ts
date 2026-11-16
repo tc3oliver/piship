@@ -28,7 +28,7 @@ import {
 import { grantCommand } from "./grant-command.js";
 
 export const DEFAULT_PLAN_PROMPT =
-  "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available: do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
+  "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available (read on a directory lists it): do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
 export const DEFAULT_BUILD_PROMPT =
   "You are in Build mode. Carry out the agreed plan with the available tools.";
 
