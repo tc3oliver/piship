@@ -26,7 +26,11 @@ import {
   resolvedPathPattern,
 } from "./glob.js";
 import { seamPlane } from "./seams.js";
-import { chainSegments } from "./shell-words.js";
+import {
+  chainSegments,
+  grantCommandWords,
+  wrappedCommand,
+} from "./shell-words.js";
 
 /** Which planes an active OS sandbox adapter enforces. */
 export interface PolicyContainment {
@@ -146,8 +150,8 @@ function insideWorkspace(root: string, target: string): boolean {
 
 /**
  * The commands a rule judges one by one: a chain's segments with leading
- * `NAME=value` prefixes removed (only harmless ones) and
- * a `cd` into the workspace dropped. Undefined when the command is not made
+ * `NAME=value` prefixes removed (only harmless ones), a shell wrapper around
+ * one plain command unwrapped, and a `cd` into the workspace dropped. Undefined when the command is not made
  * of plain commands, so only the whole text is judged.
  */
 function ruleSegments(
@@ -160,9 +164,17 @@ function ruleSegments(
   const kept: string[] = [];
   for (let segment of segments) {
     for (;;) {
-      const match = platform === "posix" ? ASSIGNMENT.exec(segment) : null;
-      if (!match || !HARMLESS_ASSIGNMENT.test(match[1] as string)) break;
-      segment = segment.slice(match[0].length);
+      if (platform !== "posix") break;
+      const match = ASSIGNMENT.exec(segment);
+      if (match && HARMLESS_ASSIGNMENT.test(match[1] as string)) {
+        segment = segment.slice(match[0].length);
+        continue;
+      }
+      // `bash -c 'npm test'` is judged as `npm test`.
+      const words = grantCommandWords(segment, platform);
+      const inner = words && wrappedCommand(words);
+      if (inner === undefined) break;
+      segment = inner;
     }
     const cd =
       /^cd\s+(?:"([^"$`\\]+)"|'([^']+)'|([^\s"'$`\\~*?[{-][^\s"'$`\\*?[{]*))$/.exec(

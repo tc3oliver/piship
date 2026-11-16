@@ -128,14 +128,16 @@ describe("gitPushResources", () => {
     // A quoted string is data, not a command.
     ['echo "git push origin main"', []],
     ['git commit -m "fix git push"', []],
+    // A shell wrapper around one plain command pushes as that command.
+    ["sh -c 'git push origin main'", ["origin/main"]],
+    [`bash -lc "sh -c 'git push upstream dev'"`, ["upstream/dev"]],
   ])("%s", (command, expected) => {
     expect(gitPushResources(command)).toEqual(expected);
   });
 
   // Not recognized, and not claimed: these stay decided by shell.execute.
   it.each([
-    "sh -c 'git push origin main'",
-    'bash -lc "git push origin main"',
+    "sh -c 'git push origin main; true'",
     "git -c alias.p=push p origin main",
     "gp origin main",
     "$GIT push origin main",
@@ -183,7 +185,7 @@ describe("gitPushResources", () => {
       "`git.push` is recognized from the command text only, by a best-effort parser of shell syntax: a `git.push` rule is not a guarantee",
     );
     for (const wrapper of [
-      "`sh -c 'git push'`",
+      "`sh -c 'git push; true'`",
       "a git alias (`git -c alias.p=push p`)",
       "a quoted command string",
       "`$GIT push`",
