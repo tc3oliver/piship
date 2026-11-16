@@ -194,6 +194,8 @@ const MAX_UPSTREAM_RETRY_AFTER_MS = 60 * 60 * 1000;
 
 const CHECK_GATEWAY =
   "Ask your administrator to check that inference.baseUrl points at a healthy OpenAI-compatible gateway";
+const RETRY_GATEWAY =
+  "Check the network connection, then try again; if it keeps failing, ask your administrator whether the inference gateway is up";
 
 /**
  * Map a gateway answer to the error contract and retry rules. `body`, the
@@ -275,6 +277,7 @@ export function classifyGatewayStatus(
       {
         component: "inference",
         retryable: true,
+        userAction: RETRY_GATEWAY,
       },
     );
   return new PiShipError(
@@ -311,7 +314,7 @@ const probeTimeout = () =>
   new PiShipError(
     "GATEWAY_UNREACHABLE",
     `The inference gateway did not answer within ${PROBE_TIMEOUT_MS / 1000} s`,
-    { component: "inference", retryable: true },
+    { component: "inference", retryable: true, userAction: RETRY_GATEWAY },
   );
 
 /** Explicit OpenAI-compatible endpoint (managed gateway or local server). */

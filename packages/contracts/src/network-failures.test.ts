@@ -358,6 +358,13 @@ describe("a target failure without a proxy still names the target", () => {
     expect(error.message).toBe(
       `access request to 127.0.0.1:${port} failed: ECONNREFUSED`,
     );
+    expect(error.userAction).toBe(
+      "Check the network connection (and the VPN, if one is needed) and that 127.0.0.1 is up, then try again",
+    );
+    expect(error.sanitizedDetail).toEqual({
+      hop: "target",
+      transport: "ECONNREFUSED",
+    });
   });
 });
 
