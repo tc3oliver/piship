@@ -235,12 +235,63 @@ const graphBuild = (
  */
 const transpileGraphBuild = (
   root: string,
+  packagePath: string,
   entryPaths: readonly string[],
-): Record<string, unknown> => ({
-  ...graphBuild(root, entryPaths),
-  packages: "external",
-  tsconfigRaw: {},
-});
+): Record<string, unknown> => {
+  const alias = importAliases(join(root, ...packagePath.split("/")));
+  return {
+    ...graphBuild(root, entryPaths),
+    packages: "external",
+    tsconfigRaw: {},
+    ...(alias ? { alias } : {}),
+  };
+};
+
+/**
+ * The package's own subpath imports (`"imports": {"#src/*": "./src/*"}`) as
+ * esbuild aliases. Pi's loader maps `#src/x` to `./src/x` and then tries
+ * extensions (`x.ts`), as for a relative import; esbuild tries none after an
+ * `imports` mapping, and reads no tsconfig `paths` below `node_modules`, but
+ * does after an alias to a path. Only a whole key (`#config`) or a trailing
+ * wildcard (`#src/*` to `./src/*`) inside the package is mapped; any other
+ * entry is left to esbuild.
+ */
+function importAliases(directory: string): Record<string, string> | undefined {
+  let imports: unknown;
+  try {
+    imports = (
+      JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
+        imports?: unknown;
+      }
+    ).imports;
+  } catch {
+    return undefined;
+  }
+  if (!imports || typeof imports !== "object") return undefined;
+  const alias: Record<string, string> = {};
+  for (const [key, value] of Object.entries(imports)) {
+    const conditions = value as Record<string, unknown> | null;
+    const target =
+      typeof value === "string"
+        ? value
+        : [conditions?.import, conditions?.node, conditions?.default].find(
+            (item): item is string => typeof item === "string",
+          );
+    if (
+      !key.startsWith("#") ||
+      !target?.startsWith("./") ||
+      target.split("/").includes("..")
+    )
+      continue;
+    const wildcard = key.endsWith("/*") && target.endsWith("/*");
+    if (!wildcard && (key.includes("*") || target.includes("*"))) continue;
+    alias[wildcard ? key.slice(0, -2) : key] = join(
+      directory,
+      ...(wildcard ? target.slice(0, -2) : target).split("/"),
+    );
+  }
+  return Object.keys(alias).length ? alias : undefined;
+}
 
 /**
  * A metafile path as a `/`-separated path relative to `root`, whatever the
@@ -620,7 +671,11 @@ export function pretranspileClosures(
   );
   const graphs = esbuild.buildAll(
     list.map((_, index) =>
-      transpileGraphBuild(roots[index] as string, entries[index] as string[]),
+      transpileGraphBuild(
+        roots[index] as string,
+        list[index]?.packagePath as string,
+        entries[index] as string[],
+      ),
     ),
   );
   const plans = list.map((options, index) => {
