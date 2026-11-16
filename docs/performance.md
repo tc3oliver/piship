@@ -72,6 +72,8 @@ Measured on Linux x64 (Node 24, warm page cache), a distribution (24 extensions,
 | Without `pretranspile` | 793-802 ms | 2,424-2,727 ms | 55,539 (41,261) | 2,382 (361) |
 | With `pretranspile` | 235-242 ms | 1,397-1,433 ms | 15,382 (2,193) | 2,949 (1,239) |
 
+The developer example turns it on for pi-code. On macOS (Node 24, Apple silicon, five warm runs each, measured twice in alternation) `devcode --smoke` took 2,088-2,883 ms without it (`resources_loaded` 1,759-2,279 ms) and 619-974 ms with it (273-459 ms); with an empty loader cache (a fresh `TMPDIR`), 3,984-7,066 ms against 1,532-2,238 ms.
+
 The added `openat` failures are the loader looking for a `package.json` in each directory of the written `.js` files. Windows was not measured: the earlier Windows analysis found about 150 µs per file lookup under an antivirus scanner, which would make the 40,000 fewer lookups about 6 s of a start, but that is an estimate from the counts, not a measurement.
 
 ## Measuring the footprint

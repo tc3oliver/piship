@@ -60,6 +60,9 @@ resources:
       package: pi-code
       version: 1.4.2
       class: user
+      # pi-code ships TypeScript that imports ./x.js while only x.ts exists;
+      # writing the JavaScript at build time saves about 1.7 s per start.
+      pretranspile: true
 
     # Diagnostics, LSP navigation, ast-grep, formatting and linting feedback after
     # every edit. It installs its linters and language servers on first use into
