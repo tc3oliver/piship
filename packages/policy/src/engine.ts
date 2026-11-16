@@ -195,11 +195,11 @@ function ruleSegments(
  */
 const TRANSPARENT_PREFIXES: Readonly<Record<string, string>> = {
   sudo: "ugCDhprtTU",
-  doas: "uC",
-  env: "uCS",
+  doas: "uCa",
+  env: "uCP",
   nice: "n",
   nohup: "",
-  time: "",
+  time: "of",
   command: "",
   exec: "a",
 };
@@ -215,8 +215,9 @@ const LONG_OPTIONS_WITH_VALUE = new Set([
   "--close-from",
   "--command-timeout",
   "--unset",
-  "--split-string",
   "--adjustment",
+  "--output",
+  "--format",
 ]);
 const FIRST_WORD = /^(\S+)\s+(?=\S)/;
 
@@ -250,9 +251,21 @@ function unprefixedCommand(command: string): string | undefined {
       rest = rest.slice(option[0].length);
       if (flag === "--") break;
       if (name === "command" && /[vV]/.test(flag)) return undefined;
-      const takesValue = flag.startsWith("--")
+      // `env -S` splits one quoted word into a command: judge it as written.
+      if (name === "env" && /^--split-string(=|$)/.test(flag)) return undefined;
+      let takesValue = flag.startsWith("--")
         ? LONG_OPTIONS_WITH_VALUE.has(flag)
-        : !/^-\d+$/.test(flag) && valued.includes(flag.at(-1) ?? "");
+        : false;
+      // In a group (`-Eu root`, `-uroot`) a value letter takes the rest of
+      // the word, or the next word when it ends the group.
+      if (!flag.startsWith("--") && !/^-\d+$/.test(flag))
+        for (let index = 1; index < flag.length; index++) {
+          if (name === "env" && flag[index] === "S") return undefined;
+          if (valued.includes(flag[index] as string)) {
+            takesValue = index === flag.length - 1;
+            break;
+          }
+        }
       if (takesValue) {
         const value = FIRST_WORD.exec(rest);
         if (!value) return undefined;

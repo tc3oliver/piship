@@ -11,6 +11,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { chainSegments } from "./shell-words.js";
 import { NO_CONTAINMENT, PolicyEngine, chainsBeyondPattern } from "./index.js";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
+import { BUILTIN_DEFAULT_RULE } from "./engine.js";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "piship-chain-")));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -357,6 +358,14 @@ describe.skipIf(process.platform === "win32")(
     it.each([
       "sudo rm -rf /",
       "sudo -u root -E rm -rf /",
+      "sudo -uroot rm -rf /",
+      "sudo -Ualice rm -rf /",
+      "sudo -Eu root rm -rf /",
+      "doas -uroot rm -rf /",
+      "doas -a style rm -rf /",
+      "time -o x rm -rf /",
+      "time -f %e rm -rf /",
+      "env -P /bin rm -rf /",
       "sudo -- rm -rf /",
       "/usr/bin/sudo rm -rf /",
       "doas rm -rf /",
@@ -401,12 +410,21 @@ describe.skipIf(process.platform === "win32")(
       expect(run(asking, "sudo npm test").effect).toBe("ask");
       expect(run(asking, "env FOO=1 npm test").effect).toBe("ask");
       expect(run(asking, "nice npm test").effect).toBe("ask");
+      expect(run(asking, "sudo -uroot npm test").effect).toBe("ask");
+      expect(run(asking, "time -o x npm test").effect).toBe("ask");
     });
 
     it("leaves a prefix that runs nothing, or a plain command, alone", () => {
       expect(run(prefixed, "command -v rm").effect).toBe("allow");
       expect(run(prefixed, "sudo ls").effect).toBe("allow");
       expect(run(prefixed, "sudo -u").effect).toBe("allow");
+      // `env -S` runs a quoted word split into a command: judged as written.
+      for (const command of [
+        "env -S 'rm -rf /'",
+        "env -iS 'rm -rf /'",
+        "env --split-string='rm -rf /'",
+      ])
+        expect(run(prefixed, command).ruleId).toBe(BUILTIN_DEFAULT_RULE);
     });
   },
 );
