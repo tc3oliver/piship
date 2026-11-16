@@ -1264,6 +1264,9 @@ describe("signing key passphrases", () => {
     ]);
     expect(init.status).toBe(0);
     expect(init.stdout).toContain("    bootstrap:\n      version: 1\n");
+    expect(init.stdout).toContain(
+      "If piship.yaml already has an updates: block, put the trust: block under it",
+    );
     mkdirSync(join(temp, "project", "resources"), { recursive: true });
     writeFileSync(join(temp, "project", "resources", "AGENTS.md"), "# Acme\n");
     const yaml = (/^(updates:\n[\s\S]*?)\n\n/m.exec(init.stdout)?.[1] ??

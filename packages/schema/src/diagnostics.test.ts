@@ -189,6 +189,17 @@ extra: true
     );
   });
 
+  it("names a key repeated in one mapping and says to merge the blocks", () => {
+    const error = failure(
+      manifest(`${valid}updates:\n  channel: stable\nupdates:\n  trust: {}\n`),
+    );
+    expect(error.kind).toBe("YAML parse failure");
+    expect(error.message).toContain(
+      "updates: appears twice in the same mapping (again at line 13); merge the two updates: blocks into one",
+    );
+    expect(error.errors[0]?.position?.line).toBe(13);
+  });
+
   it("locates the problems of a manifest being migrated", () => {
     expect(() =>
       migrateManifestSource(valid.replace("mode: personal", "mode: x")),

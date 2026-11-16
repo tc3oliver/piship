@@ -92,7 +92,7 @@ export function formatDecision(
   if (explanation.inactive.length > 0)
     blocks.push(
       section(
-        "Inactive rules (no enforced sandbox contains them)",
+        "Inactive rules (would match, but apply only under an enforced sandbox; set sandbox.required: true in piship.yaml to activate them)",
         ...explanation.inactive.map(
           (match) => `${match.ruleId} (${match.layer}, ${match.effect})`,
         ),

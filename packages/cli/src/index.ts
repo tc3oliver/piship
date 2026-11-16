@@ -86,6 +86,7 @@ import {
 } from "@piship/core";
 import { formatError, PiShipError, redact } from "@piship/contracts";
 import {
+  inactivePackRules,
   launchWarnings,
   unknownToolDenials,
   unmatchablePathRules,
@@ -1362,6 +1363,7 @@ export async function runCli(
       for (const warning of [
         ...unknownToolDenials(locked),
         ...unmatchablePathRules(locked),
+        ...inactivePackRules(locked),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       output.stdout(
@@ -1952,7 +1954,7 @@ async function runLifecycle(
       for (const warning of described.warnings)
         output.stderr(`Warning: ${warning}`);
       output.stdout(
-        `Add this bootstrap root to piship.yaml (schema piship/v1alpha5 or later):\n\n${described.yaml}\nKey fingerprints:\n${described.fingerprints.map((key) => `  ${key.id} ${key.fingerprint}`).join("\n")}`,
+        `Add this bootstrap root to piship.yaml (schema piship/v1alpha5 or later). If piship.yaml already has an updates: block, put the trust: block under it instead of adding a second updates: line:\n\n${described.yaml}\nKey fingerprints:\n${described.fingerprints.map((key) => `  ${key.id} ${key.fingerprint}`).join("\n")}`,
       );
     } else if (first === "next" && positional.length === 2) {
       const manifest = options["--manifest"];

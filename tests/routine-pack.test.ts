@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  formatDecision,
   NO_CONTAINMENT,
   type PolicyContext,
   PolicyEngine,
@@ -77,6 +78,13 @@ describe("piship.routine@1", () => {
         .explain({ action: "shell.execute", resource: "npm test" })
         .inactive.map((m) => m.ruleId),
     ).toContain("piship.routine.node.npm-test");
+    expect(
+      formatDecision(
+        e.explain({ action: "shell.execute", resource: "git status" }),
+      ),
+    ).toMatch(
+      /Inactive rules \(.*set sandbox\.required: true.*\):\n {2}piship\.routine\.git\./,
+    );
   });
 
   it("keeps path and tool rules without containment", () => {
