@@ -27,7 +27,15 @@ import {
   RestrictedFileSecretStore,
 } from "@piship/credentials";
 import type { UpdateRoot } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { deadPid } from "../../../tests/helpers/processes.js";
 import * as archiveModule from "./archive.js";
 import { PISHIP_VERSION } from "./compatibility.js";
@@ -4772,6 +4780,11 @@ wait();
       env: { ...process.env, ACMEPI_SESSION: dir },
       stdio: ["ignore", "ignore", "pipe"],
     });
+    // A timed-out test never reaches its `finally`; this still stops the
+    // session, which otherwise polls for `go` forever as an orphan.
+    onTestFinished(() => {
+      child.kill();
+    });
     let stderr = "";
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
@@ -4886,6 +4899,9 @@ else {
     );
     const child = spawn(process.execPath, [receipt.launcher as string], {
       stdio: "ignore",
+    });
+    onTestFinished(() => {
+      child.kill();
     });
     try {
       await waitForFile(ready);
