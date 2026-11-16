@@ -31,7 +31,7 @@ You can fork Pi, build all of that in, and merge upstream every week for as long
 | Sign-in | Build it | OIDC with PKCE, configured in YAML |
 | Provider keys | On every laptop, or build a proxy | Stay in your gateway; laptops get a short-lived credential |
 | Which models people can use | Patch the code | An allowlist in the manifest |
-| Sandbox | Build it | bubblewrap, Seatbelt, or your remote sandbox |
+| Sandbox | Build it | bubblewrap (Linux), Seatbelt (macOS), or your remote sandbox |
 | Rules for tools, files, shell, MCP | Build it | Declared, enforced, and explainable |
 | Getting it onto 500 laptops | Your own build and update tooling | Signed releases, verified updates, rollback |
 
@@ -243,7 +243,7 @@ The sandbox follows the same split: PiShip decides whether a command may run, th
 PiShip is pre-release and not on npm. What is proven, and what is not:
 
 - Earlier baselines (v0.7.1 to v0.9.1, on Pi 0.87.1 to 1.0.2, each with its own GitHub pre-release): see [docs/status.md](docs/status.md).
-- **v0.11.0** is the [previous baseline](docs/status.md#v0110-previous-production-validation-baseline) on Pi 1.0.3, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0): the stable `piship/v1` and `piship-lock/v1` contracts, the developer distribution and `--yolo`, a bundled, stripped payload with shared dependencies, and the shared file store. v0.10.0 was never published; it shipped inside v0.11.0 ([changelog](CHANGELOG.md)).
+- **v0.11.0** is an [earlier baseline](docs/status.md#v0110-previous-production-validation-baseline) on Pi 1.0.3, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0): the stable `piship/v1` and `piship-lock/v1` contracts, the developer distribution and `--yolo`, a bundled, stripped payload with shared dependencies, and the shared file store. v0.10.0 was never published; it shipped inside v0.11.0 ([changelog](CHANGELOG.md)).
 - **v0.12.0** is the [previous baseline](docs/status.md#v0120-previous-production-validation-baseline) on Pi 1.0.3, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.12.0): fixes for the crashes, dead ends, and repeated prompts from install to daily use, plain HTTP to private hosts by default, remembered project-trust answers, and `<command> uninstall`. `runtime.pi` may be left out of a manifest, which needs one bridge release for an installed runtime built before v0.12.0 ([changelog](CHANGELOG.md)).
 - **v0.13.0** is the [production-validation baseline](docs/status.md#v0130-production-validation-baseline) on Pi 1.1.0, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0): pi-code's `subagent` tool through the governed launcher, build-time transpilation of TypeScript Pi packages (`pretranspile`), and the Pi 1.1.0 pin. A release that enables `pretranspile` is not accepted by a runtime built before v0.13.0 ([changelog](CHANGELOG.md)).
 - `main` pins Pi 1.5.0 (the badge above), unreleased and not yet release-qualified; the remote workspace and Company Packs are also on `main` only ([status](docs/status.md#other-changes-on-main-unreleased)).
