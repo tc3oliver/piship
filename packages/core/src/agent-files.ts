@@ -578,8 +578,8 @@ export const AGENT_FILES_LOCK_QUEUE_MS = 30_000;
 // Parallel session launches (a subagent's children, several sessions opened
 // at once) meet here together: they wait out a busy lock for `waitMs`, then
 // report the same error as before. The budget is per holder: each time the
-// lock has passed to another launch the queue is moving, so the wait starts
-// again, up to AGENT_FILES_LOCK_QUEUE_MS in all. A single holder that keeps
+// lock has passed to another launch, or been let go, the queue is moving, so
+// the wait starts again, up to AGENT_FILES_LOCK_QUEUE_MS in all. A single holder that keeps
 // the lock for `waitMs` still ends the wait. The wait backs off with jitter so
 // that they do not retry in step; with no budget (a launch that is not a
 // session) the first busy answer is the error.
@@ -595,17 +595,27 @@ function agentFilesTransaction<T>(
   let deadline = start + waitMs;
   let holder: string | null = null;
   const guard = filePath(agentDir, ".piship-agent-files-lock");
+  const recovery = filePath(agentDir, ".piship-agent-files-recovery");
   for (let attempt = 0; ; attempt += 1) {
     try {
       return agentFilesTransactionOnce(agentDir, operation);
     } catch (error) {
       if (!(error instanceof AgentFilesBusyError) || waitMs <= 0) throw error;
       const owner = readOwner(join(guard, "owner.json"));
-      const token = typeof owner === "object" ? owner.token : null;
-      if (token !== null && token !== holder) {
+      // A lock let go since this attempt found it held is progress even when
+      // no next owner is seen: on Windows a waiter's holder check is slow
+      // enough that the next holder has often come and gone in between. An
+      // unfinished recovery, which also leaves no lock, is not.
+      const seen =
+        typeof owner === "object"
+          ? `token:${owner.token}`
+          : owner === "missing" && !existsSync(guard) && !existsSync(recovery)
+            ? "released"
+            : owner;
+      if (seen !== holder || seen === "released") {
         if (holder !== null)
           deadline = Math.min(performance.now() + waitMs, cap);
-        holder = token;
+        holder = seen;
       }
       const left = deadline - performance.now();
       if (left <= 0) throw error;

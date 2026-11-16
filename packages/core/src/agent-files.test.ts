@@ -1078,6 +1078,28 @@ describe("parallel session launches", () => {
         delete (agentFilesLockHooks as Record<string, unknown>)[key];
     });
 
+    it("keeps waiting while launches take and let go of the lock between its looks", () => {
+      // As on Windows, where the holder check is slow: each attempt finds the
+      // lock held, but by the time it looks at the owner that launch has let
+      // go, so the waiter never sees a next owner's token. Each release is
+      // progress, so this outlasts the 300 ms budget.
+      const started = Date.now();
+      let held = 0;
+      agentFilesLockHooks.rename = (from, to) => {
+        if (to === guard() && Date.now() - started < 900) {
+          held += 1;
+          holdAs({ pid: process.pid, token: `launch-${held}` });
+          throw fail("EPERM");
+        }
+        renameSync(from, to);
+      };
+      agentFilesLockHooks.beforeHolderCheck = () =>
+        rmSync(guard(), { recursive: true, force: true });
+      session(300).restore();
+      expect(held).toBeGreaterThan(1);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    });
+
     it("retries a release whose rename fails, then lets go", () => {
       let failures = 2;
       agentFilesLockHooks.rename = (from, to) => {
