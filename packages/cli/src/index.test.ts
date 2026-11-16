@@ -19,6 +19,7 @@ import {
   lifecycleCommands,
   optionHelp,
   publishSteps,
+  rootPublishSteps,
   runCli,
   runtimeCacheLine,
   simpleUsage,
@@ -1098,6 +1099,38 @@ describe("file system errors", () => {
     expect(result.stderr).toContain("Action: keygen never overwrites a key");
     expect(readFileSync(key, "utf8")).toBe(before);
   });
+
+  it("shows an existing key's public key in --add-key form without touching it", async () => {
+    const key = join(temp, "signing.pem");
+    const run = async (args: string[]) => {
+      const stdout: string[] = [];
+      const status = await runCli(args, {
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+      });
+      return { status, stdout: stdout.join("\n") };
+    };
+    const made = await run(["keygen", key, "--id", "k1"]);
+    const publicKey = /^Public key: (\S+)$/m.exec(made.stdout)?.[1];
+    expect(publicKey).toBeTruthy();
+    const before = readFileSync(key, "utf8");
+    const shown = await run(["keygen", key, "--id", "k2", "--show-public"]);
+    expect(shown.status).toBe(0);
+    expect(shown.stdout).toContain(`Public key: ${publicKey}`);
+    expect(shown.stdout).toContain(`--add-key k2=${publicKey}`);
+    expect(shown.stdout).not.toContain("PRIVATE KEY");
+    expect(readFileSync(key, "utf8")).toBe(before);
+    const mixed = await run([
+      "keygen",
+      key,
+      "--id",
+      "k2",
+      "--show-public",
+      "--encrypt",
+    ]);
+    expect(mixed.status).toBe(1);
+    expect(readFileSync(key, "utf8")).toBe(before);
+  });
 });
 
 describe("signing key passphrases", () => {
@@ -1186,6 +1219,20 @@ describe("signing key passphrases", () => {
     expect(readFileSync(key, "utf8")).toMatch(
       /^-----BEGIN ENCRYPTED PRIVATE KEY-----\n/,
     );
+    const shown = await run([
+      "keygen",
+      key,
+      "--id",
+      "k1",
+      "--show-public",
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    ]);
+    expect(shown.status).toBe(0);
+    expect(shown.stdout).toContain(
+      /^Public key: .+$/m.exec(keygen.stdout)?.[0] as string,
+    );
+    expect(`${shown.stdout}${shown.stderr}`).not.toContain(SECRET);
     const pem = readFileSync(key, "utf8");
     const body = pem
       .split("\n")
@@ -1941,6 +1988,7 @@ describe("publishSteps", () => {
     expect(steps).toContain(
       "1. the archives this run added: acmecode-1.1.0-darwin-arm64.tar.gz",
     );
+    expect(steps).not.toContain("root/");
     expect(steps).toContain("2. stable.json.sig and stable.json together");
     expect(steps).toContain(
       "Sign stable again by 2026-12-08: clients refuse it after 2026-12-15T14:38:15.643Z.",
@@ -1950,6 +1998,49 @@ describe("publishSteps", () => {
     expect(
       publishSteps("candidate", [], "2026-11-18T00:00:00.000Z", now),
     ).toContain("Sign candidate again by now:");
+  });
+  it("separates archives already in the channel and puts hosted roots first", () => {
+    const steps = publishSteps(
+      "stable",
+      ["a-1.1.0-darwin-arm64.tar.gz", "a-1.2.0-pack.tar.gz"],
+      "2026-12-15T00:00:00.000Z",
+      now,
+      { present: ["a-1.1.0-darwin-arm64.tar.gz"], newestRoot: 2 },
+    );
+    expect(steps).toContain(
+      "1. the archives this run added: a-1.2.0-pack.tar.gz (already in the channel directory before this run; upload only if not yet published: a-1.1.0-darwin-arm64.tar.gz)",
+    );
+    const root = steps.indexOf("0. any root/<N>.json up to root/2.json");
+    expect(root).toBeGreaterThan(-1);
+    expect(root).toBeLessThan(steps.indexOf("1. the archives"));
+    expect(
+      publishSteps("stable", ["x.tar.gz"], "2026-12-15T00:00:00Z", now, {
+        present: ["x.tar.gz"],
+      }),
+    ).toContain("1. the archives this run added: none (already");
+  });
+});
+
+describe("rootPublishSteps", () => {
+  const now = new Date("2026-11-15T00:00:00Z");
+  it("uploads the signature first and names the new channel key", () => {
+    const steps = rootPublishSteps(
+      "./channel",
+      2,
+      "2027-11-15T00:00:00Z",
+      ["acme-channel-2027"],
+      now,
+    );
+    expect(steps.indexOf("1. root/2.json.sig")).toBeLessThan(
+      steps.indexOf("2. root/2.json\n"),
+    );
+    expect(steps).toContain(
+      "piship sign-channel ./channel <archive>... --channel <name> --key <private-key-file> --key-id acme-channel-2027",
+    );
+    expect(steps).toContain("Publish the next root by 2027-11-08");
+    expect(
+      rootPublishSteps("./channel", 3, "2027-11-15T00:00:00Z", [], now),
+    ).not.toContain("sign-channel");
   });
 });
 
