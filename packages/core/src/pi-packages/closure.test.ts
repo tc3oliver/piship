@@ -613,6 +613,31 @@ describe("pretranspiling a TypeScript closure", () => {
       );
   });
 
+  // @gotgenes/pi-permission-system 39.0.4: `"#src/*": "./src/*"`, imported
+  // without an extension, which Pi's loader resolves and esbuild alone does not.
+  it("follows the package's own subpath imports to modules named without an extension", () => {
+    const fixture = typescriptPackage({
+      "node_modules/ext/package.json": JSON.stringify({
+        name: "ext",
+        version: "1.0.0",
+        type: "module",
+        imports: {
+          "#lib/*": "./lib/*",
+          "#other": { import: "./extensions/other.ts" },
+          "#dep": "some-dependency",
+        },
+      }),
+      "node_modules/ext/extensions/main.ts": `import { value } from "#lib/values";
+import { other } from "#other";
+export default () => ({ value, other: other() });
+`,
+    });
+    expect(pretranspile(fixture)?.written).toEqual([
+      "node_modules/ext/extensions/other.js",
+      "node_modules/ext/lib/values.js",
+    ]);
+  });
+
   it.each([
     ["export =", "export = 1;\n", /CommonJS/],
     [
