@@ -354,6 +354,24 @@ const writesMarker = (command: string, prefix = "") =>
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * SIGKILL a command's process group, twice: a SIGKILL to a group can miss a
+ * child the shell is forking as it lands (macOS), which then wrote its
+ * marker and failed the timeout or dispose behavior.
+ */
+const killGroup = (pid: number | undefined): void => {
+  if (!pid) return;
+  const kill = () => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  };
+  kill();
+  setTimeout(kill, 100).unref();
+};
+
 interface Session {
   readonly id: string;
   generation: number;
@@ -684,13 +702,7 @@ function referenceAdapter(options: ReferenceOptions) {
           stdio: ["ignore", "pipe", "pipe"],
         });
         session.children.add(child);
-        const kill = () => {
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGKILL");
-          } catch {
-            // already gone
-          }
-        };
+        const kill = () => killGroup(child.pid);
         let streaming = false;
         const onAbort = () => {
           // Seeded defect: the abort reaches only the start of the stream.
@@ -749,12 +761,7 @@ function referenceAdapter(options: ReferenceOptions) {
           return;
         }
         session.disposed = true;
-        for (const child of session.children)
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGKILL");
-          } catch {
-            // already gone
-          }
+        for (const child of session.children) killGroup(child.pid);
         session.stop?.();
         if (fault === "dispose leaves the sandbox running") return;
         sessionsById.delete(session.id);

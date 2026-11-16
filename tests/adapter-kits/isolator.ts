@@ -174,7 +174,12 @@ export function runIsolated(
     child,
     exited,
     killGroup: () => {
-      if (child.pid) kill(-child.pid);
+      if (!child.pid) return;
+      const group = -child.pid;
+      kill(group);
+      // A SIGKILL to a group can miss a child forked as it lands (macOS);
+      // a second one reaches it, as PiShip's own SIGTERM-then-SIGKILL does.
+      setTimeout(() => kill(group), 100).unref();
     },
     killProcess: () => {
       if (!child.pid) return;
