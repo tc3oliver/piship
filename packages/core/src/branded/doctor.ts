@@ -11,7 +11,7 @@ import {
   lifecycleStatus,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
-import { installedHere } from "./lifecycle.js";
+import { installedHere, readFailedAttempt } from "./lifecycle.js";
 
 /** The doctor groups whose lines need no Pi runtime or governed session. */
 export type LifecycleDoctorGroup = "Supply Chain" | "Release" | "Update";
@@ -166,6 +166,16 @@ function updateDoctor(
   }
   if (status.lastCheck)
     ok("last check", `${status.lastCheck.result} (${status.lastCheck.time})`);
+  const failed = readFailedAttempt(ctx.stateDir);
+  if (
+    failed &&
+    (!status.lastCheck ||
+      Date.parse(failed.time) > Date.parse(status.lastCheck.time))
+  )
+    warn(
+      "last check",
+      `${failed.kind} failed at ${failed.time}: ${failed.code}: ${failed.reason}`,
+    );
   if (status.leftovers.length)
     warn(
       "interrupted",

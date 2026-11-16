@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { LocalMetrics } from "@piship/audit";
 import {
@@ -32,6 +32,7 @@ import {
   rollbackDistribution,
   updateDistribution,
 } from "../index.js";
+import { writeJsonAtomic } from "../access/state.js";
 import { activeLock } from "../install/receipt.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import { shellArg } from "../invocation.js";
@@ -207,6 +208,72 @@ function recordLifecycleMetric(
   }
 }
 
+const FAILED_ATTEMPT_SCHEMA = "piship-update-failure/v1";
+
+/** The last update or check that failed, kept beside the metrics. */
+export interface FailedAttempt {
+  readonly kind: "update" | "check";
+  readonly time: string;
+  readonly code: string;
+  readonly reason: string;
+}
+
+function failedAttemptPath(stateDir: string): string {
+  return join(stateDir, "logs", "update-failure.json");
+}
+
+/**
+ * A failed attempt is recorded here, not in the receipt, which a failure
+ * leaves unchanged; doctor shows it while it is newer than the last check.
+ */
+function recordFailedAttempt(
+  ctx: BrandedContext,
+  kind: FailedAttempt["kind"],
+  code: string,
+  error: unknown,
+): void {
+  try {
+    // A PiShipError message is already redacted.
+    const message =
+      error instanceof PiShipError ? error.message : "unexpected error";
+    writeJsonAtomic(failedAttemptPath(ctx.stateDir), {
+      schema: FAILED_ATTEMPT_SCHEMA,
+      kind,
+      time: new Date().toISOString(),
+      code,
+      reason: message.slice(0, 500),
+    });
+  } catch {
+    // Never blocks the error the person is about to see.
+  }
+}
+
+/** The recorded failed attempt; anything unreadable counts as none. */
+export function readFailedAttempt(stateDir: string): FailedAttempt | undefined {
+  try {
+    const value = JSON.parse(
+      readFileSync(failedAttemptPath(stateDir), "utf8"),
+    ) as Record<string, unknown>;
+    if (
+      value.schema !== FAILED_ATTEMPT_SCHEMA ||
+      (value.kind !== "update" && value.kind !== "check") ||
+      typeof value.time !== "string" ||
+      Number.isNaN(Date.parse(value.time)) ||
+      typeof value.code !== "string" ||
+      typeof value.reason !== "string"
+    )
+      return undefined;
+    return {
+      kind: value.kind,
+      time: value.time,
+      code: value.code,
+      reason: value.reason,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** The declared update source, when it resolves to a URL. */
 function declaredSourceUrl(ctx: BrandedContext): URL | null {
   const template = ctx.metadata.updates?.source;
@@ -306,6 +373,7 @@ export async function runUpdate(
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "UPDATE_FAILED";
     recordLifecycleMetric(ctx, check ? "check" : "update", code);
+    recordFailedAttempt(ctx, check ? "check" : "update", code, error);
     if (!check || http)
       await auditRefusal(ctx, "runtime.update", {
         from: app.version,
