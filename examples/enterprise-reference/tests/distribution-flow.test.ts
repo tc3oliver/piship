@@ -447,6 +447,8 @@ describe.skipIf(process.platform === "win32")(
         new Set([
           // The root refresh asks for the next root first; its 404 ends it.
           "root/2.json",
+          // The empty-channel check above looks for the other allowed channel.
+          "candidate.json",
           "stable.json",
           "stable.json.sig",
           `${ID}-1.1.0-${process.platform}-${process.arch}.tar.gz`,
@@ -486,7 +488,7 @@ describe.skipIf(process.platform === "win32")(
       const rollback = await acme.run(["rollback"], {}, { timeoutMs: 280_000 });
       expect(rollback.status, rollback.stderr).toBe(0);
       expect(rollback.stdout).toContain("Rolled back AcmeCode 1.1.0 -> 1.0.0");
-      expect(rollback.stdout).toContain("credentials were not restored");
+      expect(rollback.stdout).toContain("Sessions and settings were preserved");
       expect((await acme.run(["version"])).stdout).toContain("AcmeCode 1.0.0");
 
       const after = await acme.smoke();
