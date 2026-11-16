@@ -82,7 +82,7 @@ function assertVariablesSet(
       : `Runtime variables are not set: ${names.map((name) => `${name} (for ${unset.get(name)})`).join(", ")}`,
     {
       component: "config",
-      userAction: `Ask your administrator for ${one ? "its value" : "their values"}, then set ${one ? "it" : "them"} in the environment that starts this command. In ${setVariablesHint(names, env)}`,
+      userAction: `Set ${one ? "it" : "them"} in the environment that starts this command (if you did not set up this distribution, ask your administrator for ${one ? "its value" : "their values"}). In ${setVariablesHint(names, env)}`,
     },
   );
 }

@@ -196,16 +196,29 @@ const CHECK_GATEWAY =
   "Check that inference.baseUrl points at a healthy OpenAI-compatible gateway, or ask whoever runs the gateway";
 const RETRY_GATEWAY =
   "Check the network connection, then try again; if it keeps failing, ask whoever runs the inference gateway whether it is up";
+/** A personal user runs or chose the endpoint themselves: no administrator. */
+const CHECK_ENDPOINT =
+  "Check that inference.baseUrl is the API root of a running OpenAI-compatible server (usually ending in /v1)";
+
+/** Whether an answer's error object says the account is out of quota. */
+function isQuotaExhausted(body: unknown): boolean {
+  const error = gatewayErrorBody(body);
+  return (
+    error?.code === "insufficient_quota" || error?.type === "insufficient_quota"
+  );
+}
 
 /**
  * Map a gateway answer to the error contract and retry rules. `body`, the
  * parsed answer when there is one, tells a provider's 401 or 403 relayed by
- * the gateway from the gateway's own.
+ * the gateway from the gateway's own. `personal` words the actions for a
+ * person who chose the endpoint themselves rather than an administrator's.
  */
 export function classifyGatewayStatus(
   status: number,
   headers: Readonly<Record<string, string>> = {},
   body?: unknown,
+  personal = false,
 ): PiShipError | null {
   if (status < 400) return null;
   // LiteLLM passes an upstream provider's headers on with an
@@ -224,8 +237,9 @@ export function classifyGatewayStatus(
       `The inference gateway's model provider refused the request (HTTP ${status}); the runtime credential was not rejected`,
       {
         component: "inference",
-        userAction:
-          "Ask the gateway administrator to check the gateway's provider configuration",
+        userAction: personal
+          ? "Check the gateway's provider configuration and the provider key it uses"
+          : "Ask the gateway administrator to check the gateway's provider configuration",
       },
     );
   if (status === 401)
@@ -234,8 +248,9 @@ export function classifyGatewayStatus(
       "The inference gateway rejected the runtime credential",
       {
         component: "inference",
-        userAction:
-          "PiShip will re-acquire once; if it persists, run login again",
+        userAction: personal
+          ? "Check the API key and store the right one (run login, or fix the variable or file it comes from)"
+          : "PiShip will re-acquire once; if it persists, run login again",
       },
     );
   if (status === 403)
@@ -244,8 +259,9 @@ export function classifyGatewayStatus(
       "The inference gateway denied this model or user",
       {
         component: "inference",
-        userAction:
-          "Choose another allowed model, or ask whoever runs the gateway for access to this one",
+        userAction: personal
+          ? "Choose another allowed model, or check that the API key may use this one"
+          : "Choose another allowed model, or ask whoever runs the gateway for access to this one",
       },
     );
   if (status === 404)
@@ -254,8 +270,21 @@ export function classifyGatewayStatus(
       "The inference gateway does not serve this model",
       {
         component: "inference",
-        userAction:
-          "Choose another allowed model, or try again later; if it persists, ask whoever runs the gateway to check it",
+        userAction: personal
+          ? "Check that the model id is one the provider serves, and that the endpoint's base URL is its API root (usually ending in /v1)"
+          : "Choose another allowed model, or try again later; if it persists, ask whoever runs the gateway to check it",
+      },
+    );
+  // Waiting does not refill a spent quota: only the account's plan does.
+  if (status === 429 && isQuotaExhausted(body))
+    return new PiShipError(
+      "GATEWAY_RATE_LIMITED",
+      "The model provider says the account is out of quota (insufficient_quota)",
+      {
+        component: "inference",
+        userAction: personal
+          ? "Check the plan and billing of the account the API key belongs to; waiting does not help"
+          : "Ask whoever runs the gateway to check the provider account's quota; waiting does not help",
       },
     );
   if (status === 429)
@@ -264,8 +293,9 @@ export function classifyGatewayStatus(
       "The inference gateway is rate limiting requests",
       {
         component: "inference",
-        userAction:
-          "Wait, then try again; if it keeps happening, ask whoever runs the gateway about its rate limits",
+        userAction: personal
+          ? "Wait, then try again; if it keeps happening, check the rate limits of your account or server"
+          : "Wait, then try again; if it keeps happening, ask whoever runs the gateway about its rate limits",
         retryable: true,
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       },
@@ -277,7 +307,9 @@ export function classifyGatewayStatus(
       {
         component: "inference",
         retryable: true,
-        userAction: RETRY_GATEWAY,
+        userAction: personal
+          ? "Try again; if it keeps failing, check that the model provider or server is up"
+          : RETRY_GATEWAY,
       },
     );
   return new PiShipError(
@@ -285,7 +317,7 @@ export function classifyGatewayStatus(
     `The inference gateway returned HTTP ${status}`,
     {
       component: "inference",
-      userAction: CHECK_GATEWAY,
+      userAction: personal ? CHECK_ENDPOINT : CHECK_GATEWAY,
     },
   );
 }
@@ -307,6 +339,8 @@ export interface OpenAICompatibleOptions {
    * request; none is sent without it.
    */
   readonly client?: string;
+  /** A personal distribution: its user chose the endpoint (no administrator). */
+  readonly personal?: boolean;
 }
 
 const PROBE_TIMEOUT_MS = 15_000;
@@ -342,11 +376,41 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
       );
     } catch (error) {
       if ((error as Error)?.name === "TimeoutError") throw probeTimeout();
+      // A refused connection names neither the endpoint nor what to do.
+      if (
+        error instanceof PiShipError &&
+        error.code === "GATEWAY_UNREACHABLE" &&
+        !error.userAction
+      )
+        throw new PiShipError(error.code, error.message, {
+          component: "inference",
+          retryable: true,
+          ...(error.sanitizedDetail
+            ? { sanitizedDetail: error.sanitizedDetail }
+            : {}),
+          userAction: this.options.personal
+            ? "Check that the model server is running at inference.baseUrl and reachable from this machine, then try again"
+            : RETRY_GATEWAY,
+        });
       throw error;
     }
+    // A missing model list is a wrong base URL, not a missing model.
+    if (response.status === 404)
+      throw new PiShipError(
+        "GATEWAY_PROTOCOL_ERROR",
+        "The endpoint has no model list at inference.baseUrl/models (HTTP 404)",
+        {
+          component: "inference",
+          userAction: this.options.personal ? CHECK_ENDPOINT : CHECK_GATEWAY,
+        },
+      );
     const failure = classifyGatewayStatus(
       response.status,
       Object.fromEntries(response.headers),
+      response.status >= 400
+        ? await response.json().catch(() => undefined)
+        : undefined,
+      this.options.personal,
     );
     if (failure) throw failure;
     let body: { data?: { id?: unknown }[] };

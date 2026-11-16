@@ -313,7 +313,10 @@ export async function runSmoke(
       (modelRequest.stopReason === "error" ||
         modelRequest.stopReason === "aborted")
     )
-      throw acceptanceFailure(runtime.session.messages.at(-1));
+      throw acceptanceFailure(
+        runtime.session.messages.at(-1),
+        ctx.mode === "personal",
+      );
   } catch (error) {
     sessionFailed = true;
     throw error;

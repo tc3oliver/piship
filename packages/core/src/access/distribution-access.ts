@@ -758,6 +758,7 @@ export class DistributionAccess {
       fetch: this.#gatewayFetch,
       secret: () => this.#secret,
       client: this.#client(),
+      personal: this.options.mode === "personal",
     });
   }
 

@@ -611,6 +611,27 @@ describe("personal Pi-native governance", () => {
       'The acceptance model request failed: 401: {"message":"gateway failure"}',
     );
     expect(rejected.code).toBe("CREDENTIAL_REVOKED");
+    // A personal user chose the provider: no administrator to ask, and a
+    // spent quota is not a wait.
+    const personal = (errorMessage: string) =>
+      acceptanceFailure(failed(errorMessage), true);
+    expect(
+      personal(
+        '429: {"message":"Rate limit reached","code":"rate_limit_exceeded"}',
+      ).userAction,
+    ).not.toContain("administrator");
+    expect(
+      personal(
+        '429: {"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}',
+      ),
+    ).toMatchObject({
+      code: "GATEWAY_RATE_LIMITED",
+      retryable: false,
+      userAction: expect.stringContaining("billing"),
+    });
+    expect(personal('500: {"message":"internal error"}').userAction).toBe(
+      "Try again; if it keeps failing, check that the model provider or server is up",
+    );
     // Pi sets "aborted" only when the caller's signal aborted the request.
     expect(
       acceptanceFailure({
