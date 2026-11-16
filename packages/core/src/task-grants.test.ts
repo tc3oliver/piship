@@ -46,6 +46,33 @@ describe("policy.taskGrants in piship diff", () => {
     ]);
   });
 
+  it("reports enabling grants with actions as one relaxation naming them", () => {
+    expect(
+      changes(undefined, {
+        mode: "session",
+        actions: ["shell.execute", "mcp.tool.call"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        item: "policy taskGrants.mode",
+        risk: "medium",
+        reason: expect.stringContaining(
+          "offer task grants for mcp.tool.call, shell.execute",
+        ),
+      }),
+    ]);
+  });
+
+  it("compares a ttl cap against the 8 hour default when absent", () => {
+    const base = { mode: "session" };
+    expect(changes(base, { ...base, maxTtlMinutes: 600 })[0]).toMatchObject({
+      risk: "medium",
+    });
+    expect(changes(base, { ...base, maxTtlMinutes: 60 })[0]).toMatchObject({
+      risk: "low",
+    });
+  });
+
   it("treats declaring off as no change", () => {
     expect(changes(undefined, { mode: "off" })).toEqual([]);
   });
@@ -136,6 +163,11 @@ describe("policy.taskGrants in reports", () => {
       value: "session",
       note: "ttl <= 30 min; actions git.push; no wildcard hosts",
     });
+    expect(
+      (await explain(demoLock({ mode: "session" }))).find(
+        (row) => row.key === "policy.taskGrants",
+      )?.note,
+    ).toMatch(/^ttl <= 480 min \(default\);/);
     expect(
       (await explain(demoLock())).find(
         (row) => row.key === "policy.taskGrants",

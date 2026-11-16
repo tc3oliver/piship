@@ -1,6 +1,10 @@
 import { normalizePolicyAction } from "@piship/contracts";
 import { defaultClaudeDimensions } from "@piship/policy";
-import type { DeploymentMode, GovernanceManifest } from "@piship/schema";
+import {
+  DEFAULT_TASK_GRANT_TTL_MINUTES,
+  type DeploymentMode,
+  type GovernanceManifest,
+} from "@piship/schema";
 import {
   type Collector,
   compare,
@@ -78,15 +82,17 @@ export function policy(
       y === "session"
         ? [
             "medium",
-            "Lets a session offer task grants, which approve asks for a bounded time; deny and enforced rules still apply.",
+            `Lets a session offer task grants${ag?.actions ? ` for ${[...ag.actions].sort(compare).join(", ")}` : ""}, which approve asks for a bounded time; deny and enforced rules still apply.`,
           ]
         : [
             "medium",
             "Task grants are no longer offered; a grant in use stops applying.",
           ],
   );
+  const cap = (value: string) =>
+    value === "" ? DEFAULT_TASK_GRANT_TTL_MINUTES : Number(value);
   const widerCap = (x: string, y: string): Verdict =>
-    (y === "" ? Infinity : Number(y)) > (x === "" ? Infinity : Number(x))
+    cap(y) > cap(x)
       ? ["medium", "Raises the cap on how long a task grant may last."]
       : ["low", "Lowers the cap on how long a task grant may last."];
   out.scalar(
@@ -96,13 +102,15 @@ export function policy(
     ag?.maxTtlMinutes,
     widerCap,
   );
-  out.scalar(
-    "policy",
-    "policy taskGrants.actions",
-    bg?.actions ? [...bg.actions].sort(compare).join(",") : "any",
-    ag?.actions ? [...ag.actions].sort(compare).join(",") : "any",
-    ["medium", "Changes which actions a task grant may cover."],
-  );
+  // Turning grants on or off already names the actions in the mode change.
+  if ((bg?.mode ?? "off") === (ag?.mode ?? "off"))
+    out.scalar(
+      "policy",
+      "policy taskGrants.actions",
+      bg?.actions ? [...bg.actions].sort(compare).join(",") : "any",
+      ag?.actions ? [...ag.actions].sort(compare).join(",") : "any",
+      ["medium", "Changes which actions a task grant may cover."],
+    );
   // A new or widened locked task grant changes headless authority.
   const beforeDeclared = new Map(
     (bg?.declared ?? []).map((entry) => [entry.id, JSON.stringify(entry)]),
@@ -299,9 +307,12 @@ export function policy(
       matchers(bp),
       matchers(ap),
       tier === "company"
-        ? [
+        ? (value) => [
             "high",
-            "More projects are treated as company projects; relaxes policy.",
+            // A checkout writes its own origin remote, so in managed mode a remote alone is a claim.
+            modes.after === "managed" && !value.includes("path=")
+              ? "More projects are treated as company projects; relaxes policy. A remote alone is a claim the checkout makes about itself: add a path in a managed distribution."
+              : "More projects are treated as company projects; relaxes policy.",
           ]
         : ["medium", "More projects are treated as external projects."],
       ["medium", "Fewer projects match this project class."],
