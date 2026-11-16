@@ -280,7 +280,7 @@ In `deny` mode, Seatbelt refuses every socket connection, Unix sockets included.
 
 ## Workspace
 
-Pi's file tools (`read`, `write`, `edit`) always work on this host's files; only shell commands reach the sandbox. A backend is a complete coding-agent workspace only when its commands see the files those tools edit. It declares how in `capabilities().workspace`:
+Without `workspace: remote`, Pi's file tools (`read`, `write`, `edit`) work on this host's files and only shell commands reach the sandbox; with it, see [Remote workspace](#remote-workspace). A backend is a complete coding-agent workspace only when its commands see the files those tools edit. It declares how in `capabilities().workspace`:
 
 | Mode | Meaning | Examples | Complete coding-agent workspace |
 | --- | --- | --- | --- |

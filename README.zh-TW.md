@@ -54,6 +54,8 @@ PiShip 不取代你們的身分驗證、gateway 或沙箱服務，它負責把�
 
 需要 Node.js 22.19.0 以上。在 Linux 上跑 demo 還需要允許非特權 user namespace 的 bubblewrap；macOS 內建沙箱，不用另外裝。
 
+想直接做自己的？[Your first distribution](docs/first-distribution.md) 從 `init` 到裝好指令只要五步；personal 發行版不需要 IdP 也不需要 gateway。
+
 ```bash
 git clone https://github.com/tc3oliver/piship.git
 cd piship && npm ci && npm run build
@@ -101,6 +103,22 @@ CLI 沒有發佈到 npm，請用 `node packages/cli/dist/bin.js` 執行；用 `n
 ```
 
 agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以先打開看它會做哪些事。
+
+### 公司要支援好幾種作業系統的話
+
+[Company Pack](docs/release/owner-workflow.md#building-a-company-pack) 是一份涵蓋所有平台的產出，綁定 PiShip 官方的 runtime 封存檔，IT 不用在每種作業系統上各建一次 release。改貼這段：
+
+```text
+用 PiShip 設定我們公司的 coding agent。讀
+https://github.com/tc3oliver/piship/blob/main/docs/agent-setup.md 並照著做。
+如果 PiShip 的 release 有列出 runtime 封存檔就用它，沒有的話要告訴我；除非
+指南叫你走 clone 路線，否則不要 clone 或建置 PiShip。任何你手上沒有的值都
+先問我；網址、client ID、模型 ID 都不要自己編。不要讀取、複製或印出私鑰或
+密碼，那些我自己輸入。如果某個功能需要各作業系統分開建置或需要 Windows 沙箱，
+停下來告訴我，不要去改政策。最後回報你檢查了什麼、哪些沒辦法檢查。
+```
+
+目前的支援程度：runtime 封存檔和 `piship pack` 已經在 `main` 上，CI 也有跑（[status](docs/status.md#company-packs-on-main-unreleased)），但**還沒有任何 PiShip release 發佈過 runtime 封存檔**。在那之前，每個目標平台的 runtime 都要在該作業系統上用 `piship runtime-release` 建置。限制完整列在 [status](docs/status.md#company-packs-on-main-unreleased)：pack 不能帶有 `os`/`cpu`/`libc` 欄位、安裝腳本或依平台而異的 optional dependency 的 Pi 套件，也不能帶原生資源檔（這些請在各作業系統上用 `piship release`）；`sandbox.required: true` 時不含 Windows；runtime 缺少 lock 裡指定的搜尋工具的目標平台也會被排除。
 
 ## 一份檔案就夠
 
@@ -214,7 +232,7 @@ node dist/devcode/piship.mjs install dist/devcode
 
 agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。外圍的發行版歸 PiShip：manifest、鎖定的 Pi 版本、登入和憑證、gateway、模型管控、政策、沙箱、稽核，以及建置、發版和更新。PiShip 只用 Pi 的公開 API，從不修改 Pi。
 
-沙箱也是一樣的分工：能不能跑由 PiShip 判斷，隔離交給沙箱。本機沙箱每次啟動都會實際探測。用遠端沙箱時，只有 shell 指令會送到遠端，Pi 的檔案工具還是改本機的檔案，所以沙箱那邊要掛載或同步工作目錄，兩邊才會看到同一份檔案（[細節](docs/sandbox.md#workspace)）。
+沙箱也是一樣的分工：能不能跑由 PiShip 判斷，隔離交給沙箱。本機沙箱每次啟動都會實際探測。用遠端沙箱時，預設只有 shell 指令會送到遠端，Pi 的檔案工具還是改本機的檔案，所以沙箱那邊要掛載或同步工作目錄，兩邊才會看到同一份檔案（[細節](docs/sandbox.md#workspace)）。設成 `sandbox.workspace: remote`（`e2b-compatible` 和 `custom`，preview）的話，專案改放在沙箱裡：檔案工具和指令都在那邊執行，改好的內容再用 `sandbox pull` 拉回來（[remote workspace](docs/sandbox.md#remote-workspace)）。
 
 ## 目前狀態
 
@@ -225,6 +243,7 @@ PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還
 - **v0.12.0** 是[前一個基準版本](docs/status.md#v0120-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.12.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：修正從安裝到日常使用會遇到的當機、死路與重複提示，預設允許以純 HTTP 連到私有主機，記住專案信任的回答，以及 `<command> uninstall`。manifest 可以省略 `runtime.pi`，在 v0.12.0 之前建置的已安裝 runtime 需要先經過一次 bridge release（[changelog](CHANGELOG.md)）。
 - **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：pi-code 的 `subagent` 工具透過受管控的 launcher 運作，在建置時轉譯 TypeScript Pi 套件（`pretranspile`），以及 Pi 1.1.0 的版本鎖定。啟用 `pretranspile` 的 release 不會被 v0.13.0 之前建置的 runtime 接受（[changelog](CHANGELOG.md)）。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
+- `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
 - 還沒驗證過：真實公司正式環境的 IdP 或 gateway；實際部署的 E2B、CubeSandbox 或 Kubernetes Agent Sandbox；Windows 的本機沙箱（Windows 請改用遠端沙箱）。
 
