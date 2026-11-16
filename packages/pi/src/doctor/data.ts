@@ -34,18 +34,23 @@ import {
   openAccess,
   undeclaredGovernanceHosts,
 } from "@piship/core";
-import type { GovernanceManifest, ToolExposure } from "@piship/schema";
 import {
-  type GovernanceInspection,
-  type GovernanceSession,
-  inspectGovernance,
-} from "../governance-session.js";
+  type JobSupervisorStatus,
+  windowsJobSupervisorStatus,
+  windowsSystemRoot,
+} from "@piship/sandbox";
+import type { GovernanceManifest, ToolExposure } from "@piship/schema";
 import {
   buildExposureTable,
   exposureConfigOf,
   PISHIP_TOOLS,
   type ToolExposureTable,
 } from "../governance/exposure.js";
+import {
+  type GovernanceInspection,
+  type GovernanceSession,
+  inspectGovernance,
+} from "../governance-session.js";
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -348,6 +353,23 @@ export interface DoctorData {
   readonly metrics: MetricsSnapshot;
   /** Tasks recorded by a PiShip process that is gone; each is reported once. */
   readonly orphanedTasks?: readonly OrphanedTask[];
+  /** Windows only: which supervisor starts governed children, read after the session. */
+  readonly jobSupervisor?:
+    | JobSupervisorStatus
+    | { readonly supervisor: "none"; readonly reason: string };
+}
+
+/** Read after the doctor session, which may have compiled the helper. */
+function jobSupervisorData(): DoctorData["jobSupervisor"] {
+  if (process.platform !== "win32") return undefined;
+  try {
+    return windowsJobSupervisorStatus({
+      host: process.env,
+      systemRoot: windowsSystemRoot(process.env),
+    });
+  } catch (error) {
+    return { supervisor: "none", reason: formatError(error) };
+  }
 }
 
 /**
@@ -817,6 +839,7 @@ export async function collectDoctorData(
       },
     };
   }
+  const supervisor = jobSupervisorData();
   return {
     ctx,
     piVersion: VERSION,
@@ -824,5 +847,6 @@ export async function collectDoctorData(
     ...(governance ? { governance } : {}),
     metrics: LocalMetrics.load(ctx.stateDir).snapshot(),
     orphanedTasks: takeOrphanedTasks(ctx.stateDir),
+    ...(supervisor ? { jobSupervisor: supervisor } : {}),
   };
 }

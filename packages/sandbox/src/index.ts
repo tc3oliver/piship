@@ -131,6 +131,11 @@ export {
   selectAdapter,
   UnsupportedAdapter,
 } from "./select.js";
+export { systemRoot as windowsSystemRoot } from "./windows-job.js";
+export {
+  type JobSupervisorStatus,
+  windowsJobSupervisorStatus,
+} from "./windows-job-helper.js";
 export {
   describeWorkspace,
   type GitControlProtectionState,

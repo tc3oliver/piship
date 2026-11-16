@@ -19,6 +19,7 @@ import {
   helperDirectory,
   type RunSync,
   windowsJobHelper,
+  windowsJobSupervisorStatus,
 } from "./windows-job-helper.js";
 
 let root: string;
@@ -458,3 +459,57 @@ describe.runIf(process.platform === "win32")(
     }, 60_000);
   },
 );
+
+describe("windowsJobSupervisorStatus, for doctor", () => {
+  const status = () =>
+    windowsJobSupervisorStatus({ host, systemRoot: windows });
+
+  it("is pending before any child, and names the helper once one is made", () => {
+    expect(status()).toEqual({
+      supervisor: "pending",
+      dir: helperDirectory(host),
+    });
+    const made = windowsJobHelper({
+      host,
+      systemRoot: windows,
+      run: fakeRun().run,
+    });
+    expect(status()).toEqual({ supervisor: "helper", path: made });
+  });
+
+  it("names PowerShell and why: off, no compiler, or a recorded failure", () => {
+    expect(
+      windowsJobSupervisorStatus({
+        host: { ...host, PISHIP_WINDOWS_JOB_HELPER: "off" },
+        systemRoot: windows,
+      }),
+    ).toMatchObject({ supervisor: "powershell", cause: "off" });
+    windowsJobHelper({
+      host,
+      systemRoot: windows,
+      run: fakeRun({ exit: 1 }).run,
+    });
+    const failed = status();
+    expect(failed).toMatchObject({
+      supervisor: "powershell",
+      cause: "failed",
+      reason: "the compiled helper did not run a child",
+      dir: helperDirectory(host),
+    });
+    expect(
+      failed.supervisor === "powershell" && failed.retryAt
+        ? failed.retryAt.getTime() - Date.now()
+        : 0,
+    ).toBeGreaterThan(23 * 60 * 60 * 1000);
+    rmSync(join(windows, "Microsoft.NET"), { recursive: true });
+    expect(status()).toMatchObject({
+      supervisor: "powershell",
+      cause: "no-compiler",
+    });
+  });
+
+  it("writes nothing", () => {
+    status();
+    expect(existsSync(state)).toBe(false);
+  });
+});

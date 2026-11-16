@@ -184,6 +184,61 @@ function markUnavailable(dir: string, reason: string): void {
   }
 }
 
+/** Which supervisor starts governed children on this machine, for `doctor`. */
+export type JobSupervisorStatus =
+  | { readonly supervisor: "helper"; readonly path: string }
+  /** No helper yet: the next supervised child compiles it. */
+  | { readonly supervisor: "pending"; readonly dir: string }
+  | {
+      readonly supervisor: "powershell";
+      readonly cause: "off" | "no-compiler" | "failed";
+      /** For `failed`: what the last attempt recorded. */
+      readonly reason?: string;
+      readonly dir: string;
+      /** For `failed`: when the next start tries again. */
+      readonly retryAt?: Date;
+    };
+
+/**
+ * What `windowsJobHelper` would choose, read without compiling, proving, or
+ * writing anything.
+ */
+export function windowsJobSupervisorStatus(
+  options: Omit<HelperOptions, "run">,
+): JobSupervisorStatus {
+  const { host, systemRoot } = options;
+  const dir = helperDirectory(host);
+  if (host.PISHIP_WINDOWS_JOB_HELPER === "off")
+    return { supervisor: "powershell", cause: "off", dir };
+  const existing = verified(dir);
+  if (existing !== undefined) return { supervisor: "helper", path: existing };
+  if (compilerPath(systemRoot) === undefined)
+    return { supervisor: "powershell", cause: "no-compiler", dir };
+  try {
+    const marker = join(dir, "unavailable.json");
+    const at = statSync(marker).mtimeMs;
+    if (Date.now() - at < UNAVAILABLE_MS) {
+      let reason: string | undefined;
+      try {
+        const record = JSON.parse(readFileSync(marker, "utf8"));
+        if (typeof record?.reason === "string") reason = record.reason;
+      } catch {
+        // an unreadable marker still holds the helper off
+      }
+      return {
+        supervisor: "powershell",
+        cause: "failed",
+        ...(reason ? { reason } : {}),
+        dir,
+        retryAt: new Date(at + UNAVAILABLE_MS),
+      };
+    }
+  } catch {
+    // no marker
+  }
+  return { supervisor: "pending", dir };
+}
+
 /**
  * The path of a verified compiled supervisor, or undefined when there is none
  * and one cannot be made here. Set PISHIP_WINDOWS_JOB_HELPER=off to refuse it.
