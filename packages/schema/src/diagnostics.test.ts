@@ -118,6 +118,25 @@ describe("manifest diagnostics", () => {
     );
   });
 
+  it("says a required field is missing rather than invalid", () => {
+    const absent = failure(manifest(valid.replace("  id: mypi\n", "")));
+    expect(absent.kind).toBe("invalid field");
+    expect(absent.message).toBe(
+      "invalid field at app.id (line 2, column 1): Missing required field in app; expected a non-empty string",
+    );
+    const renamed = failure(
+      manifest(valid.replace("name: My Pi", "nmae: My Pi")),
+    );
+    expect(renamed.message).toContain("Unknown field nmae; did you mean name?");
+    expect(renamed.message).toContain(
+      "app.name (line 2, column 1): Missing required field in app",
+    );
+    const empty = failure(manifest(valid.replace("id: mypi", 'id: ""')));
+    expect(empty.message).toBe(
+      "invalid field at app.id (line 3, column 7): Expected a non-empty string",
+    );
+  });
+
   it("lists the allowed fields when nothing is near", () => {
     const error = failure(manifest(`${valid}colour: red\n`));
     expect(error.message).toContain("manifest.colour (line 11, column 1)");
