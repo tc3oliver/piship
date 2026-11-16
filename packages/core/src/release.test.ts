@@ -3001,6 +3001,17 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     expect(() =>
       checkSourceUrl(new URL("https://user:pw@updates.example.test/")),
     ).toThrow(/may not carry credentials/);
+    // A file:// source stays refused, and points to update --from <dir>.
+    let local: unknown;
+    try {
+      checkSourceUrl(new URL("file:///srv/channel"));
+    } catch (error) {
+      local = error;
+    }
+    expect(local).toMatchObject({
+      code: "NETWORK_DENIED",
+      userAction: expect.stringContaining("update --from <dir>"),
+    });
     // Downloads stream through the fetcher and are checked against the entry.
     const entry = metadata.releases[0] as (typeof metadata.releases)[number];
     const out = join(temp(), entry.archive);

@@ -840,6 +840,16 @@ describe("the first-run journey from the directory above the source", () => {
     expect((await run(["validate"])).status).toBe(0);
   });
 
+  it("refuses an interactive dev without a terminal before locking or building", async () => {
+    // Vitest workers run without a terminal.
+    const result = await run(["dev", "my-agent"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("dev starts the interactive session");
+    expect(result.stderr).toMatch(/ dev \S*piship\.yaml --smoke /);
+    expect(result.stderr).not.toContain("Pi launch failed");
+    expect(existsSync(join("my-agent", "piship.lock"))).toBe(false);
+  });
+
   it("points a first lock at test and a relock at diff", async () => {
     const first = await run(["lock", "my-agent"]);
     expect(first.status).toBe(0);

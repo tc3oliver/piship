@@ -465,7 +465,12 @@ export function buildDistribution(
       : buildCacheKeys(buildInput, manifestPath, lock, {
           bundle: bundling,
           strip,
-          supplyChainGates: options.supplyChainGates !== false,
+          // The gates change no byte; only vendoring Pi packages runs them
+          // after this lookup (checkPackageSources ran above). Without Pi
+          // packages, test and build share one output instead of each
+          // reassembling the other's.
+          supplyChainGates:
+            options.supplyChainGates !== false || !lock.packages?.length,
         });
   const cached = keys ? readBuildCache(output) : undefined;
   if (cached && keys && cached.runtimeKey === keys.runtimeKey) {
