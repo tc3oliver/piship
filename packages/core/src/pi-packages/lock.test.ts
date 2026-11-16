@@ -5,6 +5,7 @@
 // neither package has dependencies.
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -132,6 +133,20 @@ updates: { channel: stable, channels: [stable] }
   return join(dir, "piship.yaml");
 }
 
+// A distribution locked once and copied for each test that starts from a
+// current lock rather than tests locking: a lock holds no absolute path, and
+// each lock runs npm and git for both packages.
+let lockedTemplate: string | undefined;
+function lockedDistribution(): string {
+  if (!lockedTemplate) {
+    lockedTemplate = distribution();
+    lockManifest(lockedTemplate);
+  }
+  const dir = mkdtempSync(join(root, "distribution-"));
+  cpSync(dirname(lockedTemplate), dir, { recursive: true });
+  return join(dir, "piship.yaml");
+}
+
 const readLock = (manifest: string): DistributionLock =>
   JSON.parse(
     readFileSync(join(dirname(manifest), "piship.lock"), "utf8"),
@@ -141,28 +156,32 @@ const readLock = (manifest: string): DistributionLock =>
  * `piship lock` refuses to resolve with npm older than 11 (Node 22 bundles
  * npm 10). The tests that lock through `lockManifest`, which takes no
  * runner, need a real npm 11 and are skipped without one; the others call
- * `lockPiPackages` with a runner that answers `npm --version` with 11 when
- * the real npm is older. Their fixtures hold no git dependency, the one
+ * `lockPiPackages` with a runner that answers `npm --version` from one real
+ * call, with 11 when the real npm is older. Their fixtures hold no git dependency, the one
  * thing npm 10 mishandles, so every other npm call stays real. CI installs
  * npm 11, so there a missing npm 11 fails the test instead of skipping it.
  */
-const NPM_MAJOR = Number(
-  /^(\d+)\./.exec(
-    spawnSync("npm", ["--version"], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    }).stdout ?? "",
-  )?.[1] ?? 0,
-);
+const NPM_VERSION =
+  spawnSync("npm", ["--version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  }).stdout?.trim() ?? "";
+const NPM_MAJOR = Number(/^(\d+)\./.exec(NPM_VERSION)?.[1] ?? 0);
 const NPM_RESOLVES = NPM_MAJOR >= 11;
 const NPM_SKIP = `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`;
 const requireNpm11 = (context: TestContext): void => {
   if (process.env.CI) expect(NPM_MAJOR, NPM_SKIP).toBeGreaterThanOrEqual(11);
   context.skip(!NPM_RESOLVES, NPM_SKIP);
 };
+// Answered from the one real call above: spawning npm costs about a second
+// on Windows, and every package resolve asks its version.
 const run: CommandRunner = (command, args, options) =>
-  !NPM_RESOLVES && command === "npm" && args[0] === "--version"
-    ? { status: 0, stdout: Buffer.from("11.0.0\n"), stderr: "" }
+  command === "npm" && args[0] === "--version"
+    ? {
+        status: 0,
+        stdout: Buffer.from(`${NPM_RESOLVES ? NPM_VERSION : "11.0.0"}\n`),
+        stderr: "",
+      }
     : runCommand(command, args, options);
 const lockPackages = (manifest: string) =>
   lockPiPackages(readManifest(manifest), dirname(manifest), { run });
@@ -211,8 +230,7 @@ describe("Pi packages in the lock", () => {
 
   it("a changed local package or a changed stored lockfile makes the lock stale", (context) => {
     requireNpm11(context);
-    const manifest = distribution();
-    lockManifest(manifest);
+    const manifest = lockedDistribution();
     const base = dirname(manifest);
     write(base, {
       "packages/team/skills/triage/SKILL.md":
@@ -233,8 +251,7 @@ describe("Pi packages in the lock", () => {
 
   it("relocks offline after an edit that leaves every package input as locked", (context) => {
     requireNpm11(context);
-    const manifest = distribution();
-    lockManifest(manifest);
+    const manifest = lockedDistribution();
     const base = dirname(manifest);
     const lockPath = join(base, "piship.lock");
     const yaml = readFileSync(manifest, "utf8");
@@ -360,8 +377,7 @@ describe("Pi packages in the lock", () => {
 
   it("switching pretranspile on or off makes the lock stale until it is locked again", (context) => {
     requireNpm11(context);
-    const manifest = distribution();
-    lockManifest(manifest);
+    const manifest = lockedDistribution();
     expect(readLock(manifest).packages?.[0]).not.toHaveProperty("pretranspile");
     const off = readFileSync(manifest, "utf8");
     const declaration = "      path: ./packages/team\n      class: user\n";
@@ -384,8 +400,7 @@ describe("Pi packages in the lock", () => {
 
   it("an undeclared package's npm root is removed when the lock is written", (context) => {
     requireNpm11(context);
-    const manifest = distribution();
-    lockManifest(manifest);
+    const manifest = lockedDistribution();
     const source = readFileSync(manifest, "utf8");
     writeFileSync(
       manifest,
@@ -420,9 +435,10 @@ describe("Pi packages in the lock", () => {
     expect(() => lockPackages(manifest)).not.toThrow();
   }, 120_000);
 
-  it("a certified package's evidence must match the locked tree", () => {
-    const manifest = distribution();
-    const tree = lockPackages(manifest)[1]?.tree;
+  it("a certified package's evidence must match the locked tree", (context) => {
+    requireNpm11(context);
+    const manifest = lockedDistribution();
+    const tree = readLock(manifest).packages?.[1]?.tree;
     expect(tree).toMatch(/^sha256-[0-9a-f]{64}$/);
     const company = readFileSync(manifest, "utf8");
     const certified = (integrity: string) =>
@@ -492,8 +508,7 @@ describe("Pi packages in the lock", () => {
 
   it("the build vendors every package under pi-packages/<id> from the lock", (context) => {
     requireNpm11(context);
-    const manifest = distribution();
-    lockManifest(manifest);
+    const manifest = lockedDistribution();
     const lock = requireCurrentLock(manifest);
     const payload = mkdtempSync(join(root, "payload-"));
     const vendored = vendorPiPackages(

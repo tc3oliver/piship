@@ -403,27 +403,25 @@ function recorded(base: PackageContext): {
 }
 
 /**
- * Resolution refuses npm older than 11 (Node 22 bundles npm 10). Where the
- * real npm is older, `npmEleven` answers `npm --version` with 11 and runs
- * every other command for real: these fixtures hold no git dependency, the
- * one thing npm 10 mishandles. With npm 11 on PATH nothing is stubbed.
+ * Resolution refuses npm older than 11 (Node 22 bundles npm 10). `npmEleven`
+ * answers `npm --version` from the one real call below, with 11 where the
+ * real npm is older, and runs every other command for real: these fixtures
+ * hold no git dependency, the one thing npm 10 mishandles. Spawning npm
+ * costs about a second on Windows, and every resolve asks its version.
  */
-const NPM_MAJOR = Number(
-  /^(\d+)\./.exec(
-    spawnSync("npm", ["--version"], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    }).stdout ?? "",
-  )?.[1] ?? 0,
-);
+const NPM_VERSION =
+  spawnSync("npm", ["--version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  }).stdout?.trim() ?? "";
+const NPM_MAJOR = Number(/^(\d+)\./.exec(NPM_VERSION)?.[1] ?? 0);
 const npmAnswering =
   (version: string): CommandRunner =>
   (command, args, options) =>
     command === "npm" && args[0] === "--version"
       ? { status: 0, stdout: Buffer.from(`${version}\n`), stderr: "" }
       : runCommand(command, args, options);
-const npmEleven: CommandRunner =
-  NPM_MAJOR >= 11 ? runCommand : npmAnswering("11.0.0");
+const npmEleven = npmAnswering(NPM_MAJOR >= 11 ? NPM_VERSION : "11.0.0");
 
 const npmCalls = (calls: string[][]) =>
   calls.filter(([command]) => command === "npm");
@@ -492,6 +490,15 @@ const npmPackage = (
     filters: {},
     ...(extra as object),
   }) as DeclaredPackage;
+
+// One resolution of @company/pi-platform@1.4.2 for the tests that start
+// from it rather than test resolving it; nothing mutates a resolved result.
+let platformResolved: ReturnType<typeof resolvePiPackage> | undefined;
+const resolvedPlatform = () =>
+  (platformResolved ??= resolvePiPackage(
+    npmPackage("@company/pi-platform", "1.4.2"),
+    context(),
+  ));
 
 const SLOW = 120_000;
 
@@ -645,10 +652,7 @@ describe("npm packages", () => {
   it(
     "apply release.sources to the whole closure",
     () => {
-      const resolved = resolvePiPackage(
-        npmPackage("@company/pi-platform", "1.4.2"),
-        context(),
-      );
+      const resolved = resolvedPlatform();
       expect(() =>
         checkPiPackageSources("company-pi-platform", resolved.dependencies, [
           "https://registry.npmjs.org",
@@ -687,7 +691,7 @@ describe("npm packages", () => {
     "refuse a build whose lockfile differs from the locked sha256",
     () => {
       const declaration = npmPackage("@company/pi-platform", "1.4.2");
-      const resolved = resolvePiPackage(declaration, context());
+      const resolved = resolvedPlatform();
       expect(() =>
         vendorPiPackage(
           declaration,
@@ -704,10 +708,7 @@ describe("npm packages", () => {
   it(
     "audit the package lockfile under release.vulnerabilities",
     async () => {
-      const resolved = resolvePiPackage(
-        npmPackage("@company/pi-platform", "1.4.2"),
-        context(),
-      );
+      const resolved = resolvedPlatform();
       const policy = { failOn: "high" as const, allow: [] };
       const clean = await auditPiPackage(
         "company-pi-platform",
@@ -1113,7 +1114,7 @@ describe("lock-time script execution and shipped modules", () => {
     "vendor a locked package without asking npm's version: npm ci from a checked lockfile resolves nothing",
     () => {
       const declaration = npmPackage("@company/pi-platform", "1.4.2");
-      const resolved = resolvePiPackage(declaration, context());
+      const resolved = resolvedPlatform();
       const { context: ctx, calls } = recorded({
         ...context(),
         run: npmAnswering("10.9.2"),
