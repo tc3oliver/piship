@@ -3872,7 +3872,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     await updateDistribution(ID, opts);
     const state = treeHash(stateDir());
     await expect(purgeDistributionState(ID)).rejects.toThrow(
-      /Uninstall acmepi before purging its state/,
+      "Uninstall acmepi before purging its state: run acmepi uninstall, or acmepi uninstall --purge --yes to do both",
     );
     expect(uninstallDistribution(ID)).toBe(stateDir());
     expect(existsSync(appsDir())).toBe(false);
@@ -4185,9 +4185,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
   });
 
   describe("the branded uninstall command", () => {
-    async function installed() {
+    async function installed(fromPayload = false) {
+      const built = await release("1.0.0");
       const receipt = await installDistribution(
-        (await release("1.0.0")).archive,
+        fromPayload ? join(built.directory, "payload") : built.archive,
       );
       const out: string[] = [];
       const err: string[] = [];
@@ -4235,8 +4236,20 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         const text = out.join("\n");
         expect(text).toContain(`kept     ${stateDir()}`);
         expect(text).toContain("signed out: no sign-in is stored");
-        expect(text).toContain("acmepi uninstall --purge --yes");
-        expect(text).toContain(`purge ${ID} --yes`);
+        expect(text).toContain(
+          `run purge from the release you installed: node <release>/payload/piship.mjs purge ${ID} --yes. Next time, acmepi uninstall --purge --yes does both.`,
+        );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "names the build's piship.mjs for purge after uninstalling a local build",
+      async () => {
+        const { ctx, out } = await installed(true);
+        await runUninstall(ctx, []);
+        expect(out.join("\n")).toContain(
+          `run purge from the build you installed: node dist/${ID}/piship.mjs purge ${ID} --yes in the directory you built in.`,
+        );
       },
     );
 

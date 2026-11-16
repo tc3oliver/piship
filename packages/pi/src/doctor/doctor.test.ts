@@ -969,6 +969,36 @@ describe("Network group", () => {
     ).toEqual([]);
   });
 
+  it("notes plain HTTP to loopback once per host, and warns only for a host off this machine", () => {
+    const data = doctorData("managed", { access: accessData() });
+    const metadata = data.ctx.metadata as unknown as Record<string, unknown>;
+    metadata.access = {
+      variables: [],
+      identity: {
+        mode: "oidc",
+        oidc: { issuer: "http://127.0.0.1:61378/idp" },
+      },
+      credential: {
+        provider: "http-broker",
+        broker: {
+          endpoint: "http://127.0.0.1:61378/broker/token",
+          revokeEndpoint: "http://127.0.0.1:61378/broker/revoke",
+        },
+      },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.20.30.40:4000/v1",
+      },
+    };
+    metadata.governance = { manifest: { audit: { sinks: [] } } };
+    const lines = group(renderDoctor(data).render(), "Network");
+    expect(lines.slice(0, 3)).toEqual([
+      `  - ${"identity.oidc.httpTransport".padEnd(20)} http-allowed: plain HTTP to 127.0.0.1:61378, loopback only; it does not leave this machine`,
+      `  - ${"credential.broker.httpTransport".padEnd(20)} http-allowed: plain HTTP to 127.0.0.1:61378, loopback only; it does not leave this machine`,
+      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.20.30.40:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
+    ]);
+  });
+
   it("shows an endpoint that resolves to plain HTTP by default, and nothing for https or a forced https", () => {
     const data = doctorData("managed", { access: accessData() });
     const metadata = data.ctx.metadata as unknown as Record<string, unknown>;

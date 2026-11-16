@@ -17,7 +17,7 @@ import {
   distributionStateDirectory,
   runtimeStateDirectory,
 } from "../index.js";
-import { receiptPath } from "./receipt.js";
+import { readInstallReceipt, receiptPath } from "./receipt.js";
 
 export interface PurgeResult {
   /** The deleted state directory. */
@@ -123,10 +123,17 @@ export async function purgeDistributionState(
 ): Promise<PurgeResult> {
   distributionStateDirectory({ value: id });
   assertDisjointRoots();
-  if (existsSync(receiptPath(id)))
+  if (existsSync(receiptPath(id))) {
+    let command = id;
+    try {
+      command = readInstallReceipt(id).app.command;
+    } catch {
+      // A damaged receipt still names the id; the id is the usual command.
+    }
     throw new Error(
-      `Uninstall ${id} before purging its state, or run uninstall ${id} --purge --yes`,
+      `Uninstall ${id} before purging its state: run ${command} uninstall, or ${command} uninstall --purge --yes to do both`,
     );
+  }
   const state = runtimeStateDirectory({ value: id });
   // The receipt is gone, so its command is only known to the release.
   const live = assertSignedOut(

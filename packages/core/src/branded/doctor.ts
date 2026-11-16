@@ -27,10 +27,14 @@ export function lifecycleDoctor(
   group: LifecycleDoctorGroup,
   ok: DoctorLine,
   warn: DoctorLine,
+  info: DoctorLine = warn,
 ): void {
+  // A personal distribution is normally installed from its own build and
+  // updated with --from, so those facts are notes there, not warnings.
+  const local = ctx.mode === "personal" ? info : warn;
   if (group === "Supply Chain") supplyChainDoctor(ctx, ok);
-  else if (group === "Release") releaseDoctor(ctx, ok, warn);
-  else updateDoctor(ctx, ok, warn);
+  else if (group === "Release") releaseDoctor(ctx, ok, local);
+  else updateDoctor(ctx, ok, warn, local);
 }
 
 function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
@@ -43,7 +47,7 @@ function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
 function releaseDoctor(
   ctx: BrandedContext,
   ok: DoctorLine,
-  warn: DoctorLine,
+  local: DoctorLine,
 ): void {
   const here = installedHere(ctx);
   const active = here?.releases.find((item) => item.version === here.active);
@@ -58,7 +62,7 @@ function releaseDoctor(
       `verified ${active.release.target} artifact (${active.release.channel})`,
     );
   else if (here)
-    warn("release", "installed from a payload directory, not a release");
+    local("release", "installed from a payload directory, not a release");
   else ok("release", "none; running from a build directory");
 }
 
@@ -66,6 +70,7 @@ function updateDoctor(
   ctx: BrandedContext,
   ok: DoctorLine,
   warn: DoctorLine,
+  local: DoctorLine,
 ): void {
   const { metadata } = ctx;
   // Doctor attempts temporary maintenance before collecting this report.
@@ -107,7 +112,7 @@ function updateDoctor(
     if (status.source && plainHttpSource(ctx, status.source))
       warn("source", `http (integrity by signature only): ${status.source}`);
     else if (status.source) ok("source", status.source);
-    else warn("source", "none declared; update needs --from");
+    else local("source", "none declared; update needs --from");
     if (metadata.updates.transport === "http-allowed")
       ok(
         "transport",
@@ -131,7 +136,7 @@ function updateDoctor(
         "trusted keys",
         `${trusted.length} (${trusted.map((key) => `${key.id} ${key.fingerprint}`).join(", ")})`,
       );
-    else warn("trusted keys", "none; updates cannot be verified");
+    else local("trusted keys", "none; updates cannot be verified");
     if (retired.length)
       ok(
         "retired keys",

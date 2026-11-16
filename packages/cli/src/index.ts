@@ -957,7 +957,7 @@ async function searchToolsDownloadable(url?: string): Promise<boolean> {
 }
 /** Printed when `init` cannot reach the registry the first build installs the runtime from. */
 const NPM_REGISTRY_UNREACHABLE =
-  "registry.npmjs.org is not reachable from here. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails until npm can reach it or the registry npm is configured to use.";
+  "registry.npmjs.org did not answer within 3 seconds. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails if npm cannot reach it, or the registry npm is configured to use, by then.";
 /** Printed when `init` leaves `runtime.searchTools` out. */
 const SEARCH_TOOLS_SKIPPED =
   "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.";
@@ -1004,6 +1004,7 @@ export function installNext(
     payload: string;
   },
   signedIn = false,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const command = receipt.app.command;
   let lock: DistributionLock | undefined;
@@ -1026,13 +1027,20 @@ export function installNext(
         !referencedVariables(source).includes(name) ||
         referencedVariables(elsewhere).includes(name),
     );
-    const set = variables.length
-      ? `set ${variables.join(", ")} in the environment that starts ${command}, then `
+    // Variables this install already sees need no step here, but a launcher
+    // that does not read the shell profile still needs them.
+    const unset = variables.filter((name) => !env[name]);
+    const set = unset.length
+      ? `set ${unset.join(", ")} in the environment that starts ${command}, then `
       : "";
+    const launcher =
+      unset.length < variables.length
+        ? ` An IDE or desktop launcher does not read your shell profile, so set ${variables.join(", ")} there too.`
+        : "";
     // An adopted (test or earlier) state may already hold a session.
     return signedIn
-      ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.`
-      : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.`;
+      ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.${launcher}`
+      : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.${launcher}`;
   }
   if (
     lock &&
@@ -1045,6 +1053,14 @@ export function installNext(
 function piPinReview(stated: string): string {
   return `runtime.pi is ${stated} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until you remove the runtime.pi line (the build then uses the pinned Pi, and the field cannot go stale again) or set it to "${PI_VERSION}" after re-verifying the distribution (docs/compatibility.md, "Upgrading Pi")`;
 }
+/** Commands only a built distribution's own command has. */
+const brandedOnlyCommands = [
+  "login",
+  "logout",
+  "models",
+  "policy",
+  "capabilities",
+];
 export async function runCli(
   args: readonly string[],
   output: CliOutput,
@@ -1068,6 +1084,12 @@ export async function runCli(
     return 0;
   }
   if (!commands.includes(command as (typeof commands)[number])) {
+    if (brandedOnlyCommands.includes(command)) {
+      output.stderr(
+        `${command} is a command of the built distribution, not of piship. Run dist/<id>/bin/<command> ${command} from the directory you built in, or <command> ${command} once it is installed.`,
+      );
+      return 2;
+    }
     const near = nearestField(command, commands);
     output.stderr(
       `Unknown command: ${command}.${near ? ` Did you mean ${near}?` : ""} Run ${pishipCommand()} --help.`,
