@@ -255,7 +255,8 @@ await new Promise((resolve) => {
       [
         "--input-type=module",
         "-e",
-        `process.stdin.once("data", async () => { process.stdin.destroy(); await import(${JSON.stringify(pathToFileURL(join(appsDir(), "launch.mjs")).href)}); });`,
+        'process.stdin.once("data", async () => { process.stdin.destroy(); await import(process.argv[1]); });',
+        pathToFileURL(join(appsDir(), "launch.mjs")).href,
       ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
