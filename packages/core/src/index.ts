@@ -40,6 +40,7 @@ export {
   lockNeedsNetwork,
   lockStatus,
   type LockStatus,
+  relockKeepingPackages,
   requireCurrentLock,
   resolveLock,
 } from "./lock.js";

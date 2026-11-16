@@ -25,7 +25,11 @@ import {
   it,
   type TestContext,
 } from "vitest";
-import { lockManifest, requireCurrentLock } from "../lock.js";
+import {
+  lockManifest,
+  relockKeepingPackages,
+  requireCurrentLock,
+} from "../lock.js";
 import type { DistributionLock } from "../lock-schema.js";
 import { type CommandRunner, runCommand } from "./command.js";
 import { checkCertifiedPackage } from "./gates.js";
@@ -225,6 +229,50 @@ describe("Pi packages in the lock", () => {
     );
     writeFileSync(stored, `${readFileSync(stored, "utf8")}\n`);
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+  }, 120_000);
+
+  it("relocks offline after an edit that leaves every package input as locked", (context) => {
+    requireNpm11(context);
+    const manifest = distribution();
+    lockManifest(manifest);
+    const base = dirname(manifest);
+    const lockPath = join(base, "piship.lock");
+    const yaml = readFileSync(manifest, "utf8");
+    writeFileSync(manifest, yaml.replace("version: 1.0.0", "version: 1.0.1"));
+    expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+    // Git is unreachable: keeping the recorded packages needs no network.
+    const offline = process.env.GIT_CONFIG_VALUE_0;
+    process.env.GIT_CONFIG_VALUE_0 = "https://unused.example.test/";
+    try {
+      expect(relockKeepingPackages(manifest)).toBe(lockPath);
+    } finally {
+      process.env.GIT_CONFIG_VALUE_0 = offline;
+    }
+    expect(requireCurrentLock(manifest).app.version).toBe("1.0.1");
+
+    // A changed declaration, or a changed stored lockfile, keeps the stop.
+    const locked = readFileSync(lockPath, "utf8");
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace("class: user", "class: company"),
+    );
+    expect(relockKeepingPackages(manifest)).toBeUndefined();
+    expect(readFileSync(lockPath, "utf8")).toBe(locked);
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8")
+        .replace("class: company", "class: user")
+        .replace("version: 1.0.1", "version: 1.0.2"),
+    );
+    const stored = join(
+      base,
+      PACKAGE_LOCK_DIRECTORY,
+      "team",
+      "package-lock.json",
+    );
+    writeFileSync(stored, `${readFileSync(stored, "utf8")}\n`);
+    expect(relockKeepingPackages(manifest)).toBeUndefined();
+    expect(readFileSync(lockPath, "utf8")).toBe(locked);
   }, 120_000);
 
   it("a relock resolves from the stored npm lockfile, so transitive versions stay put", () => {

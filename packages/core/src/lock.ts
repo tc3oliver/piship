@@ -16,7 +16,7 @@ import {
   type UpdateTrustKey,
 } from "@piship/schema";
 import { PI_VERSION } from "./compatibility.js";
-import { digest, hash } from "./digest.js";
+import { canonicalJson, digest, hash } from "./digest.js";
 import { pishipCommand, shellArg } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
 import {
@@ -85,10 +85,12 @@ export function checkPiVersion(manifest: Manifest): void {
  * bundled search tools read from the download cache, only when `packages` is
  * `"resolve"` (`piship lock`); otherwise their recorded entries are
  * re-checked offline, so a stale-lock check never reaches a registry.
+ * `"keep"` re-checks the recorded packages offline but reads search tools
+ * from the download cache, for a relock that changes no package.
  */
 export function resolveLock(
   manifestPath: string,
-  options: { readonly packages?: "resolve" | "recorded" } = {},
+  options: { readonly packages?: "resolve" | "recorded" | "keep" } = {},
 ): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
@@ -118,7 +120,7 @@ export function resolveLock(
   // lock`; the stale-lock check takes the recorded entries.
   const searchTools =
     v6 && manifest.runtime.searchTools
-      ? options.packages === "resolve"
+      ? options.packages === "resolve" || options.packages === "keep"
         ? lockSearchTools(manifest)
         : currentSearchTools(manifest, base)
       : undefined;
@@ -217,6 +219,37 @@ export function resolveLock(
 export function lockManifest(manifestPath: string): string {
   const lock = resolveLock(manifestPath, { packages: "resolve" });
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
+  writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
+  return path;
+}
+/**
+ * Relocks offline when no Pi package can resolve differently: the package
+ * declarations, `packageTrust`, the release settings, the deployment mode,
+ * the stored npm lockfiles, and local package trees are all as the lock
+ * recorded them, so the recorded packages are kept. Returns the lock path,
+ * or undefined, writing nothing, when any of those changed.
+ */
+export function relockKeepingPackages(
+  manifestPath: string,
+): string | undefined {
+  const path = join(dirname(resolve(manifestPath)), "piship.lock");
+  let recorded: Partial<DistributionLock>;
+  try {
+    recorded = JSON.parse(readFileSync(path, "utf8")) as DistributionLock;
+  } catch {
+    return undefined;
+  }
+  const lock = resolveLock(manifestPath, { packages: "keep" });
+  const inputs = (item: Partial<DistributionLock>) =>
+    canonicalJson([
+      item.deployment ?? null,
+      item.release ?? null,
+      item.governance?.manifest.resources.packages ?? null,
+      item.governance?.manifest.packageTrust ?? null,
+      item.packages ?? null,
+      item.digests?.packages ?? null,
+    ]);
+  if (inputs(recorded) !== inputs(lock)) return undefined;
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;
 }

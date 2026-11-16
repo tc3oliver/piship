@@ -62,6 +62,7 @@ import {
   progressReporter,
   purgeDistributionState,
   raiseThreadpool,
+  relockKeepingPackages,
   removeEmptyPiShipDirectories,
   readInstallReceipt,
   readSigningPassphrase,
@@ -1028,9 +1029,9 @@ const SEARCH_TOOLS_SKIPPED =
 /**
  * `dev` and `test` iterate on a manifest, so they do not stop at a lock
  * that is missing or stale. With no lock yet nothing was reviewed, so it is
- * created. A stale lock is relocked unless the manifest declares Pi
- * packages: relocking those resolves and pins network content, so it stays
- * a deliberate step. Bundled search tools are read from the download cache
+ * created. A stale lock is relocked; with Pi packages declared, only when
+ * none of their inputs changed, keeping the recorded packages offline:
+ * resolving and pinning network content stays a deliberate step. Bundled search tools are read from the download cache
  * when the old lock pins them. `build` and `release` keep requiring a
  * current lock.
  */
@@ -1042,13 +1043,14 @@ async function prepareLock(
   const status = lockStatus(target);
   if (status === "current") return;
   const lockCommand = `${pishipCommand()} lock ${shellArg(target)}`;
-  if (status === "stale" && lockNeedsNetwork(manifest))
-    throw new Error(
-      `Lockfile is stale: the manifest or a resource changed since piship.lock was written. This manifest declares Pi packages, which locking resolves over the network and pins, so relock on purpose: ${lockCommand}`,
-    );
   const progress = progressReporter(output.stderr);
   await downloadSearchToolArchives(target, progress ? { progress } : {});
-  lockManifest(target);
+  if (status === "stale" && lockNeedsNetwork(manifest)) {
+    if (!relockKeepingPackages(target))
+      throw new Error(
+        `Lockfile is stale: a Pi package declaration, packageTrust, the release settings, or a stored package lockfile changed since piship.lock was written. Locking resolves Pi packages over the network and pins them, so relock on purpose: ${lockCommand}`,
+      );
+  } else lockManifest(target);
   // `target` is the manifest file; the lock sits beside it.
   const lockPath = join(dirname(target), "piship.lock");
   output.stderr(
