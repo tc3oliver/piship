@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { TestProject } from "vitest/node";
 import {
   e2eFileKey,
@@ -12,6 +14,15 @@ import { prebuildLifecycleFixtures } from "./lifecycle.js";
 // lazily, they ran alongside the heaviest scenario files and stretched those
 // files past their timeouts on runners with few cores.
 export default async function setup(project: TestProject) {
+  // Every E2E file runs the built CLI; without it each fixture build fails
+  // with a bare MODULE_NOT_FOUND stack.
+  const cli = fileURLToPath(
+    new URL("../../packages/cli/dist/bin.js", import.meta.url),
+  );
+  if (!existsSync(cli))
+    throw new Error(
+      `${cli} is missing: run npm run build first. The E2E tier runs the built CLI, so rebuild after every source change.`,
+    );
   const cleanup = reserveFixtures(project);
   try {
     await prebuildLifecycleFixtures(
