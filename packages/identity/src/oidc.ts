@@ -46,7 +46,25 @@ function mapError(error: unknown, action: string): PiShipError {
     current;
     current = (current as { cause?: unknown }).cause
   )
-    if (current instanceof PiShipError) return current;
+    if (current instanceof PiShipError) {
+      // The managed fetch's bare connection failure names neither the
+      // identity provider nor what to do; a proxy failure carries its action.
+      if (current.code === "GATEWAY_UNREACHABLE" && !current.userAction)
+        return new PiShipError(
+          "GATEWAY_UNREACHABLE",
+          `${action}: the identity provider could not be reached (${current.message})`,
+          {
+            component: "identity",
+            retryable: true,
+            ...(current.sanitizedDetail
+              ? { sanitizedDetail: current.sanitizedDetail }
+              : {}),
+            userAction:
+              "Check the network connection (and VPN, if your company uses one), then try again; if it keeps failing, ask your administrator whether the identity provider is up",
+          },
+        );
+      return current;
+    }
   // A deadline is an unavailable identity provider, not an invalid identity.
   for (
     let current: unknown = error;

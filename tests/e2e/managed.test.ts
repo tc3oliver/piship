@@ -377,8 +377,17 @@ describe("managed distribution (local fixtures)", () => {
     expect(readdirSync(join(temp, "state", "acmecode", "secrets"))).toEqual([]);
     expect((await run(["--smoke"])).stderr).toContain("IDENTITY_REQUIRED");
 
-    // Unavailable gateway, missing configuration, and disabled TLS fail visibly.
+    // An expired credential the session can renew is renewed by doctor's
+    // activation, as by a launch: not a failure that says to sign in again.
+    services.knobs.credentialTtl = 2;
     await run(["login"]);
+    services.knobs.credentialTtl = 3600;
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    const renewedDoctor = await run(["doctor"]);
+    expect(renewedDoctor.status, renewedDoctor.stdout).toBe(0);
+    expect(renewedDoctor.stdout).toMatch(/[✓+] valid\s+\d+m remaining/);
+
+    // Unavailable gateway, missing configuration, and disabled TLS fail visibly.
     await services.close();
     const outage = await run(["--smoke"]);
     expect(outage.status).toBe(1);

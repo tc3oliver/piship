@@ -194,6 +194,20 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
         "OIDC discovery failed: the identity provider did not respond in time",
     });
   });
+  it("names an identity provider that refuses the connection and what to do", async () => {
+    // Regression: login printed the managed fetch's "access request to
+    // <host> failed" with no action, as if the gateway were down.
+    const down = provider({ issuer: "http://127.0.0.1:9/idp" });
+    await expect(down.configuration()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      component: "identity",
+      message: expect.stringMatching(
+        /^OIDC discovery failed: the identity provider could not be reached \(.*127\.0\.0\.1:9.*\)$/,
+      ),
+      userAction: expect.stringContaining("try again"),
+    });
+  });
   describe("token endpoint failures", () => {
     const PAGE_SENTINEL = "proxy-page-sentinel-0123456789";
     /** No token in the message, action, detail, cause, or any rendering. */

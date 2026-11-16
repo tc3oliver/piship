@@ -1160,6 +1160,10 @@ describe("http-broker failure and retry contract", () => {
     expect(error.message).toBe(
       "The credential broker is unreachable (network error)",
     );
+    // Regression: login printed this with no action at all.
+    expect(error.userAction).toBe(
+      "Check the network connection (and VPN, if your company uses one), then try again; if it keeps failing, ask your administrator whether the credential broker is up",
+    );
     expect(error.sanitizedDetail).not.toHaveProperty("transport");
     expect(error.sanitizedDetail).toMatchObject({ outcome: "unknown" });
   });
@@ -2236,7 +2240,9 @@ describe("credential lifecycle events", () => {
     });
     await failing.manager.ensure(null, ctx, { allowAcquire: true });
     expect(await failing.manager.logout(ctx)).toEqual([
-      "revocation: revoke endpoint returned HTTP 503",
+      expect.stringMatching(
+        /^revocation: revoke endpoint returned HTTP 503; the credential may stay valid at the provider until \d{4}-\d\d-\d\dT/,
+      ),
     ]);
     expect(failing.events.at(-1)?.detail).toMatchObject({
       revocation: "failed",
@@ -2265,7 +2271,9 @@ describe("credential lifecycle events", () => {
     // The deletion cannot be confirmed either: that is reported, never
     // taken as "absent", and the metadata stays as a discarded marker.
     expect(await unreadable.manager.logout(ctx)).toEqual([
-      "revocation: the stored credential could not be read (SECRET_STORE_UNAVAILABLE)",
+      expect.stringMatching(
+        /^revocation: the stored credential could not be read \(SECRET_STORE_UNAVAILABLE\); the credential may stay valid at the provider until /,
+      ),
       expect.stringMatching(
         /^delete piship:acmecode:inference#1: SECRET_STORE_UNAVAILABLE/,
       ),

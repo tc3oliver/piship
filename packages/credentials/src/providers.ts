@@ -403,6 +403,7 @@ async function brokerRequest(
     operation === "acquire"
       ? "The credential broker"
       : "The credential revocation endpoint";
+  const retryAction = `Check the network connection (and VPN, if your company uses one), then try again; if it keeps failing, ask your administrator whether ${subject.replace("The", "the")} is up`;
   const failure = (error: unknown): unknown => {
     if (options.signal?.aborted) return cancelled("unknown");
     if (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE")
@@ -437,7 +438,12 @@ async function brokerRequest(
         operation,
         "timeout",
         `${subject} did not respond in time`,
-        { retryable: true, outcome: "unknown", detail },
+        {
+          retryable: true,
+          outcome: "unknown",
+          detail,
+          userAction: retryAction,
+        },
       );
     const code = systemCode(error);
     return brokerFailure(
@@ -449,6 +455,7 @@ async function brokerRequest(
         outcome: failedBeforeSend(error) ? "not-sent" : "unknown",
         // The system code, when there is one, so a log or a test sees why.
         detail: { ...detail, ...(code ? { transport: code } : {}) },
+        userAction: retryAction,
       },
     );
   };

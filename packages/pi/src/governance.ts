@@ -819,7 +819,13 @@ export function acceptanceFailure(message: unknown): PiShipError {
   const value = message as
     | { stopReason?: string; errorMessage?: string }
     | undefined;
-  const detail = redact(value?.errorMessage ?? value?.stopReason ?? "unknown");
+  // The session's message_end handler may already have appended its own
+  // action for the TUI; this error carries one action, its own.
+  const detail = redact(
+    value?.errorMessage?.split("\nAction: ")[0] ??
+      value?.stopReason ??
+      "unknown",
+  );
   if (value?.stopReason === "aborted")
     return new PiShipError(
       "REQUEST_CANCELLED",
