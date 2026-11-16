@@ -247,6 +247,14 @@ describe("local payload reuse", () => {
     }
   });
 
+  it("shares one output between test (no gates) and build (gates) without Pi packages", () => {
+    const p = project();
+    const output = buildDistribution(p.manifest, p.output, options);
+    expect(buildDistribution(p.manifest, p.output, {})).toBe(output);
+    expect(buildDistribution(p.manifest, p.output, options)).toBe(output);
+    expect(fixture.installs).toBe(1);
+  });
+
   it("rejects stale resource locks before taking a cache hit", () => {
     const p = project();
     buildDistribution(p.manifest, p.output, options);

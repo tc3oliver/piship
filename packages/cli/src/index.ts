@@ -1553,6 +1553,16 @@ export async function runCli(
           : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${shellArg(target)} --json for the full locked configuration.`,
       );
     } else if (command === "dev" || command === "test") {
+      // Before any lock or build: the branded refusal would name a command
+      // that is not installed, followed by "Pi launch failed: 1".
+      if (
+        command === "dev" &&
+        rest[0] !== "--smoke" &&
+        !(process.stdin.isTTY && process.stdout.isTTY)
+      )
+        throw new Error(
+          `${pishipCommand()} dev starts the interactive session and needs a terminal. Without one, run ${pishipCommand()} dev ${shellArg(target)} --smoke (the headless launch, JSON) or ${pishipCommand()} test ${shellArg(target)} (the acceptance smoke).`,
+        );
       const manifest = readManifest(target);
       for (const warning of checkSkills(manifest, target))
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);

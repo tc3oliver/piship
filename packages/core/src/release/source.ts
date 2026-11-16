@@ -417,6 +417,12 @@ export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
     throw new PiShipError(
       "NETWORK_DENIED",
       `Update sources must use https (got ${url.protocol}//${url.host})`,
+      url.protocol === "file:"
+        ? {
+            userAction:
+              "For a channel directory on this machine, use its absolute path instead of a file:// URL (as the update source, or with update --from <dir>); otherwise serve the channel over https",
+          }
+        : {},
     );
   if (url.username || url.password)
     throw new PiShipError(
