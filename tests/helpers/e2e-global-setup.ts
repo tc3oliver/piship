@@ -3,9 +3,9 @@ import { fileURLToPath } from "node:url";
 import type { TestProject } from "vitest/node";
 import {
   e2eFileKey,
-  e2eFixtures,
   e2eShard,
   type LifecycleFixture,
+  prebuildFixtures,
 } from "./e2e-shards.js";
 import reserveFixtures from "./global-setup.js";
 import { prebuildLifecycleFixtures } from "./lifecycle.js";
@@ -27,7 +27,7 @@ export default async function setup(project: TestProject) {
   try {
     await prebuildLifecycleFixtures(
       project.getProvidedContext().lifecycleFixtures,
-      await shardFixtures(project),
+      await selectedFixtures(project),
     );
   } catch (error) {
     // Vitest 4 reports a failed global setup as "No test files found" and
@@ -54,20 +54,29 @@ export default async function setup(project: TestProject) {
 }
 
 /**
- * With `--shard`, only the fixtures that this shard's files use: the same
- * split the sequencer makes (vitest.e2e.config.ts), over every E2E file.
- * Without it, every fixture.
+ * The fixtures of the files this run selected: those a filename filter
+ * matched (`npm run test:e2e -- tests/e2e/cli.test.ts`), split as the
+ * sequencer splits them with `--shard` (vitest.e2e.config.ts). Undefined,
+ * every fixture, for a full run.
  */
-async function shardFixtures(
+async function selectedFixtures(
   project: TestProject,
 ): Promise<ReadonlySet<LifecycleFixture> | undefined> {
   const shard = project.vitest.config.shard;
-  if (!shard) return undefined;
-  const { testFiles } = await project.globTestFiles();
-  const files = e2eShard(testFiles, shard.index, shard.count);
-  const fixtures = e2eFixtures(files);
+  // The CLI's filename filters; Vitest keeps them on the instance but does
+  // not type them as public.
+  const filters = (project.vitest as unknown as { filenamePattern?: string[] })
+    .filenamePattern;
+  const all = (await project.globTestFiles()).testFiles;
+  const selected = filters?.length
+    ? (await project.globTestFiles(filters)).testFiles
+    : undefined;
+  const fixtures = prebuildFixtures(all, selected, shard);
+  const files = shard
+    ? e2eShard(selected ?? all, shard.index, shard.count)
+    : selected;
   console.info(
-    `E2E shard ${shard.index}/${shard.count}: ${files.map(e2eFileKey).join(", ")}; fixtures: ${[...fixtures].join(", ") || "none"}`,
+    `E2E ${shard ? `shard ${shard.index}/${shard.count}` : files ? "files" : "full run"}: ${files ? files.map(e2eFileKey).join(", ") : `${all.length} files`}; fixtures: ${fixtures ? [...fixtures].join(", ") || "none" : "all"}`,
   );
   return fixtures;
 }

@@ -8,6 +8,7 @@ import {
   e2eFixtures,
   e2eShard,
   type LifecycleFixture,
+  prebuildFixtures,
 } from "./e2e-shards.js";
 
 const e2e = fileURLToPath(new URL("../e2e/", import.meta.url));
@@ -86,5 +87,34 @@ describe("E2E shards", () => {
       e2eShard([...files, extra], index, 3, "linux"),
     );
     expect(shards.flat().filter((path) => path === extra)).toHaveLength(1);
+  });
+
+  it("prebuilds every fixture for a full run, a shard's for a shard, and a filtered file's own", () => {
+    const pick = (name: string) =>
+      files.filter((path) => e2eFileKey(path) === name);
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      expect(prebuildFixtures(files, undefined, undefined, platform)).toBe(
+        undefined,
+      );
+      for (let index = 1; index <= 3; index++)
+        expect(
+          prebuildFixtures(files, undefined, { index, count: 3 }, platform),
+        ).toEqual(e2eFixtures(e2eShard(files, index, 3, platform)));
+    }
+    expect(prebuildFixtures(files, pick("headless"), undefined)).toEqual(
+      new Set(),
+    );
+    expect(
+      prebuildFixtures(files, pick("lifecycle-install"), undefined),
+    ).toEqual(new Set(["demo"]));
+    expect(
+      prebuildFixtures(
+        files,
+        [...pick("personal-lifecycle"), ...pick("managed-clean-machine")],
+        undefined,
+      ),
+    ).toEqual(new Set(["personal", "demo-commands"]));
+    // A filter that matched nothing builds as before.
+    expect(prebuildFixtures(files, [], undefined)).toBe(undefined);
   });
 });
