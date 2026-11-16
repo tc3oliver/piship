@@ -69,6 +69,9 @@ describe("npm under its supervisor", () => {
     expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "30" })).toBe(30);
     expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "0" })).toBe(10);
     expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "x" })).toBe(10);
+    expect(npmTimeoutMinutes({ PISHIP_NPM_TIMEOUT_MINUTES: "100000" })).toBe(
+      35791,
+    );
   });
 
   it("stops a hung npm ci and its children at the time limit, and says why", async () => {

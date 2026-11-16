@@ -6,15 +6,19 @@
 // gone. So a hung `npm ci` neither hangs a build for ever nor outlives it.
 
 const DEFAULT_MINUTES = 10;
+const MAX_MINUTES = Math.floor((2 ** 31 - 1) / 60_000);
 /** The supervisor's exit status when npm ran out of time. */
 export const NPM_TIMED_OUT = 124;
 
-/** `PISHIP_NPM_TIMEOUT_MINUTES`, else 10; a value that is not a positive number is ignored. */
+/** `PISHIP_NPM_TIMEOUT_MINUTES`, else 10, at most 35791; a value that is not a positive number is ignored. */
 export function npmTimeoutMinutes(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
   const value = Number(env.PISHIP_NPM_TIMEOUT_MINUTES);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_MINUTES;
+  // setTimeout fires at once past 2^31-1 ms (about 24.8 days), so cap there.
+  return Number.isFinite(value) && value > 0
+    ? Math.min(value, MAX_MINUTES)
+    : DEFAULT_MINUTES;
 }
 
 const SUPERVISOR = `
