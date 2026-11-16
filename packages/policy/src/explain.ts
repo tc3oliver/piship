@@ -181,6 +181,8 @@ export function denialHint(
   deployment: "personal" | "managed",
   where: {
     readonly policyFile?: string;
+    /** The distribution's command, which runs `policy explain`. */
+    readonly command?: string;
     /** Task grants are on; `actions` limits which actions a grant covers. */
     readonly grants?: { readonly actions?: readonly string[] | undefined };
   } = {},
@@ -196,12 +198,12 @@ export function denialHint(
       decision.action === "shell.execute") &&
     (where.grants.actions?.includes(decision.action) ?? true);
   const grant = grantable
-    ? " Or type `/grant <folder>` to approve that folder's prompts for this session."
+    ? " Or type `/grant <folder>` to approve that folder's prompts for a limited time (`--for` sets how long)."
     : "";
   // The person's own refusal of a prompt needs no way to change a rule.
   if (decision.approval === "denied" || decision.approval === "cancelled")
     return "";
-  const explain = `\`piship policy explain ${decision.action} <resource>\` shows how it was decided`;
+  const explain = `\`${where.command ?? "piship"} policy explain ${decision.action} <resource>\` shows how it was decided`;
   switch (decision.layer) {
     case "distribution-enforced":
       return deployment === "managed"

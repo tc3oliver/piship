@@ -235,9 +235,9 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
       decide: async (path) => (path.endsWith("a.txt") ? "allow" : "skip"),
     });
     await ws.ensureSeeded();
-    const left = notices.filter((line) => line.includes("Left out"));
+    const left = warnings.filter((line) => line.includes("Left out"));
     expect(left).toEqual([
-      "Left out of the sandbox: 2 by policy. Policy withheld 2 of 3 project files, so the agent will not see most of the project.",
+      "Left out of the sandbox: 2 by policy (b.txt, c.txt). Policy withheld 2 of 3 project files, so the agent will not see most of the project.",
     ]);
     expect(notices.join("\n")).not.toContain("Your policy withheld");
     expect(ws.lookup()?.skipped(join(project, "b.txt"))).toBe("policy");
@@ -248,7 +248,10 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     await workspace("s9", undefined, {
       decide: async (path) => (path.endsWith("b.txt") ? "skip" : "allow"),
     }).ensureSeeded();
-    expect(notices.at(-1)).toBe("Left out of the sandbox: 1 by policy.");
+    // A few files withheld are progress, not a warning, and are named.
+    expect(notices.at(-1)).toBe(
+      "Left out of the sandbox: 1 by policy (b.txt).",
+    );
   });
 
   it("remembers a seed failure no retry can cure, and retries a transient one", async () => {

@@ -707,6 +707,8 @@ describe("governed built-in tools", () => {
       ),
     ).toBe(true);
     expect(messages.at(-1)).toContain("echo command-canary");
+    // The prompt names the rule that asked.
+    expect(messages.at(-1)).toContain("Rule: me.echo");
     await session.close();
     const audit = readFileSync(
       join(root, "state", "logs", "audit.jsonl"),
@@ -1235,7 +1237,7 @@ describe("governed built-in tools", () => {
     for (const name of ["mcp__docs__search", "deploy", "grep"])
       expect(await call?.({ toolName: name, input: {} }, context())).toEqual({
         block: true,
-        reason: `Plan mode does not allow ${name}. The user can switch to Build mode with /build.`,
+        reason: `Plan mode does not allow ${name}. The user can switch to Build mode with /build. Do not retry it or work around Plan mode with another tool; finish the plan and tell the user it needs Build mode.`,
       });
     expect(await call?.({ toolName: "read", input: {} }, context())).toBe(
       undefined,
@@ -1247,7 +1249,7 @@ describe("governed built-in tools", () => {
     ).toEqual({
       block: true,
       reason:
-        "Plan mode does not allow ask_user. The user can switch to Build mode with /build.",
+        "Plan mode does not allow ask_user. The user can switch to Build mode with /build. Do not retry it or work around Plan mode with another tool; finish the plan and tell the user it needs Build mode.",
     });
     session.loader.builtin.add("piship-ask-user");
     expect(await call?.({ toolName: "ask_user", input: {} }, context())).toBe(
@@ -1696,7 +1698,7 @@ describe("one prompt per governed tool call", () => {
     ).toHaveProperty("text");
     expect(write.prompts).toHaveLength(2);
     expect(write.prompts[0]).toMatch(
-      /tool\.execute write\nTool-reason-canary\nfilesystem\.write write: .*asked\nFile-reason-canary\nAllow for this session covers any target matching write \(rule me\.write-tool\) for tool\.execute in this session\nAllow for this session covers any target matching workspace\/asked\/\*\* \(rule me\.write\) for filesystem\.write in this session$/,
+      /tool\.execute write\nTool-reason-canary\nRule: me\.write-tool\nfilesystem\.write write: .*asked\nFile-reason-canary\nRule: me\.write\nAllow for this session covers any target matching write \(rule me\.write-tool\) for tool\.execute in this session\nAllow for this session covers any target matching workspace\/asked\/\*\* \(rule me\.write\) for filesystem\.write in this session$/,
     );
     expect(write.prompts[1]).not.toContain("tool.execute");
     // An allowed file: one prompt, for the tool alone.
@@ -1711,7 +1713,9 @@ describe("one prompt per governed tool call", () => {
       ),
     ).toHaveProperty("text");
     expect(edit.prompts).toEqual([
-      expect.stringMatching(/tool\.execute edit\nfilesystem\.write edit: /),
+      expect.stringMatching(
+        /tool\.execute edit\nRule: me\.edit-tool\nfilesystem\.write edit: /,
+      ),
     ]);
     expect(readFileSync(join(workspace, "notes.txt"), "utf8")).toBe(
       "workspace edited\n",
@@ -1854,7 +1858,7 @@ describe("git.push in the shell gate", () => {
     ]) {
       const result = await bash(command, [...SHELL, ...PUSH], context(true));
       expect(result.outcome).toMatch(
-        /rule me\.main.*your own rule me\.main.*piship policy explain git\.push/,
+        /rule me\.main.*your own rule me\.main.*`unit policy explain git\.push/,
       );
       expect(result.ran).toBe(false);
       expect(result.prompts).toEqual([]);

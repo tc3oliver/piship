@@ -194,6 +194,8 @@ function bestEffort(record: () => void): void {
   }
 }
 
+export type NoticeLevel = "info" | "warning";
+
 export class GovernanceSession {
   readonly manifest: GovernanceManifest;
   readonly resources: ResourceEvidence[] = [];
@@ -302,7 +304,7 @@ export class GovernanceSession {
           });
         },
         warn: (message) => this.#notice(message),
-        notify: (message) => this.#notice(message),
+        notify: (message) => this.#notice(message, "info"),
         ...(this.manifest.sandbox.remote?.seed
           ? { seedLimits: this.manifest.sandbox.remote.seed }
           : {}),
@@ -515,6 +517,7 @@ export class GovernanceSession {
   denialHint(decision: Parameters<typeof denialHint>[0]): string {
     const hint = denialHint(decision, this.options.lock.deployment.mode, {
       policyFile: join(this.options.stateDir, "config", "policy.json"),
+      command: this.options.lock.app.command,
       ...(this.grantsAllowed
         ? { grants: { actions: this.manifest.policy.taskGrants?.actions } }
         : {}),
@@ -722,10 +725,12 @@ export class GovernanceSession {
           ? [
               `tool.execute ${tool.tool}`,
               ...(tool.decision.reason ? [tool.decision.reason] : []),
+              `Rule: ${tool.decision.ruleId}`,
             ]
           : []),
         `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? own.resource)}`,
         ...(own.reason && (!tool || own.effect === "ask") ? [own.reason] : []),
+        ...(own.effect === "ask" ? [`Rule: ${own.ruleId}`] : []),
       ].join("\n"),
     };
     // A grant wider than the target shown says so, for each ask, where the
@@ -1770,30 +1775,34 @@ export class GovernanceSession {
   workflowMode: "plan" | "build" | null = null;
 
   #workspaceWarned = false;
-  #pendingNotices: string[] = [];
-  #notify: ((message: string) => void) | undefined;
+  #pendingNotices: [string, NoticeLevel][] = [];
+  #notify: ((message: string, level: NoticeLevel) => void) | undefined;
 
   /**
    * Show session notices through `notify` (the governance extension's UI).
    * Notices raised before a sink is attached are shown when it is.
    */
-  attachNotices(notify: (message: string) => void): void {
+  attachNotices(notify: (message: string, level: NoticeLevel) => void): void {
     this.#notify = notify;
-    for (const message of this.#pendingNotices.splice(0)) this.#notice(message);
+    for (const [message, level] of this.#pendingNotices.splice(0))
+      this.#notice(message, level);
   }
 
-  /** Show a session notice now, or once a UI is attached. */
-  notice(message: string): void {
-    this.#notice(message);
+  /**
+   * Show a session notice now, or once a UI is attached: `info` for progress
+   * the user needs no action on, `warning` (the default) for anything else.
+   */
+  notice(message: string, level: NoticeLevel = "warning"): void {
+    this.#notice(message, level);
   }
 
-  #notice(message: string): void {
+  #notice(message: string, level: NoticeLevel = "warning"): void {
     if (!this.#notify) {
-      this.#pendingNotices.push(message);
+      this.#pendingNotices.push([message, level]);
       return;
     }
     try {
-      this.#notify(message);
+      this.#notify(message, level);
     } catch {
       // a notice never decides a command
     }

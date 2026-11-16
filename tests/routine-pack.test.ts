@@ -50,12 +50,26 @@ describe("piship.routine@1", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("says why each ask asks, never that it is routine work", () => {
+    const asks = managed().defaults.filter((rule) => rule.effect === "ask");
+    expect(asks.length).toBeGreaterThan(0);
+    for (const rule of asks)
+      expect(rule.reason).not.toMatch(/routine \S+ work/);
+    expect(
+      managed().defaults.find(
+        (rule) => rule.id === "piship.routine.fs.secrets.shell-after-space",
+      )?.reason,
+    ).toBe("piship.routine@1: it names a dotenv file, which may hold secrets");
+  });
+
   it("is frozen", () => {
     const rules = managed().defaults;
-    // Changing the pack needs routine@2, not an edit of this digest.
+    // Changing what the pack decides needs routine@2, not an edit of this
+    // digest; a rule's reason is only shown, so it is pinned below instead.
     expect(rules).toHaveLength(RULE_COUNT);
+    const decisions = rules.map(({ reason: _reason, ...rule }) => rule);
     expect(
-      createHash("sha256").update(JSON.stringify(rules)).digest("hex"),
+      createHash("sha256").update(JSON.stringify(decisions)).digest("hex"),
     ).toBe(DIGEST);
   });
 
@@ -258,4 +272,4 @@ describe("piship.routine@1", () => {
 
 const RULE_COUNT = 207;
 const DIGEST =
-  "aac42141aec3205665a60890e272504009c9cc3055e443d1775bf153e475c9f9";
+  "8bb168595c1dcdb605abeb147a1b4ac88cee6f989038defbcc8ca596b9fd0747";

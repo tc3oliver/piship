@@ -74,6 +74,10 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     );
     const hint = scanner.hint();
     expect(hint).toContain("protected git control path");
+    // Names who can run it; the model cannot leave the sandbox.
+    expect(hint).toContain(
+      "The user can run this command in their own terminal",
+    );
     expect(hint).not.toContain("write.allow");
   });
 

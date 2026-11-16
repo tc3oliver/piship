@@ -257,6 +257,9 @@ describe("personal mode", () => {
     // question, not a second one.
     expect(prompts[0]?.title).toBe("Project configuration");
     expect(prompts[0]?.message).toContain("CLAUDE.md");
+    // Says what loading does, in words, not the origin class.
+    expect(prompts[0]?.message).toContain("of unknown origin");
+    expect(prompts[0]?.message).toContain("run with your permissions");
     for (const path of CLAUDE_PATHS)
       expect(prompts[0]?.message).toContain(path);
     expect(session.projectTrust.trusted).toBe(true);

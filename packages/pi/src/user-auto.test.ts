@@ -410,7 +410,7 @@ describe("user auto mode in a governed session", () => {
         expect(ran).toBe(answer);
         expect(prompts).toEqual([
           expect.stringMatching(
-            /tool\.execute read\nRead-tool-canary\nfilesystem\.read read: \S*notes\.txt$/,
+            /tool\.execute read\nRead-tool-canary\nRule: read-tool\nfilesystem\.read read: \S*notes\.txt$/,
           ),
         ]);
       }

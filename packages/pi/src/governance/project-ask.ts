@@ -13,6 +13,7 @@ import {
   recallProjectTrust,
   rememberProjectTrust,
 } from "@piship/core";
+import type { ProjectOrigin } from "@piship/policy";
 import type { GovernanceSession } from "../governance-session.js";
 
 export interface AskItem {
@@ -48,6 +49,13 @@ function safe(value: string): string {
 }
 
 const SHOWN_ITEMS = 12;
+
+/** The project's origin class, in the words a prompt uses. */
+const ORIGIN_WORDS: Readonly<Record<ProjectOrigin, string>> = {
+  company: "the company project",
+  external: "the project from outside your company",
+  unknown: "the project of unknown origin",
+};
 
 /** The question for one project, asked at most once per launch. */
 export class ProjectAsk {
@@ -114,7 +122,7 @@ export class ProjectAsk {
         title: this.claudeOnly
           ? "Project Claude Code configuration"
           : "Project configuration",
-        message: `Load ${this.claudeOnly ? "the Claude Code configuration" : "the configuration"} of ${session.project.origin} project ${safe(session.project.root)}?\n${shown.join("\n")}`,
+        message: `Load ${this.claudeOnly ? "the Claude Code configuration" : "the configuration"} of ${ORIGIN_WORDS[session.project.origin]} ${safe(session.project.root)}? Its instructions steer the agent, and its extensions, hooks, and MCP servers run with your permissions.\n${shown.join("\n")}`,
         offerRemember: digest !== undefined && this.channel !== undefined,
       },
     );
