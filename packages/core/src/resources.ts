@@ -238,6 +238,9 @@ function resolveResourceFiles(
         `${declared} must be a file`,
       );
     const path = relative(base, absolute).split(sep).join("/");
+    // Several fields may name one file, such as one MCP module run with different args.
+    if (output.some((item) => item.kind === "adapters" && item.path === path))
+      continue;
     output.push({
       kind: "adapters",
       path,

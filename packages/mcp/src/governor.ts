@@ -306,7 +306,26 @@ export class McpGovernor {
       };
     } catch (error) {
       await session.close().catch(() => undefined);
-      throw withStderr(error, transport);
+      // Name the setting to raise rather than the milliseconds left over.
+      const late =
+        error instanceof PiShipError &&
+        error.retryable &&
+        Date.now() >= deadline;
+      throw withStderr(
+        late
+          ? mcpUnhealthy(
+              `MCP server ${config.id} did not start within its startupTimeout of ${config.startupTimeoutMs / 1000}s`,
+              {
+                retryable: true,
+                detail: {
+                  ...error.sanitizedDetail,
+                  timeoutMs: config.startupTimeoutMs,
+                },
+              },
+            )
+          : error,
+        transport,
+      );
     }
   }
 
@@ -657,11 +676,18 @@ function isTimeout(error: unknown): boolean {
 
 function failureReason(error: unknown): string {
   if (error instanceof PiShipError) {
-    const stderr = error.sanitizedDetail?.stderr;
+    const detail = error.sanitizedDetail?.stderr;
+    // The reason is one status line; stack frames add length, not meaning.
+    const stderr =
+      typeof detail === "string"
+        ? detail
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("at "))
+            .join(" | ")
+        : "";
     return truncate(
-      typeof stderr === "string" && stderr.length > 0
-        ? `${error.message} (stderr: ${stderr})`
-        : error.message,
+      stderr ? `${error.message} (stderr: ${stderr})` : error.message,
       1200,
     );
   }
