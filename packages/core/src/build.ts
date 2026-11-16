@@ -24,6 +24,7 @@ import {
 import { bundleDistribution } from "./bundle.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { requireCurrentLock } from "./lock.js";
+import { supervisedNpm } from "./npm-process.js";
 import { removeTree } from "./parallel-files.js";
 import {
   inventory,
@@ -123,10 +124,15 @@ function installRuntime(
     ...NPM_CI_ARGUMENTS,
     ...(ignoreScripts ? ["--ignore-scripts"] : []),
   ];
-  const [file, args] =
+  const { file, args } =
     process.platform === "win32"
-      ? ["cmd.exe", ["/d", "/s", "/c", `npm ${npmArguments.join(" ")}`]]
-      : ["npm", npmArguments];
+      ? supervisedNpm("cmd.exe", [
+          "/d",
+          "/s",
+          "/c",
+          `npm ${npmArguments.join(" ")}`,
+        ])
+      : supervisedNpm("npm", npmArguments);
   let install: { status: number | null; output: string };
   let running: ReturnType<typeof startBackgroundProcess> | undefined;
   if (meanwhile.overlap)

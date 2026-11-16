@@ -1,6 +1,7 @@
 // npm, git, and tar invocations for package resolution. Credentials come only
 // from npm / git configuration in the environment; PiShip passes none.
 import { spawnSync } from "node:child_process";
+import { supervisedNpm } from "../npm-process.js";
 import { windowsNpmInvocation } from "../windows-npm.js";
 import { packageError } from "./refs.js";
 
@@ -29,13 +30,19 @@ export const runCommand: CommandRunner = (command, args, options) => {
     cwd: options.cwd,
     env: options.env ?? process.env,
     maxBuffer: 256 * 1024 * 1024,
-    timeout: 600_000,
+    // npm's limit is kept by its supervisor, which also stops npm's children.
+    ...(command === "npm" ? {} : { timeout: 600_000 }),
     ...(options.input ? { input: options.input } : {}),
   };
-  const invocation =
-    command === "npm" && process.platform === "win32"
-      ? windowsNpmInvocation(args, spawnOptions.env, options.cwd)
-      : { file: command, args };
+  let invocation: { file: string; args: readonly string[] } = {
+    file: command,
+    args,
+  };
+  if (command === "npm") {
+    if (process.platform === "win32")
+      invocation = windowsNpmInvocation(args, spawnOptions.env, options.cwd);
+    invocation = supervisedNpm(invocation.file, invocation.args);
+  }
   const result = spawnSync(invocation.file, [...invocation.args], spawnOptions);
   return {
     status: result.status,
