@@ -31,6 +31,7 @@ import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
 import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
 import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
+import { pishipCommand } from "../invocation.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
 
@@ -277,7 +278,7 @@ export function readInstallReceipt(id: string): InstallReceipt {
       {
         userAction: mismatch
           ? `Set ${mismatch[0]}=${mismatch[1]} and run the command again`
-          : `Run piship uninstall ${id}, then install ${id} again`,
+          : `Run ${pishipCommand()} uninstall ${id}, then install ${id} again`,
         sanitizedDetail: {
           receipt: path,
           check,

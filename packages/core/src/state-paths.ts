@@ -16,6 +16,7 @@ import {
   sep,
 } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { readManifest } from "@piship/schema";
 import type { DistributionId } from "./lock-schema.js";
 
 const DISTRIBUTION_ID = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
@@ -44,8 +45,26 @@ export function suggestDistributionId(value: string): string | undefined {
   if (!words) return undefined;
   return isDistributionId(words) ? words : `app-${words}`;
 }
+/**
+ * A manifest path or directory given where an id belongs: no slugified
+ * suggestion, but the manifest's app.id when it can be read.
+ */
+function pathGivenAsId(value: string): string | undefined {
+  if (!/[/\\]|\.ya?ml$/.test(value)) return undefined;
+  let id: string | undefined;
+  try {
+    id = readManifest(
+      /\.ya?ml$/.test(value) ? value : join(value, "piship.yaml"),
+    ).app.id;
+  } catch {
+    // Not a readable manifest; the message still says what to pass.
+  }
+  return `${JSON.stringify(value)} is a path, not a distribution id; pass the distribution id (app.id in piship.yaml)${id ? `, here ${id}` : ""}`;
+}
 export function distributionStateDirectory(id: DistributionId): string {
   if (!isDistributionId(id.value)) {
+    const path = pathGivenAsId(id.value);
+    if (path) throw new Error(path);
     const suggestion = suggestDistributionId(id.value);
     throw new Error(
       `Distribution id ${JSON.stringify(id.value)} must start with a lowercase letter and contain only lowercase letters, digits and single hyphens${suggestion ? `; use ${suggestion}` : ""}`,

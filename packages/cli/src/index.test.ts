@@ -647,7 +647,7 @@ describe("help", () => {
   });
 
   it.each([
-    ["validate", "validate <manifest>"],
+    ["validate", "validate [<manifest>]"],
     ["install", "install <artifact|release-dir|archive|pack>"],
     ["doctor", "doctor <artifact|id>"],
     ["config", "config explain <manifest|artifact|id>"],
@@ -756,9 +756,114 @@ describe("argument errors", () => {
   });
 
   it("prints only the usage when nothing specific is wrong", async () => {
-    expect((await run(["validate"])).stderr).toMatch(
-      /^Usage: piship validate /,
+    expect((await run(["doctor"])).stderr).toMatch(/^Usage: piship doctor /);
+  });
+
+  it("reads options before the positional argument", async () => {
+    for (const args of [
+      ["build", "--bogus", "m.yaml"],
+      ["build", "--json", "m.yaml"],
+    ]) {
+      const result = await run(args);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(
+        /^Unknown option --(bogus|json) for build\./,
+      );
+    }
+  });
+
+  it("says when there is no ./piship.yaml to default to", async () => {
+    const result = await run(["dev", "--smoke"]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/^No piship.yaml in this directory; /);
+  });
+
+  it("suggests the command a typo meant", async () => {
+    const typo = await run(["int"]);
+    expect(typo.status).toBe(2);
+    expect(typo.stderr).toMatch(/^Unknown command: int\. Did you mean init\? /);
+    expect((await run(["zzzzzz"])).stderr).not.toContain("Did you mean");
+  });
+});
+
+describe("the first-run journey from the directory above the source", () => {
+  const saved = { ...process.env };
+  const cwd = process.cwd();
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (m) => stdout.push(m),
+      stderr: (m) => stderr.push(m),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+  beforeEach(async () => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-journey-"));
+    process.env.PISHIP_INSTALL_HOME = join(temp, "install");
+    process.env.PISHIP_STATE_HOME = join(temp, "state");
+    process.env.PISHIP_BIN_HOME = join(temp, "bin");
+    process.chdir(temp);
+    expect((await run(["init", "my-agent"])).status).toBe(0);
+  });
+  afterEach(() => {
+    process.chdir(cwd);
+    process.env = { ...saved };
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("takes the source directory, or ./piship.yaml, as the manifest", async () => {
+    const validated = await run(["validate", "my-agent"]);
+    expect(validated.status).toBe(0);
+    expect(validated.stdout).toMatch(/^Next: .* test .*piship\.yaml /m);
+    process.chdir("my-agent");
+    expect((await run(["validate"])).status).toBe(0);
+  });
+
+  it("points a first lock at test and a relock at diff", async () => {
+    const first = await run(["lock", "my-agent"]);
+    expect(first.status).toBe(0);
+    expect(first.stdout).not.toContain("diff");
+    expect(first.stdout).toMatch(/^Next: .* test .* build /m);
+    const again = await run(["lock", "my-agent"]);
+    expect(again.stdout).toContain("diff <previous piship.lock>");
+  });
+
+  it.each(["doctor", "install"])(
+    "%s of the source directory says to build it, not that it is damaged",
+    async (command) => {
+      const result = await run([command, "my-agent"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toContain("INTEGRITY_FAILED");
+      expect(result.stderr).toContain(
+        `my-agent is the source of a distribution (it holds piship.yaml), not a built one. Build it with piship build my-agent, then run piship ${command} ${join("dist", "my-agent")}.`,
+      );
+    },
+  );
+
+  it("doctor of the source directory checks the installed distribution of that id", async () => {
+    mkdirSync(join(temp, ID));
+    writeFileSync(
+      join(temp, ID, "piship.yaml"),
+      readFileSync(join(temp, "my-agent", "piship.yaml")),
     );
+    installRecorder();
+    const result = await run(["doctor", ID]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("is the source of a distribution");
+  });
+
+  it("names the manifest's id when a path is given for an id", async () => {
+    const result = await run([
+      "purge",
+      join("my-agent", "piship.yaml"),
+      "--yes",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "is a path, not a distribution id; pass the distribution id (app.id in piship.yaml), here my-agent",
+    );
+    expect(result.stderr).not.toContain("use my-agent");
   });
 });
 
@@ -1414,7 +1519,7 @@ describe("init", () => {
       const result = await run(["init", directory, "--personal"]);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe(
-        "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.",
+        "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.\nregistry.npmjs.org is not reachable from here. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails until npm can reach it or the registry npm is configured to use.",
       );
       expect(result.stdout).toContain(
         `Created ${join(directory, "piship.yaml")}`,

@@ -62,6 +62,7 @@ import {
   writeShim,
 } from "./launcher.js";
 import { uninstallDistribution } from "./uninstall.js";
+import { pishipCommand } from "../invocation.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -415,7 +416,7 @@ export async function installDistribution(
           } catch {}
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; or run piship uninstall ${id} and install again. ${command} update --from <signed update source> only upgrades to a newer version`
+              ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run ${pishipCommand()} repair ${id} <release archive or directory>; or run ${pishipCommand()} uninstall ${id} and install again. ${command} update --from <signed update source> only upgrades to a newer version`
               : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
         }
