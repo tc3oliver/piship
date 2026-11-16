@@ -1461,6 +1461,15 @@ async function runLifecycle(
       output.stderr(
         `Warning: ${first} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, or recorded tests. Install it for local testing only; use the release piship release builds, or your publisher's, for anything else.`,
       );
+    // A first install has nothing to check a channel signature against; the
+    // publisher's digest is what ties a copied archive to its source.
+    if (
+      options["--sha256"] === undefined &&
+      statSync(resolve(first), { throwIfNoEntry: false })?.isFile()
+    )
+      output.stderr(
+        `Warning: ${first} is a local archive, so no channel signature was verified for it. Pass --sha256 with the digest its publisher printed (and --expect-key) to check it; later updates through the installed command's update verify the signed channel.`,
+      );
     const receipt = await installDistribution(
       first,
       flags.has("--use-existing-state"),

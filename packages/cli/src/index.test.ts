@@ -898,6 +898,41 @@ describe("file system errors", () => {
     expect((await run(["install", other])).stderr).not.toContain("Warning:");
   });
 
+  it("warns that a local archive's channel signature was not verified, unless its digest is pinned", async () => {
+    const archive = join(temp, "copied.tar.gz");
+    writeFileSync(archive, "not an archive");
+    const previous = process.env.PISHIP_INSTALL_HOME;
+    process.env.PISHIP_INSTALL_HOME = join(temp, "install-home");
+    try {
+      const unchecked = await run(["install", archive]);
+      expect(unchecked.status).toBe(1);
+      expect(
+        unchecked.stderr
+          .split("\n")
+          .filter((line) => line.includes("no channel signature was verified")),
+      ).toEqual([
+        `Warning: ${archive} is a local archive, so no channel signature was verified for it. Pass --sha256 with the digest its publisher printed (and --expect-key) to check it; later updates through the installed command's update verify the signed channel.`,
+      ]);
+      const pinned = await run([
+        "install",
+        archive,
+        "--sha256",
+        "a".repeat(64),
+      ]);
+      expect(pinned.stderr).not.toContain("channel signature");
+      // A directory is no copied archive, and a missing path is not either.
+      expect((await run(["install", temp])).stderr).not.toContain(
+        "channel signature",
+      );
+      expect(
+        (await run(["install", join(temp, "missing")])).stderr,
+      ).not.toContain("channel signature");
+    } finally {
+      if (previous === undefined) delete process.env.PISHIP_INSTALL_HOME;
+      else process.env.PISHIP_INSTALL_HOME = previous;
+    }
+  });
+
   it("refuses malformed install checks before touching the source", async () => {
     const missing = join(temp, "missing");
     const digest = await run(["install", missing, "--sha256", "xyz"]);
