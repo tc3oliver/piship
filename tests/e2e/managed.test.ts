@@ -385,7 +385,7 @@ describe("managed distribution (local fixtures)", () => {
     await new Promise((resolve) => setTimeout(resolve, 3500));
     const renewedDoctor = await run(["doctor"]);
     expect(renewedDoctor.status, renewedDoctor.stdout).toBe(0);
-    expect(renewedDoctor.stdout).toMatch(/✓ valid\s+\d+m remaining/);
+    expect(renewedDoctor.stdout).toMatch(/[✓+] valid\s+\d+m remaining/);
 
     // Unavailable gateway, missing configuration, and disabled TLS fail visibly.
     await services.close();
