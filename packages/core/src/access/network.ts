@@ -155,8 +155,8 @@ export function resolveRuntimeReferences(
           {
             component: "config",
             userAction: names.length
-              ? `Ask your administrator for the correct value of ${names.join(", ")}, then set it in the environment that starts this command`
-              : `Ask your administrator to correct ${field} in the distribution`,
+              ? `Set ${names.join(", ")} to a correct URL in the environment that starts this command (in a managed distribution, your administrator has the value)`
+              : `Correct ${field} in piship.yaml (in a managed distribution, ask your administrator)`,
           },
         );
       }

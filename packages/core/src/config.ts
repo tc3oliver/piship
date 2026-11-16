@@ -181,9 +181,12 @@ export function setPreference(
   onNotice?: (notice: string) => void,
   /** The installed command, named in the refusals' next step. */
   command?: string,
+  /** Who changes the distribution: its administrator, or the user's own piship.yaml. */
+  mode: "managed" | "personal" = "managed",
 ): UserPreferences {
   const policy = policyView(access, appTheme);
   const explain = command ? `${command} config explain` : "config explain";
+  const personal = mode === "personal";
   const recovered = recoverPreferences(path);
   // Never write over a damaged file that could not be moved aside.
   if (!recovered.moved && recovered.error) throw recovered.error;
@@ -214,7 +217,7 @@ export function setPreference(
         `User preferences can only narrow the distribution allowlist; not allowed: ${widening.join(", ")}`,
         {
           component: "config",
-          userAction: `List only models the distribution allows (${command ? `${command} models` : "the models command"} lists them), or ask your administrator to allow more`,
+          userAction: `List only models the distribution allows (${command ? `${command} models` : "the models command"} lists them), ${personal ? "or add them to models.allowed in your piship.yaml" : "or ask your administrator to allow more"}`,
         },
       );
     const next = { ...current, modelsAllowed: list };
@@ -233,7 +236,9 @@ export function setPreference(
         component: "config",
         ...(sensitive
           ? {
-              userAction: `Your administrator sets ${key} in the distribution; ${explain} shows what you can set`,
+              userAction: personal
+                ? `${key} is set in your piship.yaml; ${explain} shows what you can set`
+                : `Your administrator sets ${key} in the distribution; ${explain} shows what you can set`,
             }
           : {}),
       },
@@ -248,7 +253,9 @@ export function setPreference(
       `${key} is enforced by the distribution and cannot be overridden`,
       {
         component: "config",
-        userAction: `${explain} shows which settings you can change; ask your administrator to change ${key}`,
+        userAction: personal
+          ? `${explain} shows which settings you can change; to change ${key}, edit config.enforced or config.userOverridable in your piship.yaml`
+          : `${explain} shows which settings you can change; ask your administrator to change ${key}`,
       },
     );
   if (value !== undefined) {

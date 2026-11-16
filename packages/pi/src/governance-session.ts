@@ -1437,7 +1437,9 @@ export class GovernanceSession {
         {
           component: "policy",
           userAction:
-            "Answer each prompt as it comes; ask your administrator to enable policy.taskGrants for task grants",
+            this.options.lock.deployment.mode === "personal"
+              ? "Answer each prompt as it comes, or set policy.taskGrants.mode to session in your piship.yaml"
+              : "Answer each prompt as it comes; ask your administrator to enable policy.taskGrants for task grants",
         },
       );
     this.#checkGrantSlot(grant.id);

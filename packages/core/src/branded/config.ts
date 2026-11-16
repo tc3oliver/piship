@@ -77,6 +77,7 @@ export async function runConfig(
       action === "set" ? rest[0] : undefined,
       (notice) => ctx.err(`Notice: ${notice}`),
       ctx.metadata.app.command,
+      ctx.mode,
     );
     ctx.out(
       action === "set"
