@@ -52,6 +52,13 @@ vi.mock("./runtime-dependencies.js", async (original) => ({
   buildInput: fixture.input,
   workspacePackages: ["core"],
 }));
+// A test that stands in for Windows has no npm.cmd on PATH to resolve.
+vi.mock("./windows-npm.js", () => ({
+  windowsNpmInvocation: (args: readonly string[]) => ({
+    file: "node",
+    args: ["npm-cli.js", ...args],
+  }),
+}));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
   return {
@@ -604,10 +611,10 @@ describe("immutable runtime cache", () => {
     const { file: command, args } = JSON.parse(
       fixture.runs[0]?.[1][2] ?? "{}",
     ) as { file: string; args: string[] };
-    // Windows reaches npm through cmd.exe, with the same words.
-    const words =
-      process.platform === "win32" ? (args.at(-1) ?? "").split(" ") : args;
-    expect(command).toBe(process.platform === "win32" ? "cmd.exe" : "npm");
+    // Windows runs npm's own script with Node (windowsNpmInvocation, mocked
+    // above), never cmd.exe, with the same words.
+    const words = args;
+    expect(command).toBe(process.platform === "win32" ? "node" : "npm");
     for (const word of [
       "ci",
       "--omit=dev",

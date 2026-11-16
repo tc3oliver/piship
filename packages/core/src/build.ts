@@ -68,6 +68,23 @@ import {
   type OutputStagingOptions,
   sweepOutputStaging,
 } from "./temporary-directories.js";
+import { windowsNpmInvocation } from "./windows-npm.js";
+
+/**
+ * The runtime `npm ci` under its supervisor. On Windows it runs npm.cmd's own
+ * target (node with npm-cli.js), not cmd.exe: the supervisor's tree kill and
+ * Ctrl+C then reach npm directly, with no batch-job prompt in between.
+ */
+export function runtimeNpm(
+  args: readonly string[],
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): { file: string; args: string[] } {
+  if (platform !== "win32") return supervisedNpm("npm", args);
+  const npm = windowsNpmInvocation(args, env, cwd);
+  return supervisedNpm(npm.file, npm.args);
+}
 
 /**
  * What `npm ci` is asked for: the locked runtime tree only, from the npm cache
@@ -133,15 +150,7 @@ function installRuntime(
     ...NPM_CI_ARGUMENTS,
     ...(ignoreScripts ? ["--ignore-scripts"] : []),
   ];
-  const { file, args } =
-    process.platform === "win32"
-      ? supervisedNpm("cmd.exe", [
-          "/d",
-          "/s",
-          "/c",
-          `npm ${npmArguments.join(" ")}`,
-        ])
-      : supervisedNpm("npm", npmArguments);
+  const { file, args } = runtimeNpm(npmArguments, stage);
   let install: { status: number | null; output: string };
   let running: ReturnType<typeof startBackgroundProcess> | undefined;
   if (meanwhile.overlap)
