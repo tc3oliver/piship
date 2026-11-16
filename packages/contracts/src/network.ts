@@ -827,6 +827,8 @@ function transportFailure(
     {
       retryable: true,
       component,
+      // A caller that knows the service may replace the generic action.
+      sanitizedDetail: { hop: "target", ...(code ? { transport: code } : {}) },
       userAction:
         code === "ENOTFOUND" || code === "EAI_AGAIN"
           ? `${target.hostname} does not resolve: check the network connection, the VPN if one is needed, and DNS, then try again`

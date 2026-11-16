@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  formatError,
   type ManagedFetch,
   PiShipError,
   SecretValue,
@@ -205,8 +206,17 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       message: expect.stringMatching(
         /^OIDC discovery failed: the identity provider could not be reached \(.*127\.0\.0\.1:9.*\)$/,
       ),
-      userAction: expect.stringContaining("try again"),
+      userAction: expect.stringContaining(
+        "ask your administrator whether the identity provider is up",
+      ),
     });
+    // The identity action replaces the network layer's generic one: login
+    // prints exactly one Action line, and it names the identity provider.
+    const printed = formatError(
+      await down.configuration().catch((error: unknown) => error),
+    );
+    expect(printed.match(/^Action:/gm)).toHaveLength(1);
+    expect(printed).toMatch(/^Action: .*the identity provider is up$/m);
   });
   describe("token endpoint failures", () => {
     const PAGE_SENTINEL = "proxy-page-sentinel-0123456789";

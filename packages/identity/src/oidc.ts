@@ -47,9 +47,13 @@ function mapError(error: unknown, action: string): PiShipError {
     current = (current as { cause?: unknown }).cause
   )
     if (current instanceof PiShipError) {
-      // The managed fetch's bare connection failure names neither the
-      // identity provider nor what to do; a proxy failure carries its action.
-      if (current.code === "GATEWAY_UNREACHABLE" && !current.userAction)
+      // The managed fetch's direct connection failure does not name the
+      // identity provider and has only a generic action; a proxy failure
+      // keeps its own proxy action.
+      if (
+        current.code === "GATEWAY_UNREACHABLE" &&
+        current.sanitizedDetail?.hop === "target"
+      )
         return new PiShipError(
           "GATEWAY_UNREACHABLE",
           `${action}: the identity provider could not be reached (${current.message})`,
