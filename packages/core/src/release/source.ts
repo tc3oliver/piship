@@ -223,9 +223,12 @@ async function fetchSource(
         {
           retryable: response.status >= 500 || response.status === 429,
           ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-          ...(response.status === 429
-            ? { userAction: "Wait, then run update again" }
-            : {}),
+          userAction:
+            response.status === 429
+              ? "Wait, then run update again"
+              : response.status >= 500
+                ? "The update source is failing; run update again later, and tell the distribution owner if it keeps failing"
+                : "Tell the distribution owner: the update source refuses this file (check its access rules and that the file is published)",
         },
       );
     }

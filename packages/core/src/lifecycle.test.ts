@@ -2156,8 +2156,13 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     ).toEqual([next.id]);
     // The removed key no longer counts, even at a higher sequence.
     forgeChannel(channelDir, KEY);
-    expect((await rejection(updateDistribution(ID, opts))).message).toMatch(
+    const stale = await rejection(updateDistribution(ID, opts));
+    expect(stale.message).toMatch(
       /Signature key test-release is not trusted; trusted keys: test-release-next$/,
+    );
+    // The person running update learns whom to tell and what to ask for.
+    expect(stale.userAction).toMatch(
+      /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root/,
     );
     // Rolling back to B, whose lock trusts the old key, does not restore it.
     await rollbackDistribution(ID, { runCheck: fakeRun });
@@ -2247,7 +2252,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
   it("a failed root fetch stops the update before the channel", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive);
-    for (const failure of ["HTTP 500", "fetch failed"]) {
+    for (const failure of ["HTTP 500", "HTTP 403", "fetch failed"]) {
       const requested: string[] = [];
       const options = served(channelDir, requested);
       const fetcher = options.fetcher as typeof fetch;
@@ -2258,13 +2263,22 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
             if (String(input).includes("/root/")) {
               requested.push(new URL(String(input)).pathname);
               if (failure === "fetch failed") throw new TypeError(failure);
-              return new Response("", { status: 500 });
+              return new Response("", { status: Number(failure.slice(5)) });
             }
             return fetcher(input, init);
           }) as typeof fetch,
         }),
       );
       expect(error.message).toContain(failure);
+      // The person running update is told what to do about a server answer.
+      if (failure === "HTTP 500")
+        expect(error.userAction).toMatch(
+          /update source is failing; run update again later/,
+        );
+      if (failure === "HTTP 403")
+        expect(error.userAction).toMatch(
+          /^Tell the distribution owner: the update source refuses/,
+        );
       expect(requested).toEqual(["/acmepi/root/2.json"]);
       expect(readInstallReceipt(ID).active).toBe("1.0.0");
     }

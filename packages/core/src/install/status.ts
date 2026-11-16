@@ -44,7 +44,12 @@ export interface LifecycleStatus {
   readonly fromRelease?: boolean;
   readonly lastCheck?: InstallReceipt["lastCheck"];
   readonly leftovers: readonly string[];
-  readonly runtimeLeases?: { readonly live: number; readonly stale: number };
+  readonly runtimeLeases?: {
+    readonly live: number;
+    readonly stale: number;
+    /** Release versions live sessions run. */
+    readonly held: readonly string[];
+  };
 }
 
 /** Update status for doctor; never fetches anything. */
@@ -66,8 +71,19 @@ export function lifecycleStatus(
     ".runtime-leases",
     ".downloads",
   ]);
+  // The process asking (doctor runs in a launcher that holds a lease) is
+  // not another session.
+  const leases = runtimeLeases(id).filter((lease) => !lease.self);
+  // A release a running session still uses is kept on purpose, not left over.
+  const held = [
+    ...new Set(
+      leases.filter((lease) => lease.live).map((lease) => lease.version),
+    ),
+  ].filter((version) => version !== "*");
   const leftovers = existsSync(apps)
-    ? readdirSync(apps).filter((name) => !known.has(name))
+    ? readdirSync(apps).filter(
+        (name) => !known.has(name) && !held.includes(name),
+      )
     : [];
   const active = receipt.releases.find(
     (item) => item.version === receipt.active,
@@ -113,9 +129,6 @@ export function lifecycleStatus(
           ...(retired ? { retiredBy: retired.release } : {}),
         };
       });
-  // The process asking (doctor runs in a launcher that holds a lease) is
-  // not another session.
-  const leases = runtimeLeases(id).filter((lease) => !lease.self);
   const live = leases.filter((lease) => lease.live).length;
   const stale = leases.length - live;
   return {
@@ -153,6 +166,6 @@ export function lifecycleStatus(
     fromRelease: !!active?.release,
     ...(receipt.lastCheck ? { lastCheck: receipt.lastCheck } : {}),
     leftovers,
-    ...(leases.length ? { runtimeLeases: { live, stale } } : {}),
+    ...(leases.length ? { runtimeLeases: { live, stale, held } } : {}),
   };
 }
