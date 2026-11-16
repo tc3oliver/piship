@@ -270,3 +270,60 @@ describe("Windows shell syntax", () => {
     expect(chainsBeyondPattern("rg *", "rg a | calc", "win32")).toBe(true);
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "a shell wrapper around one plain command",
+  () => {
+    const wrapped = new PolicyEngine({
+      policy: makePolicy({
+        default: "ask",
+        defaults: [
+          rule("d.safe", "shell.execute", "npm test**", "allow"),
+          rule("d.git", "shell.execute", "git *", "allow"),
+          rule("d.curl", "shell.execute", "curl **", "deny"),
+        ],
+        enforced: [rule("e.zsh", "shell.execute", "zsh -c*", "deny")],
+      }),
+      context: ctx,
+    });
+    const run = (resource: string) =>
+      wrapped.evaluate({ action: "shell.execute", resource }).effect;
+
+    it.each([
+      'bash -c "npm test"',
+      "sh -c 'git status'",
+      "bash -lc 'git log --format=\"%h\"'",
+      "/bin/sh -c 'npm test -- --run'",
+      "CI=1 bash -c 'npm test'",
+      `bash -c "sh -c 'git status'"`,
+      "cd sub && bash -c 'npm test'",
+    ])("judges %s as the bare command", (command) => {
+      expect(run(command)).toBe("allow");
+    });
+
+    it.each([
+      "bash -c 'npm test; rm -rf x'",
+      "bash -c 'npm test && git status'",
+      "bash -c 'npm test | tail'",
+      "bash -c 'npm test > out'",
+      "bash -c 'git status $(whoami)'",
+      "bash -c 'git log `id`'",
+      "bash -c 'git log $HOME'",
+      "bash -c 'npm test' extra",
+      "bash -c",
+      "bash 'npm test'",
+      "bash --norc -c 'npm test'",
+      "python -c 'npm test'",
+    ])("keeps asking for %s", (command) => {
+      expect(run(command)).toBe("ask");
+    });
+
+    it.each([
+      "bash -c 'curl https://example.com'",
+      `sh -c "bash -c 'curl x'"`,
+      "zsh -c 'npm test'",
+    ])("still denies %s", (command) => {
+      expect(run(command)).toBe("deny");
+    });
+  },
+);

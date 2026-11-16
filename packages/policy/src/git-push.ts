@@ -1,4 +1,4 @@
-import { simpleCommands } from "./shell-words.js";
+import { simpleCommands, wrappedCommand } from "./shell-words.js";
 
 /** More resources than this collapse to one unnamed target. */
 const MAX_RESOURCES = 64;
@@ -97,7 +97,12 @@ export function gitPushResources(command: string): string[] {
   const git = unterminated.search(/\bgit\b/);
   if (git !== -1 && /\bpush\b/.test(unterminated.slice(git)))
     resources.add("*");
-  for (const words of commands)
+  for (const words of commands) {
+    // `sh -c 'git push'` pushes as the bare command would.
+    const inner = wrappedCommand(words);
+    if (inner !== undefined)
+      for (const target of gitPushResources(inner)) resources.add(target);
+    if (resources.size > MAX_RESOURCES) return ["*"];
     for (let index = 0; index < words.length; index++) {
       const targets = pushTargets(words, index);
       if (!targets) continue;
@@ -106,5 +111,6 @@ export function gitPushResources(command: string): string[] {
       // The rest of the word list is the push's arguments, not commands.
       break;
     }
+  }
   return [...resources];
 }

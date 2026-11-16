@@ -366,3 +366,24 @@ export function chainSegments(
   cut(text.length, 0);
   return segments;
 }
+
+/** A POSIX shell, by name or at its usual absolute path. */
+const SHELL = /^(?:\/(?:usr\/)?bin\/)?(?:ba|z|da|k)?sh$/;
+
+/**
+ * The command a shell wrapper runs, `bash -c 'npm test'` or `sh -lc "git
+ * status"`, as source text when it is one plain command (no chain,
+ * redirect, substitution, variable or newline). Rules then judge it as if it
+ * ran bare; anything else stays undefined and the wrapper is judged as written.
+ */
+export function wrappedCommand(words: readonly string[]): string | undefined {
+  const [shell, flags, inner] = words;
+  if (
+    words.length !== 3 ||
+    !SHELL.test(shell as string) ||
+    !/^-[elx]*c[elx]*$/.test(flags as string)
+  )
+    return undefined;
+  const text = (inner as string).trim();
+  return text && grantCommandWords(text, "posix") ? text : undefined;
+}
