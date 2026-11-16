@@ -278,8 +278,12 @@ describe("model.select and model.dispatch policy", () => {
       rule("never", "model.dispatch", "acme/coder", "deny"),
     ]);
     await expect(
-      modelPolicy(physical.session, "acme/coder"),
-    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+      modelPolicy(physical.session, "acme/coder", [], "acme"),
+    ).rejects.toMatchObject({
+      code: "MODEL_DENIED",
+      userAction:
+        "Choose an allowed model with --model; acme models lists them",
+    });
   });
 
   it("records a routed request and a refusal with the selected model, the target, and the router", async () => {

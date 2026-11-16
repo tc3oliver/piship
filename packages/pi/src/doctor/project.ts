@@ -30,7 +30,14 @@ export function projectGroup(data: DoctorData, out: DoctorSection): void {
   if (!trust) return;
   const label = "project trust for extensions";
   const reason = `${trust.decidedBy ? `${trust.decidedBy.path}: ` : ""}${trust.reason}`;
-  if (trust.effect === "deny")
+  // Nothing found and the managed default withholding trust is the intended
+  // state of a project the policy does not know, not a problem to fix.
+  if (trust.effect === "deny" && trust.surfaces.length === 0)
+    out.info(
+      label,
+      `not trusted (${inspection.project.origin} project; nothing to load here)`,
+    );
+  else if (trust.effect === "deny")
     out.warn(
       label,
       `not trusted for extensions that honor Pi project trust; user-consented extension MCP servers can still load (${reason})`,

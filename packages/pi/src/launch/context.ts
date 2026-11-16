@@ -17,6 +17,7 @@ import {
 } from "@piship/core";
 import type { LocalMetrics } from "@piship/audit";
 import { VERSION } from "@earendil-works/pi-coding-agent";
+import { chooseModelAction } from "../governance.js";
 import { launchMetrics, saveMetrics } from "../launch-metrics.js";
 import { applyPiEnvironment } from "./pi-defaults.js";
 
@@ -80,6 +81,12 @@ export async function prepareAccess(
       throw new PiShipError(
         "MODEL_DENIED",
         "Use --model provider/model for Pi-native distributions",
+        {
+          userAction: chooseModelAction(
+            ctx.metadata.app.command,
+            "--model provider/model",
+          ),
+        },
       );
     return {
       metrics,

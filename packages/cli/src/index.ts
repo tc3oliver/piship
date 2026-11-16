@@ -50,6 +50,7 @@ import {
   lockStatus,
   pishipCommand,
   shellArg,
+  signedInClasses,
   markLocalBuild,
   nextTrustRoot,
   payloadApp,
@@ -738,7 +739,7 @@ export function assertPayloadPackageJson(artifact: string): void {
       {
         component: "cli",
         userAction:
-          "Restore the release from a trusted copy of the same version with: piship repair <id> <release archive>",
+          "Restore the release from a trusted copy of the same version with: piship repair <id> <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair <id> <extracted release>",
       },
     );
 }
@@ -974,10 +975,13 @@ async function prepareLock(
  * needs its runtime variables set and a `login`; a personal one with Pi's
  * own providers signs in inside Pi.
  */
-export function installNext(receipt: {
-  app: { command: string };
-  payload: string;
-}) {
+export function installNext(
+  receipt: {
+    app: { command: string };
+    payload: string;
+  },
+  signedIn = false,
+) {
   const command = receipt.app.command;
   let lock: DistributionLock | undefined;
   try {
@@ -999,7 +1003,13 @@ export function installNext(receipt: {
         !referencedVariables(source).includes(name) ||
         referencedVariables(elsewhere).includes(name),
     );
-    return `Next: ${variables.length ? `set ${variables.join(", ")} in the environment that starts ${command}, then ` : ""}run ${command} login, then ${command}. ${command} --help lists its commands.`;
+    const set = variables.length
+      ? `set ${variables.join(", ")} in the environment that starts ${command}, then `
+      : "";
+    // An adopted (test or earlier) state may already hold a session.
+    return signedIn
+      ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.`
+      : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.`;
   }
   if (
     lock &&
@@ -1476,18 +1486,26 @@ export async function runCli(
       if (result.status !== 0) {
         // The branded "Run <command> login" names a command not installed
         // yet; the test state signs in through the built one.
-        const hint = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
+        const signIn = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
           result.stderr,
-        )
+        );
+        // The hint replaces the branded action line, not adds to it.
+        const stderr = signIn
+          ? result.stderr
+              .split("\n")
+              .filter(
+                (line) => line !== `Action: Run ${lock.app.command} login`,
+              )
+              .join("\n")
+          : result.stderr;
+        const hint = signIn
           ? `\nThis build is not installed: sign in to the test state with ${shellArg(join(artifact, "bin", process.platform === "win32" ? `${lock.app.command}.cmd` : lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
           : // The branded "Ask your administrator" speaks to users; whoever
             // runs this test build is the one who chooses the values.
             /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)
             ? `\nFor this test build, set them in this shell (staging values will do), then run ${pishipCommand()} ${command} ${shellArg(target)} again. ${pishipCommand()} validate ${shellArg(target)} lists them.`
             : "";
-        throw new Error(
-          `Pi launch failed: ${result.stderr || result.status}${hint}`,
-        );
+        throw new Error(`Pi launch failed: ${stderr || result.status}${hint}`);
       }
       if (command === "test")
         output.stdout(
@@ -1598,7 +1616,12 @@ async function runLifecycle(
       [
         `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
         pathHint(dirname(receipt.commandPath)),
-        installNext(receipt),
+        installNext(
+          receipt,
+          signedInClasses(
+            runtimeStateDirectory({ value: receipt.app.id }),
+          ).includes("an identity session"),
+        ),
       ]
         .filter(Boolean)
         .join("\n"),

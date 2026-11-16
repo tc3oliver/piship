@@ -2977,7 +2977,10 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         ...options,
         fetcher,
       }),
-    ).rejects.toThrow(/HTTP 404 for candidate.json/);
+    ).rejects.toMatchObject({
+      message: "Update source has no candidate.json",
+      userAction: expect.stringContaining("piship sign-channel"),
+    });
     const insecure = await rejection(
       readChannel("http://updates.example.test/acmepi", "stable", {
         ...options,

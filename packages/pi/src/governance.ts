@@ -119,6 +119,11 @@ export interface GovernedRuntime {
   withAccessAction(message: unknown): unknown;
 }
 
+/** What to tell a user whose model is refused: `how` picks another one. */
+export function chooseModelAction(command?: string, how = "/model"): string {
+  return `Choose an allowed model with ${how}${command ? `; ${command} models lists them` : ""}`;
+}
+
 function denied(
   provider: string,
   id: string,
@@ -130,7 +135,7 @@ function denied(
     `Model ${provider}/${id} is not allowed by this distribution${reason ? ` (${reason})` : ""}`,
     {
       component: "inference",
-      userAction: `Choose an allowed model with /model${command ? `; ${command} models lists them` : ""}`,
+      userAction: chooseModelAction(command),
     },
   );
 }

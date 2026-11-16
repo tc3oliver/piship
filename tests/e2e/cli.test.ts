@@ -230,6 +230,8 @@ describe("CLI", () => {
     expect(tested.status).toBe(1);
     expect(tested.stderr).toContain("IDENTITY_REQUIRED");
     expect(tested.stderr).toContain("This build is not installed");
+    // The branded "Run acmecode login" names a command not installed yet.
+    expect(tested.stderr).not.toContain("Action: Run acmecode login");
     expect(tested.stderr).toMatch(
       /dist[\\/]acmecode[\\/]bin[\\/]acmecode(\.cmd)?'? login, then run .* test /,
     );

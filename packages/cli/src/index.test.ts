@@ -1834,6 +1834,19 @@ describe("what to do after an install", () => {
     );
   });
 
+  it("does not ask an adopted state that is signed in to log in again", () => {
+    const next = installNext(
+      receipt({
+        deployment: { mode: "managed" },
+        access: { variables: ["ACME_ISSUER"] },
+      }),
+      true,
+    );
+    expect(next).toBe(
+      "Next: set ACME_ISSUER in the environment that starts acme, then run acme; it is already signed in. acme --help lists its commands.",
+    );
+  });
+
   it("leaves out a variable that only update reads", () => {
     const next = installNext(
       receipt({
