@@ -824,7 +824,14 @@ function transportFailure(
   return new PiShipError(
     "GATEWAY_UNREACHABLE",
     `${component} request to ${host} failed: ${shownCode}`,
-    { retryable: true, component },
+    {
+      retryable: true,
+      component,
+      userAction:
+        code === "ENOTFOUND" || code === "EAI_AGAIN"
+          ? `${target.hostname} does not resolve: check the network connection, the VPN if one is needed, and DNS, then try again`
+          : `Check the network connection (and the VPN, if one is needed) and that ${target.hostname} is up, then try again`,
+    },
   );
 }
 

@@ -481,6 +481,7 @@ describe("OpenAI-compatible endpoint", () => {
       code: "GATEWAY_UNREACHABLE",
       retryable: true,
       message: "The inference gateway did not answer within 15 s",
+      userAction: expect.stringMatching(/^Check the network connection/),
     });
     const slowBody = new OpenAICompatibleInferenceProvider({
       providerId: "acmecode",
