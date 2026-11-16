@@ -2027,7 +2027,7 @@ describe("publishSteps", () => {
     expect(steps).not.toContain("root/");
     expect(steps).toContain("2. stable.json.sig and stable.json together");
     expect(steps).toContain(
-      "Sign stable again by 2026-12-08: clients refuse it after 2026-12-15T14:38:15.643Z. sign-channel with no archive re-signs it.",
+      "Sign stable again by 2026-12-08: clients refuse it after 2026-12-15T14:38:15.643Z. sign-channel with no archive re-signs it with the same key.",
     );
   });
   it("says now when less than a week is left", () => {
@@ -2071,7 +2071,7 @@ describe("rootPublishSteps", () => {
       steps.indexOf("2. root/2.json\n"),
     );
     expect(steps).toContain(
-      "piship sign-channel ./channel --channel <name> --key <private-key-file> --key-id acme-channel-2027 (with no archive it re-signs what the channel lists)",
+      "piship sign-channel ./channel --channel <name> --key <private-key-file> --key-id acme-channel-2027 (with no archive it re-signs what the channel lists; add --previous-key <old-key-id>=<old-public-key> so the metadata the old key signed verifies)",
     );
     expect(steps).toContain("Publish the next root by 2027-11-08");
     expect(

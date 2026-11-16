@@ -52,7 +52,7 @@ Do these once, before the first release that employees install.
    ```
 
    Upload `root/<N+1>.json.sig`, then `root/<N+1>.json`.
-3. Sign channels with the new key. While some clients may not have fetched the new root yet, sign with both: `sign-channel <channel-dir> --channel <name> --key <old.pem> --key-id <old> --key <new.pem> --key-id <new>` (with no archive it re-signs what the channel already lists). Every client fetches roots before it reads the channel, so in practice a client that can reach the source already has the new root.
+3. Sign channels with the new key. While some clients may not have fetched the new root yet, sign with both: `sign-channel <channel-dir> --channel <name> --key <old.pem> --key-id <old> --key <new.pem> --key-id <new>` (with no archive it re-signs what the channel already lists; the old key signed the published metadata, so it must be among the signing keys or passed as `--previous-key <old>=<old-public-key>`). Every client fetches roots before it reads the channel, so in practice a client that can reach the source already has the new root.
 4. Publish the next root without the old key: `trust-root next <source> --manifest piship.yaml --remove-key acmecode-channel-2026 --expires-days 365 --sign ...`. Clients refuse it from then on, even after a rollback.
 5. Destroy the old key when no channel you publish uses it, and note the date.
 

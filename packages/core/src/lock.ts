@@ -231,7 +231,8 @@ export function lockManifest(manifestPath: string): string {
  * declarations, `packageTrust`, the release settings, the deployment mode,
  * the stored npm lockfiles, and local package trees are all as the lock
  * recorded them, so the recorded packages are kept. Returns the lock path,
- * or undefined, writing nothing, when any of those changed.
+ * or undefined, writing nothing, when any of those changed or an older
+ * PiShip wrote the lock.
  */
 export function relockKeepingPackages(
   manifestPath: string,
@@ -243,6 +244,9 @@ export function relockKeepingPackages(
   } catch {
     return undefined;
   }
+  // An older PiShip resolved these packages under other lock-time gates; a
+  // kept relock would stamp this version on them without a full resolve.
+  if (recorded.runtime?.pishipVersion !== PISHIP_VERSION) return undefined;
   const lock = resolveLock(manifestPath, { packages: "keep" });
   const inputs = (item: Partial<DistributionLock>) =>
     canonicalJson([
