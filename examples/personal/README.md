@@ -8,7 +8,7 @@ MyPi is the neutral personal reference distribution on `piship/v1`. It needs no 
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
 - **A user-managed MCP server.** `mcp.mode: explicit` declares `notes`, a tiny stdio server in `resources/mcp/notes-server.mjs`. It serves two in-memory notes as `mcp__notes__list_notes` and `mcp__notes__read_note`, uses no network and no credential, and must report `serverInfo.name` `mypi-notes`.
 - **Optional sandbox and no audit.** `sandbox.required: false` and `audit.enabled: false`. Set `sandbox.required: true` in a copy on Linux or macOS to contain `bash`, `!` commands, and the MCP server.
-- **Signed releases, update, and rollback.** `updates` offers the `stable` and `candidate` channels and reads the channel from `${MYPI_UPDATE_SOURCE}`, which is resolved only when `update` runs. The example pins no update trust (no `updates.trust.bootstrap`), so `update` fails closed and `piship release` refuses it until you add your own key.
+- **Signed releases, update, and rollback.** `updates` offers the `stable` and `candidate` channels and reads the channel from `${MYPI_UPDATE_SOURCE}`, which is resolved only when `update` runs. The example pins no update trust (no `updates.trust.bootstrap`), so `update` fails closed, and a release built from it is update-disabled, until you add your own key.
 
 ## Build, install, and run
 
@@ -33,7 +33,7 @@ node dist/mypi/piship.mjs uninstall mypi
 
 On Windows (PowerShell), `~` is `$HOME` and the installed command is `$HOME\.local\bin\mypi.cmd`: run `mypi` by name once that folder is on `PATH` (`install` prints the line that adds it), and write paths with `\` or `/`.
 
-This example builds a bundled and stripped payload (`release.bundle` and `release.strip`, on by default in `piship/v1` and written out as `true` in `piship.yaml`): 117 files where an unbundled one has about 17,000, which is what keeps an install, an update, and a start fast on a machine that scans every file. A bundled payload carries the runtime commands (`install`, `update`, `rollback`, `doctor`) but not the build input, so it cannot build another distribution: run `build`, `release`, `dev`, and `test` from the PiShip source checkout, as above. Set both to `false` and run `lock` again for an unbundled payload. It also bundles `fd` and `rg` (`runtime.searchTools`), pinned for Linux, macOS, and Windows: without them Pi downloads them on the first prompt and waits 24 to 30 seconds, so a distribution of your own that omits `runtime.searchTools` gets a launch with Pi's download skipped and no file-name autocomplete (`PISHIP_ALLOW_TOOL_DOWNLOAD=1` lets Pi download). See [performance](../../docs/performance.md).
+This example builds a bundled and stripped payload (`release.bundle` and `release.strip`, on by default in `piship/v1` and written out as `true` in `piship.yaml`): 124 files, 7 of them the bundled `fd` and `rg`, where an unbundled one has about 17,000, which is what keeps an install, an update, and a start fast on a machine that scans every file. A bundled payload carries the runtime commands (`install`, `update`, `rollback`, `doctor`) but not the build input, so it cannot build another distribution: run `build`, `release`, `dev`, and `test` from the PiShip source checkout, as above. Set both to `false` and run `lock` again for an unbundled payload. It also bundles `fd` and `rg` (`runtime.searchTools`), pinned for Linux, macOS, and Windows: without them Pi downloads them on the first prompt and waits 24 to 30 seconds, so a distribution of your own that omits `runtime.searchTools` gets a launch with Pi's download skipped and no file-name autocomplete (`PISHIP_ALLOW_TOOL_DOWNLOAD=1` lets Pi download). See [performance](../../docs/performance.md).
 
 `piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state and marks it as created by `piship test`; the first install adopts it. Install refuses any other existing state (for example after an uninstall) unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and the headless commands (`--version`, `--smoke`, `doctor`, `capabilities`) do not fetch packages.
 
@@ -54,12 +54,14 @@ Start it with `PI_OFFLINE=1` set to stop the download and Pi's other network req
 
 The lifecycle works as for the demo company ([release](../../docs/release.md)), with nothing to sign in to. Work in a copy so the example stays unchanged:
 
-1. Create a release key outside the repository, then add it under `updates` in the copy as `trust.bootstrap` with `version: 1`, an `expires` timestamp, the printed entry in `keys`, and its ID in both `roles.root` and `roles.channel` (threshold 1). A personal distribution may use one key for both roles ([manifest](../../docs/manifest.md#update-trust-bootstrap-v1alpha5)):
+1. Create a release key outside the repository, then generate the bootstrap root from its printed public key, with the key in both the root and the channel role. A personal distribution may use one key for both roles, so ignore the warning that a managed distribution needs two ([manifest](../../docs/manifest.md#update-trust-bootstrap-v1alpha5)). Put the printed `trust:` block under `updates` in the copy:
 
    ```bash
    cp -r examples/personal /tmp/mypi
    mkdir -p ~/mypi-keys
    node packages/cli/dist/bin.js keygen ~/mypi-keys/release.pem --id mypi-release
+   node packages/cli/dist/bin.js trust-root init --key mypi-release=<public key> \
+     --root-keys mypi-release --channel-keys mypi-release --expires-days 365
    ```
 
 2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release. Uninstall any earlier `mypi` install first; uninstall keeps state, so pass `--use-existing-state` to adopt it:
