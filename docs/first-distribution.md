@@ -112,7 +112,7 @@ piship build my-agent/piship.yaml
 node dist/my-agent/piship.mjs install dist/my-agent
 ```
 
-The payload carries its own copy of the manager, so you run `piship.mjs` from the build output. Pass the build output, not the source directory: `install my-agent` from the directory above the source says to build it first and names `dist/my-agent`, and so does `doctor my-agent` unless a distribution with that id is installed, which it then checks. Install places the command in `~/.local/bin` (set `PISHIP_BIN_HOME` to change it) and tells you if that directory is not on your `PATH`. State that `test` created is adopted by the first install, so no flag is needed.
+The payload carries its own copy of the manager, so you run `piship.mjs` from the build output. Pass the build output, not the source directory: `install my-agent` from the directory above the source says to build it first and names `dist/my-agent`, and so does `doctor my-agent` unless a distribution with that id is installed, which it then checks. Install places the command in `~/.local/bin` (set `PISHIP_BIN_HOME` to change it) and tells you if that directory is not on your `PATH`. State that `test` created is adopted by the first install, so no flag is needed. On Linux these paths do not follow XDG: the install goes to `~/.local/share/piship`, the command to `~/.local/bin`, and state to `~/.piship/<id>` whatever `XDG_DATA_HOME`, `XDG_STATE_HOME`, or `XDG_BIN_HOME` say; set `PISHIP_INSTALL_HOME`, `PISHIP_BIN_HOME`, and `PISHIP_STATE_HOME` to move them (only the download cache follows `XDG_CACHE_HOME`).
 
 On Windows the line `install` prints adds `%USERPROFILE%\.local\bin` to `PATH` for new terminals only, so open a new terminal before you run `my-agent`, or run `& "$HOME\.local\bin\my-agent.cmd"` in this one.
 
@@ -125,7 +125,7 @@ A personal distribution signs in inside Pi: run `my-agent` and use `/login`. A m
 
 To install a rebuilt copy over the one you have, run the install again with `--replace`; its state is kept.
 
-Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too). Uninstall keeps the state and prints the `purge` command that deletes it. Commands that take an id (`uninstall`, `purge`, `update`) want `my-agent`, not a path: given `my-agent/piship.yaml` they say so and name the manifest's `app.id`.
+Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too). Uninstall keeps the state and prints the `purge` command that deletes it; after a release installed with its `install.sh`, that command names the extracted release's own `piship.mjs` while the directory is still there. Once nothing is left in them, uninstall and purge also remove the empty `apps` and `receipts` folders and, at their default locations, `~/.local/share/piship` and `~/.piship`. Commands that take an id (`uninstall`, `purge`, `update`) want `my-agent`, not a path: given `my-agent/piship.yaml` they say so and name the manifest's `app.id`.
 
 ## Where to go next
 

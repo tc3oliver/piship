@@ -10,6 +10,7 @@ export {
 } from "./launcher.js";
 export {
   purgeDistributionState,
+  removeEmptyPiShipDirectories,
   signedInClasses,
   type PurgeResult,
 } from "./purge.js";

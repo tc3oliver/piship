@@ -62,6 +62,7 @@ import {
   progressReporter,
   purgeDistributionState,
   raiseThreadpool,
+  removeEmptyPiShipDirectories,
   readInstallReceipt,
   readSigningPassphrase,
   repairDistribution,
@@ -1524,6 +1525,7 @@ export async function runCli(
           output,
         ),
       );
+      removeEmptyPiShipDirectories();
     } else if (command === "inspect") {
       const path = resolve(target);
       const info =
@@ -1872,6 +1874,7 @@ async function runLifecycle(
         )}`,
       );
     }
+    removeEmptyPiShipDirectories();
   } else if (command === "update" || command === "rollback") {
     // The active release performs the switch so its audit and credential
     // handling apply.

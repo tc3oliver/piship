@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { launcherSource } from "./launcher-source.js";
+import { launcherSource, portableCliSource } from "./launcher-source.js";
 
 const CONTRACTS = fileURLToPath(new URL("../../contracts", import.meta.url));
 // An obvious fake in a bearer shape the redaction knows.
@@ -108,5 +108,23 @@ describe("the generated launcher", () => {
     expect(result.stderr).toContain("callback failure");
     expect(result.stderr).not.toContain(SECRET);
     expect(result.stderr).not.toContain("    at ");
+  });
+});
+
+describe("the portable CLI entry", () => {
+  it("names the running Node when it is too old", () => {
+    // Ubuntu 24.04's apt nodejs is 18.19.1.
+    const old =
+      'Object.defineProperty(process, "versions", { value: { ...process.versions, node: "18.19.1" } });\nObject.defineProperty(process, "version", { value: "v18.19.1" });\n';
+    write(join(temp, "piship.mjs"), old + portableCliSource());
+    const result = spawnSync(process.execPath, [join(temp, "piship.mjs")], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Node.js 22.19.0 or newer is required; this is v18.19.1.",
+    );
+    expect(result.stderr).toContain("nodejs.org");
   });
 });

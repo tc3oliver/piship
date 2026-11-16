@@ -1,5 +1,13 @@
 // Purge: delete a distribution's PiShip-owned state after uninstall.
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   createSecretStore,
@@ -15,9 +23,32 @@ import { accessStatePaths } from "../access/index.js";
 import {
   assertDisjointRoots,
   distributionStateDirectory,
+  installHome,
   runtimeStateDirectory,
+  stateHome,
 } from "../index.js";
 import { readInstallReceipt, receiptPath } from "./receipt.js";
+
+/**
+ * Remove the directories PiShip created that the last uninstall or purge left
+ * empty: `apps` and `receipts` in the install home, and the install and state
+ * homes themselves when they are the defaults (a home the user chose through
+ * PISHIP_INSTALL_HOME or PISHIP_STATE_HOME is theirs). rmdir removes only an
+ * empty directory, so nothing with content is ever touched.
+ */
+export function removeEmptyPiShipDirectories(): void {
+  const install = installHome();
+  const own = [join(install, "apps"), join(install, "receipts")];
+  if (install === resolve(homedir(), ".local", "share", "piship"))
+    own.push(install);
+  if (stateHome() === resolve(homedir(), ".piship")) own.push(stateHome());
+  for (const directory of own)
+    try {
+      rmdirSync(directory);
+    } catch {
+      // Not empty, already gone, or in use: it stays.
+    }
+}
 
 export interface PurgeResult {
   /** The deleted state directory. */

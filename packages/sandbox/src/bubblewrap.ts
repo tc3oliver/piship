@@ -89,6 +89,20 @@ function byDepth(paths: readonly string[]): string[] {
   return [...paths].sort((a, b) => pathDepth(a) - pathDepth(b));
 }
 
+/**
+ * Why bwrap's availability check failed, from what bwrap printed. Wording
+ * only: the adapter is unavailable whichever cause it names.
+ */
+export function bubblewrapFailureReason(detail: string): string {
+  // A namespace was created but a mount was refused: Docker's default seccomp
+  // and mount restrictions do this; unprivileged user namespaces are fine.
+  const cause =
+    /Can't mount proc|Can't mount tmpfs|Failed to make \/ slave/.test(detail)
+      ? "user namespaces work, but a mount was refused, as inside a container whose seccomp or mount restrictions forbid it"
+      : "unprivileged user namespaces may be disabled";
+  return `bubblewrap cannot create a sandbox (${cause}): ${detail}`;
+}
+
 /** Build the bwrap argument vector (without the bwrap executable itself). */
 export function bubblewrapArgs(
   profile: SandboxProfile,
@@ -230,7 +244,7 @@ export class BubblewrapAdapter implements SandboxAdapter {
     if (!basic.ok)
       return {
         available: false,
-        reason: `bubblewrap cannot create a sandbox (unprivileged user namespaces may be disabled): ${basic.detail}`,
+        reason: bubblewrapFailureReason(basic.detail),
       };
     this.#features = { disableUserns: false, tmpfsPerms: false };
     return { available: true };

@@ -370,7 +370,12 @@ export function checkReleaseInputs(
     throw gate(
       "CONFIG_INVALID",
       "target",
-      `${target} is not in release.targets (${release.targets.join(", ")})`,
+      `${target} is not in release.targets (${release.targets.join(", ")})${
+        // Adding an unevidenced target would only reach the next refusal.
+        EVIDENCED_TARGETS.includes(target)
+          ? ""
+          : `, and this PiShip version builds releases only on ${EVIDENCED_TARGETS.join(", ")}; build on one of those (an arm64 Linux machine or container can run linux-x64 under emulation)`
+      }`,
     );
   if (!EVIDENCED_TARGETS.includes(target))
     throw gate(

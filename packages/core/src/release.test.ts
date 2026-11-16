@@ -689,6 +689,10 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /Release gate target: linux-arm64 is not in release.targets/,
     );
+    // Adding linux-arm64 would not help, so it says where releases build.
+    expect(error.message).toMatch(
+      /builds releases only on linux-x64, darwin-arm64, win32-x64/,
+    );
   });
 
   it("target: refuses a declared target without lifecycle evidence", () => {
