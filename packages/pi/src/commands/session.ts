@@ -159,6 +159,9 @@ function accessSummary(
   };
 }
 
+/** How long `--smoke-model` waits for the model's answer. */
+const SMOKE_MODEL_TIMEOUT_MS = 60_000;
+
 export async function runSmoke(
   ctx: LaunchContext,
   requestedModel: string | undefined,
@@ -225,7 +228,34 @@ export async function runSmoke(
             userAction: chooseModelAction(ctx.metadata.app.command, "--model"),
           },
         );
-      await runtime.session.prompt(SMOKE_PROMPT);
+      // PiShip's own deadline: a provider that accepts the connection and
+      // never answers would otherwise hold the check for many minutes.
+      const deadlineMs =
+        Number(process.env.PISHIP_SMOKE_MODEL_TIMEOUT_MS) ||
+        SMOKE_MODEL_TIMEOUT_MS;
+      let timedOut = false;
+      const deadline = setTimeout(() => {
+        timedOut = true;
+        void runtime.session.abort();
+      }, deadlineMs);
+      try {
+        await runtime.session.prompt(SMOKE_PROMPT);
+      } finally {
+        clearTimeout(deadline);
+      }
+      if (timedOut)
+        throw new PiShipError(
+          "GATEWAY_UNREACHABLE",
+          `The model provider did not answer the acceptance request within ${Math.round(deadlineMs / 1000)} s`,
+          {
+            component: "inference",
+            retryable: true,
+            userAction:
+              ctx.mode === "personal"
+                ? "Check that the model provider or server is up and answering (a local model can take a while to load), then try again"
+                : "Try again; if it keeps failing, ask your administrator to check the gateway",
+          },
+        );
       const messages = runtime.session.messages;
       const last = messages.at(-1) as
         | { role?: string; stopReason?: string; errorMessage?: string }

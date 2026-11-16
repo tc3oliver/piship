@@ -7,6 +7,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,5 +152,37 @@ describe("personal local model variant (loopback model server)", () => {
       false,
     );
     expect(existsSync(join(temp, "home", ".pi"))).toBe(false);
+
+    // A server that accepts the request and never answers ends the check at
+    // PiShip's deadline, with a cause and an action, instead of hanging.
+    const silent = createServer((request, response) => {
+      if (request.url?.endsWith("/models"))
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify({ data: [{ id: "local/coder" }] }));
+    });
+    await new Promise<void>((resolve) =>
+      silent.listen(0, "127.0.0.1", () => resolve()),
+    );
+    onTestFinished(() => {
+      silent.closeAllConnections();
+      silent.close();
+    });
+    const started = Date.now();
+    const hung = await branded(command, ["--smoke-model"], {
+      cwd: temp,
+      env: {
+        ...env,
+        MYPI_MODEL_URL: `http://127.0.0.1:${(silent.address() as AddressInfo).port}/v1`,
+        PISHIP_SMOKE_MODEL_TIMEOUT_MS: "2000",
+      },
+      timeoutMs: 60_000,
+    });
+    expect(Date.now() - started).toBeLessThan(45_000);
+    expect(hung.status).toBe(1);
+    expect(hung.stderr).toContain(
+      "GATEWAY_UNREACHABLE: The model provider did not answer the acceptance request within 2 s",
+    );
+    expect(hung.stderr).toContain("Action: Check that the model provider");
   }, 600000);
 });
