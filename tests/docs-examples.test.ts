@@ -126,6 +126,15 @@ describe("documented examples", () => {
     }
   });
 
+  // The enterprise-litellm README says its manifest passes validate, and
+  // nothing else builds or locks it.
+  it("examples/enterprise-litellm/piship.yaml parses", () => {
+    const manifest = readManifest(
+      join(root, "examples/enterprise-litellm/piship.yaml"),
+    );
+    expect(manifest.deployment.mode).toBe("managed");
+  });
+
   // A declared `sandbox.filesystem.read.deny` or `sandbox.environment.allow`
   // replaces the default list, so an example that declares one must still
   // carry every default it does not mean to drop.
