@@ -19,9 +19,12 @@ jobs:
   # build (about 40 seconds on Ubuntu and macOS, 75 on Windows), so a target
   # has only as many unit shards as keep it below Windows' compatibility
   # runner, the slowest of all.
+  # The Ubuntu runners use a pinned image while `ubuntu-latest` stays the
+  # label in the check names: the sandbox steps rely on its apt bubblewrap and
+  # its AppArmor userns sysctl, so a new image is adopted deliberately.
   ubuntu:
     name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -149,8 +152,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, part: unit, shard: 1/2 }
-          - { os: macos-latest, part: unit, shard: 2/2 }
+          - { os: macos-latest, part: unit, shard: 1/3 }
+          - { os: macos-latest, part: unit, shard: 2/3 }
+          - { os: macos-latest, part: unit, shard: 3/3 }
           - { os: macos-latest, part: compatibility }
     steps: *check-steps
   windows:
@@ -172,7 +176,7 @@ jobs:
     name: check (ubuntu-latest)
     needs: [ubuntu]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: test "$RESULT" = success
         env:
@@ -181,7 +185,7 @@ jobs:
     name: check (macos-latest)
     needs: [macos]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: test "$RESULT" = success
         env:
@@ -190,7 +194,7 @@ jobs:
     name: check (windows-latest)
     needs: [windows]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: test "$RESULT" = success
         env:

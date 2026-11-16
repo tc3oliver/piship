@@ -29,7 +29,7 @@ jobs:
   # every test release, so an advisory it rejects would fail each shard
   # separately (scripts/audit-preflight.mjs).
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,7 +46,7 @@ jobs:
   # import PiShip's built packages, so npm ci and the build run here too.
   stack:
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       COMPOSE_PROJECT: piship-reference-e2e
@@ -107,7 +107,7 @@ jobs:
           up=$(( $(date +%s) - started ))
           node broker/live-check.mjs --env-file "$REFERENCE_ENV_FILE"
           {
-            echo "### Reference stack on ubuntu-latest"
+            echo "### Reference stack on ubuntu-24.04"
             echo
             echo "| Step | Seconds |"
             echo "| --- | --- |"
@@ -176,7 +176,7 @@ jobs:
   # also share one host; the runners are for time, not isolation.
   reference:
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -317,7 +317,7 @@ jobs:
   report:
     needs: [preflight, stack, reference]
     if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read

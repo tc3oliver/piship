@@ -51,7 +51,7 @@ concurrency:
 jobs:
   live:
     environment: live-provider
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       npm_config_prefer_offline: "true"
