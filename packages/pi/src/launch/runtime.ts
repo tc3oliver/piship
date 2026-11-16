@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   createAgentSession,
   createAgentSessionRuntime,
@@ -121,6 +121,22 @@ function resourcePaths(
   });
 }
 
+/**
+ * Rewrites paths into the payload's resources folder as the manifest-relative
+ * paths the author wrote (`./resources/extensions/bad.ts`), so a load error
+ * points at the source file rather than its build copy.
+ */
+export function sourcePaths(text: string, distributionDir: string): string {
+  const root = join(distributionDir, "resources");
+  let output = text;
+  for (const prefix of new Set([
+    `${root}${sep}`,
+    `${root.replaceAll("\\", "/")}/`,
+  ]))
+    output = output.replaceAll(prefix, "./");
+  return output;
+}
+
 export function publishContext(context: EnterpriseContext | null): void {
   const holder = globalThis as unknown as Record<symbol, unknown>;
   if (context) holder[ENTERPRISE_CONTEXT_SYMBOL] = context;
@@ -232,6 +248,22 @@ export function launchTheme(input: {
   if (!available(input.theme))
     throw new Error(`Declared theme is unavailable: ${input.theme}`);
   return { theme: input.theme };
+}
+
+/**
+ * What to do when the selected model is not one Pi offers, by where the
+ * selection came from: a user preference, the manifest, or a --model flag.
+ */
+export function unavailableModelAction(
+  command: string,
+  flag: string,
+  source: string | undefined,
+): string {
+  if (source === "user-preference")
+    return `Run ${command} config unset model to remove the model preference, or start ${command} ${flag}`;
+  if (source === "distribution-default" || source === "distribution-enforced")
+    return `The distribution's models.default is not a model Pi offers: set models.default (and models.allowed, if it lists models) in piship.yaml to one ${command} models lists, or start ${command} ${flag}`;
+  return `Start ${command} ${flag} with a model Pi offers`;
 }
 
 async function startRuntime(
@@ -412,7 +444,10 @@ async function startRuntime(
       prepared.metrics?.recordLoadFailure("resource", "UNKNOWN");
     if (extensionErrors.length)
       throw new Error(
-        `Pi extension load failed: ${extensionErrors.map((item) => item.error).join("; ")}`,
+        `Pi extension load failed: ${sourcePaths(
+          extensionErrors.map((item) => item.error).join("; "),
+          ctx.distributionDir,
+        )}`,
       );
     if (themeDiagnostics.length)
       throw new Error(
@@ -473,18 +508,15 @@ async function startRuntime(
           activated.runtime.kind === "managed-endpoint"
             ? "--model <model>"
             : "--model <provider/model>";
-        const fromPreference =
-          activated.config.values.model === activated.selectedModel &&
-          activated.config.entries.find((entry) => entry.key === "model")
-            ?.source === "user-preference";
+        const source =
+          activated.config.values.model === activated.selectedModel
+            ? activated.config.entries.find((entry) => entry.key === "model")
+                ?.source
+            : undefined;
         throw new PiShipError(
           "MODEL_UNAVAILABLE",
           `Model ${activated.selectedModel} is not available in the Pi runtime`,
-          {
-            userAction: fromPreference
-              ? `Run ${command} config unset model to remove the model preference, or start ${command} ${flag}`
-              : `Start ${command} ${flag} with a model Pi offers`,
-          },
+          { userAction: unavailableModelAction(command, flag, source) },
         );
       }
     }

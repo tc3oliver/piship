@@ -19,7 +19,11 @@ import {
   startupMark,
   startupTimingEnabled,
 } from "@piship/contracts";
-import { refreshInstalledLauncher, sweepDistributionData } from "@piship/core";
+import {
+  packageLabel,
+  refreshInstalledLauncher,
+  sweepDistributionData,
+} from "@piship/core";
 import { acceptanceFailure, chooseModelAction } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -285,6 +289,9 @@ export async function runSmoke(
           .filter((path) => !path.startsWith("<inline")),
         prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
         themes: resourceLoader.getThemes().themes.map((item) => item.name),
+        ...(ctx.metadata.packages?.length
+          ? { packages: ctx.metadata.packages.map(packageLabel) }
+          : {}),
         ...registryInventory(
           runtime.session,
           resourceLoader.getExtensions().extensions,

@@ -327,3 +327,86 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe.skipIf(process.platform === "win32")(
+  "deny and ask rules see past transparent prefixes",
+  () => {
+    const prefixed = new PolicyEngine({
+      policy: makePolicy({
+        default: "allow",
+        defaults: [
+          rule("d.rm", "shell.execute", "rm -rf**", "deny"),
+          rule("d.push", "shell.execute", "git push**", "ask"),
+          rule("d.sudo", "shell.execute", "sudo **", "allow"),
+          rule("d.npm", "shell.execute", "npm test**", "allow"),
+        ],
+        enforced: [rule("e.reset", "shell.execute", "git reset**", "ask")],
+      }),
+      context: ctx,
+    });
+    const asking = new PolicyEngine({
+      policy: makePolicy({
+        default: "ask",
+        defaults: [rule("d.npm", "shell.execute", "npm test", "allow")],
+      }),
+      context: ctx,
+    });
+    const run = (engine: PolicyEngine, resource: string) =>
+      engine.evaluate({ action: "shell.execute", resource });
+
+    it.each([
+      "sudo rm -rf /",
+      "sudo -u root -E rm -rf /",
+      "sudo -- rm -rf /",
+      "/usr/bin/sudo rm -rf /",
+      "doas rm -rf /",
+      "env rm -rf /",
+      "env -i FOO=1 BAR='a b' rm -rf /",
+      "FOO=1 rm -rf /",
+      "nice -n 10 rm -rf /",
+      "nice -5 rm -rf /",
+      "nohup rm -rf / &",
+      "time -p rm -rf /",
+      "command rm -rf /",
+      "exec rm -rf /",
+      "sudo env A=1 nice nohup rm -rf /",
+      "echo hi && sudo rm -rf /",
+      "sudo bash -c 'rm -rf /'",
+      "bash -c 'sudo rm -rf /'",
+    ])("denies %s", (command) => {
+      const decision = run(prefixed, command);
+      expect(decision.effect).toBe("deny");
+      expect(decision.ruleId).toBe("d.rm");
+      expect(decision.resource).toBe(command);
+    });
+
+    it("keeps an ask past a prefix", () => {
+      expect(run(prefixed, "sudo git push origin main").effect).toBe("ask");
+      expect(
+        prefixed.keepsPrompt({
+          action: "shell.execute",
+          resource: "nice git push",
+        }),
+      ).toBe(false);
+      // An enforced ask keeps its prompt in auto mode behind a prefix too.
+      expect(
+        prefixed.keepsPrompt({
+          action: "shell.execute",
+          resource: "sudo git reset --hard",
+        }),
+      ).toBe(true);
+    });
+
+    it("never widens an allow rule by stripping", () => {
+      expect(run(asking, "sudo npm test").effect).toBe("ask");
+      expect(run(asking, "env FOO=1 npm test").effect).toBe("ask");
+      expect(run(asking, "nice npm test").effect).toBe("ask");
+    });
+
+    it("leaves a prefix that runs nothing, or a plain command, alone", () => {
+      expect(run(prefixed, "command -v rm").effect).toBe("allow");
+      expect(run(prefixed, "sudo ls").effect).toBe("allow");
+      expect(run(prefixed, "sudo -u").effect).toBe("allow");
+    });
+  },
+);

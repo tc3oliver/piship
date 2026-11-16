@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatSmokeSummary, pathHint } from "./summary.js";
+import type { DistributionLock } from "./lock-schema.js";
+import {
+  formatInspection,
+  formatSmokeSummary,
+  inspection,
+  pathHint,
+} from "./summary.js";
 
 const smoke = {
   initialized: true,
@@ -31,14 +37,55 @@ describe("formatSmokeSummary", () => {
     expect(text).not.toContain("{");
     expect(text).not.toContain("/state/agent");
     expect(text).toContain("1.5.0, new acceptance session abc");
-    expect(text).toContain(
-      "instructions 1, skills 1, extensions 2, prompts 0, themes 0",
-    );
+    expect(text).toMatch(/resources\s+instructions 1: AGENTS\.md\n/);
+    expect(text).toContain("skills 1: review");
+    expect(text).toContain("extensions 2: a.ts, b.ts");
+    expect(text).not.toContain("prompts");
     expect(text).toMatch(/model\s+acme\/coder/);
     expect(text).toContain(
       "policy acme, project unknown, sandbox os, audit healthy, 1 resource(s) not loaded",
     );
     expect(text).toMatch(/mcp\s+notes healthy/);
+  });
+
+  it("names extensions from their folder, caps long lists, and lists packages", () => {
+    const text = formatSmokeSummary(
+      JSON.stringify({
+        ...smoke,
+        skills: ["a", "b", "c", "d", "e", "f", "g"],
+        extensionPaths: [
+          "/dist/x/resources/resources/extensions/clock/index.ts",
+          "C:\\dist\\x\\resources\\extensions\\bad.ts",
+        ],
+        packages: ["pi-web@1.2.0", "tools@abc1234"],
+      }),
+    );
+    expect(text).toContain("skills 7: a, b, c, d, e, +2 more");
+    expect(text).toContain("extensions 2: clock/index.ts, bad.ts");
+    expect(text).toMatch(/packages\s+pi-web@1\.2\.0, tools@abc1234/);
+  });
+
+  it("says why an MCP server failed, on one line", () => {
+    const text = formatSmokeSummary(
+      JSON.stringify({
+        ...smoke,
+        governance: {
+          ...smoke.governance,
+          mcp: [
+            { id: "notes", state: "healthy" },
+            {
+              id: "clock",
+              state: "failed",
+              reason: `spawn clock-mcp ENOENT\n  at x\n${"y".repeat(300)}`,
+            },
+          ],
+        },
+      }),
+    );
+    expect(text).toMatch(
+      /mcp\s+notes healthy\n\s+clock failed: spawn clock-mcp ENOENT at x y+\.\.\.$/,
+    );
+    expect(text.split("\n").at(-1)?.length).toBeLessThan(200);
   });
 
   it("names the bundled search tools Pi's find and grep used", () => {
@@ -57,6 +104,31 @@ describe("formatSmokeSummary", () => {
 
   it("returns output that is not JSON unchanged", () => {
     expect(formatSmokeSummary("not json")).toBe("not json");
+  });
+});
+
+describe("formatInspection", () => {
+  it("names resources by kind and lists the locked Pi packages", () => {
+    const lock = {
+      app: { id: "a", name: "A", version: "1.0.0", command: "a" },
+      deployment: { mode: "personal" },
+      runtime: { version: "1.5.0", pishipVersion: "0.13.0" },
+      resources: [
+        { kind: "adapters", path: "resources/mcp/clock.mjs", sha256: "x" },
+        { kind: "instructions", path: "resources/AGENTS.md", sha256: "x" },
+      ],
+      packages: [
+        { id: "pi-web", version: "1.2.0" },
+        { id: "tools", commit: "abc1234def" },
+      ],
+    } as unknown as DistributionLock;
+    const info = inspection(lock, "/state");
+    expect(info.packages).toEqual(["pi-web@1.2.0", "tools@abc1234"]);
+    const text = formatInspection(info);
+    expect(text).toMatch(
+      /resources\s+adapters 1: resources\/mcp\/clock\.mjs\n\s+instructions 1: resources\/AGENTS\.md/,
+    );
+    expect(text).toMatch(/packages\s+pi-web@1\.2\.0, tools@abc1234/);
   });
 });
 

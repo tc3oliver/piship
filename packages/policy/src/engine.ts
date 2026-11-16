@@ -189,6 +189,82 @@ function ruleSegments(
 }
 
 /**
+ * Commands that run the rest of their words as a command, with the letters
+ * of their short options that take a value. Deny and ask rules also judge the
+ * command they run; allow rules never do.
+ */
+const TRANSPARENT_PREFIXES: Readonly<Record<string, string>> = {
+  sudo: "ugCDhprtTU",
+  doas: "uC",
+  env: "uCS",
+  nice: "n",
+  nohup: "",
+  time: "",
+  command: "",
+  exec: "a",
+};
+const LONG_OPTIONS_WITH_VALUE = new Set([
+  "--user",
+  "--group",
+  "--other-user",
+  "--chdir",
+  "--host",
+  "--prompt",
+  "--role",
+  "--type",
+  "--close-from",
+  "--command-timeout",
+  "--unset",
+  "--split-string",
+  "--adjustment",
+]);
+const FIRST_WORD = /^(\S+)\s+(?=\S)/;
+
+/**
+ * `command` (POSIX) with its leading `NAME=value` assignments and transparent
+ * prefixes removed: `sudo -u root env A=1 nice rm -rf /` is `rm -rf /`.
+ * Undefined when nothing was removed or the prefix runs no command
+ * (`command -v rm`).
+ */
+function unprefixedCommand(command: string): string | undefined {
+  let rest = command.trimStart();
+  let changed = false;
+  for (;;) {
+    const assignment = ASSIGNMENT.exec(rest);
+    if (assignment) {
+      rest = rest.slice(assignment[0].length);
+      changed = true;
+      continue;
+    }
+    const head = FIRST_WORD.exec(rest);
+    const name = head?.[1]?.split("/").pop() ?? "";
+    const valued = Object.hasOwn(TRANSPARENT_PREFIXES, name)
+      ? TRANSPARENT_PREFIXES[name]
+      : undefined;
+    if (!head || valued === undefined) break;
+    rest = rest.slice(head[0].length);
+    for (;;) {
+      const option = FIRST_WORD.exec(rest);
+      const flag = option?.[1];
+      if (!option || !flag?.startsWith("-")) break;
+      rest = rest.slice(option[0].length);
+      if (flag === "--") break;
+      if (name === "command" && /[vV]/.test(flag)) return undefined;
+      const takesValue = flag.startsWith("--")
+        ? LONG_OPTIONS_WITH_VALUE.has(flag)
+        : !/^-\d+$/.test(flag) && valued.includes(flag.at(-1) ?? "");
+      if (takesValue) {
+        const value = FIRST_WORD.exec(rest);
+        if (!value) return undefined;
+        rest = rest.slice(value[0].length);
+      }
+    }
+    changed = true;
+  }
+  return changed ? rest : undefined;
+}
+
+/**
  * A rule with a former action name (`model.use`) under its current name.
  * Rules from a lock written before the rename still match the action the
  * runtime evaluates.
@@ -684,6 +760,40 @@ export class PolicyEngine {
    * too and `echo x; rm -rf /` still reaches the `rm` rules.
    */
   #decide(action: PolicyAction, resource: string): PolicyDecision {
+    const written = this.#decideWritten(action, resource);
+    if (written.effect === "deny") return written;
+    // A deny or ask rule also judges each command run through `sudo`,
+    // `env`, `nice` and the like; its allow rules never widen this way.
+    const stricter = this.#unprefixed(action, resource)
+      .map((inner) => this.#decide(action, inner))
+      .filter(
+        (decision) =>
+          decision.ruleId !== BUILTIN_DEFAULT_RULE &&
+          (decision.effect === "deny" || decision.effect === "ask"),
+      );
+    const effect = strictest(
+      written.effect,
+      ...stricter.map((entry) => entry.effect),
+    );
+    if (effect === written.effect) return written;
+    const deciding = stricter.find((entry) => entry.effect === effect);
+    return { ...(deciding as PolicyDecision), resource };
+  }
+
+  /** POSIX shell commands of `resource` with their transparent prefixes removed. */
+  #unprefixed(action: string, resource: string): string[] {
+    if (action !== "shell.execute" || PLATFORM !== "posix") return [];
+    const segments = ruleSegments(
+      resource,
+      this.context.workspaceRoot,
+      PLATFORM,
+    ) ?? [resource];
+    return segments
+      .map(unprefixedCommand)
+      .filter((inner): inner is string => inner !== undefined);
+  }
+
+  #decideWritten(action: PolicyAction, resource: string): PolicyDecision {
     const whole = this.#decideOne(action, resource);
     if (whole.effect === "deny") return whole;
     if (whole.effect === "allow" && whole.ruleId !== BUILTIN_DEFAULT_RULE)
@@ -810,8 +920,8 @@ export class PolicyEngine {
     const { action } = request;
     const segments = this.#segments(action, resource);
     if (
-      segments?.some((segment) =>
-        this.keepsPrompt({ ...request, resource: segment }),
+      [...(segments ?? []), ...this.#unprefixed(action, resource)].some(
+        (segment) => this.keepsPrompt({ ...request, resource: segment }),
       )
     )
       return true;

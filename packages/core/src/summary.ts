@@ -10,6 +10,8 @@ export interface Inspection {
   readonly deployment: DistributionLock["deployment"];
   readonly runtime: DistributionLock["runtime"];
   readonly resources: DistributionLock["resources"];
+  /** The locked Pi packages, as `id@version` (npm) or `id@<short commit>` (git). */
+  readonly packages?: readonly string[];
   readonly access?: NonNullable<DistributionLock["access"]>;
   readonly governance?: NonNullable<DistributionLock["governance"]>;
   /** The update keys the lock pins, by id and `sha256:` fingerprint. */
@@ -33,6 +35,9 @@ export function inspection(
     deployment: lock.deployment,
     runtime: lock.runtime,
     resources: lock.resources,
+    ...(lock.packages?.length
+      ? { packages: lock.packages.map(packageLabel) }
+      : {}),
     ...(lock.access ? { access: lock.access } : {}),
     ...(lock.governance ? { governance: lock.governance } : {}),
     ...(lock.updates
@@ -50,13 +55,33 @@ export function inspection(
   };
 }
 
-function counts(items: readonly string[]): string {
-  const tally = new Map<string, number>();
-  for (const item of items) tally.set(item, (tally.get(item) ?? 0) + 1);
-  return [...tally].map(([name, count]) => `${name} ${count}`).join(", ");
+/** A locked Pi package as `id@version` (npm) or `id@<short commit>` (git). */
+export function packageLabel(item: {
+  readonly id: string;
+  readonly version?: string;
+  readonly commit?: string;
+}): string {
+  const at = item.version ?? item.commit?.slice(0, 7);
+  return at ? `${item.id}@${at}` : item.id;
+}
+
+const LISTED = 5;
+/** Up to five items, then how many more. */
+function names(items: readonly string[]): string {
+  const more = items.length - LISTED;
+  return `${items.slice(0, LISTED).join(", ")}${more > 0 ? `, +${more} more` : ""}`;
+}
+
+/** One line of at most 160 characters. */
+function oneLine(text: string): string {
+  const line = text.split(/\s+/).filter(Boolean).join(" ");
+  return line.length > 160 ? `${line.slice(0, 157)}...` : line;
 }
 
 const row = (label: string, value: string) => `  ${label.padEnd(11)}${value}`;
+/** A labelled list: the label on the first line only. */
+const rows = (label: string, values: readonly string[]) =>
+  values.map((value, index) => row(index ? "" : label, value));
 
 /** A short, human-readable `inspect` report. */
 export function formatInspection(info: Inspection): string {
@@ -65,13 +90,21 @@ export function formatInspection(info: Inspection): string {
     `${app.name} ${app.version} (${app.id}, command ${app.command})`,
     row("mode", deployment.mode),
     row("runtime", `Pi ${runtime.version}, PiShip ${runtime.pishipVersion}`),
-    row(
-      "resources",
-      resources.length
-        ? `${resources.length} file(s): ${counts(resources.map((item) => item.kind))}`
-        : "none",
-    ),
   ];
+  const byKind = new Map<string, string[]>();
+  for (const item of resources)
+    byKind.set(item.kind, [...(byKind.get(item.kind) ?? []), item.path]);
+  lines.push(
+    ...(byKind.size
+      ? rows(
+          "resources",
+          [...byKind].map(
+            ([kind, paths]) => `${kind} ${paths.length}: ${names(paths)}`,
+          ),
+        )
+      : [row("resources", "none")]),
+  );
+  if (info.packages) lines.push(row("packages", names(info.packages)));
   if (access) {
     lines.push(
       row("identity", access.identity.mode),
@@ -144,6 +177,8 @@ interface Smoke {
   readonly instructions?: readonly string[];
   readonly skills?: readonly string[];
   readonly extensions?: number;
+  readonly extensionPaths?: readonly string[];
+  readonly packages?: readonly string[];
   readonly prompts?: readonly string[];
   readonly themes?: readonly string[];
   readonly searchTools?: Readonly<Record<string, string>>;
@@ -152,7 +187,11 @@ interface Smoke {
     readonly policy?: string;
     readonly project?: { readonly origin?: string };
     readonly sandbox?: { readonly level?: string; readonly provider?: string };
-    readonly mcp?: readonly { readonly id: string; readonly state: string }[];
+    readonly mcp?: readonly {
+      readonly id: string;
+      readonly state: string;
+      readonly reason?: string;
+    }[];
     readonly audit?: string;
     readonly resources?: readonly { readonly loaded: boolean }[];
   };
@@ -174,17 +213,37 @@ export function formatSmokeSummary(output: string): string {
     return output;
   }
   if (typeof smoke !== "object" || smoke === null) return output;
-  const length = (items: readonly unknown[] | undefined) => items?.length ?? 0;
+  const base = (path: string) => path.replaceAll("\\", "/").split("/").pop();
+  // An extension is named from its extensions folder down: foo/index.ts.
+  const extension = (path: string) => {
+    const slashed = path.replaceAll("\\", "/");
+    const at = slashed.lastIndexOf("/extensions/");
+    return at < 0 ? base(slashed) : slashed.slice(at + "/extensions/".length);
+  };
+  const loaded = [
+    ["instructions", (smoke.instructions ?? []).map(base)],
+    ["skills", smoke.skills ?? []],
+    ["extensions", (smoke.extensionPaths ?? []).map(extension)],
+    ["prompts", smoke.prompts ?? []],
+    ["themes", smoke.themes ?? []],
+  ] as const;
+  const listed = loaded
+    .filter(([, items]) => items.length)
+    .map(
+      ([kind, items]) => `${kind} ${items.length}: ${names(items as string[])}`,
+    );
+  // A payload older than extensionPaths reports only the count.
+  if (!smoke.extensionPaths && smoke.extensions)
+    listed.push(`extensions ${smoke.extensions}`);
   const lines = [
     row(
       "Pi",
       `${smoke.piVersion ?? "unknown"}, ${smoke.resumed ? "resumed" : "new"} acceptance session ${smoke.sessionId ?? ""}`.trimEnd(),
     ),
-    row(
-      "resources",
-      `instructions ${length(smoke.instructions)}, skills ${length(smoke.skills)}, extensions ${smoke.extensions ?? 0}, prompts ${length(smoke.prompts)}, themes ${length(smoke.themes)}`,
-    ),
+    ...(listed.length ? rows("resources", listed) : [row("resources", "none")]),
   ];
+  if (smoke.packages?.length)
+    lines.push(row("packages", names(smoke.packages)));
   if (smoke.searchTools)
     lines.push(
       row(
@@ -219,9 +278,12 @@ export function formatSmokeSummary(output: string): string {
     );
     if (gov.mcp?.length)
       lines.push(
-        row(
+        ...rows(
           "mcp",
-          gov.mcp.map((server) => `${server.id} ${server.state}`).join(", "),
+          gov.mcp.map(
+            (server) =>
+              `${server.id} ${server.state}${server.reason ? `: ${oneLine(server.reason)}` : ""}`,
+          ),
         ),
       );
   }
