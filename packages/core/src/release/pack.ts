@@ -248,7 +248,8 @@ if (!pinned) {
 }
 const found = [process.env.PISHIP_RUNTIME_ARCHIVE, join(here, pinned.name), join(dirname(here), pinned.name)].find((path) => path && existsSync(path));
 if (!found) {
-  console.error("Put " + pinned.name + " next to this pack, or set PISHIP_RUNTIME_ARCHIVE to its path.");
+  const set = process.env.PISHIP_RUNTIME_ARCHIVE;
+  console.error((set ? "PISHIP_RUNTIME_ARCHIVE is " + set + ", which does not exist. " : "") + pack.distribution.name + " needs the PiShip " + pack.runtime.pishipVersion + " runtime for " + target + ", " + pinned.name + " (SHA-256 " + pinned.sha256 + "), and it is not in " + here + " or " + dirname(here) + ". Get it from whoever gave you this pack, put it in one of those folders, or set PISHIP_RUNTIME_ARCHIVE to its path.");
   process.exit(1);
 }
 const digest = createHash("sha256").update(readFileSync(found)).digest("hex");

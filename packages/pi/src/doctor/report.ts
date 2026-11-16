@@ -130,10 +130,11 @@ export class DoctorReport {
       output.push(
         "",
         group,
-        ...checks.map(
-          (check) =>
-            `  ${marks[check.status]} ${check.label.padEnd(20)} ${check.value}`,
-        ),
+        ...checks.map((check) => {
+          const prefix = `  ${marks[check.status]} ${check.label.padEnd(20)} `;
+          // A formatted error's `Action:` line lines up under its value.
+          return `${prefix}${check.value.replaceAll("\n", `\n${" ".repeat(prefix.length)}`)}`;
+        }),
       );
     return output.join("\n");
   }
