@@ -2,14 +2,20 @@
 // (`updates`) and release policy (`release`).
 import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
-import { AccessFieldError, failUnknown } from "./access.js";
+import {
+  fail,
+  hasControl,
+  isRecord,
+  oneOf,
+  optionalRecord,
+  record,
+} from "./governance/fields.js";
 import { PRIVATE_HOSTS, plainHttpPermitted } from "./http-transport.js";
 import {
   checkTemplate,
   hasRuntimeReference,
   referencedVariables,
 } from "./variables.js";
-import { expectedOneOf } from "./suggest.js";
 import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 
 /** Top-level manifest sections added by piship/v1alpha4 (kept by v1alpha5). */
@@ -177,40 +183,6 @@ export interface LifecycleManifest {
   readonly release: ReleaseManifest;
 }
 
-type Json = Record<string, unknown>;
-
-function fail(field: string, message: string): never {
-  throw new AccessFieldError("invalid field", field, message);
-}
-function isRecord(value: unknown): value is Json {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-/** Field names that indicate secret material; never valid manifest keys. */
-const SECRET_FIELD =
-  /(secret|token|password|passwd|api_?key|private_?key|client_?key|bearer|authorization|cookie)/i;
-function record(
-  value: unknown,
-  path: string,
-  allowed: readonly string[],
-): Json {
-  if (!isRecord(value)) fail(path, "Expected an object");
-  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (unknown.length) failUnknown(path, unknown, allowed, SECRET_FIELD);
-  return value;
-}
-function optionalRecord(
-  value: unknown,
-  path: string,
-  allowed: readonly string[],
-): Json {
-  return value === undefined ? {} : record(value, path, allowed);
-}
-function hasControl(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.charCodeAt(0);
-    return code < 32 || code === 127;
-  });
-}
 function plainString(value: unknown, path: string, max: number): string {
   if (typeof value !== "string" || value.trim() === "")
     fail(path, "Expected a non-empty string");
@@ -228,19 +200,6 @@ function unique<T>(values: readonly T[], path: string): void {
   if (new Set(values).size !== values.length)
     fail(path, "Duplicate entries are not allowed");
 }
-function oneOf<T extends string>(
-  value: unknown,
-  path: string,
-  allowed: readonly T[],
-): T {
-  if (
-    typeof value !== "string" ||
-    !(allowed as readonly string[]).includes(value)
-  )
-    fail(path, expectedOneOf(value, allowed));
-  return value as T;
-}
-
 // ----------------------------------------------------------------- updates
 
 const KEY_ID = /^[a-z0-9][a-z0-9.-]*$/;

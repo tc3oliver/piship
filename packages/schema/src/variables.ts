@@ -4,15 +4,6 @@
  * unresolved template, so a lock is not machine-specific; values are resolved
  * from the launch environment at runtime and never written back.
  */
-export const RUNTIME_REFERENCE_FIELDS = [
-  "identity.oidc.issuer",
-  "identity.oidc.clientId",
-  "identity.oidc.audience",
-  "credential.broker.endpoint",
-  "credential.broker.revokeEndpoint",
-  "inference.baseUrl",
-  "network.tls.additionalCA",
-] as const;
 
 // Linear-time pattern: a reference body is only name characters, so malformed
 // input (for example repeated "${{") cannot trigger backtracking.

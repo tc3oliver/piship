@@ -44,6 +44,7 @@ import {
   isPrivateNetworkHost,
   NO_CONTENT_CAPTURE,
   PiShipError,
+  processAlive,
 } from "@piship/contracts";
 import {
   AUDIT_CONTENT_CLASSES,
@@ -207,15 +208,6 @@ const HOST_ID = createHash("sha256")
   .slice(0, 12);
 
 /** Whether a process with this ID exists (EPERM: it exists, not ours). */
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 /**
  * The process a rotation lock token names, and whether it is on this host:
  * `<pid>-<host id>-<random>`, or `<pid>-<random>` from an earlier PiShip

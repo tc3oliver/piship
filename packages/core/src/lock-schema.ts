@@ -29,11 +29,6 @@ import type { GovernanceLock } from "./trust.js";
 export interface DistributionId {
   readonly value: string;
 }
-export interface ResolvedDistribution {
-  readonly id: DistributionId;
-  readonly schema: PishipSchemaVersion;
-  readonly piVersion: string;
-}
 export const LOCK_SCHEMA_VERSION = "piship-lock/v1alpha1";
 /** Lock schema for piship/v1alpha2 manifests; adds the static access envelope. */
 export const LOCK_SCHEMA_V1ALPHA2 = "piship-lock/v1alpha2";

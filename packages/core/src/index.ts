@@ -75,7 +75,6 @@ export {
   type LockedToolOrigin,
   type LockedVirtualModel,
   type LockSchemaVersion,
-  type ResolvedDistribution,
 } from "./lock-schema.js";
 export * from "./migration.js";
 export {
