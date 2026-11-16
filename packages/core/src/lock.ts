@@ -15,7 +15,7 @@ import {
   readManifest,
   type UpdateTrustKey,
 } from "@piship/schema";
-import { PI_VERSION } from "./compatibility.js";
+import { PI_VERSION, PISHIP_VERSION } from "./compatibility.js";
 import { canonicalJson, digest, hash } from "./digest.js";
 import { pishipCommand, shellArg } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
@@ -217,6 +217,10 @@ export function resolveLock(
   };
 }
 export function lockManifest(manifestPath: string): string {
+  if (recordedPackagesReusable(manifestPath)) {
+    const kept = relockKeepingPackages(manifestPath);
+    if (kept) return kept;
+  }
   const lock = resolveLock(manifestPath, { packages: "resolve" });
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
@@ -253,6 +257,38 @@ export function relockKeepingPackages(
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;
 }
+/** An exact npm version, which names one immutable tarball. */
+const EXACT_VERSION =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Whether resolving the declared Pi packages again could only reproduce what
+ * the lock records: every package is an exact npm version or local content
+ * (recomputed offline), and the lock was written by this PiShip version, so
+ * its entries follow the same rules. A git ref or a semver range can move,
+ * and is resolved again.
+ */
+function recordedPackagesReusable(manifestPath: string): boolean {
+  const declared = declaredPackages(readManifest(manifestPath));
+  if (!declared.length) return false;
+  if (
+    !declared.every(
+      (item) =>
+        item.source === "local" ||
+        (item.source === "npm" && EXACT_VERSION.test(item.version)),
+    )
+  )
+    return false;
+  try {
+    const recorded = JSON.parse(
+      readFileSync(join(dirname(resolve(manifestPath)), "piship.lock"), "utf8"),
+    ) as Partial<DistributionLock>;
+    return recorded.runtime?.pishipVersion === PISHIP_VERSION;
+  } catch {
+    return false;
+  }
+}
+
 /** Whether `piship.lock` beside a manifest matches what the manifest locks to. */
 export type LockStatus = "current" | "missing" | "stale";
 export function lockStatus(manifestPath: string): LockStatus {

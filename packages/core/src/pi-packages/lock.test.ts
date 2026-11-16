@@ -275,6 +275,62 @@ describe("Pi packages in the lock", () => {
     expect(readFileSync(lockPath, "utf8")).toBe(locked);
   }, 120_000);
 
+  it("lock keeps exact npm and local packages it already recorded, and resolves a git one again", (context) => {
+    requireNpm11(context);
+    const manifest = distribution();
+    lockManifest(manifest);
+    const base = dirname(manifest);
+    const lockPath = join(base, "piship.lock");
+    write(base, { "resources/AGENTS.md": "# Reviewer, edited\n" });
+    // A git ref can move, so the git package is resolved again: unreachable.
+    const offline = process.env.GIT_CONFIG_VALUE_0;
+    process.env.GIT_CONFIG_VALUE_0 = "https://unused.example.test/";
+    try {
+      expect(() => lockManifest(manifest)).toThrow();
+    } finally {
+      process.env.GIT_CONFIG_VALUE_0 = offline;
+    }
+    // Without it, the local package is recomputed offline and npm never runs.
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace(
+        /    - id: pi-review\n(?: {6}.*\n)+/,
+        "",
+      ),
+    );
+    lockManifest(manifest);
+    const resolved = readFileSync(lockPath, "utf8");
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace(
+        "version: 1.0.0",
+        "version: 1.0.1",
+      ),
+    );
+    const path = process.env.PATH;
+    process.env.PATH = join(base, "no-npm-here");
+    try {
+      expect(lockManifest(manifest)).toBe(lockPath);
+    } finally {
+      process.env.PATH = path;
+    }
+    expect(readLock(manifest).app.version).toBe("1.0.1");
+    expect(readLock(manifest).packages).toEqual(
+      (JSON.parse(resolved) as DistributionLock).packages,
+    );
+    // A changed local package is not kept: npm is needed again.
+    write(base, {
+      "packages/team/skills/triage/SKILL.md":
+        "---\nname: triage\ndescription: Triage an issue.\n---\nChanged.\n",
+    });
+    process.env.PATH = join(base, "no-npm-here");
+    try {
+      expect(() => lockManifest(manifest)).toThrow();
+    } finally {
+      process.env.PATH = path;
+    }
+  }, 120_000);
+
   it("a relock resolves from the stored npm lockfile, so transitive versions stay put", () => {
     const manifest = distribution();
     const base = dirname(manifest);

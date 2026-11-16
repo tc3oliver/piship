@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-3ed4e29b50eee1a393ac4e0f054626b727f122a913d3a3f93a699fbeab7e8922"
+    "sha256": "sha256-387070d3e2c5ffade4b72bf7d2d52ae583dce47cdad30dc6304393e0d3efbc90"
   },
   "app": {
     "id": "devcode",
@@ -1055,6 +1055,7 @@
             "id": "pi-code",
             "class": "user",
             "filters": {},
+            "pretranspile": true,
             "source": "npm",
             "package": "pi-code",
             "version": "1.4.2"
@@ -1973,7 +1974,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-6bb7dae01bab768a588db325fe26744e48357401d1c7d5d4bd3f3ba8e5fa2390",
+    "packages": "sha256-4fde87890444426160e20e88f5cba62f86def735ef272167b9568e3d2f70974f",
     "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
@@ -2139,7 +2140,8 @@
         "darwin-arm64": [],
         "linux-x64": [],
         "win32-x64": []
-      }
+      },
+      "pretranspile": true
     },
     {
       "id": "pi-lens",
