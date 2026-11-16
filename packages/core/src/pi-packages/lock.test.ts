@@ -292,6 +292,25 @@ describe("Pi packages in the lock", () => {
     expect(readFileSync(lockPath, "utf8")).toBe(locked);
   }, 120_000);
 
+  it("does not keep packages an older PiShip resolved", (context) => {
+    requireNpm11(context);
+    const manifest = lockedDistribution();
+    const lockPath = join(dirname(manifest), "piship.lock");
+    const older = JSON.parse(readFileSync(lockPath, "utf8"));
+    older.runtime.pishipVersion = "0.0.1";
+    const text = `${JSON.stringify(older, null, 2)}\n`;
+    writeFileSync(lockPath, text);
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace(
+        "version: 1.0.0",
+        "version: 1.0.1",
+      ),
+    );
+    expect(relockKeepingPackages(manifest)).toBeUndefined();
+    expect(readFileSync(lockPath, "utf8")).toBe(text);
+  }, 120_000);
+
   it("lock keeps exact npm and local packages it already recorded, and resolves a git one again", (context) => {
     requireNpm11(context);
     const manifest = distribution();

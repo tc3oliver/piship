@@ -608,7 +608,7 @@ export function publishSteps(
     `  1. the archives this run added: ${added.length ? added.join(", ") : "none"}${kept.length ? ` (already in the channel directory before this run; upload only if not yet published: ${kept.join(", ")})` : ""}`,
     `  2. ${channel}.json.sig and ${channel}.json together`,
     "Remove an older archive only after no published channel lists it.",
-    `Sign ${channel} again by ${by}: clients refuse it after ${expires}. sign-channel with no archive re-signs it.`,
+    `Sign ${channel} again by ${by}: clients refuse it after ${expires}. sign-channel with no archive re-signs it with the same key.`,
   ].join("\n");
 }
 
@@ -636,7 +636,7 @@ export function rootPublishSteps(
     "Never delete or replace a published root.",
     ...(addedChannelKeys.length
       ? [
-          `Then sign each channel with the new channel key: ${pishipCommand()} sign-channel ${directory} --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]} (with no archive it re-signs what the channel lists)`,
+          `Then sign each channel with the new channel key: ${pishipCommand()} sign-channel ${directory} --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]} (with no archive it re-signs what the channel lists; add --previous-key <old-key-id>=<old-public-key> so the metadata the old key signed verifies)`,
         ]
       : []),
     `Publish the next root by ${by}: clients stop updating after ${expires}.`,

@@ -2108,7 +2108,10 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     );
     expect(readFileSync(join(channelDir, "stable.json"))).toEqual(signed);
     // The new key re-signs the same entries without any archive argument.
-    const resigned = await sign(channelDir, [], "stable", next);
+    // The old key signed the published metadata, so the owner names it.
+    const unanchored = await rejection(sign(channelDir, [], "stable", next));
+    expect(unanchored.userAction).toMatch(/--previous-key <id>=<public-key>/);
+    const resigned = await sign(channelDir, [], "stable", next, KEY);
     expect(resigned.metadata.sequence).toBe(2);
     expect(resigned.metadata.releases).toEqual(listed);
     expect(await updateDistribution(ID, opts)).toMatchObject({
@@ -2130,6 +2133,26 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(Date.parse(later.metadata.expires)).toBeGreaterThan(
       Date.now() + 89 * 86_400_000,
     );
+  });
+
+  it("a re-sign does not take its trust anchor from the channel directory", async () => {
+    const attacker = generateSigningKey("attacker");
+    // The host's release declares the attacker's key and the owner's.
+    const evil = await release(
+      "1.0.0",
+      true,
+      undefined,
+      [attacker, KEY],
+      [ROOT],
+    );
+    const channelDir = temp("piship-channel-");
+    await sign(channelDir, [evil.archive], "stable", attacker);
+    const before = readFileSync(join(channelDir, "stable.json"));
+    const refused = await rejection(sign(channelDir, [], "stable", KEY));
+    expect(refused.code).toBe("INTEGRITY_FAILED");
+    expect(refused.message).toMatch(/does not verify/);
+    expect(readFileSync(join(channelDir, "stable.json"))).toEqual(before);
+    expect(existsSync(join(channelDir, "stable.json.sig"))).toBe(true);
   });
 
   it("re-signs only a channel whose listed archives are all present and match", async () => {
@@ -2243,7 +2266,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     );
     // The person running update learns whom to tell and what to ask for.
     expect(stale.userAction).toMatch(
-      /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root \(piship sign-channel <channel-dir> --channel stable --key <file> --key-id <id> re-signs it without adding an archive\)/,
+      /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root \(piship sign-channel <channel-dir> --channel stable --key <file> --key-id <id> --previous-key <old-id>=<old-public-key> re-signs it without adding an archive\)/,
     );
     // Rolling back to B, whose lock trusts the old key, does not restore it.
     await rollbackDistribution(ID, { runCheck: fakeRun });

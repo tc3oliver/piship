@@ -228,14 +228,16 @@ function existingChannel(
   path: string,
   channel: string,
   accepted: readonly TrustedKey[],
+  resign = false,
 ): ChannelMetadata {
   const refuse = (problem: string) =>
     new PiShipError(
       "INTEGRITY_FAILED",
       `Existing channel metadata ${path} ${problem}; refusing to extend it`,
       {
-        userAction:
-          "Restore the published metadata and its signature; if a key you trust signed it, pass that key with --previous-key <id>=<public-key>",
+        userAction: resign
+          ? "A re-sign trusts only the keys you pass: after a key rotation, pass the key that signed the published metadata with --previous-key <id>=<public-key> (the old key's public half); otherwise restore the published metadata and its signature"
+          : "Restore the published metadata and its signature; if a key you trust signed it, pass that key with --previous-key <id>=<public-key>",
       },
     );
   const bytes = readFileSync(path);
@@ -496,6 +498,9 @@ export async function signChannel(
   for (const signer of signers)
     accept({ id: signer.keyId, publicKey: signer.publicKey });
   for (const key of options.previousKeys ?? []) accept(key);
+  // A re-sign verifies the previous metadata only against these owner-supplied
+  // keys: the channel directory and its archives are untrusted downloads.
+  const ownerKeys = [...accepted];
   const now = (options.now ?? (() => new Date()))();
   const directory = resolve(options.directory);
   const verified: { archive: string; release: VerifiedRelease }[] = [];
@@ -535,7 +540,12 @@ export async function signChannel(
       await declare(pack.lock, pack.distribution);
     }
     const previous = existsSync(path)
-      ? existingChannel(path, options.channel, accepted)
+      ? existingChannel(
+          path,
+          options.channel,
+          resign ? ownerKeys : accepted,
+          resign,
+        )
       : undefined;
     const entries = new Map(
       (previous?.releases ?? []).map((item) => [
@@ -785,7 +795,7 @@ export async function readChannel(
     if (!(error instanceof PiShipError)) throw error;
     throw new PiShipError(error.code, error.message, {
       component: "signing",
-      userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel <channel-dir> --channel ${channel} --key <file> --key-id <id> re-signs it without adding an archive), and any new root/<N>.json published before it`,
+      userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel <channel-dir> --channel ${channel} --key <file> --key-id <id> --previous-key <old-id>=<old-public-key> re-signs it without adding an archive), and any new root/<N>.json published before it`,
     });
   }
   const keyId = keyIds[0] as string;
