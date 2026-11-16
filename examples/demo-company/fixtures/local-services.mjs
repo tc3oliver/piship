@@ -14,6 +14,7 @@ import {
 } from "node:crypto";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 
 const b64 = (value) => Buffer.from(value).toString("base64url");
 const random = (bytes = 18) => randomBytes(bytes).toString("base64url");
@@ -784,16 +785,50 @@ export function environmentLines(variables, platform) {
   ];
 }
 
+/**
+ * The command line: `--port <n>`, `--prefix <NAME>` for the variable names a
+ * `piship init --managed` template reads (ACMECODE by default), and repeatable
+ * `--model <id>` to serve and entitle the template's models besides the demo's.
+ */
+export function cliOptions(args) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      port: { type: "string" },
+      prefix: { type: "string", default: "ACMECODE" },
+      model: { type: "string", multiple: true, default: [] },
+    },
+  });
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(values.prefix))
+    throw new Error(
+      `--prefix must be an environment variable name (A-Z, 0-9, _): ${values.prefix}`,
+    );
+  const models = ["acme/coder", "acme/general", ...values.model];
+  return {
+    prefix: values.prefix,
+    start: {
+      ...(values.port === undefined ? {} : { port: Number(values.port) }),
+      ...(values.model.length > 0
+        ? {
+            knobs: {
+              entitledModels: models,
+              gatewayModels: [...models, "acme/review"],
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const portIndex = process.argv.indexOf("--port");
-  const services = await startLocalServices(
-    portIndex > 0 ? { port: Number(process.argv[portIndex + 1]) } : {},
-  );
+  const options = cliOptions(process.argv.slice(2));
+  const services = await startLocalServices(options.start);
+  const command = options.prefix === "ACMECODE" ? "acmecode" : "<command>";
   console.log(
-    "# Local demo fixtures (not a real IdP or gateway). Export these, then run acmecode login:",
+    `# Local demo fixtures (not a real IdP or gateway). Export these, then run ${command} login:`,
   );
   for (const line of environmentLines(
-    Object.entries(services.env()),
+    Object.entries(services.env(options.prefix)),
     process.platform,
   ))
     console.log(line);

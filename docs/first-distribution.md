@@ -11,17 +11,17 @@ cd ~/src/piship && npm ci && npm run build
 
 ## Run the CLI by path
 
-PiShip is not published to npm, so there is no `piship` command on your machine. Run the CLI as `node <checkout>/packages/cli/dist/bin.js`. Do not try `npx` or `npm exec` with the name: they look it up on the public registry and run an unrelated package. The rest of this page writes the long form as `$PISHIP`:
+PiShip is not published to npm, so there is no `piship` command on your machine. Run the CLI as `node <checkout>/packages/cli/dist/bin.js`. Do not try `npx` or `npm exec` with the name: they look it up on the public registry and run an unrelated package. Define a shell function so the rest of this page can write `piship` (a variable such as `PISHIP="node …"` does not run in zsh, the macOS default shell, which does not split it into words):
 
 ```bash
-export PISHIP="node $HOME/src/piship/packages/cli/dist/bin.js"
+piship() { node "$HOME/src/piship/packages/cli/dist/bin.js" "$@"; }
 ```
 
 The "Next:" lines the CLI prints already name the command that is running, so you can also copy them as they are.
 
-`$PISHIP --help` lists the commands, and `$PISHIP help <command>` (or `<command> --help`) lists that command's options, one line each. A mistyped option is named in the error before the usage line.
+`piship --help` lists the commands, and `piship help <command>` (or `<command> --help`) lists that command's options, one line each. A mistyped option is named in the error before the usage line.
 
-On Windows, a PowerShell variable holding a command line does not run, so define a function instead and read `$PISHIP` below as `piship`:
+On Windows, define the same function in PowerShell:
 
 ```powershell
 function piship { node "$HOME\src\piship\packages\cli\dist\bin.js" @args }
@@ -33,13 +33,13 @@ An installed command is `%USERPROFILE%\.local\bin\<name>.cmd`, which cmd.exe and
 
 ```bash
 mkdir -p ~/agents && cd ~/agents
-$PISHIP init ./my-agent
+piship init ./my-agent
 ```
 
 This writes `my-agent/piship.yaml` and `my-agent/resources/AGENTS.md`. The directory name becomes the distribution id and the command name, so it must start with a lowercase letter and use only lowercase letters, digits, and single hyphens. For a directory that does not follow that, such as `my_agent`, name the distribution yourself:
 
 ```bash
-$PISHIP init ./my_agent --id my-agent
+piship init ./my_agent --id my-agent
 ```
 
 Without `--id` the error suggests the id to use. `init` writes a personal distribution; `--managed` writes a company template that asks for anything unlisted and opts into the `piship.routine@1` rule pack, so routine work (workspace edits, tests, builds, read-only git, search) does not prompt once `sandbox.required` is true. The template ships with `sandbox.required: false`, so until you set it every shell command (`git status`, `npm test`) asks; `validate` and `lock` warn about this, and `policy explain shell.execute "git status"` lists the pack rule that is inactive.
@@ -51,7 +51,7 @@ The manifest does not state `runtime.pi`. Left out, the build uses the Pi versio
 ## 2. Validate it
 
 ```bash
-$PISHIP validate my-agent/piship.yaml
+piship validate my-agent/piship.yaml
 ```
 
 `validate` reads the manifest and its resources and writes nothing. Every command that takes a manifest (`validate`, `lock`, `build`, `test`, `dev`) also takes its directory (`my-agent`), and with no argument uses `./piship.yaml`; options may come before or after it. It reports every problem it finds in one run, each with the line and column in the YAML, and suggests a fix for the common mistakes: a misspelled field names the nearest valid one, an unquoted `version: 1.0` says to quote it, and `schema: piship/v2` names the current schema. Warnings do not fail it: an unused entry under `variables`, a setting that fails on some machines, and a declared skill that Pi would skip (a skills directory with no `SKILL.md`, or a `SKILL.md` without a description) are printed on stderr and the exit code stays 0.
@@ -59,7 +59,7 @@ $PISHIP validate my-agent/piship.yaml
 ## 3. Test it
 
 ```bash
-$PISHIP test my-agent/piship.yaml
+piship test my-agent/piship.yaml
 ```
 
 `test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming `build` and the install command.
@@ -73,13 +73,13 @@ The first time, there is no `piship.lock` yet, so `test` writes one and says so 
 `dev` runs the same isolated build and opens the command interactively; `dev --smoke` runs it headlessly.
 
 ```bash
-$PISHIP dev my-agent/piship.yaml
+piship dev my-agent/piship.yaml
 ```
 
 After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`) as long as the manifest declares no Pi packages. Those are resolved over the network and pinned in the lock, so for them `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
 ```bash
-$PISHIP lock my-agent/piship.yaml
+piship lock my-agent/piship.yaml
 ```
 
 Run `lock` whenever you add or change a package, and check what changed in the lock before you commit it.
@@ -87,7 +87,7 @@ Run `lock` whenever you add or change a package, and check what changed in the l
 ## 5. Build it
 
 ```bash
-$PISHIP build my-agent/piship.yaml
+piship build my-agent/piship.yaml
 ```
 
 `build` and `release` never write a lock for you: they require one that matches the manifest and its resources, and stop with `Lockfile is stale` or `Lockfile missing` otherwise. Run `test` or `lock` first. `build` also runs the supply-chain gates that `dev` and `test` skip. It prints that the result is an unqualified local build: it is not audited, has no SBOM, and is not signed. That is right for yourself. For something to hand to other people, build a qualified release with `release` ([release guide](release.md)).
