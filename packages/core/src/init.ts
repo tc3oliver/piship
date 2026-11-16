@@ -14,18 +14,19 @@ import { isDistributionId, suggestDistributionId } from "./state-paths.js";
  * and release keys are configured (as `piship migrate` writes them).
  */
 function initGovernance(managed: boolean, id: string): string {
-  // Managed: workspace-provided items (.pi, .agents, AGENTS.md, .mcp.json)
-  // stay unloaded outside trusted projects. Personal: the person's own
+  // Managed: a repository's text (AGENTS.md, skills) loads everywhere, as
+  // the managed defaults say; anything in it that starts code stays
+  // unloaded outside trusted projects. Personal: the person's own
   // projects must work, so instructions and skills load (an unknown origin,
   // such as a repository with no remote, loads its text only) and
   // anything that starts code asks. Hooks, agents, and providers stay denied.
   const projectTrust = managed
-    ? `  # Relax per dimension, or add company.match entries, to trust projects.
+    ? `  # Every repository's AGENTS.md and skills load (they are text); nothing
+  # in a repository that starts code does. Add company.match entries (a
+  # remote and a path: the remote alone is only a claim) to trust company
+  # checkouts, or set a dimension to deny to tighten.
   projectTrust:
     external: &isolated
-      passiveContext: deny
-      instructions: deny
-      skills: deny
       agents: deny
       hooks: deny
       extensions: deny
@@ -73,9 +74,17 @@ ${projectTrust}  # Routine work runs without a prompt (workspace reads and write
       action: model.select
       resource: "${id}/**"
       effect: allow
+    # Company and project instructions and skills load without a prompt.
+    # Each declared extension, prompt, or theme needs its own allow
+    # (extension.load or resource.load on "company:**"), or it asks at every
+    # launch and headless runs leave it out.
     - id: distribution.instructions
       action: instruction.load
-      resource: "company:**"
+      resource: "**"
+      effect: allow
+    - id: distribution.skills
+      action: skill.load
+      resource: "**"
       effect: allow
 `
     : `policy:

@@ -1,7 +1,20 @@
 // Project group: the project's origin and each discovered project item with
 // its effect.
+import { decisionRule } from "@piship/policy";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
+
+/** Who can change a project trust deny: the person in personal mode, IT otherwise. */
+function trustHint(
+  data: DoctorData,
+  origin: string,
+  dimension: string,
+): string {
+  const field = `policy.projectTrust.${origin}.${dimension}`;
+  return data.ctx.mode === "managed"
+    ? `your administrator sets this (${field} in piship.yaml)`
+    : `set ${field} in piship.yaml to load it`;
+}
 
 export function projectGroup(data: DoctorData, out: DoctorSection): void {
   const inspection = data.governance?.inspection;
@@ -23,7 +36,23 @@ export function projectGroup(data: DoctorData, out: DoctorSection): void {
   for (const candidate of inspection.candidates) {
     if (candidate.dimension === "restrictions") continue;
     const line = `${candidate.path}: ${candidate.effect} (${candidate.reason})`;
-    if (candidate.effect === "deny") out.warn(candidate.kind, line);
+    // Project trust admits the item; policy still decides it at launch.
+    const decision = inspection.projectDecisions.get(candidate.path);
+    if (candidate.effect === "deny")
+      out.warn(
+        candidate.kind,
+        `${line}; ${trustHint(data, candidate.origin, candidate.dimension)}`,
+      );
+    else if (decision?.effect === "deny")
+      out.warn(
+        candidate.kind,
+        `${candidate.path}: not loaded, denied by ${decisionRule(decision)}`,
+      );
+    else if (decision?.effect === "ask")
+      out.warn(
+        candidate.kind,
+        `${candidate.path}: asks at each launch and is left out of headless runs (${decisionRule(decision)}); a policy.defaults allow for ${decision.action} project:** loads it without a prompt`,
+      );
     else out.ok(candidate.kind, line);
   }
   const trust = inspection.extensionTrust;

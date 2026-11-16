@@ -159,6 +159,8 @@ export interface ResourceEvidence {
   readonly path: string;
   readonly loaded: boolean;
   readonly reason: string;
+  /** Inspection only: policy asks, so it loads only once someone approves. */
+  readonly asks?: boolean;
   readonly integrity?: "verified" | "not-applicable";
   readonly compatible?: boolean;
   readonly origin?: string;

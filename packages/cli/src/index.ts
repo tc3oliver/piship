@@ -20,6 +20,7 @@ import {
   checkSkills,
   checkToolExposure,
   checkGovernance,
+  unapprovedLoadWarnings,
   checkPiVersion,
   PI_VERSION,
   checkStateMigration,
@@ -91,6 +92,7 @@ import { formatError, PiShipError, redact } from "@piship/contracts";
 import {
   inactivePackRules,
   launchWarnings,
+  unknownMcpServerRules,
   unknownToolDenials,
   unmatchablePathRules,
   runtimeVariableUse,
@@ -1347,6 +1349,7 @@ export async function runCli(
       );
       for (const warning of [
         ...launchWarnings(manifest),
+        ...unapprovedLoadWarnings(manifest),
         ...checkSkills(manifest, target),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
@@ -1483,8 +1486,10 @@ export async function runCli(
       const locked = readManifest(target);
       for (const warning of [
         ...unknownToolDenials(locked),
+        ...unknownMcpServerRules(locked),
         ...unmatchablePathRules(locked),
         ...inactivePackRules(locked),
+        ...unapprovedLoadWarnings(locked),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       output.stdout(

@@ -24,6 +24,7 @@ import {
   shellArg,
   suggestDistributionId,
   requireCurrentLock,
+  unapprovedLoadWarnings,
   resolveLock,
   runtimeStateDirectory,
 } from "./index.js";
@@ -201,10 +202,12 @@ describe("init", () => {
       expect(manifest.governance).toBeDefined();
       expect(manifest.governance?.sandbox.required).toBe(false);
       const projectTrust = manifest.governance?.policy.projectTrust;
+      // Managed: a repository's text loads anywhere (the managed defaults);
+      // nothing in an untrusted one that starts code does.
       const closed = {
-        passiveContext: "deny",
-        instructions: "deny",
-        skills: "deny",
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
         agents: "deny",
         hooks: "deny",
         extensions: "deny",
@@ -404,6 +407,55 @@ describe("managed init", () => {
         manifest.access?.variables.every((name) => !/TOKEN/.test(name)),
       ).toBe(true);
     }
+  });
+
+  it("lets policy load the repository text that project trust admits", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-managed-"));
+    roots.push(root);
+    const policy = readManifest(
+      initDistribution(join(root, "acme-agent"), { managed: true }),
+    ).governance?.policy;
+    // Project trust admits the text; policy then loads it without a prompt.
+    for (const action of ["instruction.load", "skill.load"])
+      expect(policy?.defaults).toContainEqual(
+        expect.objectContaining({ action, resource: "**", effect: "allow" }),
+      );
+  });
+});
+
+describe("unapproved load warnings", () => {
+  it("names declared resources and MCP servers only policy.default decides", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-managed-"));
+    roots.push(root);
+    const path = initDistribution(join(root, "acme-agent"), { managed: true });
+    // The template as written loads everything it declares.
+    expect(unapprovedLoadWarnings(readManifest(path))).toEqual([]);
+    const dir = join(root, "acme-agent", "resources", "ext");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "index.ts"), "export default () => {};\n");
+    const lines = readFileSync(path, "utf8")
+      .replace(
+        "      - ./resources/AGENTS.md\n",
+        "      - ./resources/AGENTS.md\n  extensions:\n    company: [./resources/ext]\n",
+      )
+      .split("\n");
+    // Uncomment the MCP example, as the test above does.
+    const first = lines.indexOf("  #   servers:");
+    const last = lines.indexOf('  #         "*": hidden');
+    for (let index = first; index <= last; index += 1)
+      lines[index] = (lines[index] as string).replace(/^ {2}# {3}/, "  ");
+    const source = lines.join("\n");
+    writeFileSync(path, source);
+    expect(
+      unapprovedLoadWarnings(readManifest(path)).map((item) => item.path),
+    ).toEqual([
+      "resources.extensions.company",
+      "mcp.servers.docs",
+      "mcp.servers.docs.tools.search",
+    ]);
+    expect(unapprovedLoadWarnings(readManifest(path))[0]?.message).toBe(
+      './resources/ext: no policy rule allows extension.load company:./resources/ext, so policy.default (ask) asks at every launch and headless runs leave it out; add a policy.defaults allow rule for extension.load on "company:**"',
+    );
   });
 });
 

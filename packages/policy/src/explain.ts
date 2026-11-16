@@ -7,6 +7,7 @@ import {
   redact,
 } from "@piship/contracts";
 import {
+  BUILTIN_DEFAULT_RULE,
   BUILTIN_UNKNOWN_ACTION_RULE,
   type PolicyExplanation,
 } from "./engine.js";
@@ -17,6 +18,18 @@ const HEADINGS: Readonly<Record<PolicyEffect, string>> = {
   ask: "APPROVAL REQUIRED",
   deny: "DENIED",
 };
+
+/**
+ * The rule behind a decision, for a one-line reason. A decision no rule made
+ * says so in words: `builtin:default` alone reads like a rule someone wrote.
+ */
+export function decisionRule(
+  decision: Pick<PolicyDecision, "ruleId" | "reason">,
+): string {
+  return decision.ruleId === BUILTIN_DEFAULT_RULE
+    ? (decision.reason ?? "No rule matched; the policy default decides")
+    : `policy ${decision.ruleId}`;
+}
 
 function section(title: string, ...lines: readonly string[]): string {
   return `${title}:\n${lines.map((line) => `  ${redact(line)}`).join("\n")}`;
@@ -69,7 +82,12 @@ export function formatDecision(
       : []),
     section("Action", decision.action),
     section("Resource", decision.resource),
-    section("Rule", decision.ruleId),
+    section(
+      "Rule",
+      decision.ruleId === BUILTIN_DEFAULT_RULE
+        ? `${decision.ruleId} (no rule matched; policy.default decides)`
+        : decision.ruleId,
+    ),
     section("Policy", decision.policyId),
     section("Enforcement", enforcementLine(explanation)),
     section("Layer", decision.layer),

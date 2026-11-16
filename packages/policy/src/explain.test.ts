@@ -127,7 +127,9 @@ describe("formatDecision", () => {
       a.explain({ action: "model.select", resource: "m" }),
     );
     expect(text).toMatch(/^ALLOWED\n/);
-    expect(text).toContain("Rule:\n  builtin:default");
+    expect(text).toContain(
+      "Rule:\n  builtin:default (no rule matched; policy.default decides)",
+    );
   });
 });
 
