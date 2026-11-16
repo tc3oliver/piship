@@ -647,7 +647,7 @@ export function inactivePackRules(manifest: Manifest): ValidationDiagnostic[] {
       ? [
           {
             path: "policy.packs",
-            message: `${pack}@${version}: its ${gated.length} sandbox-gated rules (such as ${(gated.find((rule) => rule.action === "shell.execute") ?? gated[0])?.id}) are inactive because sandbox.required is not true, so commands like git status and npm test fall back to policy.default (${governance.policy.default}); set sandbox.required: true to activate them`,
+            message: `${pack}@${version}: its ${gated.length} sandbox-gated rules (such as ${(gated.find((rule) => rule.resource === "git status") ?? gated[0])?.id}) are inactive because sandbox.required is not true, so commands like git status and npm test fall back to policy.default (${governance.policy.default}); set sandbox.required: true to activate them`,
           },
         ]
       : [];
