@@ -964,6 +964,7 @@ export function governedBashOperations(
               profile: gov.sandbox.profile,
               mode: gov.options.lock.deployment.mode,
               command,
+              cwd,
             })
           : undefined;
       try {

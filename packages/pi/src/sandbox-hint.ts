@@ -4,6 +4,7 @@
 // command failed, names the denied path or host and the manifest key that
 // decides it.
 import { accessSync, constants, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   isWithin,
   realpathNearest,
@@ -12,16 +13,22 @@ import {
 
 const FILESYSTEM_ERROR =
   /\b(EROFS|EPERM|EACCES)\b|Read-only file system|Permission denied|Operation not permitted/i;
+// A connect refused by the sandbox: Seatbelt fails it with EPERM, a network
+// namespace with no route with ENETUNREACH.
 const NETWORK_ERROR =
-  /\b(ENOTFOUND|EAI_AGAIN)\b|Could not resolve host|Temporary failure in name resolution|Name or service not known|nodename nor servname/i;
+  /\b(ENOTFOUND|EAI_AGAIN)\b|Could not resolve host|Temporary failure in name resolution|Name or service not known|nodename nor servname|\bconnect E(?:PERM|ACCES|NETUNREACH)\b|connect to host \S+ port \d+: Operation not permitted|Network is unreachable|Failed to connect to/i;
 // A command that reaches the network by itself, even when it prints nothing
 // (`curl -s` fails with exit code 6 and no output).
 const NETWORK_COMMAND =
   /(?:^|[\s;&|(])(?:curl|wget|ssh|scp|sftp|rsync|ping|telnet|ftp|nc)\b|(?:^|[\s;&|(])git\s+(?:clone|fetch|pull|ls-remote)\b|[a-z]+:\/\//i;
-const HOST = /(?:ENOTFOUND|EAI_AGAIN|resolve host:?)\s+([A-Za-z0-9.-]+)/i;
-// The first absolute path a failing line names, quoted or bare.
-const QUOTED_PATH = /['"`](\/[^'"`\n]+)['"`]/;
-const BARE_PATH = /(?:^|[\s:(])(\/[^\s:'"`()]+)/;
+const HOST =
+  /(?:ENOTFOUND|EAI_AGAIN|resolve host:?|connect E[A-Z]+|connect to host|Failed to connect to)\s+([A-Za-z0-9.-]+)/i;
+// A path a failing line names, quoted or bare: absolute, or relative with a
+// slash in it (`.git/config`, `../x`). The last one is the denied path; the
+// first is often the program, as in `/bin/bash: .git/config: Operation not
+// permitted`.
+const PATH =
+  /['"`]((?:\/|[^\s'"`/]+\/)[^'"`\n]*)['"`]|(?:^|[\s:(])((?:\/(?!\/)|[\w.-]+\/)[^\s:'"`()]*)/g;
 
 /** The most characters of one output line the scanner looks at. */
 const LINE_LIMIT = 2000;
@@ -36,6 +43,8 @@ export interface SandboxHintContext {
   readonly mode: "managed" | "personal";
   /** The command, to name the network denial when its output says nothing. */
   readonly command?: string;
+  /** The directory the command ran in; a relative path is resolved against it. */
+  readonly cwd?: string;
 }
 
 /** The one next action: who changes which manifest key. */
@@ -62,7 +71,9 @@ function readable(path: string): boolean {
 }
 
 function pathOf(line: string): string | undefined {
-  return (QUOTED_PATH.exec(line) ?? BARE_PATH.exec(line))?.[1];
+  let last: string | undefined;
+  for (const match of line.matchAll(PATH)) last = match[1] ?? match[2];
+  return last;
 }
 
 /**
@@ -102,9 +113,9 @@ export class SandboxFailureScanner {
    */
   hint(): string | undefined {
     this.feed("\n");
-    const { profile, mode } = this.context;
+    const { profile, mode, cwd = profile.workspace } = this.context;
     for (const named of this.#filesystem) {
-      const path = realpathNearest(named);
+      const path = realpathNearest(resolve(cwd, named));
       if (profile.readDeny.some((denied) => isWithin(path, denied)))
         return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")} ${SANDBOX_NO_RETRY}]`;
       // A file the launching user cannot read is an ordinary permission

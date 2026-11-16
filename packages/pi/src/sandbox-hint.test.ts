@@ -136,6 +136,59 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     expect(silent("curl -s https://example.com", "allow")).toBeUndefined();
   });
 
+  it("names the denied path, not the shell, and resolves a relative path against the command's directory", () => {
+    const p = profile();
+    const scanner = (cwd = p.workspace) =>
+      new SandboxFailureScanner({
+        profile: {
+          ...p,
+          writeProtect: {
+            files: [join(p.workspace, ".git", "config")],
+            directories: [join(p.workspace, ".git", "hooks")],
+          },
+        },
+        mode: "personal",
+        cwd,
+      });
+    const hint = (line: string, cwd?: string) => {
+      const s = scanner(cwd);
+      s.feed(`${line.replaceAll("<root>", p.root)}\n`);
+      return s.hint();
+    };
+    // What macOS Seatbelt prints for `echo x > ~/x` under /bin/bash.
+    expect(hint("/bin/bash: <root>/home/x: Operation not permitted")).toContain(
+      `${p.root}/home/x is outside`,
+    );
+    for (const line of [
+      "/bin/bash: .git/config: Operation not permitted",
+      "touch: .git/hooks/pre-commit: Operation not permitted",
+      "error: could not write config file .git/config: Operation not permitted",
+      "Error: EPERM: operation not permitted, open '.git/hooks/a'",
+    ])
+      expect(hint(line), line).toContain("protected git control path");
+    expect(hint("cp: ../h: Operation not permitted")).toContain(
+      "../h is outside the directories shell commands can write",
+    );
+    // The same relative path from a writable directory is not a denial.
+    expect(
+      hint("cp: ../h: Operation not permitted", join(p.root, "tmp", "a")),
+    ).toBeUndefined();
+  });
+
+  it("names the host of a connection the sandbox refused", () => {
+    expect(hintFor("connect EPERM 1.1.1.1:443 - Local (0.0.0.0:0)\n")).toMatch(
+      /^\[PiShip sandbox: 1\.1\.1\.1 cannot be reached because shell commands have no network access/,
+    );
+    expect(
+      hintFor(
+        "ssh: connect to host github.com port 22: Operation not permitted\n",
+      ),
+    ).toContain("github.com cannot be reached");
+    expect(
+      hintFor("connect ENETUNREACH 10.0.0.1:80\n", "managed", "allow"),
+    ).toBeUndefined();
+  });
+
   it("finds an error split across chunks", () => {
     const p = profile();
     const scanner = new SandboxFailureScanner({ profile: p, mode: "managed" });
