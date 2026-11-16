@@ -1,4 +1,4 @@
-// `<command> uninstall [--purge --yes]`: the branded way to remove an
+// `<command> uninstall [--without-logout] [--purge --yes]`: the branded way to remove an
 // installed distribution, without finding the release directory's piship.mjs.
 import { type Dirent, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ import { requireInstalled } from "./lifecycle.js";
 const FLAGS = ["--purge", "--yes", "--without-logout", "--remove-edited-shim"];
 /** The options `uninstall` accepts, as its usage and the branded help print them. */
 export const UNINSTALL_OPTIONS =
-  "[--purge --yes [--without-logout]] [--remove-edited-shim]";
+  "[--without-logout] [--purge --yes] [--remove-edited-shim]";
 
 /** Measuring a directory stops after this many entries or this long. */
 const MEASURE_ENTRIES = 50_000;
@@ -99,7 +99,7 @@ export interface UninstallCommandOptions {
  * settings stay unless `--purge --yes` is given; a distribution that is
  * still signed in is refused (as purge refuses it) until `<command> logout`
  * has revoked the sign-in, because once the install is gone there is no
- * command left to do it. `--without-logout` is accepted only with `--purge --yes`.
+ * command left to do it. `--without-logout` accepts leaving it.
  *
  * The running process holds a lease on the payload it removes, which an
  * uninstall started from the command itself does not count as another
@@ -118,7 +118,7 @@ export async function runUninstall(
   if (
     flags.size !== args.length ||
     args.some((arg) => !FLAGS.includes(arg)) ||
-    ((flags.has("--yes") || flags.has("--without-logout")) && !purge)
+    (flags.has("--yes") && !purge)
   )
     throw new PiShipError("CONFIG_INVALID", usage);
   requireInstalled(ctx, `${app.command} uninstall`);
@@ -146,12 +146,12 @@ export async function runUninstall(
       },
     );
   const live = signedInClasses(state);
-  if (live.length && !purge)
+  if (live.length && !withoutLogout && !purge)
     throw new PiShipError(
       "CONFIG_INVALID",
       `${app.name} is still signed in (${live.join(", ")}). Once it is uninstalled there is no ${app.command} left to sign out with, and the sign-in would stay live until it expires`,
       {
-        userAction: `Run ${app.command} logout, then ${app.command} uninstall again`,
+        userAction: `Run ${app.command} logout, then ${app.command} uninstall again; or add --without-logout to uninstall and leave the sign-in`,
       },
     );
   const installed = measure(appDirectory(id));
@@ -201,7 +201,9 @@ export async function runUninstall(
       `Uninstalled ${app.name}.`,
       `  removed  ${app.command} (${shim}) and the installed releases (${size(installed)})`,
       `  kept     ${state}: sessions and settings, ${held}`,
-      "  signed out: no sign-in is stored",
+      live.length
+        ? `  signed in: ${live.join(", ")} stays until it expires (uninstalled without logout)`
+        : "  signed out: no sign-in is stored",
       `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
     ].join("\n"),
   );
