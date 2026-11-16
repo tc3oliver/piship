@@ -135,11 +135,16 @@ function resolveSource(
   } catch (error) {
     const variable =
       error instanceof RuntimeReferenceError ? error.variable : undefined;
+    // A personal user publishes their own updates; there is no administrator.
+    const find =
+      lock.deployment.mode === "personal"
+        ? `Set ${variable} to where you publish ${lock.app.name} updates (its channel's URL or directory)`
+        : `Ask your administrator where ${lock.app.name} updates come from (its channel's URL or directory), then set ${variable}`;
     throw new PiShipError("CONFIG_UNAVAILABLE", (error as Error).message, {
       component: "update",
       ...(variable
         ? {
-            userAction: `Ask your administrator where ${lock.app.name} updates come from (its channel's URL or directory), then set ${variable} in the environment that runs this command, or pass it once with --from <directory|url>. In ${setVariablesHint([variable], env)}`,
+            userAction: `${find} in the environment that runs this command, or pass it once with --from <directory|url>. In ${setVariablesHint([variable], env)}`,
           }
         : {}),
     });

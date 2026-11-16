@@ -1697,6 +1697,35 @@ describe("Sandbox containment severity", () => {
   });
 });
 
+describe("Sandbox lines when a required sandbox is unavailable", () => {
+  it("does not pass the isolation and network the sandbox would give", () => {
+    const inspected = inspection({
+      required: true,
+      planes: [],
+      level: "unavailable",
+      network: "deny",
+      reason: "bubblewrap (bwrap) was not found on PATH",
+    });
+    const lines = group(
+      renderDoctor(
+        doctorData("personal", {
+          governance: governanceData({
+            inspection: inspected,
+            isolation: sandboxIsolation(inspected.sandbox),
+            workspace: workspaceData(inspected),
+          }),
+        }),
+      ).render(),
+      "Sandbox",
+    );
+    expect(lines.find((line) => line.includes("containment"))).toMatch(/^  ✗/);
+    expect(lines.find((line) => line.includes(" isolation "))).toMatch(/^  -/);
+    expect(lines.find((line) => line.includes(" network "))).toBe(
+      `  - ${"network".padEnd(20)} deny (declared; not in effect while the sandbox is unavailable)`,
+    );
+  });
+});
+
 describe("Sandbox credential lines", () => {
   // An obvious fake: never a real key.
   const SENTINEL = "sandbox-sentinel-secret-7741";

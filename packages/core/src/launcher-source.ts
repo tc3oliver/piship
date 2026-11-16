@@ -43,6 +43,10 @@ export const LAUNCHER_TIMING_SNIPPET = `const timing = process.env.PISHIP_DEBUG_
 const mark = (name) => { if (timing) timing.marks.push({ name, ms: performance.now() }); };
 `;
 
+// Names the running version: a Linux distribution's own nodejs package is often older (Ubuntu 24.04: 18).
+const NODE_TOO_OLD =
+  "Node.js 22.19.0 or newer is required; this is ${process.version}. Install a current Node.js separately (nodejs.org); a Linux distribution's own nodejs package is often older.";
+
 /**
  * The built command. A launch error is printed through the shared redaction;
  * so is an error no await catches (an unhandled rejection, which Node raises
@@ -65,7 +69,7 @@ process.on("uncaughtException", (error) => { try { console.error(formatError(err
 const directory = fileURLToPath(new URL("..", ${IMPORT_META_URL}));
 try {
   const version = process.versions.node.split(".").map(Number);
-  if (version[0] < 22 || (version[0] === 22 && version[1] < 19)) throw new Error("Node.js 22.19.0 or newer is required; install Node separately before launch");
+  if (version[0] < 22 || (version[0] === 22 && version[1] < 19)) throw new Error(\`${NODE_TOO_OLD}\`);
   const metadata = verifyLaunchPayload(directory);
   mark("payload_checked");
   const { preparePiEnvironment } = await import("@piship/pi/environment");
@@ -78,5 +82,5 @@ try {
 `);
 }
 export function portableCliSource(): string {
-  return `const version = process.versions.node.split(".").map(Number);\nif (version[0] < 22 || (version[0] === 22 && version[1] < 19)) { console.error("Node.js 22.19.0 or newer is required. Install Node separately."); process.exitCode = 1; } else { const { runCli } = await import("@piship/cli"); process.exitCode = await runCli(process.argv.slice(2), { stdout: (message) => console.log(message), stderr: (message) => console.error(message) }); }\n`;
+  return `const version = process.versions.node.split(".").map(Number);\nif (version[0] < 22 || (version[0] === 22 && version[1] < 19)) { console.error(\`${NODE_TOO_OLD}\`); process.exitCode = 1; } else { const { runCli } = await import("@piship/cli"); process.exitCode = await runCli(process.argv.slice(2), { stdout: (message) => console.log(message), stderr: (message) => console.error(message) }); }\n`;
 }

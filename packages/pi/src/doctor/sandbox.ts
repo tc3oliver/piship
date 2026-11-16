@@ -232,18 +232,29 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       if (report.level === "not-required") out.info("containment", text);
       else out.warn("containment", text);
     }
+    // A required sandbox that is not running isolates nothing and denies no
+    // network, so what it declares is a note, not a pass.
+    const failed = report.required && report.level !== "enforced";
+    const declaredLine = (label: string, value: string) =>
+      failed ? out.info(label, value) : out.ok(label, value);
     const declared = governance.workspace.declared;
     // A mounted or synced workspace makes host files reachable, through it.
     if (
       governance.isolation === "remote" &&
       (declared === "shared" || declared === "synchronized")
     )
-      out.ok("isolation", REMOTE_WORKSPACE_TEXT);
+      declaredLine("isolation", REMOTE_WORKSPACE_TEXT);
     else if (governance.isolation)
-      out.ok("isolation", ISOLATION_TEXT[governance.isolation]);
+      declaredLine("isolation", ISOLATION_TEXT[governance.isolation]);
     if (itEgress(data) && report.network === "allow")
       out.info("network", `allow (${IT_EGRESS_DELEGATED})`);
-    else out.ok("network", networkText(report));
+    else
+      declaredLine(
+        "network",
+        failed
+          ? `${report.network} (declared; not in effect while the sandbox is unavailable)`
+          : networkText(report),
+      );
     out.ok(
       "scope",
       "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",

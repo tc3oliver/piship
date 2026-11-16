@@ -204,6 +204,34 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
     expect(lines.join("\n")).toMatch(/ok transport http-allowed/);
   });
 
+  it("names an unset source variable in doctor instead of passing the template", async () => {
+    await installed(false, "http-allowed");
+    delete process.env.ACMEPI_UPDATE_SOURCE;
+    const lines: string[] = [];
+    lifecycleDoctor(
+      context(),
+      "Update",
+      (label, value) => lines.push(`ok ${label} ${value}`),
+      (label, value) => lines.push(`! ${label} ${value}`),
+    );
+    expect(lines).toContain(
+      `! source ACMEPI_UPDATE_SOURCE is not set (updates.source \${ACMEPI_UPDATE_SOURCE}); update needs it, or --from <directory|url>`,
+    );
+  });
+
+  it("tells a personal user to set the source variable, with no administrator", async () => {
+    await installed(false, "http-allowed");
+    delete process.env.ACMEPI_UPDATE_SOURCE;
+    const error = (await rejection(
+      runUpdate(context(), ["--check"]),
+    )) as PiShipError;
+    expect(error.code).toBe("CONFIG_UNAVAILABLE");
+    expect(error.userAction).toContain(
+      "Set ACMEPI_UPDATE_SOURCE to where you publish",
+    );
+    expect(error.userAction).not.toContain("administrator");
+  });
+
   it("audits an update check over plain HTTP with its transport", async () => {
     const { channelDir } = await installed(false, "http-allowed");
     served = channelDir;

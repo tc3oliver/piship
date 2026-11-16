@@ -295,6 +295,7 @@ export async function installDistribution(
       info = {
         ...releaseInfo(verified.metadata, verified.archiveSha256),
         via: "file",
+        ...(isArchive ? {} : { directory: source }),
       };
       lap("install verify release");
     } else {

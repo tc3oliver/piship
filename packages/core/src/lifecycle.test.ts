@@ -45,6 +45,7 @@ import {
   withTestState,
 } from "./index.js";
 import * as copyModule from "./install/copy.js";
+import { shellArg } from "./invocation.js";
 import * as filesModule from "./install/files.js";
 import {
   describeReclaimed,
@@ -52,6 +53,7 @@ import {
   installDistribution,
   lifecycleStatus,
   purgeDistributionState,
+  removeEmptyPiShipDirectories,
   RECEIPT_SCHEMA,
   readInstallReceipt,
   reclaimObsoleteVersions,
@@ -2784,7 +2786,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
     );
     expect(unset.code).toBe("CONFIG_UNAVAILABLE");
-    expect(unset.userAction).toMatch(/set ACMEPI_UPDATE_SOURCE/);
+    expect(unset.userAction).toMatch(/[Ss]et ACMEPI_UPDATE_SOURCE/);
     expect(unset.userAction).toMatch(/--from <directory\|url>/);
     expect(requests).toBe(0);
     // An absolute local directory is accepted after resolution.
@@ -4081,6 +4083,23 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
+  it("removes the apps and receipts directories the last uninstall empties, and keeps a chosen install home", async () => {
+    const a = await release("1.0.0");
+    await installDistribution(a.archive);
+    const home = process.env.PISHIP_INSTALL_HOME as string;
+    // Content PiShip did not write in the install home is never touched.
+    write(join(home, "notes.txt"), "mine\n");
+    uninstallDistribution(ID);
+    removeEmptyPiShipDirectories();
+    expect(existsSync(join(home, "apps"))).toBe(false);
+    expect(existsSync(join(home, "receipts"))).toBe(false);
+    expect(readFileSync(join(home, "notes.txt"), "utf8")).toBe("mine\n");
+    await purgeDistributionState(ID);
+    removeEmptyPiShipDirectories();
+    // An overridden state home is the user's: it stays even when empty.
+    expect(existsSync(process.env.PISHIP_STATE_HOME as string)).toBe(true);
+  });
+
   it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
     const a = await release("1.0.0");
     const receipt = await installDistribution(a.archive);
@@ -4185,10 +4204,16 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
   });
 
   describe("the branded uninstall command", () => {
-    async function installed(fromPayload = false) {
+    async function installed(
+      from: "archive" | "payload" | "directory" = "archive",
+    ) {
       const built = await release("1.0.0");
       const receipt = await installDistribution(
-        fromPayload ? join(built.directory, "payload") : built.archive,
+        from === "payload"
+          ? join(built.directory, "payload")
+          : from === "directory"
+            ? built.directory
+            : built.archive,
       );
       const out: string[] = [];
       const err: string[] = [];
@@ -4232,6 +4257,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         }
         expect(existsSync(receipt.commandPath)).toBe(false);
         expect(existsSync(appsDir())).toBe(false);
+        // The apps directory it emptied goes too.
+        expect(
+          existsSync(join(process.env.PISHIP_INSTALL_HOME as string, "apps")),
+        ).toBe(false);
         expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
         const text = out.join("\n");
         expect(text).toContain(`kept     ${stateDir()}`);
@@ -4243,9 +4272,26 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     );
 
     it.skipIf(process.platform === "win32")(
+      "names the release directory's piship.mjs for purge after an install.sh install",
+      async () => {
+        const { ctx, out } = await installed("directory");
+        const directory =
+          readInstallReceipt(ID).releases[0]?.release?.directory;
+        expect(directory).toBeDefined();
+        // The fake assembly has no manager; a real release payload does.
+        const manager = join(directory as string, "payload", "piship.mjs");
+        if (!existsSync(manager)) write(manager, "");
+        await runUninstall(ctx, []);
+        expect(out.join("\n")).toContain(
+          `run purge from the release you installed: node ${shellArg(manager)} purge ${ID} --yes.`,
+        );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
       "names the build's piship.mjs for purge after uninstalling a local build",
       async () => {
-        const { ctx, out } = await installed(true);
+        const { ctx, out } = await installed("payload");
         await runUninstall(ctx, []);
         expect(out.join("\n")).toContain(
           `run purge from the build you installed: node dist/${ID}/piship.mjs purge ${ID} --yes in the directory you built in.`,

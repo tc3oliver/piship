@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxAdapter } from "./adapter.js";
-import { bubblewrapArgs } from "./bubblewrap.js";
+import { bubblewrapArgs, bubblewrapFailureReason } from "./bubblewrap.js";
 import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import { realpathNearest } from "./profile.js";
 import { sbplString, seatbeltProfile } from "./seatbelt.js";
@@ -565,5 +565,22 @@ describe.skipIf(!posix)("the live probe is not vacuous", () => {
       code: "SANDBOX_UNAVAILABLE",
       message: expect.stringContaining("a write outside the allowed paths"),
     });
+  });
+});
+
+describe("bubblewrapFailureReason", () => {
+  it("blames a container's mount restrictions when bwrap could not mount proc", () => {
+    const reason = bubblewrapFailureReason(
+      "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
+    );
+    expect(reason).toContain("a mount was refused");
+    expect(reason).not.toContain("user namespaces may be disabled");
+    expect(reason).toContain("Can't mount proc");
+  });
+
+  it("keeps the user-namespace hint for a uid map failure", () => {
+    expect(
+      bubblewrapFailureReason("bwrap: setting up uid map: Permission denied"),
+    ).toContain("unprivileged user namespaces may be disabled");
   });
 });

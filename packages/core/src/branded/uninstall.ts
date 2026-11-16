@@ -4,7 +4,11 @@ import { type Dirent, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readInstallReceipt, runtimeStateDirectory } from "../index.js";
-import { signedInClasses } from "../install/purge.js";
+import { shellArg } from "../invocation.js";
+import {
+  removeEmptyPiShipDirectories,
+  signedInClasses,
+} from "../install/purge.js";
 import { appDirectory } from "../install/receipt.js";
 import {
   uninstallAndPurgeDistribution,
@@ -168,13 +172,27 @@ export async function runUninstall(
         `  deleted  ${purged.state} (${held})${count ? `, and ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`,
       ].join("\n"),
     );
+    removeEmptyPiShipDirectories();
     return;
   }
   // Read before the receipt goes: purge then runs from what was installed.
-  const fromRelease = receipt.releases.some(
-    (item) => item.version === receipt.active && item.release,
-  );
+  const release = receipt.releases.find(
+    (item) => item.version === receipt.active,
+  )?.release;
+  const fromRelease = Boolean(release);
+  // The release directory it came from, while that still holds the manager.
+  const recorded =
+    typeof release?.directory === "string"
+      ? join(release.directory, "payload", "piship.mjs")
+      : undefined;
+  const manager =
+    recorded && existsSync(recorded)
+      ? shellArg(recorded)
+      : fromRelease
+        ? "<release>/payload/piship.mjs"
+        : `dist/${id}/piship.mjs`;
   uninstallDistribution(id, { removeEditedShim, ownSession: true });
+  removeEmptyPiShipDirectories();
   ctx.out(
     [
       `Uninstalled ${app.name}.`,
@@ -183,7 +201,7 @@ export async function runUninstall(
       live.length
         ? `  signed in: ${live.join(", ")} stays until it expires (uninstalled without logout)`
         : "  signed out: no sign-in is stored",
-      `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${fromRelease ? "<release>/payload" : `dist/${id}`}/piship.mjs purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
+      `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
     ].join("\n"),
   );
 }

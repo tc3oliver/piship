@@ -2,7 +2,7 @@
 import { statfsSync } from "node:fs";
 import { LocalMetrics, type MetricsSnapshot } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
-import { resolveTemplate } from "@piship/schema";
+import { RuntimeReferenceError, resolveTemplate } from "@piship/schema";
 import {
   abandonedTemporaryCount,
   installHome,
@@ -109,7 +109,13 @@ function updateDoctor(
       "channel",
       `${status.channel} (allowed: ${(status.channels ?? []).join(", ")})`,
     );
-    if (status.source && plainHttpSource(ctx, status.source))
+    const unset = status.source && unsetSourceVariable(ctx, status.source);
+    if (unset)
+      local(
+        "source",
+        `${unset} is not set (updates.source ${status.source}); update needs it, or --from <directory|url>`,
+      );
+    else if (status.source && plainHttpSource(ctx, status.source))
       warn("source", `http (integrity by signature only): ${status.source}`);
     else if (status.source) ok("source", status.source);
     else local("source", "none declared; update needs --from");
@@ -197,6 +203,24 @@ function freeInstallBytes(): number | undefined {
 }
 
 /** Whether the update source resolves to plain HTTP on a non-loopback host. */
+/** The runtime variable updates.source names that this environment lacks. */
+function unsetSourceVariable(
+  ctx: BrandedContext,
+  template: string,
+): string | undefined {
+  try {
+    resolveTemplate(
+      "updates.source",
+      template,
+      ctx.metadata.access?.variables ?? [],
+      process.env,
+    );
+    return undefined;
+  } catch (error) {
+    return error instanceof RuntimeReferenceError ? error.variable : undefined;
+  }
+}
+
 function plainHttpSource(ctx: BrandedContext, template: string): boolean {
   try {
     const url = new URL(

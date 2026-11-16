@@ -61,6 +61,13 @@ export interface InstalledRelease {
      * written before this field; an older reader ignores it.
      */
     readonly via?: "channel" | "file";
+    /**
+     * The extracted release directory it was installed from (what
+     * `install.sh` passes), so uninstall can name the `piship.mjs` that purges
+     * later. Absent for an archive or a channel, and in receipts written
+     * before this field; an older reader ignores it.
+     */
+    readonly directory?: string;
     /** A release composed from a Company Pack and a runtime archive has no archive digest of its own. */
     readonly pack?: { readonly sha256: string; readonly version: string };
     readonly runtime?: {
