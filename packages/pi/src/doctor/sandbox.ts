@@ -210,6 +210,62 @@ export function networkText(report: ContainmentReport): string {
   return `${report.network} (attested by the backend, not verified${denial.reason ? `: ${denial.reason}` : ""})`;
 }
 
+const POWERSHELL_COST =
+  "each command the agent runs and each MCP stdio server starts through PowerShell, about 0.9 s slower";
+const FAILED_FIX: Readonly<Record<string, string>> = {
+  "the helper did not compile":
+    "check that csc.exe can run here; application control (AppLocker, WDAC) may block it",
+  "the compiled helper did not run a child":
+    "application control (AppLocker, WDAC) probably blocks programs in that directory; ask IT to allow it",
+  "the helper could not be installed":
+    "check that the state home is writable by this user",
+};
+
+/** Windows: which supervisor puts governed children in a Job Object, and why. */
+function jobSupervisorLine(
+  status: NonNullable<DoctorData["jobSupervisor"]>,
+  out: DoctorSection,
+): void {
+  const label = "child supervisor";
+  switch (status.supervisor) {
+    case "helper":
+      out.ok(label, `compiled Job Object helper (${status.path})`);
+      return;
+    case "pending":
+      out.info(
+        label,
+        "compiled Job Object helper, built at the first command or MCP stdio server it starts; still shown after commands ran, the state home is not writable and each start uses PowerShell, about 0.9 s slower",
+      );
+      return;
+    case "none":
+      out.bad(label, `${status.reason}; governed children cannot start`);
+      return;
+  }
+  if (status.cause === "off") {
+    out.info(
+      label,
+      `PowerShell (PISHIP_WINDOWS_JOB_HELPER=off): ${POWERSHELL_COST}`,
+    );
+    return;
+  }
+  if (status.cause === "no-compiler") {
+    out.warn(
+      label,
+      `PowerShell: no .NET Framework 4 compiler (csc.exe under %SystemRoot%\\Microsoft.NET), so ${POWERSHELL_COST}; with the .NET Framework 4.x compiler present the next start compiles the faster helper`,
+    );
+    return;
+  }
+  const reason = status.reason ?? "the helper could not be made";
+  const fix = FAILED_FIX[reason] ?? "see the reason";
+  const retry = status.retryAt
+    ? `; it is tried again after ${status.retryAt.toISOString()}`
+    : "";
+  out.warn(
+    label,
+    `PowerShell: ${reason}, so ${POWERSHELL_COST}${retry}. Fix: ${fix}, then delete ${status.dir}\\unavailable.json to try again now`,
+  );
+}
+
 export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
   const inspection = governance?.inspection;
@@ -218,6 +274,7 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       `task ${task.id}`,
       `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
     );
+  if (data.jobSupervisor) jobSupervisorLine(data.jobSupervisor, out);
   if (!governance) return;
   if (inspection) {
     const report = inspection.sandbox;

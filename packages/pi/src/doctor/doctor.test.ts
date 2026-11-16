@@ -16,12 +16,12 @@ import {
   principalKey,
   type SecretStore,
   SecretValue,
+  statusMarks,
 } from "@piship/contracts";
 import { type ActivatedAccess, SandboxCredential } from "@piship/core";
 import type { WorkspaceReport } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { statusMarks } from "@piship/contracts";
 import { renderDoctor } from "../commands/doctor.js";
 import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
@@ -1729,8 +1729,12 @@ describe("Sandbox lines when a required sandbox is unavailable", () => {
       ).render(),
       "Sandbox",
     );
-    expect(lines.find((line) => line.includes("containment"))).toMatch(/^  ✗/);
-    expect(lines.find((line) => line.includes(" isolation "))).toMatch(/^  -/);
+    expect(lines.find((line) => line.includes("containment"))).toMatch(
+      /^ {2}✗/,
+    );
+    expect(lines.find((line) => line.includes(" isolation "))).toMatch(
+      /^ {2}-/,
+    );
     expect(lines.find((line) => line.includes(" network "))).toBe(
       `  - ${"network".padEnd(20)} deny (declared; not in effect while the sandbox is unavailable)`,
     );
@@ -2063,6 +2067,47 @@ describe("Audit group", () => {
     expect(group(report.render(), "Sandbox")).toContain(
       `  ! ${"task abc".padEnd(20)} started by PiShip process 4242, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
     );
+  });
+
+  it("names the Windows child supervisor, and the cause and fix of the slow PowerShell path", () => {
+    const sandbox = (jobSupervisor: DoctorData["jobSupervisor"]) =>
+      group(
+        renderDoctor({
+          ...doctorData("managed", { governance: governanceData({}) }),
+          ...(jobSupervisor ? { jobSupervisor } : {}),
+        }).render(),
+        "Sandbox",
+      ).filter((line) => line.includes("child supervisor"));
+    const label = "child supervisor".padEnd(20);
+    expect(sandbox(undefined)).toEqual([]);
+    expect(
+      sandbox({ supervisor: "helper", path: "C:\\s\\jobhelper-0.exe" }),
+    ).toEqual([
+      `  ✓ ${label} compiled Job Object helper (C:\\s\\jobhelper-0.exe)`,
+    ]);
+    expect(sandbox({ supervisor: "pending", dir: "C:\\s" })[0]).toMatch(
+      /^ {2}- child supervisor +compiled Job Object helper, built at the first/,
+    );
+    expect(
+      sandbox({
+        supervisor: "powershell",
+        cause: "no-compiler",
+        dir: "C:\\s",
+      })[0],
+    ).toMatch(
+      /^ {2}! child supervisor +PowerShell: no \.NET Framework 4 compiler/,
+    );
+    expect(
+      sandbox({
+        supervisor: "powershell",
+        cause: "failed",
+        reason: "the compiled helper did not run a child",
+        dir: "C:\\s",
+        retryAt: new Date("2026-11-17T10:00:00.000Z"),
+      }),
+    ).toEqual([
+      `  ! ${label} PowerShell: the compiled helper did not run a child, so each command the agent runs and each MCP stdio server starts through PowerShell, about 0.9 s slower; it is tried again after 2026-11-17T10:00:00.000Z. Fix: application control (AppLocker, WDAC) probably blocks programs in that directory; ask IT to allow it, then delete C:\\s\\unavailable.json to try again now`,
+    ]);
   });
 
   it("reports orphaned, stale, and set-aside audit spools", () => {

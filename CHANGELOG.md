@@ -42,6 +42,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- A Windows user whose machine cannot build the compiled Job Object helper (no .NET Framework compiler, application control blocking the new executable, an unwritable state home) had every command and MCP server start through PowerShell, about 0.9 s slower each, with nothing saying so. `doctor` now has a `child supervisor` row in the Sandbox group on Windows: the compiled helper, not built yet, or PowerShell with the cause, the fix, and when it is retried.
 - On Windows, `install`, `update`, `rollback`, `uninstall`, and the other commands that take a lifecycle lock could fail with `EPERM ... open '<receipts>/.<id>.launch.lock'` when they took a lifecycle lock just as its previous holder released it: Windows refuses to create a file whose delete is still pending. The lock now waits that out (up to about 2 s) and still reports a lasting `EPERM`.
 - `piship lock` prints the same warnings `validate` prints. It printed only the policy-rule warnings, so an unused variable, update trust without a bootstrap root, an inert `audit.capture` class, or a network finding showed up only if the owner also ran `validate`. `dev` and `test`, which lock internally, still print none of them.
 - `doctor` lines up an error's `Action:` line under the value it belongs to, in every group; it started at the left margin and read as a line of its own.
