@@ -263,6 +263,62 @@ function existingChannel(
   return metadata;
 }
 
+/**
+ * The archives an existing channel lists, as paths in its directory, for a
+ * re-sign. The file is not trusted here: the names must be plain file names,
+ * and the caller verifies the metadata, its signature, and every archive.
+ */
+function listedArchives(
+  path: string,
+  directory: string,
+  channel: string,
+): { readonly releases: string[]; readonly packs: string[] } {
+  if (!existsSync(path))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `No archives were given and ${path} does not exist, so there is no ${channel} channel to re-sign`,
+      {
+        userAction:
+          "Pass the release or pack archives to add, or name the channel directory that holds the published channel",
+      },
+    );
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    metadata = undefined;
+  }
+  if (!validChannel(metadata) || metadata.channel !== channel)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `Existing channel metadata ${path} is not valid channel metadata; refusing to re-sign it`,
+      {
+        userAction: "Restore the published metadata and its signature",
+      },
+    );
+  const local = (name: string): string => {
+    const file = join(directory, name);
+    if (name !== basename(name) || name === "." || name === "..")
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `${path} lists ${JSON.stringify(name)}, which is not a file name; refusing to re-sign it`,
+      );
+    if (!existsSync(file))
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${path} lists ${name}, which is not in ${directory}; a re-sign verifies every listed archive`,
+        {
+          userAction: `Put ${name} back in the channel directory (download it from the update source), then sign again`,
+        },
+      );
+    return file;
+  };
+  return {
+    releases: metadata.releases.map((item) => local(item.archive)),
+    packs: (metadata.packs ?? []).map((item) => local(item.archive)),
+  };
+}
+
 /** The channel trust a release declares, as its clients will check it. */
 interface DeclaredTrust {
   readonly label: string;
@@ -460,17 +516,24 @@ export async function signChannel(
         for (const key of trust.keys) accept(key);
       }
     };
-    for (const archive of options.archives) {
+    const path = join(directory, `${options.channel}.json`);
+    // With no archive, the channel is re-signed (a rotated key, a later
+    // expiry): every archive it lists is verified again from the channel
+    // directory, exactly as an added one is, and must match its entry.
+    const resign = !options.archives.length && !options.packs?.length;
+    const listed = resign
+      ? listedArchives(path, directory, options.channel)
+      : undefined;
+    for (const archive of listed?.releases ?? options.archives) {
       const release = await verifyRelease(archive);
       verified.push({ archive, release });
       await declare(release.lock, release.metadata.distribution.id);
     }
-    for (const archive of options.packs ?? []) {
+    for (const archive of listed?.packs ?? options.packs ?? []) {
       const pack = await readPack(archive, directory, options.runtimes ?? []);
       packs.push(pack);
       await declare(pack.lock, pack.distribution);
     }
-    const path = join(directory, `${options.channel}.json`);
     const previous = existsSync(path)
       ? existingChannel(path, options.channel, accepted)
       : undefined;
@@ -533,6 +596,21 @@ export async function signChannel(
           }
         : {}),
     };
+    if (
+      resign &&
+      (canonicalJson(metadata.releases) !==
+        canonicalJson(previous?.releases ?? []) ||
+        canonicalJson(metadata.packs ?? []) !==
+          canonicalJson(previous?.packs ?? []))
+    )
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `An archive in ${directory} does not match its entry in ${options.channel}.json; nothing was written`,
+        {
+          userAction:
+            "Restore the published archives the channel lists, or pass the archives to add",
+        },
+      );
     if (previous && metadata.sequence <= previous.sequence)
       throw new PiShipError(
         "CONFIG_INVALID",
@@ -707,7 +785,7 @@ export async function readChannel(
     if (!(error instanceof PiShipError)) throw error;
     throw new PiShipError(error.code, error.message, {
       component: "signing",
-      userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel), and any new root/<N>.json published before it`,
+      userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel <channel-dir> --channel ${channel} --key <file> --key-id <id> re-signs it without adding an archive), and any new root/<N>.json published before it`,
     });
   }
   const keyId = keyIds[0] as string;

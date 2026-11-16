@@ -2080,6 +2080,87 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     };
   }
 
+  it("re-signs a channel with no archive after a root rotates its key, and for a later expiry", async () => {
+    const next = generateSigningKey("test-release-next");
+    const a = await release("1.0.0", true, undefined, [KEY], [ROOT]);
+    const b = await release("1.1.0", true, undefined, [KEY], [ROOT]);
+    const channelDir = temp("piship-channel-");
+    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    await installDistribution(a.archive);
+    await sign(channelDir, [b.archive]);
+    const listed = JSON.parse(
+      readFileSync(join(channelDir, "stable.json"), "utf8"),
+    ).releases;
+    // Root 2 moves the channel role to the next key: the channel as signed
+    // no longer verifies for the client.
+    await publishRoot(channelDir, rootBody(2, [next]), [ROOT]);
+    expect(
+      (await rejection(updateDistribution(ID, { ...opts, check: true })))
+        .message,
+    ).toMatch(/Signature key test-release is not trusted/);
+    // The removed key cannot re-sign it: the listed release's root chain is
+    // checked as for an added archive, and nothing is written.
+    const signed = readFileSync(join(channelDir, "stable.json"));
+    const refused = await rejection(sign(channelDir, [], "stable", KEY));
+    expect(refused.code).toBe("INTEGRITY_FAILED");
+    expect(refused.message).toMatch(
+      /do not satisfy the channel role of update root 2/,
+    );
+    expect(readFileSync(join(channelDir, "stable.json"))).toEqual(signed);
+    // The new key re-signs the same entries without any archive argument.
+    const resigned = await sign(channelDir, [], "stable", next);
+    expect(resigned.metadata.sequence).toBe(2);
+    expect(resigned.metadata.releases).toEqual(listed);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: next.id,
+    });
+    // A later expiry, same entries, next sequence.
+    const later = await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [],
+      privateKeyPem: next.privateKeyPem,
+      keyId: next.id,
+      expiresDays: 90,
+    });
+    expect(later.metadata.sequence).toBe(3);
+    expect(later.metadata.releases).toEqual(listed);
+    expect(Date.parse(later.metadata.expires)).toBeGreaterThan(
+      Date.now() + 89 * 86_400_000,
+    );
+  });
+
+  it("re-signs only a channel whose listed archives are all present and match", async () => {
+    const b = await release("1.1.0", true, undefined, [KEY], [ROOT]);
+    const empty = temp("piship-channel-");
+    const none = await rejection(sign(empty, []));
+    expect(none.code).toBe("CONFIG_INVALID");
+    expect(none.message).toMatch(
+      /^No archives were given and .*stable\.json does not exist, so there is no stable channel to re-sign$/,
+    );
+    const channelDir = temp("piship-channel-");
+    await sign(channelDir, [b.archive]);
+    const listedName = basename(b.archive);
+    const signed = readFileSync(join(channelDir, "stable.json"));
+    // Another verified 1.1.0 (built without rollback) under the listed name
+    // does not match its entry.
+    const other = await release("1.1.0", false, undefined, [KEY], [ROOT]);
+    expect(basename(other.archive)).toBe(listedName);
+    cpSync(other.archive, join(channelDir, listedName));
+    const swapped = await rejection(sign(channelDir, []));
+    expect(swapped.code).toBe("INTEGRITY_FAILED");
+    expect(swapped.message).toMatch(
+      /does not match its entry in stable\.json; nothing was written/,
+    );
+    expect(readFileSync(join(channelDir, "stable.json"))).toEqual(signed);
+    rmSync(join(channelDir, listedName));
+    const missing = await rejection(sign(channelDir, []));
+    expect(missing.code).toBe("CONFIG_INVALID");
+    expect(missing.message).toContain(`lists ${listedName}, which is not in`);
+  });
+
   it("rotates the channel key only through a signed root; a release lock never widens trust", async () => {
     const next = generateSigningKey("test-release-next");
     const a = await release("1.0.0", true, undefined, [KEY], [ROOT]);
@@ -2162,7 +2243,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     );
     // The person running update learns whom to tell and what to ask for.
     expect(stale.userAction).toMatch(
-      /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root/,
+      /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root \(piship sign-channel <channel-dir> --channel stable --key <file> --key-id <id> re-signs it without adding an archive\)/,
     );
     // Rolling back to B, whose lock trusts the old key, does not restore it.
     await rollbackDistribution(ID, { runCheck: fakeRun });
