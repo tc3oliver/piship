@@ -325,21 +325,28 @@ export class RemoteWorkspace {
     this.#dirty = false;
     this.#host = host;
     this.#seeded = result;
-    const policy = result.skipped.filter(
-      (item) => item.reason === "policy",
-    ).length;
+    const withheld = result.skipped
+      .filter((item) => item.reason === "policy")
+      .map((item) => item.path);
+    const policy = withheld.length;
     const large = result.skipped.filter(
       (item) => item.reason === "too-large",
     ).length;
+    const named = printable(
+      `${withheld.slice(0, 3).join(", ")}${policy > 3 ? ", ..." : ""}`,
+    );
     const left = [
-      ...(policy ? [`${policy} by policy`] : []),
+      ...(policy ? [`${policy} by policy (${named})`] : []),
       ...(large ? [`${large} over the per-file size cap`] : []),
     ];
     if (left.length) {
       const total = policy + result.uploaded.length;
-      this.#options.notify(
+      const most = policy * 2 > total;
+      // Most of the project withheld changes what the agent can do; a few
+      // files (a dotenv file) are expected and need no action.
+      (most ? this.#options.warn : this.#options.notify)(
         `Left out of the sandbox: ${left.join(", ")}.${
-          policy * 2 > total
+          most
             ? ` Policy withheld ${policy} of ${total} project files, so the agent will not see most of the project.`
             : ""
         }`,
@@ -431,18 +438,18 @@ export class RemoteWorkspace {
       try {
         const { sent, conflicts } = await host.run();
         this.#refreshWarned = false;
-        const { command, notify } = this.#options;
+        const { command, notify, warn } = this.#options;
         if (sent.length)
           notify(
             `Sent ${sent.length} ${sent.length === 1 ? "file" : "files"} you changed on this machine to the sandbox`,
           );
         if (conflicts.length <= 3)
           for (const path of conflicts)
-            notify(
+            warn(
               `${printable(path)} changed on this machine and in the sandbox; the sandbox copy is kept. \`${command} sandbox pull\` will merge or flag it.`,
             );
         else
-          notify(
+          warn(
             `${conflicts.length} files changed on this machine and in the sandbox (${printable(conflicts.slice(0, 3).join(", "))}, ...); the sandbox copies are kept. \`${command} sandbox pull\` will merge or flag them.`,
           );
         const lines = [

@@ -86,7 +86,7 @@ function attach(gov: GovernanceSession, ctx: ExtensionContext): void {
   // Session notices (a workspace weaker than declared) reach the screen once
   // the session has a UI; without one they stay held, not lost.
   if (ctx.hasUI)
-    gov.attachNotices((message) => ctx.ui.notify(message, "warning"));
+    gov.attachNotices((message, level) => ctx.ui.notify(message, level));
 }
 
 /** Where a call came from, its parent, and its exposure (audit `detail`). */
@@ -137,8 +137,8 @@ function unresolvedExposure(
     lateNoticed.set(gov, noticed);
     if (!noticed.has(tool) && ctx.hasUI)
       ctx.ui.notify(
-        `${what}, so its exposure was not checked against the distribution; the policy still decides each call.`,
-        "warning",
+        `${what}, so the distribution's tool list did not cover it; your policy still decides each call.`,
+        "info",
       );
     noticed.add(tool);
     return undefined;
@@ -232,7 +232,7 @@ async function decideToolCall(
   if (decision.outcome === "allow") return undefined;
   return {
     block: true,
-    reason: redact(policyRefusal(gov, decision, tool)),
+    reason: redact(policyRefusal(gov, decision, `The ${tool} tool`)),
   };
 }
 
@@ -294,7 +294,7 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
       if (gov.grantsAllowed)
         pi.registerCommand("grant", {
           description:
-            "Task grant: approve asks inside a folder without a prompt for a while (add [path] [--for 2h] [--task label], list, revoke <id|all>)",
+            "Task grant: approve asks inside a folder without a prompt for a while (add [path] [--for 2h] [--run npm,pytest | --no-run] [--task label], list, revoke <id|all>)",
           handler: (args, ctx) => grantCommand(gov, args, ctx),
         });
       // Audit is keyed on tool_execution_start/end, not tool_call: a call

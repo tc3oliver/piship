@@ -2,8 +2,9 @@
 // a managed distribution should not prompt for. A manifest opts in with
 // `policy.packs`; parsing appends the expansion after the author's own
 // defaults, so the lock, the policy digest, `policy explain` and `piship diff`
-// see ordinary rules. Version 1 is frozen: change the data and a new version
-// is needed (tests/routine-pack.test.ts pins the digest).
+// see ordinary rules. Version 1 is frozen: change what it decides and a new
+// version is needed (tests/routine-pack.test.ts pins the digest). A reason is
+// only shown, in a prompt or a refusal, so it may be reworded.
 import type { PolicyEffect } from "@piship/contracts";
 import type { PolicyRule } from "../governance.js";
 
@@ -257,6 +258,20 @@ const CONTAINED: readonly Entry[] = [
   ),
 ];
 
+/**
+ * Why an `ask` entry asks, by ID prefix, so its prompt does not call the
+ * exception routine work.
+ */
+const ASK_REASONS: readonly (readonly [prefix: string, reason: string])[] = [
+  ["fs.secrets.", "it names a dotenv file, which may hold secrets"],
+  [
+    "fs.exec-config.",
+    "the file configures code that runs later (direnv, an editor, an agent, or a git hook)",
+  ],
+  ["search.", "rg --pre and --hostname-bin run another program"],
+  ["git.local.", "a forced switch or checkout discards uncommitted changes"],
+];
+
 /** The rules of one pack version, in the order they are appended. */
 export function routineRules(version: number): PolicyRule[] {
   if (version !== 1)
@@ -266,7 +281,11 @@ export function routineRules(version: number): PolicyRule[] {
     action,
     resource,
     effect,
-    reason: `${ROUTINE_PACK}@${version}: routine ${id.split(".")[0]} work`,
+    reason: `${ROUTINE_PACK}@${version}: ${
+      (effect === "ask" &&
+        ASK_REASONS.find(([prefix]) => id.startsWith(prefix))?.[1]) ||
+      `routine ${id.split(".")[0]} work`
+    }`,
     ...(CONTAINED.some((entry) => entry[0] === id) ? { contained: true } : {}),
   }));
 }

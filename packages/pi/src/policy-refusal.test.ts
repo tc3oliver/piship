@@ -39,10 +39,10 @@ describe("a policy refusal", () => {
       policyRefusal(
         gov,
         decision({ effect: "ask", approval: "cancelled" }),
-        "filesystem.write /w/a",
+        "Writing /w/a",
       ),
     ).toBe(
-      "filesystem.write /w/a did not run: the approval prompt was dismissed (acme rule no-curl asks for approval). Do not retry it unless the user asks.",
+      "Writing /w/a did not run: the approval prompt was dismissed (acme rule no-curl asks for approval). Do not retry it unless the user asks; ask how they want to proceed.",
     );
   });
 

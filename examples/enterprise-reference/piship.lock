@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-a7b869fabd0dccf8bbf738b0922f47516c0e0c49e2cc9ab7cfce64b5668455ac"
+    "sha256": "sha256-f3ea43044e4668fa964d3cfc9a6da8faf6cfd9ad19891c9e4cfe20f9b0272030"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1309,56 +1309,56 @@
             "action": "filesystem.read",
             "resource": "workspace/**/.env",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets"
           },
           {
             "id": "piship.routine.fs.secrets.read-workspace-env-any",
             "action": "filesystem.read",
             "resource": "workspace/**/.env.*",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-envrc",
             "action": "filesystem.write",
             "resource": "workspace/**/.envrc",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-claude",
             "action": "filesystem.write",
             "resource": "workspace/**/.claude/**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-pi",
             "action": "filesystem.write",
             "resource": "workspace/**/.pi/**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-mcp-json",
             "action": "filesystem.write",
             "resource": "workspace/**/.mcp.json",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-vscode",
             "action": "filesystem.write",
             "resource": "workspace/**/.vscode/**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.exec-config.write-workspace-husky",
             "action": "filesystem.write",
             "resource": "workspace/**/.husky/**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work"
+            "reason": "piship.routine@1: the file configures code that runs later (direnv, an editor, an agent, or a git hook)"
           },
           {
             "id": "piship.routine.fs.read-workspace",
@@ -1419,7 +1419,7 @@
             "action": "shell.execute",
             "resource": "**\t.env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1427,7 +1427,7 @@
             "action": "shell.execute",
             "resource": "**=.env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1435,7 +1435,7 @@
             "action": "shell.execute",
             "resource": "** .env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1443,7 +1443,7 @@
             "action": "shell.execute",
             "resource": "**/.env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1451,7 +1451,7 @@
             "action": "shell.execute",
             "resource": "**:.env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1459,7 +1459,7 @@
             "action": "shell.execute",
             "resource": "**'.env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1467,7 +1467,7 @@
             "action": "shell.execute",
             "resource": "**\".env**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine fs work",
+            "reason": "piship.routine@1: it names a dotenv file, which may hold secrets",
             "contained": true
           },
           {
@@ -1475,7 +1475,7 @@
             "action": "shell.execute",
             "resource": "rg**--pre**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine search work",
+            "reason": "piship.routine@1: rg --pre and --hostname-bin run another program",
             "contained": true
           },
           {
@@ -1483,7 +1483,7 @@
             "action": "shell.execute",
             "resource": "rg**--hostname-bin**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine search work",
+            "reason": "piship.routine@1: rg --pre and --hostname-bin run another program",
             "contained": true
           },
           {
@@ -1875,7 +1875,7 @@
             "action": "shell.execute",
             "resource": "git switch**--discard-changes**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine git work",
+            "reason": "piship.routine@1: a forced switch or checkout discards uncommitted changes",
             "contained": true
           },
           {
@@ -1883,7 +1883,7 @@
             "action": "shell.execute",
             "resource": "git switch** -f**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine git work",
+            "reason": "piship.routine@1: a forced switch or checkout discards uncommitted changes",
             "contained": true
           },
           {
@@ -1891,7 +1891,7 @@
             "action": "shell.execute",
             "resource": "git switch**--force**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine git work",
+            "reason": "piship.routine@1: a forced switch or checkout discards uncommitted changes",
             "contained": true
           },
           {
@@ -1899,7 +1899,7 @@
             "action": "shell.execute",
             "resource": "git checkout** -f**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine git work",
+            "reason": "piship.routine@1: a forced switch or checkout discards uncommitted changes",
             "contained": true
           },
           {
@@ -1907,7 +1907,7 @@
             "action": "shell.execute",
             "resource": "git checkout**--force**",
             "effect": "ask",
-            "reason": "piship.routine@1: routine git work",
+            "reason": "piship.routine@1: a forced switch or checkout discards uncommitted changes",
             "contained": true
           },
           {
@@ -3050,7 +3050,7 @@
   },
   "digests": {
     "resources": "sha256-4a4a3cc477b9e63dacd22b6e947a9878ae36e25a7d5c7ff71208d30d8ef56084",
-    "policy": "sha256-71f5102bed07d85ab54de2acf0cf3f74ec328b6cbf13f581dd39bace7e70a9db",
+    "policy": "sha256-0cfbc862fd27a400e784d19fe39346939a81a385cd594b9dc600bdb0e3c03830",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
     "sandbox": "sha256-92de7059c6fc8cec514738016f8df98e67cc1f236df82c9f1fb625122c24d385",

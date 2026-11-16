@@ -274,6 +274,9 @@ describe("denialHint", () => {
     expect(denialHint(at("builtin"), "personal", { policyFile })).toBe(
       "Nothing allows this yet; add a rule to /state/config/policy.json (`piship policy explain shell.execute <resource>` shows how it was decided).",
     );
+    expect(
+      denialHint(at("builtin"), "personal", { policyFile, command: "acme" }),
+    ).toContain("`acme policy explain shell.execute <resource>`");
     expect(denialHint(at("builtin"), "managed", { policyFile })).toBe("");
     expect(
       denialHint(

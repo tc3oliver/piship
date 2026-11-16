@@ -90,7 +90,10 @@ export const PLAN_RULE = "piship-workflow.plan";
  * session, so Plan mode explores with `read` and leaves the shell to Build.
  */
 const PLAN_SHELL_REFUSAL =
-  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool, or switch to Build mode with /build to run it.";
+  "Plan mode does not run commands, because PiShip cannot tell a read-only command from one that changes files. Explore with the read tool; the user can switch to Build mode with /build to run it.";
+/** Told to the model after a Plan-mode refusal, so it does not loop on it. */
+const PLAN_NO_RETRY =
+  "Do not retry it or work around Plan mode with another tool; finish the plan and tell the user it needs Build mode.";
 
 /**
  * Record a tool refused by Plan mode and return the refusal, or undefined
@@ -122,9 +125,11 @@ export function planRefusal(
     enforcement: "control-plane",
     detail: { action: "tool.execute" },
   });
-  return tool === "bash"
-    ? PLAN_SHELL_REFUSAL
-    : `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
+  return `${
+    tool === "bash"
+      ? PLAN_SHELL_REFUSAL
+      : `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`
+  } ${PLAN_NO_RETRY}`;
 }
 
 /**
@@ -201,12 +206,16 @@ export function policyRefusal(
   model = true,
 ): string {
   const asked = `${decision.policyId} rule ${decision.ruleId} asks for approval`;
+  // The user's own answer: no rule to change, so only "ask them" is left.
+  const askUser = model
+    ? " Do not retry it unless the user asks; ask how they want to proceed."
+    : "";
   if (decision.approval === "denied")
     return model
-      ? `${subject} was declined by the user (${asked}). Do not retry it unless the user asks; ask how they want to proceed.`
+      ? `${subject} was declined by the user (${asked}).${askUser}`
       : `${subject} was declined (${asked}).`;
   if (decision.approval === "cancelled")
-    return `${subject} did not run: the approval prompt was dismissed (${asked}).${model ? " Do not retry it unless the user asks." : ""}`;
+    return `${subject} did not run: the approval prompt was dismissed (${asked}).${askUser}`;
   return `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? (gov.options.subagent ? " (a subagent cannot ask for approval, and approvals given in its parent session do not carry over)" : " (approval needs an interactive session)") : ""}.${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
 }
 
@@ -416,7 +425,13 @@ export async function gatePath(
     },
   );
   if (decision.outcome !== "allow")
-    throw blocked(policyRefusal(gov, decision, `${action} ${path}`));
+    throw blocked(
+      policyRefusal(
+        gov,
+        decision,
+        `${action === "filesystem.read" ? "Reading" : "Writing"} ${path}`,
+      ),
+    );
   return real;
 }
 

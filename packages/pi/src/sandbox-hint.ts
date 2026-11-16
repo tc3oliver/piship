@@ -42,6 +42,10 @@ export function manifestChange(
     : `Change ${key} in your piship.yaml.`;
 }
 
+/** The shell cannot get past the sandbox, so a retry only repeats the failure. */
+const SANDBOX_NO_RETRY =
+  "Do not retry it or work around the sandbox; tell the user what failed.";
+
 function readable(path: string): boolean {
   try {
     accessSync(path, constants.R_OK);
@@ -96,7 +100,7 @@ export class SandboxFailureScanner {
     for (const named of this.#filesystem) {
       const path = realpathNearest(named);
       if (profile.readDeny.some((denied) => isWithin(path, denied)))
-        return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")}]`;
+        return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")} ${SANDBOX_NO_RETRY}]`;
       // A file the launching user cannot read is an ordinary permission
       // error on a read, not a sandbox decision.
       if (existsSync(path) && !readable(path)) continue;
@@ -107,12 +111,12 @@ export class SandboxFailureScanner {
           isWithin(path, protectedDirectory),
         )
       )
-        return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees); git runs it outside the sandbox. Run this command outside the sandbox.]`;
+        return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees); git runs it outside the sandbox. The user can run this command in their own terminal, outside the sandbox; do not retry it here.]`;
       if (!profile.writeAllow.some((allowed) => isWithin(path, allowed)))
-        return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")}]`;
+        return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")} ${SANDBOX_NO_RETRY}]`;
     }
     if (this.#networkSeen && profile.network === "deny")
-      return `[PiShip sandbox: ${this.#network ? `${this.#network} cannot be reached` : "the host cannot be reached"} because shell commands have no network access. ${manifestChange(mode, "sandbox.network.mode")}]`;
+      return `[PiShip sandbox: ${this.#network ? `${this.#network} cannot be reached` : "the host cannot be reached"} because shell commands have no network access. ${manifestChange(mode, "sandbox.network.mode")} ${SANDBOX_NO_RETRY}]`;
     return undefined;
   }
 }
