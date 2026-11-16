@@ -157,7 +157,10 @@ export function registerVirtualModels(
       throw new PiShipError(
         "MODEL_DENIED",
         `Virtual model ${name}, registered by ${extensionPath}, is not in models.catalog`,
-        { component: "inference" },
+        {
+          component: "inference",
+          userAction: `The distribution owner adds ${name} to models.catalog in piship.yaml, with this extension as its router, or removes the registration from the extension`,
+        },
       );
     if (!rule.routerPath || !fromRouter(extensionPath, rule.routerPath))
       throw new PiShipError(

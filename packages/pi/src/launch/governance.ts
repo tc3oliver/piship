@@ -29,7 +29,11 @@ import {
   governanceHooks,
   workflowExtension,
 } from "../builtins.js";
-import type { ModelPolicy, VirtualModelRule } from "../governance.js";
+import {
+  chooseModelAction,
+  type ModelPolicy,
+  type VirtualModelRule,
+} from "../governance.js";
 import {
   type GovernanceOptions,
   GovernanceSession,
@@ -342,6 +346,7 @@ export async function modelPolicy(
   gov: GovernanceSession,
   selected: string | undefined,
   virtual: readonly VirtualModelRule[] = [],
+  command?: string,
 ): Promise<ModelPolicy> {
   const approved = new Set<string>();
   const approvedDispatch = new Set<string>();
@@ -394,7 +399,10 @@ export async function modelPolicy(
       throw new PiShipError(
         "MODEL_DENIED",
         `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}${gov.denialHint(decision)}`,
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction: chooseModelAction(command, "--model"),
+        },
       );
     approved.add(selected);
     const rule = virtual.find((item) => key(item) === selected);
@@ -433,7 +441,10 @@ export async function modelPolicy(
         rule
           ? `No route of virtual model ${selected} (${targets.join(", ")}) may receive a request`
           : `Model ${selected} may not receive a request (model.dispatch)`,
-        { component: "policy" },
+        {
+          component: "policy",
+          userAction: chooseModelAction(command, "--model"),
+        },
       );
   }
   function selectEffect(key: string, routes: boolean): boolean {

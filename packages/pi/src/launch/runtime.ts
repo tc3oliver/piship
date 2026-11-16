@@ -256,7 +256,9 @@ async function startRuntime(
       ? `${activated.runtime.providerId}/${activated.selectedModel}`
       : activated?.selectedModel;
   const virtual = launchVirtualModels(ctx, prepared);
-  const policy = gov ? await modelPolicy(gov, selectedKey, virtual) : undefined;
+  const policy = gov
+    ? await modelPolicy(gov, selectedKey, virtual, ctx.metadata.app.command)
+    : undefined;
   const builtinExtensions = gov ? governanceExtensions(gov) : [];
   const exposureConfig = gov ? exposureConfigOf(gov) : null;
   const exposureExtensionFactories =

@@ -8,7 +8,11 @@ export {
   refreshInstalledLauncher,
   type InstalledLauncher,
 } from "./launcher.js";
-export { purgeDistributionState, type PurgeResult } from "./purge.js";
+export {
+  purgeDistributionState,
+  signedInClasses,
+  type PurgeResult,
+} from "./purge.js";
 export {
   RECEIPT_SCHEMA,
   readInstallReceipt,

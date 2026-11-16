@@ -255,9 +255,12 @@ describe("channel trust root", () => {
     await expect(read(dir, trust(OLD))).rejects.toThrow(/not valid JSON/);
     // A signature file without its metadata.
     rmSync(join(dir, "stable.json"));
-    await expect(read(dir, trust(OLD))).rejects.toThrow(
-      /Update source has no stable.json/,
-    );
+    await expect(read(dir, trust(OLD))).rejects.toMatchObject({
+      message: "Update source has no stable.json",
+      userAction: expect.stringMatching(
+        /not been published yet .*piship sign-channel.*wrong directory or URL/,
+      ),
+    });
   });
 
   it("refuses another channel's signed metadata served under this channel", async () => {

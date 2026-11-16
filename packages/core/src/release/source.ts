@@ -253,19 +253,26 @@ export async function readSourceFile(
       fetcher,
       METADATA_TIMEOUT_MS,
       transport,
+      "absent",
     );
+    if (!response) throw missingChannelFile(name);
     const date = Date.parse(response.headers.get("date") ?? "");
     if (answer && !Number.isNaN(date)) answer.date = date;
     return readBody(response, name, MAX_METADATA_BYTES);
   }
   const path = join(resolve(source), name);
-  if (!existsSync(path))
-    throw new PiShipError("UPDATE_FAILED", `Update source has no ${name}`, {
-      userAction: CHECK_SOURCE,
-    });
+  if (!existsSync(path)) throw missingChannelFile(name);
   if (statSync(path).size > MAX_METADATA_BYTES)
     throw tooLarge(name, MAX_METADATA_BYTES);
   return readFileSync(path);
+}
+
+/** A channel file the source does not have (no file, or HTTP 404). */
+function missingChannelFile(name: string): PiShipError {
+  return new PiShipError("UPDATE_FAILED", `Update source has no ${name}`, {
+    userAction:
+      "Either the channel has not been published yet (the distribution owner signs it with piship sign-channel and uploads the channel files), or --from or updates.source names the wrong directory or URL",
+  });
 }
 
 async function readBody(

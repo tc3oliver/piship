@@ -20,7 +20,7 @@ import {
   startupTimingEnabled,
 } from "@piship/contracts";
 import { refreshInstalledLauncher, sweepDistributionData } from "@piship/core";
-import { acceptanceFailure } from "../governance.js";
+import { acceptanceFailure, chooseModelAction } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import {
@@ -212,6 +212,9 @@ export async function runSmoke(
         throw new PiShipError(
           "MODEL_UNAVAILABLE",
           "No model is selected for the acceptance request",
+          {
+            userAction: chooseModelAction(ctx.metadata.app.command, "--model"),
+          },
         );
       await runtime.session.prompt(SMOKE_PROMPT);
       const messages = runtime.session.messages;
