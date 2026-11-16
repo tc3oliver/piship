@@ -2038,7 +2038,7 @@ describe("git.push in the shell gate", () => {
 
   it("does not see a push it cannot read from the text; shell.execute still decides it", async () => {
     for (const command of [
-      "sh -c 'git push origin main'",
+      "sh -c 'git push origin main; true'",
       "git -c alias.p=push p origin main",
       "./push.sh",
     ]) {
@@ -2056,6 +2056,15 @@ describe("git.push in the shell gate", () => {
       ]);
       expect(shell.outcome).toMatch(/rule me\.wrapped/);
     }
+  });
+
+  it("sees a push inside a shell wrapper around one plain command", async () => {
+    const result = await bash("sh -c 'git push origin main'", [
+      ...SHELL,
+      ...PUSH,
+    ]);
+    expect(result).toMatchObject({ ran: false });
+    expect(result.outcome).toMatch(/rule me\.main/);
   });
 
   it("finds no git.push rule in any example, so their pushes are decided as before", () => {
