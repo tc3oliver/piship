@@ -180,7 +180,8 @@ const receipt = () => JSON.parse(readFileSync(receiptPath));
 
 // A: what benchmark-install.mjs measures. B: what a user types. Node refuses to
 // spawn a .cmd without a shell, so on Windows B goes through cmd.exe exactly as
-// `cmd /c` from a terminal does (arguments are fixed, nothing user-supplied).
+// `cmd /c` from a terminal does. The command path reaches cmd.exe through the
+// environment, not spliced into the command line.
 const variantA = (...argv) =>
   run(process.execPath, [receipt().launcher, ...argv]);
 const variantB = (...argv) => {
@@ -188,8 +189,11 @@ const variantB = (...argv) => {
   return windows
     ? run(
         "cmd.exe",
-        ["/d", "/s", "/c", `call "${command}" ${argv.join(" ")}`],
-        { windowsVerbatimArguments: true },
+        ["/d", "/s", "/c", `call "%PISHIP_BENCH_COMMAND%" ${argv.join(" ")}`],
+        {
+          windowsVerbatimArguments: true,
+          env: { ...env, PISHIP_BENCH_COMMAND: command },
+        },
       )
     : run(command, argv);
 };

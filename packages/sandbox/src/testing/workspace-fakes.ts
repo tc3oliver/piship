@@ -60,12 +60,22 @@ export function runShell(
       ? join(root, ...request.workspacePath.split("/"))
       : root;
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("/bin/sh", ["-c", request.command], {
-      cwd,
-      // The sandbox's own environment: a remote never receives the host PATH.
-      env: { ...request.env, PATH: "/usr/bin:/bin" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // The command arrives in a variable the script unsets before running it,
+    // so the shell's command line is a constant.
+    const child = spawn(
+      "/bin/sh",
+      ["-c", 'c=$PISHIP_FAKE_COMMAND; unset PISHIP_FAKE_COMMAND; eval "$c"'],
+      {
+        cwd,
+        // The sandbox's own environment: a remote never receives the host PATH.
+        env: {
+          ...request.env,
+          PATH: "/usr/bin:/bin",
+          PISHIP_FAKE_COMMAND: request.command,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     const onAbort = () => child.kill("SIGKILL");
     io.signal.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", io.onStdout);
