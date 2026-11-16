@@ -23,7 +23,7 @@ jobs:
   # every test release, so an advisory it rejects would fail each shard
   # separately (scripts/audit-preflight.mjs).
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,8 +48,8 @@ jobs:
       # it has fewer shards than Windows, whose files take longest.
       matrix:
         include:
-          - { os: ubuntu-latest, shard: 1, shards: 2 }
-          - { os: ubuntu-latest, shard: 2, shards: 2 }
+          - { os: ubuntu-24.04, shard: 1, shards: 2 }
+          - { os: ubuntu-24.04, shard: 2, shards: 2 }
           - { os: macos-latest, shard: 1, shards: 3 }
           - { os: macos-latest, shard: 2, shards: 3 }
           - { os: macos-latest, shard: 3, shards: 3 }
@@ -264,7 +264,7 @@ jobs:
   report:
     needs: [preflight, portable]
     if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

@@ -23,7 +23,7 @@ jobs:
         contains(fromJSON('["schedule","workflow_dispatch"]'), github.event.workflow_run.event) &&
         contains(fromJSON('["success","failure"]'), github.event.workflow_run.conclusion)
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

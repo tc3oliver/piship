@@ -32,7 +32,7 @@ jobs:
         build: [first, second]
         include:
           - target: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - target: darwin-arm64
             os: macos-latest
           - target: win32-x64
@@ -134,7 +134,7 @@ jobs:
   # builders above never use it: each still compiles its own PiShip from a
   # fresh checkout and `npm ci`.
   cli:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -168,7 +168,7 @@ jobs:
         distribution: [acmecode, mypi, devcode, piship-runtime]
         target: [linux-x64, darwin-arm64, win32-x64]
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
           - os: macos-latest
             target: darwin-arm64
@@ -230,7 +230,7 @@ jobs:
   # ran for. Only the `first` build of each target is attested.
   attest:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -262,7 +262,7 @@ jobs:
         distribution: [acmecode, mypi, devcode, piship-runtime]
         target: [linux-x64, darwin-arm64, win32-x64]
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
           - os: macos-latest
             target: darwin-arm64
@@ -419,7 +419,7 @@ jobs:
         distribution: [acmecode, mypi, devcode]
         target: [linux-x64, darwin-arm64, win32-x64]
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
           - os: macos-latest
             target: darwin-arm64

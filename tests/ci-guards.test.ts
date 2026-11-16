@@ -71,8 +71,9 @@ describe("the CI check runners", () => {
       "{ os: ubuntu-latest, part: unit, shard: 2/2 }",
     ],
     macos: [
-      "{ os: macos-latest, part: unit, shard: 1/2 }",
-      "{ os: macos-latest, part: unit, shard: 2/2 }",
+      "{ os: macos-latest, part: unit, shard: 1/3 }",
+      "{ os: macos-latest, part: unit, shard: 2/3 }",
+      "{ os: macos-latest, part: unit, shard: 3/3 }",
     ],
     windows: [
       "{ os: windows-latest, part: unit, shard: 1/3 }",
@@ -96,6 +97,8 @@ describe("the CI check runners", () => {
 
   it("runs every step of the check, and every unit shard, on each target", () => {
     expect(ciJob("ubuntu")).toContain("    steps: &check-steps\n");
+    // A pinned image: the sandbox steps depend on its bubblewrap and sysctl.
+    expect(ciJob("ubuntu")).toContain("    runs-on: ubuntu-24.04\n");
     for (const [target, shards] of Object.entries(TARGETS)) {
       const job = ciJob(target);
       if (target !== "ubuntu")
@@ -149,7 +152,7 @@ describe("the CI check runners", () => {
           `    name: check (${target}-latest)`,
           `    needs: [${target}]`,
           "    if: always()",
-          "    runs-on: ubuntu-latest",
+          "    runs-on: ubuntu-24.04",
           "    steps:",
           '      - run: test "$RESULT" = success',
           "        env:",
