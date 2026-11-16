@@ -39,17 +39,24 @@ const args = process.argv.slice(2);
 const fakeDir = resolve(dirname(process.argv[1]), "..", "..", "..");
 const same = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const printed = (report) => { process.stdout.write(JSON.stringify(report)); process.exit(0); };
-if (args[0] === "audit") {
+// PISHIP_FAKE_NPM_HANG=<file>: \`ci\` and \`install\` start a child that never
+// ends, write its pid to <file>, and hang, as npm does on a dead registry.
+if (process.env.PISHIP_FAKE_NPM_HANG && (args[0] === "ci" || args[0] === "install")) {
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  require("node:fs").writeFileSync(process.env.PISHIP_FAKE_NPM_HANG, String(child.pid));
+  setInterval(() => {}, 1000);
+} else if (args[0] === "audit") {
   const rest = args.slice(1).filter((arg) => !/^--registry=/.test(arg));
   const is = (...want) => rest.length === want.length && want.every((arg, i) => rest[i] === arg);
   if (is("--omit=dev", "--json")) printed(${JSON.stringify(AUDIT_V2)});
   if (is("signatures", "--omit=dev", "--json")) printed(${JSON.stringify(SIGNATURES)});
   process.stderr.write("fake npm: unknown audit form: npm " + args.join(" ") + "\\n");
   process.exit(2);
+} else {
+  const PATH = (process.env.PATH || process.env.Path || "").split(delimiter).filter((entry) => !same(resolve(entry), fakeDir)).join(delimiter);
+  const real = spawnSync("npm", args, { stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, PATH, Path: PATH } });
+  process.exit(real.status ?? 1);
 }
-const PATH = (process.env.PATH || process.env.Path || "").split(delimiter).filter((entry) => !same(resolve(entry), fakeDir)).join(delimiter);
-const real = spawnSync("npm", args, { stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, PATH, Path: PATH } });
-process.exit(real.status ?? 1);
 `;
 
 let directory: string | undefined;

@@ -600,7 +600,10 @@ describe("immutable runtime cache", () => {
       runtimeCache: cacheOf(p.manifest, home()),
     });
     expect(fixture.runs).toHaveLength(1);
-    const [command, args] = fixture.runs[0] ?? ["", []];
+    // npm runs under the supervisor that keeps its time limit (npm-process.ts).
+    const { file: command, args } = JSON.parse(
+      fixture.runs[0]?.[1][2] ?? "{}",
+    ) as { file: string; args: string[] };
     // Windows reaches npm through cmd.exe, with the same words.
     const words =
       process.platform === "win32" ? (args.at(-1) ?? "").split(" ") : args;
