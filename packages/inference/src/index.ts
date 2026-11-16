@@ -380,7 +380,9 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
       if (
         error instanceof PiShipError &&
         error.code === "GATEWAY_UNREACHABLE" &&
-        !error.userAction
+        // A direct connection failure (not the proxy's): its generic action,
+        // if any, is replaced, never shown beside this one.
+        (error.sanitizedDetail?.hop === "target" || !error.userAction)
       )
         throw new PiShipError(error.code, error.message, {
           component: "inference",
