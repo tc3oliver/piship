@@ -215,6 +215,27 @@ async function rejection(promise: Promise<unknown>) {
 }
 
 describe("branded logout", () => {
+  it("names every data class the logout purge removed", async () => {
+    const { ctx, out } = context();
+    const data = {
+      contract: "piship-data/v1",
+      declared: {
+        retention: {},
+        purge: { onLogout: ["cache", "temp"], onUninstall: "none" },
+        export: {},
+      },
+    };
+    const purging = {
+      ...ctx,
+      metadata: { ...ctx.metadata, data },
+    } as unknown as BrandedContext;
+    await signIn(purging);
+    await runLogout(purging);
+    expect(out).toEqual([
+      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; cache files and temp files were removed; sessions were preserved.",
+    ]);
+  });
+
   it("clears local credentials and attributes the audit to the (issuer, subject) principal", async () => {
     const { ctx, out, err, path } = context();
     const secrets = await signIn(ctx);

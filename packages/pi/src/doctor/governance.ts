@@ -184,10 +184,16 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
       "data retention",
       retention.length ? retention.join(", ") : "no class declared",
     );
-    out.ok(
-      "data purge",
-      `logout: ${declared.purge.onLogout.join(", ") || "none"}; uninstall: ${declared.purge.onUninstall}`,
-    );
+    const purge = `logout: ${declared.purge.onLogout.join(", ") || "none"}; uninstall: ${declared.purge.onUninstall}${declared.purge.onUninstall === "all" ? " (not acted on yet: uninstall keeps state, purge deletes it)" : ""}`;
+    if (
+      declared.purge.onLogout.length &&
+      (!lock.access || lock.access.credential.provider === "pi-native")
+    )
+      out.warn(
+        "data purge",
+        `${purge}; the logout purge never runs: sign-in is Pi's, and Pi's /logout purges nothing`,
+      );
+    else out.ok("data purge", purge);
     const older = releasesWithoutDataSweep(data.ctx);
     if (older.length)
       out.warn(

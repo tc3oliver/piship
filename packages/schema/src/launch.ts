@@ -772,6 +772,38 @@ export function inertCaptureClasses(
 }
 
 /**
+ * Purge settings no command acts on: `onLogout` runs only in the branded
+ * `logout`, which a distribution that leaves sign-in to Pi does not have, and
+ * `uninstall` does not read `onUninstall` yet.
+ */
+export function inertDataPurge(manifest: Manifest): ValidationDiagnostic[] {
+  const purge = manifest.data?.purge;
+  if (!purge) return [];
+  const piSignIn =
+    !manifest.access || manifest.access.credential.provider === "pi-native";
+  return [
+    ...(piSignIn && purge.onLogout.length
+      ? [
+          {
+            path: "data.purge.onLogout",
+            message:
+              "nothing runs it: sign-in is left to Pi (credential.provider: pi-native), so there is no branded logout, and Pi's /logout purges nothing; the retention sweep still applies",
+          },
+        ]
+      : []),
+    ...(purge.onUninstall === "all"
+      ? [
+          {
+            path: "data.purge.onUninstall",
+            message:
+              "uninstall does not act on it yet and keeps the state; users delete it with purge <id> --yes or uninstall <id> --purge --yes",
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -785,6 +817,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...uncontainedReadDenials(manifest),
     ...inactivePackRules(manifest),
     ...inertCaptureClasses(manifest),
+    ...inertDataPurge(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

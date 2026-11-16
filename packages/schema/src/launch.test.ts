@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  inertDataPurge,
   launchWarnings,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA4,
@@ -732,5 +733,22 @@ describe("MCP rules naming no declared server", () => {
     expect(unknownMcpServerRules(explicit).map((item) => item.path)).toEqual([
       "policy.defaults[3].resource",
     ]);
+  });
+});
+
+describe("purge settings nothing acts on", () => {
+  const manifest = (provider: string, onUninstall: string) =>
+    ({
+      access: { credential: { provider } },
+      data: { purge: { onLogout: ["sessions"], onUninstall } },
+    }) as unknown as Parameters<typeof inertDataPurge>[0];
+
+  it("warns about a logout purge when sign-in is Pi's and about onUninstall: all", () => {
+    expect(
+      inertDataPurge(manifest("pi-native", "all")).map((item) => item.path),
+    ).toEqual(["data.purge.onLogout", "data.purge.onUninstall"]);
+  });
+  it("is quiet when the branded logout runs the purge", () => {
+    expect(inertDataPurge(manifest("http-broker", "none"))).toEqual([]);
   });
 });
