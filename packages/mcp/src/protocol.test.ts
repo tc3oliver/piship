@@ -242,6 +242,22 @@ describe("JSON-RPC validation", () => {
       /invalid tools\/list cursor/,
     );
   });
+
+  it("names the tool limit and what to do about it", async () => {
+    const tools = Array.from({ length: 1001 }, (_, i) => ({
+      name: `t${i}`,
+      inputSchema: { type: "object" },
+    }));
+    const transport = memoryTransport((message) =>
+      "id" in message && "method" in message
+        ? { jsonrpc: "2.0", id: message.id, result: { tools } }
+        : undefined,
+    );
+    const session = new McpSession(transport, "big");
+    await expect(session.listTools({ timeoutMs: 1000 })).rejects.toThrow(
+      /^MCP server big offers more than 1000 tools, the most one server may list; split it into several servers or start it with fewer tools/,
+    );
+  });
 });
 
 describe("SSE parser", () => {

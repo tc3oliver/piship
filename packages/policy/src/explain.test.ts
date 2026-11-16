@@ -63,6 +63,18 @@ describe("formatDecision", () => {
       ].join("\n\n"),
     );
   });
+  it("points a model-facing tool name at <server>:<tool>", () => {
+    const text = formatDecision(
+      engine.explain({
+        action: "mcp.tool.call",
+        resource: "mcp__docs__delete_document",
+      }),
+    );
+    expect(text).toContain(
+      "Hint:\n  mcp__docs__delete_document is the model-facing tool name; an mcp.tool.call resource is <server>:<tool>, so ask for docs:delete_document",
+    );
+    expect(formatDecision(explanation)).not.toContain("Hint:");
+  });
   it("renders a JSON form", () => {
     const json = JSON.parse(JSON.stringify(decisionToJSON(explanation)));
     expect(json).toMatchObject({

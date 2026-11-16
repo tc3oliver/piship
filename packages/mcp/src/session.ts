@@ -144,7 +144,7 @@ export class McpSession {
         tools.push(tool);
         if (tools.length > MAX_TOOLS)
           throw mcpUnhealthy(
-            `MCP server ${this.#label} offers more than ${MAX_TOOLS} tools`,
+            `MCP server ${this.#label} offers more than ${MAX_TOOLS} tools, the most one server may list; split it into several servers or start it with fewer tools (many servers take an argument that selects toolsets). Hiding tools with an exposure map does not help: the limit applies to what the server lists`,
           );
       }
       const next = result.nextCursor;
