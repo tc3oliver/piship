@@ -52,6 +52,13 @@ vi.mock("./runtime-dependencies.js", async (original) => ({
   buildInput: fixture.input,
   workspacePackages: ["core"],
 }));
+// A test that stands in for Windows has no npm.cmd on PATH to resolve.
+vi.mock("./windows-npm.js", () => ({
+  windowsNpmInvocation: (args: readonly string[]) => ({
+    file: "node",
+    args: ["npm-cli.js", ...args],
+  }),
+}));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
   return {

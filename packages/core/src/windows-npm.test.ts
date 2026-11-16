@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { runtimeNpm } from "./build.js";
 import { windowsNpmInvocation } from "./windows-npm.js";
 
 const roots: string[] = [];
@@ -93,5 +94,35 @@ describe("windowsNpmInvocation", () => {
     expect(() => windowsNpmInvocation([], { PATH: "" })).toThrow(
       /npm was not found on PATH/,
     );
+  });
+});
+
+describe("the build's runtime npm ci", () => {
+  const supervised = (invocation: { file: string; args: string[] }) => {
+    expect(invocation.file).toBe(process.execPath);
+    return JSON.parse(invocation.args[2] as string) as {
+      file: string;
+      args: string[];
+    };
+  };
+
+  it("runs npm.cmd's target on Windows, not cmd.exe", () => {
+    const directory = npmDirectory({ node: true });
+    const npm = supervised(
+      runtimeNpm(["ci", "--omit=dev"], directory, "win32", { Path: directory }),
+    );
+    expect(npm.file).toBe(join(directory, "node.exe"));
+    expect(npm.args).toEqual([
+      join(directory, "node_modules", "npm", "bin", "npm-cli.js"),
+      "ci",
+      "--omit=dev",
+    ]);
+  });
+
+  it("runs npm from PATH elsewhere", () => {
+    expect(supervised(runtimeNpm(["ci"], tmpdir(), "linux"))).toMatchObject({
+      file: "npm",
+      args: ["ci"],
+    });
   });
 });

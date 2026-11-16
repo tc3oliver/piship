@@ -9,6 +9,13 @@ git clone https://github.com/tc3oliver/piship ~/src/piship
 cd ~/src/piship && npm ci && npm run build
 ```
 
+On Windows, in PowerShell (these lines also work in Windows PowerShell 5.1, which has no `&&` and passes `~` to git unexpanded):
+
+```powershell
+git clone https://github.com/tc3oliver/piship "$HOME\src\piship"
+cd "$HOME\src\piship"; npm ci; npm run build
+```
+
 ## Run the CLI by path
 
 PiShip is not published to npm, so there is no `piship` command on your machine. Run the CLI as `node <checkout>/packages/cli/dist/bin.js`. Do not try `npx` or `npm exec` with the name: they look it up on the public registry and run an unrelated package. Define a shell function so the rest of this page can write `piship` (a variable such as `PISHIP="node …"` does not run in zsh, the macOS default shell, which does not split it into words):
@@ -33,6 +40,13 @@ An installed command is `%USERPROFILE%\.local\bin\<name>.cmd`, which cmd.exe and
 
 ```bash
 mkdir -p ~/agents && cd ~/agents
+piship init ./my-agent
+```
+
+In PowerShell:
+
+```powershell
+mkdir "$HOME\agents"; cd "$HOME\agents"
 piship init ./my-agent
 ```
 
@@ -99,6 +113,8 @@ node dist/my-agent/piship.mjs install dist/my-agent
 ```
 
 The payload carries its own copy of the manager, so you run `piship.mjs` from the build output. Pass the build output, not the source directory: `install my-agent` from the directory above the source says to build it first and names `dist/my-agent`, and so does `doctor my-agent` unless a distribution with that id is installed, which it then checks. Install places the command in `~/.local/bin` (set `PISHIP_BIN_HOME` to change it) and tells you if that directory is not on your `PATH`. State that `test` created is adopted by the first install, so no flag is needed.
+
+On Windows the line `install` prints adds `%USERPROFILE%\.local\bin` to `PATH` for new terminals only, so open a new terminal before you run `my-agent`, or run `& "$HOME\.local\bin\my-agent.cmd"` in this one.
 
 ```bash
 my-agent --help
