@@ -78,7 +78,6 @@ Candidates, not scheduled:
 - Lock capabilities that record the contract actually selected, if the provider evidence the governance lock already carries proves not to be enough. The `sha256-` prefixed, canonical manifest digest is part of `piship-lock/v1alpha5` in v0.8.0.
 - A `registry/` directory and additional certification metadata.
 - The remaining git control-file hardening listed in [security](security.md#limits).
-- macOS and Windows code signing, and a Windows sandbox adapter.
 - Runtime hooks for actions that have none yet: `network.connect` without a sandbox, `web.request`, `browser.execute`, `agent.invoke`, `memory.*`, and `session.export` `public` and `local`. Each becomes `enforced` by changing the seam table once Pi exposes a seam.
 - Remote execution: synchronizing the local workspace into a remote [sandbox backend](sandbox.md) (today the template or image provides it), running file tools remotely, mapping `sandbox.filesystem` path rules into a remote sandbox, and a short-lived or workload credential source for the built-in e2b-compatible and Kubernetes backends (such as an in-cluster service account token).
 - Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([maintainer release checklist](maintainers/release-checklist.md)); more targets once each has installed lifecycle evidence.
