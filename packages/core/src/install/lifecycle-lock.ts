@@ -229,6 +229,8 @@ export interface LifecycleHold {
 
 /** How often a waiting caller looks at a held lock again. */
 const LOCK_POLL_MS = 100;
+/** Polls spent on a Windows lock file whose delete is pending (EPERM). */
+const PENDING_DELETE_RETRIES = 20;
 
 /**
  * Take the lock at `path`, or throw `busy(pid, holder)` while a live holder
@@ -254,12 +256,26 @@ export function acquireLifecycleLock(
     acquiredAt: new Date().toISOString(),
   })}\n`;
   const deadline = Date.now() + waitMs;
+  let pendingDeletes = 0;
   for (let attempt = 0; attempt < 3; )
     try {
       create(path, record);
       return hold(path, instance);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // Windows refuses to create a file while the previous holder's delete
+      // of it is still pending (EPERM); that clears within moments.
+      if (code === "EPERM" && process.platform === "win32") {
+        if (++pendingDeletes > PENDING_DELETE_RETRIES) throw error;
+        Atomics.wait(
+          new Int32Array(new SharedArrayBuffer(4)),
+          0,
+          0,
+          LOCK_POLL_MS,
+        );
+        continue;
+      }
+      if (code !== "EEXIST") throw error;
       const holder = readHolder(path);
       if (!holder || stale(holder)) {
         if (holder) breakStale(path, holder);
