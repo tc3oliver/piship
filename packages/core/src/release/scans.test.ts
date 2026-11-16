@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { workspacePackages } from "../runtime-dependencies.js";
-import { withWorkspaceManifests } from "./scans.js";
+import { excerpt, withWorkspaceManifests } from "./scans.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -80,5 +80,19 @@ describe("the registry signature check's view of the payload", () => {
       expect(readdirSync(join(root, "packages"))).toEqual(["mine"]);
     });
     expect(readdirSync(join(root, "packages"))).toEqual(["mine"]);
+  });
+});
+
+describe("the excerpt of npm's output in a gate message", () => {
+  it("cuts long output in the middle, keeping the whole log path npm ends with", () => {
+    const log = `/private/tmp/${"x".repeat(120)}/_logs/2026-11-16T00_00_00_000Z-debug-0.log`;
+    const text = `npm warn audit request to https://registry.npmjs.org/-/npm/v1/security/advisories/bulk failed, reason: connect ETIMEDOUT\n${"npm verbose noise\n".repeat(40)}npm error A complete log of this run can be found in: ${log}\n`;
+    const line = excerpt(text);
+    expect(line).toMatch(/^npm warn audit request/);
+    expect(line.endsWith(log)).toBe(true);
+    expect(line).toContain(" ... ");
+    expect(line.length).toBeLessThan(420);
+    expect(excerpt("short\n output")).toBe("short output");
+    expect(excerpt(" \n")).toBe("no output");
   });
 });

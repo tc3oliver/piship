@@ -64,7 +64,7 @@ $PISHIP test my-agent/piship.yaml
 
 `test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming `build` and the install command.
 
-The first build or test downloads the runtime packages from the npm registry (registry.npmjs.org, or the registry npm is configured to use), which can take a few minutes; later builds use the cache. In a terminal it shows each step as it goes, such as `Installing the runtime packages (npm ci)...`.
+The first build or test downloads the runtime packages from the npm registry (registry.npmjs.org, or the registry npm is configured to use), which can take a few minutes; later builds use the cache. In a terminal it shows each step as it goes, such as `Installing the runtime packages (npm ci; needs npm registry access, up to 10 minutes)...`; without a terminal (a script or CI) it still prints that one line on stderr before npm starts, and `release` likewise before its npm audit.
 
 The first time, there is no `piship.lock` yet, so `test` writes one and says so (`Created <path>/piship.lock: none existed, so nothing was reviewed yet`). The lock records the digest of every resource and the pinned runtime; review it, and commit it with `piship.yaml`.
 

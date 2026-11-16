@@ -220,12 +220,14 @@ describe("real bundled Pi runtime", () => {
   it("takes the installed tree and the bundle from the runtime cache and ships the same bytes", () => {
     const cache = join(root, "runtime-cache");
     const cold = cachedBuild(cache, join(root, "cached-cold"));
-    expect(cold.steps).toContain("Installing the runtime packages (npm ci)");
+    const installing = (steps: string[]) =>
+      steps.some((step) =>
+        step.startsWith("Installing the runtime packages (npm ci;"),
+      );
+    expect(installing(cold.steps)).toBe(true);
     const warm = cachedBuild(cache, join(root, "cached-warm"));
     expect(warm.steps).toContain("Reusing the cached runtime packages");
-    expect(warm.steps).not.toContain(
-      "Installing the runtime packages (npm ci)",
-    );
+    expect(installing(warm.steps)).toBe(false);
     expect(
       readdirSync(join(cache, "runtime")).filter((name) =>
         /^[ifb]-[0-9a-f]{20}$/.test(name),

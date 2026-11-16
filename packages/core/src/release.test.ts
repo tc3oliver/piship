@@ -1257,7 +1257,9 @@ policy:
     expect(error.message).toMatch(
       /Release gate vulnerability: the dependency scan returned no npm audit v2 report/,
     );
-    expect(error.userAction).toMatch(/^Restore npm and registry access/);
+    expect(error.userAction).toMatch(
+      /^Check network access to the npm registry/,
+    );
   });
 
   it("vulnerability: names npm's error summary when the scan gives one", async () => {
@@ -1327,7 +1329,9 @@ server.listen(0, "127.0.0.1", () => console.log(server.address().port));`,
           /^Release gate vulnerability: the dependency scan returned no npm audit v2 report: .*500/,
         );
         expect(error.message).not.toMatch(/\n/);
-        expect(error.userAction).toMatch(/^Restore npm and registry access/);
+        expect(error.userAction).toMatch(
+          /^Check network access to the npm registry/,
+        );
       } finally {
         stub.kill();
       }
@@ -1363,7 +1367,7 @@ server.listen(0, "127.0.0.1", () => console.log(server.address().port));`,
     const steps: string[] = [];
     await build(path, { progress: (step) => steps.push(step) });
     expect(steps).toEqual([
-      "Scanning dependencies with npm audit",
+      "Scanning dependencies with npm audit (needs npm registry access)",
       "Checking registry signatures with npm audit signatures (up to 5 minutes)",
     ]);
   });
