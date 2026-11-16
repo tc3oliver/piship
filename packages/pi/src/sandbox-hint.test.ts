@@ -189,6 +189,67 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     ).toBeUndefined();
   });
 
+  // What bubblewrap's mounts print, recorded in an Ubuntu 24.04 container.
+  it("reads bubblewrap's errors", () => {
+    const p = profile();
+    const hint = (line: string) => {
+      const scanner = new SandboxFailureScanner({
+        profile: {
+          ...p,
+          writeProtect: {
+            files: [join(p.workspace, ".git", "config")],
+            directories: [join(p.workspace, ".git", "hooks")],
+          },
+        },
+        mode: "personal",
+      });
+      scanner.feed(`${line.replaceAll("<root>", p.root)}\n`);
+      return scanner.hint();
+    };
+    for (const line of [
+      "/bin/bash: line 1: <root>/home/out.txt: Read-only file system",
+      "touch: cannot touch '<root>/home/y': Read-only file system",
+      "mkdir: cannot create directory '<root>/home/.cache': Read-only file system",
+      "OSError: [Errno 30] Read-only file system: '<root>/home/q'",
+    ])
+      expect(hint(line), line).toContain("is outside the directories");
+    expect(
+      hint("cat: <root>/home/.docker/config.json: Permission denied"),
+    ).toContain("sandbox.filesystem.read.deny");
+    // A protected file is a read-only bind mount: replacing it is EBUSY.
+    for (const line of [
+      "/bin/bash: line 1: .git/config: Read-only file system",
+      "touch: cannot touch '.git/hooks/pre-commit': Read-only file system",
+      "error: could not write config file .git/config: Device or resource busy",
+      "mv: cannot move '.git/config' to '.git/config.bak': Device or resource busy",
+    ])
+      expect(hint(line), line).toContain("protected git control path");
+    for (const [line, host] of [
+      [
+        "ssh: connect to host 1.1.1.1 port 22: Network is unreachable",
+        "1.1.1.1",
+      ],
+      ["connect ENETUNREACH 1.1.1.1:443 - Local (0.0.0.0:0)", "1.1.1.1"],
+      [
+        "curl: (7) Failed to connect to 1.1.1.1 port 80 after 0 ms: Couldn't connect to server",
+        "1.1.1.1",
+      ],
+      [
+        "ssh: Could not resolve hostname github.com: Temporary failure in name resolution",
+        "the host",
+      ],
+      [
+        "npm ERR! request to https://registry.npmjs.org/semver failed, reason: getaddrinfo EAI_AGAIN registry.npmjs.org",
+        "registry.npmjs.org",
+      ],
+      [
+        "urllib.error.URLError: <urlopen error [Errno 101] Network is unreachable>",
+        "the host",
+      ],
+    ] as const)
+      expect(hint(line), line).toContain(`${host} cannot be reached`);
+  });
+
   it("finds an error split across chunks", () => {
     const p = profile();
     const scanner = new SandboxFailureScanner({ profile: p, mode: "managed" });

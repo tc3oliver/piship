@@ -11,8 +11,9 @@ import {
   type SandboxProfile,
 } from "@piship/sandbox";
 
+// Bubblewrap binds a protected file read-only, so replacing it is EBUSY.
 const FILESYSTEM_ERROR =
-  /\b(EROFS|EPERM|EACCES)\b|Read-only file system|Permission denied|Operation not permitted/i;
+  /\b(EROFS|EPERM|EACCES|EBUSY)\b|Read-only file system|Permission denied|Operation not permitted|Device or resource busy/i;
 // A connect refused by the sandbox: Seatbelt fails it with EPERM, a network
 // namespace with no route with ENETUNREACH.
 const NETWORK_ERROR =
@@ -24,9 +25,10 @@ const NETWORK_COMMAND =
 const HOST =
   /(?:ENOTFOUND|EAI_AGAIN|resolve host:?|connect E[A-Z]+|connect to host|Failed to connect to)\s+([A-Za-z0-9.-]+)/i;
 // A path a failing line names, quoted or bare: absolute, or relative with a
-// slash in it (`.git/config`, `../x`). The last one is the denied path; the
-// first is often the program, as in `/bin/bash: .git/config: Operation not
-// permitted`.
+// slash in it (`.git/config`, `../x`). The last one is the denied path for a
+// write; the first is often the program, as in `/bin/bash: .git/config:
+// Operation not permitted`. A hidden or protected path counts wherever it is
+// on the line (`mv: cannot move '.git/config' to '.git/config.bak'`).
 const PATH =
   /['"`]((?:\/|[^\s'"`/]+\/)[^'"`\n]*)['"`]|(?:^|[\s:(])((?:\/(?!\/)|[\w.-]+\/)[^\s:'"`()]*)/g;
 
@@ -70,10 +72,8 @@ function readable(path: string): boolean {
   }
 }
 
-function pathOf(line: string): string | undefined {
-  let last: string | undefined;
-  for (const match of line.matchAll(PATH)) last = match[1] ?? match[2];
-  return last;
+function pathsOf(line: string): string[] {
+  return [...line.matchAll(PATH)].map((match) => match[1] ?? match[2] ?? "");
 }
 
 /**
@@ -83,6 +83,7 @@ function pathOf(line: string): string | undefined {
 export class SandboxFailureScanner {
   #pending = "";
   #filesystem: string[] = [];
+  #named: string[] = [];
   #network: string | undefined;
   #networkSeen = false;
 
@@ -102,8 +103,11 @@ export class SandboxFailureScanner {
       return;
     }
     if (!FILESYSTEM_ERROR.test(line) || this.#filesystem.length >= 3) return;
-    const path = pathOf(line);
-    if (path && !this.#filesystem.includes(path)) this.#filesystem.push(path);
+    const paths = pathsOf(line);
+    const last = paths.at(-1);
+    if (last && !this.#filesystem.includes(last)) this.#filesystem.push(last);
+    for (const path of paths.slice(0, 4))
+      if (!this.#named.includes(path)) this.#named.push(path);
   }
 
   /**
@@ -114,14 +118,12 @@ export class SandboxFailureScanner {
   hint(): string | undefined {
     this.feed("\n");
     const { profile, mode, cwd = profile.workspace } = this.context;
-    for (const named of this.#filesystem) {
-      const path = realpathNearest(resolve(cwd, named));
+    const real = (named: string) => realpathNearest(resolve(cwd, named));
+    const { files = [], directories = [] } = profile.writeProtect ?? {};
+    for (const named of this.#named) {
+      const path = real(named);
       if (profile.readDeny.some((denied) => isWithin(path, denied)))
         return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")} ${SANDBOX_NO_RETRY}]`;
-      // A file the launching user cannot read is an ordinary permission
-      // error on a read, not a sandbox decision.
-      if (existsSync(path) && !readable(path)) continue;
-      const { files = [], directories = [] } = profile.writeProtect ?? {};
       if (
         files.includes(path) ||
         directories.some((protectedDirectory) =>
@@ -129,6 +131,12 @@ export class SandboxFailureScanner {
         )
       )
         return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees); git runs it outside the sandbox. The user can run this command in their own terminal, outside the sandbox; do not retry it here.]`;
+    }
+    for (const named of this.#filesystem) {
+      const path = real(named);
+      // A file the launching user cannot read is an ordinary permission
+      // error on a read, not a sandbox decision.
+      if (existsSync(path) && !readable(path)) continue;
       if (!profile.writeAllow.some((allowed) => isWithin(path, allowed)))
         return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")} ${SANDBOX_NO_RETRY}]`;
     }
