@@ -784,6 +784,15 @@ describe("argument errors", () => {
     expect(typo.stderr).toMatch(/^Unknown command: int\. Did you mean init\? /);
     expect((await run(["zzzzzz"])).stderr).not.toContain("Did you mean");
   });
+
+  it("points a command only the built distribution has at it", async () => {
+    const policy = await run(["policy", "explain", "shell.execute", "ls"]);
+    expect(policy.status).toBe(2);
+    expect(policy.stderr).toBe(
+      "policy is a command of the built distribution, not of piship. Run dist/<id>/bin/<command> policy from the directory you built in, or <command> policy once it is installed.",
+    );
+    expect((await run(["login"])).stderr).toMatch(/^login is a command of/);
+  });
 });
 
 describe("the first-run journey from the directory above the source", () => {
@@ -1532,7 +1541,7 @@ describe("init", () => {
       const result = await run(["init", directory, "--personal"]);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe(
-        "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.\nregistry.npmjs.org is not reachable from here. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails until npm can reach it or the registry npm is configured to use.",
+        "GitHub is not reachable from here, so fd and rg are not bundled (Pi's @ file completion and find/grep need them). Add runtime.searchTools: { mode: bundled } and https://github.com to release.sources later, or see docs/manifest.md#bundled-search-tools-v1alpha6.\nregistry.npmjs.org did not answer within 3 seconds. The first build or test downloads the runtime packages from the npm registry (later ones use the cache), so it fails if npm cannot reach it, or the registry npm is configured to use, by then.",
       );
       expect(result.stdout).toContain(
         `Created ${join(directory, "piship.yaml")}`,
@@ -1855,6 +1864,26 @@ describe("what to do after an install", () => {
     expect(next).toBe(
       "Next: set ACME_ISSUER in the environment that starts acme, then run acme; it is already signed in. acme --help lists its commands.",
     );
+  });
+
+  it("skips the variables this install already sees but keeps the launcher caveat", () => {
+    const managed = receipt({
+      deployment: { mode: "managed" },
+      access: { variables: ["ACME_ISSUER", "ACME_GATEWAY"] },
+    });
+    expect(
+      installNext(managed, true, {
+        ACME_ISSUER: "https://idp",
+        ACME_GATEWAY: "https://gw",
+      }),
+    ).toBe(
+      "Next: run acme; it is already signed in. acme --help lists its commands. An IDE or desktop launcher does not read your shell profile, so set ACME_ISSUER, ACME_GATEWAY there too.",
+    );
+    const partly = installNext(managed, false, { ACME_ISSUER: "https://idp" });
+    expect(partly).toContain(
+      "Next: set ACME_GATEWAY in the environment that starts acme, then run acme login",
+    );
+    expect(partly).toContain("set ACME_ISSUER, ACME_GATEWAY there too.");
   });
 
   it("leaves out a variable that only update reads", () => {

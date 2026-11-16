@@ -173,6 +173,24 @@ describe("doctor verification states", () => {
     expect(lines[0]?.[1]).not.toContain("artifact");
   });
 
+  it("notes a payload install for a personal distribution and warns for a managed one", () => {
+    const seen = (mode: "personal" | "managed") => {
+      const lines: string[] = [];
+      const line = (level: string) => (label: string) =>
+        lines.push(`${level} ${label}`);
+      lifecycleDoctor(
+        { ...installed(), mode },
+        "Release",
+        line("ok"),
+        line("warn"),
+        line("info"),
+      );
+      return lines;
+    };
+    expect(seen("personal")).toEqual(["info release"]);
+    expect(seen("managed")).toEqual(["warn release"]);
+  });
+
   it("does not call a receipt without via a file install", () => {
     const { via: _via, ...older } = composed(pinned);
     const detail = verificationStates(

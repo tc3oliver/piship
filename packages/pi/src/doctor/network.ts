@@ -5,6 +5,7 @@
 // variables by name, never by value.
 import {
   DEFAULT_NETWORK_POLICY,
+  isLoopbackHost,
   isPrivateNetworkHost,
   plainHttpProxy,
 } from "@piship/contracts";
@@ -110,7 +111,7 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
           ),
         );
         if (url.protocol === "http:") {
-          plain.push(url.host);
+          if (!plain.includes(url.host)) plain.push(url.host);
           // A plain-HTTP request is refused through a proxy that is not
           // itself private (it would cross it unencrypted).
           const proxy = plainHttpProxy(url, policy);
@@ -127,10 +128,19 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
         `plain HTTP to ${proxied.join(", ")} would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add ${proxied.join(", ")} to NO_PROXY`,
       );
     if (endpoint.proxyOnly) continue;
-    if (plain.length)
+    // Loopback traffic never leaves this machine, so it is not exposed.
+    const exposed = plain.filter(
+      (host) => !isLoopbackHost(new URL(`http://${host}`).hostname),
+    );
+    if (exposed.length)
       out.warn(
         endpoint.key,
-        `http-allowed: plain HTTP to ${plain.join(", ")}; ${endpoint.exposed} unencrypted on the network path`,
+        `http-allowed: plain HTTP to ${exposed.join(", ")}; ${endpoint.exposed} unencrypted on the network path`,
+      );
+    else if (plain.length)
+      out.info(
+        endpoint.key,
+        `http-allowed: plain HTTP to ${plain.join(", ")}, loopback only; it does not leave this machine`,
       );
     else if (endpoint.explicit)
       out.info(

@@ -170,6 +170,10 @@ export async function runUninstall(
     );
     return;
   }
+  // Read before the receipt goes: purge then runs from what was installed.
+  const fromRelease = receipt.releases.some(
+    (item) => item.version === receipt.active && item.release,
+  );
   uninstallDistribution(id, { removeEditedShim, ownSession: true });
   ctx.out(
     [
@@ -179,7 +183,7 @@ export async function runUninstall(
       live.length
         ? `  signed in: ${live.join(", ")} stays until it expires (uninstalled without logout)`
         : "  signed out: no sign-in is stored",
-      `A later install of ${app.name} picks the kept data up again. To delete it instead, use ${app.command} uninstall --purge --yes in place of a plain uninstall, or, after this one, node <the release you installed from>/payload/piship.mjs purge ${id} --yes.`,
+      `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${fromRelease ? "<release>/payload" : `dist/${id}`}/piship.mjs purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
     ].join("\n"),
   );
 }
