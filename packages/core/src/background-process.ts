@@ -14,7 +14,7 @@ const STARTED = 3;
 const START_LIMIT_MS = 60_000;
 /** The tail of the process's error output a failure reports. */
 const OUTPUT_BYTES = 64 * 1024;
-/** A hung process must not hang a build for ever. */
+/** A hung process must not hang a build for ever: the default wait limit. */
 const WAIT_LIMIT_MS = 60 * 60_000;
 
 const WORKER = `
@@ -51,11 +51,12 @@ export interface BackgroundProcess {
   readonly wait: () => { readonly status: number; readonly output: string };
 }
 
-/** Start `command` with `args` in `cwd`, and return at once. */
+/** Start `command` with `args` in `cwd`, and return at once; `wait` gives up after `waitLimitMs`. */
 export function startBackgroundProcess(
   command: string,
   args: readonly string[],
   cwd: string,
+  waitLimitMs = WAIT_LIMIT_MS,
 ): BackgroundProcess {
   const stateBuffer = new SharedArrayBuffer(8 * 4);
   const outputBuffer = new SharedArrayBuffer(OUTPUT_BYTES);
@@ -72,12 +73,14 @@ export function startBackgroundProcess(
     wait() {
       if (result) return result;
       const startedBy = Date.now() + START_LIMIT_MS;
-      const deadline = Date.now() + WAIT_LIMIT_MS;
+      const deadline = Date.now() + waitLimitMs;
       while (Atomics.load(state, DONE) === 0) {
         if (Atomics.load(state, STARTED) === 0 && Date.now() > startedBy)
           throw new Error(`The thread that runs ${command} did not start`);
         if (Date.now() > deadline)
-          throw new Error(`${command} did not finish within an hour`);
+          throw new Error(
+            `${command} did not finish within ${Math.ceil(waitLimitMs / 1000)} s`,
+          );
         Atomics.wait(state, DONE, 0, 1000);
       }
       void worker.terminate();

@@ -55,6 +55,17 @@ describe("startBackgroundProcess", () => {
     expect(outcome.output.length).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("gives up waiting at the limit it was given", () => {
+    const job = startBackgroundProcess(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 3000)"],
+      // Not a directory removed after the test: the process outlives it.
+      tmpdir(),
+      200,
+    );
+    expect(() => job.wait()).toThrow(/did not finish within 1 s/);
+  });
+
   it("reports a process that cannot start", () => {
     const outcome = startBackgroundProcess(
       join(temp(), "no-such-program"),

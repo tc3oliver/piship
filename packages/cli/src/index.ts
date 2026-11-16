@@ -825,10 +825,34 @@ const manifestCommands = [
   "migrate",
   "inspect",
 ];
-function manifestPath(target: string | undefined): string | undefined {
+/**
+ * `preferInstalled` (inspect, config explain): a bare id that names both a
+ * source directory here and an installed distribution means the install, as
+ * it does for doctor; a path to the directory or its piship.yaml means the source.
+ */
+function manifestPath(
+  target: string | undefined,
+  preferInstalled = false,
+): string | undefined {
   if (target === undefined)
     return existsSync("piship.yaml") ? "piship.yaml" : undefined;
+  if (preferInstalled && installedPayload(target) !== undefined) return target;
   return isDistributionSource(target) ? join(target, "piship.yaml") : target;
+}
+/** The installed payload of a bare id that also names a source directory here. */
+function installedPayload(target: string): string | undefined {
+  if (!isDistributionId(target) || !isDistributionSource(resolve(target)))
+    return undefined;
+  try {
+    return readInstallReceipt(target).payload;
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.startsWith("No PiShip installation recorded")
+    )
+      throw error;
+    return undefined;
+  }
 }
 /** Why a distribution's source directory is not something to install or check, and what to run. */
 function notBuilt(target: string, command: string): Error {
@@ -843,23 +867,22 @@ function notBuilt(target: string, command: string): Error {
     `${target} is the source of a distribution (it holds piship.yaml), not a built one. Build it with ${self} build ${shellArg(target)}, then run ${self} ${command} ${shellArg(join("dist", id))}.`,
   );
 }
-function artifactFor(target: string, command: string): string {
+function artifactFor(
+  target: string,
+  command: string,
+  note: (line: string) => void,
+): string {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isDirectory()) {
     if (!isDistributionSource(path)) return path;
     // `doctor my-agent` next to the source of the installed my-agent means the install.
-    if (isDistributionId(target)) {
-      try {
-        return readInstallReceipt(target).payload;
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !error.message.startsWith("No PiShip installation recorded")
-        )
-          throw error;
-      }
-    }
-    throw notBuilt(target, command);
+    const installed = installedPayload(target);
+    if (installed === undefined) throw notBuilt(target, command);
+    // doctor checks installs only; inspect and config explain also read a manifest.
+    note(
+      `Note: ${command} reads the installed ${target}, not the source directory of that name${command === "doctor" ? "" : `; for the source, pass ${shellArg(join(target, "piship.yaml"))}`}.`,
+    );
+    return installed;
   }
   return installedReceipt(target).payload;
 }
@@ -1098,7 +1121,7 @@ export async function runCli(
       ? [args[1], ...args.slice(2)]
       : positionalFirst(args.slice(1), command === "init" ? ["--id"] : []);
   const target = manifestCommands.includes(command)
-    ? manifestPath(given)
+    ? manifestPath(given, command === "inspect")
     : given;
   if (command === "config") {
     if (target !== "explain" || rest.length !== 1) {
@@ -1316,7 +1339,7 @@ export async function runCli(
           output.stderr(`Note: ${piPinReview(pin)}`);
       }
     } else if (command === "config") {
-      const configTarget = manifestPath(rest[0]) ?? "";
+      const configTarget = manifestPath(rest[0], true) ?? "";
       const path = resolve(configTarget);
       if (existsSync(path) && statSync(path).isFile()) {
         // Explain straight from the manifest; no artifact is assembled.
@@ -1354,7 +1377,7 @@ export async function runCli(
           ),
         );
       } else {
-        const artifact = artifactFor(configTarget, command);
+        const artifact = artifactFor(configTarget, command, output.stderr);
         const app = payloadApp(artifact);
         const result = runLauncher(artifact, app.command, [
           "config",
@@ -1428,7 +1451,7 @@ export async function runCli(
               );
             })()
           : (() => {
-              const artifact = artifactFor(target, command);
+              const artifact = artifactFor(target, command, output.stderr);
               const lock = verifyPayload(artifact);
               return inspection(
                 lock,
@@ -1515,7 +1538,7 @@ export async function runCli(
         );
       else if (!interactive) output.stdout(result.stdout.trim());
     } else if (command === "doctor") {
-      const artifact = artifactFor(target, command);
+      const artifact = artifactFor(target, command, output.stderr);
       const app = payloadApp(artifact);
       const lock = verifyPayload(artifact);
       const json = rest[0] === "--json";

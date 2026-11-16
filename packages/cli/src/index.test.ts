@@ -841,17 +841,27 @@ describe("the first-run journey from the directory above the source", () => {
     },
   );
 
-  it("doctor of the source directory checks the installed distribution of that id", async () => {
-    mkdirSync(join(temp, ID));
-    writeFileSync(
-      join(temp, ID, "piship.yaml"),
-      readFileSync(join(temp, "my-agent", "piship.yaml")),
-    );
-    installRecorder();
-    const result = await run(["doctor", ID]);
-    expect(result.status).toBe(1);
-    expect(result.stderr).not.toContain("is the source of a distribution");
-  });
+  it.each([["doctor"], ["inspect"], ["config", "explain"]])(
+    "%s of a bare id naming a source directory too reads the install, and says so",
+    async (...command) => {
+      mkdirSync(join(temp, ID));
+      writeFileSync(
+        join(temp, ID, "piship.yaml"),
+        readFileSync(join(temp, "my-agent", "piship.yaml")),
+      );
+      installRecorder();
+      const result = await run([...command, ID]);
+      expect(result.stderr).not.toContain("is the source of a distribution");
+      expect(result.stderr).toContain(
+        `Note: ${command[0]} reads the installed ${ID}, not the source directory of that name`,
+      );
+      // The source's manifest by path is still the source.
+      if (command[0] !== "doctor")
+        expect(
+          (await run([...command, join(ID, "piship.yaml")])).stderr,
+        ).not.toContain("reads the installed");
+    },
+  );
 
   it("names the manifest's id when a path is given for an id", async () => {
     const result = await run([

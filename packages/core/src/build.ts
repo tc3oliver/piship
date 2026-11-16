@@ -24,7 +24,11 @@ import {
 import { bundleDistribution } from "./bundle.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { requireCurrentLock } from "./lock.js";
-import { npmTimeoutMinutes, supervisedNpm } from "./npm-process.js";
+import {
+  npmTimeoutMinutes,
+  npmWaitLimitMs,
+  supervisedNpm,
+} from "./npm-process.js";
 import { removeTree } from "./parallel-files.js";
 import { announceWait } from "./progress.js";
 import {
@@ -142,7 +146,9 @@ function installRuntime(
   let running: ReturnType<typeof startBackgroundProcess> | undefined;
   if (meanwhile.overlap)
     try {
-      running = startBackgroundProcess(file, args, stage);
+      // Past npm's own limit, so its supervisor stops npm first and the
+      // fallback below never starts a second npm beside a running one.
+      running = startBackgroundProcess(file, args, stage, npmWaitLimitMs());
     } catch {
       // No thread to run it: npm runs here, as it does without overlap.
     }
