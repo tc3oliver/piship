@@ -4,7 +4,7 @@ import {
   spawn,
   spawnSync,
 } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   binHome,
@@ -128,7 +128,7 @@ const summaries = {
   rollback: "Return an installed distribution to its previous release",
   repair: "Restore a damaged installed release from a trusted source",
   "migrate-check": "Check whether a release can take over the current state",
-  keygen: "Create a channel signing key",
+  keygen: "Create a root or channel signing key, or show a key's public key",
   "sign-channel": "Sign channel metadata for release archives",
   "trust-root": "Create bootstrap update trust or publish the next root",
   reproducibility: "Compare two builds of the same release",
@@ -242,6 +242,8 @@ export const optionHelp: Record<string, Record<string, string>> = {
       "Read the passphrase from this environment variable",
     "--passphrase-stdin": "Read the passphrase from standard input",
     "--force-in-worktree": "Write the key even inside a git work tree",
+    "--show-public":
+      "Print the public key of an existing private key file instead",
   },
   "sign-channel": {
     "--channel <name>": "Channel the metadata is for",
@@ -409,10 +411,15 @@ export const lifecycleCommands: Record<
   },
   keygen: {
     usage:
-      "keygen <private-key-file> --id <key-id> [--encrypt [--passphrase-env <NAME> | --passphrase-stdin]] [--force-in-worktree]",
+      "keygen <private-key-file> --id <key-id> [--encrypt [--passphrase-env <NAME> | --passphrase-stdin]] [--force-in-worktree] [--show-public]",
     positional: [1, 1],
     values: ["--id", "--passphrase-env"],
-    flags: ["--force-in-worktree", "--encrypt", "--passphrase-stdin"],
+    flags: [
+      "--force-in-worktree",
+      "--encrypt",
+      "--passphrase-stdin",
+      "--show-public",
+    ],
   },
   "sign-channel": {
     usage:
@@ -567,13 +574,19 @@ async function pemSigners(
 /**
  * What to upload after sign-channel, in the order the trust root page gives,
  * and when to sign again: a week before the metadata expires, or at once
- * when less is left.
+ * when less is left. `present` names archives that were already in the
+ * channel directory before this run; `newestRoot` is the newest
+ * root/<N>.json there, which clients need before a channel its keys sign.
  */
 export function publishSteps(
   channel: string,
   artifacts: readonly string[],
   expires: string,
   now = new Date(),
+  context: {
+    present?: readonly string[];
+    newestRoot?: number | undefined;
+  } = {},
 ): string {
   const expiry = new Date(expires);
   const week = 7 * 24 * 60 * 60 * 1000;
@@ -581,13 +594,63 @@ export function publishSteps(
     expiry.getTime() - now.getTime() > week
       ? new Date(expiry.getTime() - week).toISOString().slice(0, 10)
       : "now";
+  const present = new Set(context.present ?? []);
+  const names = artifacts.map((item) => basename(item));
+  const added = names.filter((name) => !present.has(name));
+  const kept = names.filter((name) => present.has(name));
   return [
     "Next: publish the channel directory to the update source in this order:",
-    `  1. the archives this run added: ${artifacts.map((item) => basename(item)).join(", ")}`,
+    ...(context.newestRoot
+      ? [
+          `  0. any root/<N>.json up to root/${context.newestRoot}.json not yet published, each root/<N>.json.sig before root/<N>.json: clients refuse a channel signed by keys a root they have not fetched adds`,
+        ]
+      : []),
+    `  1. the archives this run added: ${added.length ? added.join(", ") : "none"}${kept.length ? ` (already in the channel directory before this run; upload only if not yet published: ${kept.join(", ")})` : ""}`,
     `  2. ${channel}.json.sig and ${channel}.json together`,
     "Remove an older archive only after no published channel lists it.",
     `Sign ${channel} again by ${by}: clients refuse it after ${expires}.`,
   ].join("\n");
+}
+
+/**
+ * What to upload after trust-root next: the signature before the root, and
+ * the root before any channel signed by a channel key it adds.
+ */
+export function rootPublishSteps(
+  directory: string,
+  version: number,
+  expires: string,
+  addedChannelKeys: readonly string[],
+  now = new Date(),
+): string {
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const expiry = new Date(expires).getTime();
+  const by =
+    expiry - now.getTime() > week
+      ? new Date(expiry - week).toISOString().slice(0, 10)
+      : "now";
+  return [
+    "Next: publish the root to the update source in this order, before any channel signed with keys it adds:",
+    `  1. root/${version}.json.sig`,
+    `  2. root/${version}.json`,
+    "Never delete or replace a published root.",
+    ...(addedChannelKeys.length
+      ? [
+          `Then sign each channel with the new channel key: piship sign-channel ${directory} <archive>... --channel <name> --key <private-key-file> --key-id ${addedChannelKeys[0]}`,
+        ]
+      : []),
+    `Publish the next root by ${by}: clients stop updating after ${expires}.`,
+  ].join("\n");
+}
+
+/** The newest root/<N>.json in a channel's root directory, if any. */
+function newestRootVersion(directory: string): number | undefined {
+  if (!existsSync(directory)) return undefined;
+  const versions = readdirSync(directory).flatMap((name) => {
+    const match = /^([1-9][0-9]*)\.json$/.exec(name);
+    return match ? [Number(match[1])] : [];
+  });
+  return versions.length ? Math.max(...versions) : undefined;
 }
 
 /** A lock file's content, or LOCK_INVALID naming the file and the way out. */
@@ -1681,7 +1744,7 @@ async function runLifecycle(
       progress: progressReporter(output.stderr),
     });
     output.stdout(
-      `Built qualified release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
+      `Built qualified release ${built.name} (built for channel ${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThe release is not signed yet: users get it through a signed channel or verified provenance.\nNext: piship verify-release ${built.archive} (ideally on another machine), then piship sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>`,
     );
     // Where the runtime came from is no part of the release, so it goes to
     // stderr and to the build-info file beside the archive.
@@ -1695,7 +1758,7 @@ async function runLifecycle(
       progress: progressReporter(output.stderr),
     });
     output.stdout(
-      `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThis local build is unsigned: publish it with verified provenance before calling it a release.`,
+      `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThe runtime release is not signed: publish it with verified provenance.\nNext: piship verify-release ${built.archive}, then piship pack <piship.yaml> --runtime ${built.archive} (one --runtime per target)`,
     );
     output.stderr(runtimeCacheLine(built.runtimeCache));
   } else if (
@@ -1710,7 +1773,7 @@ async function runLifecycle(
       output.stdout(
         flags.has("--json")
           ? JSON.stringify(metadata, null, 2)
-          : `Verified PiShip runtime ${metadata.pishipVersion} for ${metadata.target}\n  Pi ${metadata.pi.version} (${metadata.pi.compatibility}), npm lock ${metadata.npmLockSha256}\n  payload ${metadata.inventory.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification}\nPublisher identity is not checked here: verify the build provenance.`,
+          : `Verified PiShip runtime ${metadata.pishipVersion} for ${metadata.target}\n  Pi ${metadata.pi.version} (compatibility: ${metadata.pi.compatibility}), npm lock ${metadata.npmLockSha256}\n  payload ${metadata.inventory.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification}\nPublisher identity is not checked here: verify the build provenance.`,
       );
     } finally {
       verified.cleanup();
@@ -1739,7 +1802,7 @@ async function runLifecycle(
         .map(([target, reason]) => `\n  excluded  ${target}: ${reason}`)
         .join(
           "",
-        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.`,
+        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.\nNext: piship sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>${repeated["--runtime"].map((item) => ` --runtime ${item}`).join("")}`,
     );
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
@@ -1750,7 +1813,7 @@ async function runLifecycle(
       output.stdout(
         flags.has("--json")
           ? JSON.stringify(metadata, null, 2)
-          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification ?? "not recorded (built before PiShip recorded it)"}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
+          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (built for channel ${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (compatibility: ${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification ?? "not recorded (built before PiShip recorded it)"}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
       );
     } finally {
       verified.cleanup();
@@ -1880,6 +1943,18 @@ async function runLifecycle(
     const id = options["--id"];
     if (!id) throw new Error("keygen needs --id <key-id>");
     const input = passphraseInput(options, flags);
+    if (flags.has("--show-public")) {
+      if (flags.has("--encrypt") || flags.has("--force-in-worktree"))
+        throw new Error(
+          "--show-public reads an existing key; it takes no --encrypt or --force-in-worktree",
+        );
+      const [signer] = await pemSigners([{ id, file: first }], input, output);
+      const publicKey = (signer as KeyedSigner).publicKey;
+      output.stdout(
+        `Public key: ${publicKey}\nFingerprint: ${keyFingerprint(publicKey)}\nAdd it to the next root with: piship trust-root next ... --add-key ${id}=${publicKey}\nOr pin it in a new bootstrap with: piship trust-root init --key ${id}=${publicKey} ...`,
+      );
+      return 0;
+    }
     if (!flags.has("--encrypt") && (input.env !== undefined || input.stdin))
       throw new Error("--passphrase-env and --passphrase-stdin need --encrypt");
     const pair = generateSigningKey(
@@ -1927,6 +2002,8 @@ async function runLifecycle(
     );
     // A Company Pack is listed under `packs`, a release archive under `releases`.
     const artifacts = positional.slice(1);
+    // Archives already in the channel directory were added by an earlier run.
+    const before = existsSync(first) ? readdirSync(first) : [];
     const kinds = await Promise.all(artifacts.map((item) => isPack(item)));
     const signed = await signChannel({
       directory: first,
@@ -1964,7 +2041,7 @@ async function runLifecycle(
         ),
       ].join(
         "\n",
-      )}\n${publishSteps(channel, [...added, ...new Set(runtimeArchives)], signed.metadata.expires)}`,
+      )}\n${publishSteps(channel, [...added, ...new Set(runtimeArchives)], signed.metadata.expires, new Date(), { present: before, newestRoot: newestRootVersion(join(first, "root")) })}`,
     );
   } else if (command === "trust-root") {
     const expiry = {
@@ -2044,7 +2121,14 @@ async function runLifecycle(
         signers,
       });
       output.stdout(
-        `Wrote ${result.path} and its signature: root ${result.previous.version} -> ${result.root.version}, expires ${result.root.expires}, signed by ${result.signedBy.join(", ")}\n  root role     ${result.root.roles.root.threshold} of ${result.root.roles.root.keyIds.join(", ")}\n  channel role  ${result.root.roles.channel.threshold} of ${result.root.roles.channel.keyIds.join(", ")}`,
+        `Wrote ${result.path} and its signature: root ${result.previous.version} -> ${result.root.version}, expires ${result.root.expires}, signed by ${result.signedBy.join(", ")}\n  root role     ${result.root.roles.root.threshold} of ${result.root.roles.root.keyIds.join(", ")}\n  channel role  ${result.root.roles.channel.threshold} of ${result.root.roles.channel.keyIds.join(", ")}\n${rootPublishSteps(
+          second,
+          result.root.version,
+          result.root.expires,
+          result.root.roles.channel.keyIds.filter(
+            (id) => !result.previous.roles.channel.keyIds.includes(id),
+          ),
+        )}`,
       );
     } else {
       output.stderr(`Usage: piship ${lifecycleCommands["trust-root"]?.usage}`);
