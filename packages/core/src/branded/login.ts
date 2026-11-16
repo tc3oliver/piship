@@ -610,11 +610,14 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   // Retention, and the classes the distribution purges at logout. Sessions a
   // running launch holds are kept.
   await sweepDistributionData(ctx, "logout");
-  const sessions = ctx.metadata.data?.declared?.purge.onLogout.includes(
-    "sessions",
-  )
-    ? "sessions not in use were removed"
-    : "sessions were preserved";
+  const onLogout = ctx.metadata.data?.declared?.purge.onLogout ?? [];
+  const purged = onLogout.map((dataClass) =>
+    dataClass === "sessions" ? "sessions not in use" : `${dataClass} files`,
+  );
+  const sessions = [
+    ...(purged.length ? [`${purged.join(" and ")} were removed`] : []),
+    ...(onLogout.includes("sessions") ? [] : ["sessions were preserved"]),
+  ].join("; ");
   // Whatever metadata is left names a secret that could not be deleted. A
   // distribution without a stored runtime credential never clears one.
   const classes = [

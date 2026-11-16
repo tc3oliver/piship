@@ -2592,9 +2592,23 @@ describe("Governance group", () => {
       `  ✓ ${"seam table".padEnd(20)} Pi 1.5.0`,
       `  ✓ ${"cache warming".padEnd(20)} off`,
       `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h max`,
-      `  ✓ ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none`,
+      `  ! ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none; the logout purge never runs: sign-in is Pi's, and Pi's /logout purges nothing`,
       `  ! ${"data retention".padEnd(20)} installed release 0.9.0 predates the data contract: rolled back to, it stops the retention sweep`,
     ]);
+    const brokered = v6(base, {
+      access: { credential: { provider: "http-broker" } },
+      data: {
+        contract: "piship-data/v1",
+        declared: {
+          retention: {},
+          purge: { onLogout: ["cache"], onUninstall: "all" },
+          export: {},
+        },
+      },
+    });
+    expect(group(renderDoctor(brokered).render(), "Governance")).toContain(
+      `  ✓ ${"data purge".padEnd(20)} logout: cache; uninstall: all (not acted on yet: uninstall keeps state, purge deletes it)`,
+    );
     const undeclared = v6(base, { data: { contract: "piship-data/v1" } });
     expect(group(renderDoctor(undeclared).render(), "Governance")).toContain(
       `  - ${"data retention".padEnd(20)} not declared; nothing is swept`,
