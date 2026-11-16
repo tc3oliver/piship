@@ -58,17 +58,25 @@ describe("declared resource roots", () => {
     expect(error?.field).toBe("resources.extensions.user[0]");
     expect(error?.message).toContain("without index.ts or index.js");
   });
-  it.each(["ext/index.ts", "ext/index.js", "ext/package.json"])(
-    "accepts an extension directory with %s",
-    (entry) => {
-      expect(
-        resolveWith("  extensions:\n    user: [./ext]", {
-          "ext/main.ts": "export default () => {};",
-          [entry]: entry.endsWith(".json")
-            ? '{"pi":{"extensions":["./main.ts"]}}'
-            : "export default () => {};",
-        }),
-      ).toBeUndefined();
-    },
-  );
+  it("rejects a nested folder that is not extensions/", () => {
+    const error = resolveWith("  extensions:\n    user: [./ext]", {
+      "ext/lib/tool.ts": "export default () => {};",
+    });
+    expect(error?.message).toContain("without index.ts or index.js");
+  });
+  it.each([
+    "ext/index.ts",
+    "ext/index.js",
+    "ext/package.json",
+    "ext/extensions/tool.ts",
+  ])("accepts an extension directory with %s", (entry) => {
+    expect(
+      resolveWith("  extensions:\n    user: [./ext]", {
+        "ext/main.ts": "export default () => {};",
+        [entry]: entry.endsWith(".json")
+          ? '{"pi":{"extensions":["./main.ts"]}}'
+          : "export default () => {};",
+      }),
+    ).toBeUndefined();
+  });
 });

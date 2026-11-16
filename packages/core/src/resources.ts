@@ -183,20 +183,21 @@ function resolveResourceFiles(
         field,
         `${declared} has no JavaScript or TypeScript extension entry`,
       );
-    // Pi loads a directory through its index file or package.json `pi.extensions`.
+    // Pi loads a directory through its index file, package.json
+    // `pi.extensions`, or the files of its `extensions/` subdirectory.
+    const root = `${relative(base, absolute).split(sep).join("/")}/`;
     if (
       (kind === "extensions" || kind === "providers") &&
       lstatSync(absolute).isDirectory() &&
       !["index.ts", "index.js", "package.json"].some((entry) =>
-        files.includes(
-          `${relative(base, absolute).split(sep).join("/")}/${entry}`,
-        ),
-      )
+        files.includes(`${root}${entry}`),
+      ) &&
+      !files.some((file) => file.startsWith(`${root}extensions/`))
     )
       throw new ManifestError(
         "invalid field",
         field,
-        `${declared} is a directory without index.ts or index.js; name the extension file itself, add an index file, or list the entries in a package.json "pi.extensions"`,
+        `${declared} is a directory without index.ts or index.js; name the extension file itself, add an index file, put the extensions in an extensions/ folder inside it, or list the entries in a package.json "pi.extensions"`,
       );
     for (const file of files)
       output.push({
