@@ -300,6 +300,9 @@ export function projectProtection(
         throw new PiShipError(
           "POLICY_DENIED",
           "Managed projects cannot protect a linked .claude directory while hooks are denied",
+          {
+            userAction: `Make ${path} a real directory in the project instead of a link to elsewhere, then start again`,
+          },
         );
       directories.push(path);
     }
@@ -318,6 +321,9 @@ export function projectProtection(
         throw new PiShipError(
           "POLICY_DENIED",
           "Managed package permission providers cannot use a linked project .pi directory",
+          {
+            userAction: `Make ${path} a real directory in the project instead of a link to elsewhere, then start again`,
+          },
         );
       directories.push(path);
     }

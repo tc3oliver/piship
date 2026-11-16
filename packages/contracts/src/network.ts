@@ -357,7 +357,11 @@ function loadCertificates(paths: readonly string[]): string[] {
       throw new PiShipError(
         "CONFIG_INVALID",
         `Enterprise CA bundle contains no PEM certificate: ${path}`,
-        { component: "network" },
+        {
+          component: "network",
+          userAction:
+            "Point network.tls.additionalCA (or the variable it names) at a PEM file of -----BEGIN CERTIFICATE----- blocks; convert a DER file with openssl x509 -inform der -in <file> -out <file>.pem",
+        },
       );
     output.push(...certificates);
   }
@@ -379,7 +383,11 @@ export function countCertificates(paths: readonly string[]): number {
         throw new PiShipError(
           "CONFIG_INVALID",
           `Enterprise CA bundle contains a certificate that does not parse: ${path}`,
-          { component: "network" },
+          {
+            component: "network",
+            userAction:
+              "Replace that bundle with the CA certificates exported again as PEM; one damaged block fails the whole bundle",
+          },
         );
       }
       count += 1;

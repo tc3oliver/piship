@@ -1824,6 +1824,24 @@ describe("discoverProjectResources", () => {
     expect(parsed.ignored.map((item) => item.rule.id)).toEqual(["p.allow-all"]);
   });
 
+  it("names the fix for a restriction file that is not JSON", () => {
+    const root = dir("restrict-broken");
+    write(join(root, ".piship", "policy.json"), "{ rules: [");
+    const found = discoverProjectResources(
+      identifyProject(root, trust),
+      managed,
+      { homeDir: home },
+    );
+    expect(() => readProjectRestrictions(found)).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_INVALID",
+        userAction: expect.stringMatching(
+          /^Fix the JSON syntax in .*policy\.json, then start again$/,
+        ),
+      }),
+    );
+  });
+
   it("does not read a restriction file that escapes the root", () => {
     const outside = dir("outside-policy");
     write(join(outside, "policy.json"), "not json");

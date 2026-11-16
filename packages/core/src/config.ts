@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, renameSync } from "node:fs";
 import { PiShipError } from "@piship/contracts";
 import {
-  CONFIG_KEYS,
   type AccessManifest,
+  CONFIG_KEYS,
   type ConfigKey,
   THINKING_LEVELS,
 } from "@piship/schema";
@@ -179,8 +179,11 @@ export function setPreference(
   key: string,
   value: string | undefined,
   onNotice?: (notice: string) => void,
+  /** The installed command, named in the refusals' next step. */
+  command?: string,
 ): UserPreferences {
   const policy = policyView(access, appTheme);
+  const explain = command ? `${command} config explain` : "config explain";
   const recovered = recoverPreferences(path);
   // Never write over a damaged file that could not be moved aside.
   if (!recovered.moved && recovered.error) throw recovered.error;
@@ -209,21 +212,31 @@ export function setPreference(
       throw new PiShipError(
         "POLICY_DENIED",
         `User preferences can only narrow the distribution allowlist; not allowed: ${widening.join(", ")}`,
-        { component: "config" },
+        {
+          component: "config",
+          userAction: `List only models the distribution allows (${command ? `${command} models` : "the models command"} lists them), or ask your administrator to allow more`,
+        },
       );
     const next = { ...current, modelsAllowed: list };
     writePreferences(path, next);
     return next;
   }
+  const sensitive =
+    /^(identity|credential|inference|network|variables|models)(\.|$)/.test(key);
   if (!(CONFIG_KEYS as readonly string[]).includes(key))
     throw new PiShipError(
       "POLICY_DENIED",
-      /^(identity|credential|inference|network|variables|models)(\.|$)/.test(
-        key,
-      )
+      sensitive
         ? `${key} is security-sensitive and cannot be set by a user preference`
         : `Unknown preference ${key}; use one of ${[...CONFIG_KEYS, "models.allowed"].join(", ")}`,
-      { component: "config" },
+      {
+        component: "config",
+        ...(sensitive
+          ? {
+              userAction: `Your administrator sets ${key} in the distribution; ${explain} shows what you can set`,
+            }
+          : {}),
+      },
     );
   const configKey = key as ConfigKey;
   if (
@@ -235,6 +248,7 @@ export function setPreference(
       `${key} is enforced by the distribution and cannot be overridden`,
       {
         component: "config",
+        userAction: `${explain} shows which settings you can change; ask your administrator to change ${key}`,
       },
     );
   if (value !== undefined) {

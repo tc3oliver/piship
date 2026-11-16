@@ -2722,9 +2722,12 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         keyId: KEY.id,
         ...(sequence === undefined ? {} : { sequence }),
       });
-    await expect(sign(1)).rejects.toThrow(
-      /Channel sequence must increase \(current 1\)/,
-    );
+    await expect(sign(1)).rejects.toMatchObject({
+      message: expect.stringMatching(
+        /Channel sequence must increase \(current 1\)/,
+      ),
+      userAction: "Pass --sequence 2 or higher, or leave --sequence out",
+    });
     await expect(sign(0)).rejects.toThrow(/must increase/);
     const b = project({ version: "1.1.0" });
     const next = await build(b.path, { outputRoot: join(dir, "b") });

@@ -88,6 +88,7 @@ describe("OIDC discovery with httpTransport: http-allowed", () => {
       message: expect.stringContaining(
         "authorization_endpoint is plain HTTP to login.acme.example, which is public",
       ),
+      userAction: expect.stringContaining("publish https endpoints"),
     });
     await expect(
       provider({ jwks_uri: "http://8.8.8.8/jwks" }, true).configuration(),

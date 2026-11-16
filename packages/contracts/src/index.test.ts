@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { createServer as createHttpServer } from "node:http";
-import { createServer as createHttpsServer } from "node:https";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,23 +12,23 @@ import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
 import {
-  PiShipError,
-  SecretValue,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
   checkDestination,
   createDispatcher,
   createManagedFetch,
+  DEFAULT_NETWORK_POLICY,
   formatError,
+  PiShipError,
   parseRetryAfter,
   principalDigest,
   principalId,
   principalKey,
   redact,
-  samePrincipal,
   redactValue,
+  SecretValue,
+  samePrincipal,
   sanitizeManagedEnvironment,
-  DEFAULT_NETWORK_POLICY,
   trimTrailingSlashes,
 } from "./index.js";
 
@@ -321,7 +321,12 @@ describe("network policy", () => {
         ...DEFAULT_NETWORK_POLICY,
         additionalCA: [join(directory, "empty.pem")],
       }),
-    ).toThrow("contains no PEM certificate");
+    ).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining("contains no PEM certificate"),
+        userAction: expect.stringContaining("network.tls.additionalCA"),
+      }),
+    );
     // Refusal of a disabled-TLS environment is covered by the
     // assertTlsVerificationEnabled test above and, end to end, by the managed
     // E2E launch; this test never disables verification in its own process.

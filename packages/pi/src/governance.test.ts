@@ -205,7 +205,11 @@ describe("managed model governance on the pinned Pi runtime", () => {
     );
     await expect(
       runtime.login("openai", "api_key", {} as never),
-    ).rejects.toMatchObject({ code: "POLICY_DENIED" });
+    ).rejects.toMatchObject({
+      code: "POLICY_DENIED",
+      userAction:
+        "Sign in with acme login in a terminal; the distribution supplies the model credentials",
+    });
     await expect(
       runtime.setRuntimeApiKey("openai", "sk-user-supplied"),
     ).rejects.toMatchObject({ code: "POLICY_DENIED" });

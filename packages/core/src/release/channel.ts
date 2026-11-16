@@ -16,21 +16,21 @@ import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
 import { syncDirectory, temporarySibling } from "@piship/credentials";
 import { RELEASE_CHANNELS, type UpdateTransport } from "@piship/schema";
 import { sha256File } from "../archive.js";
-import type { DistributionLock } from "../lock-schema.js";
+import { canonicalJson } from "../digest.js";
 import { channelTrustFromLock } from "../lock.js";
+import type { DistributionLock } from "../lock-schema.js";
 import {
   buildSignatureEnvelope,
   type KeyedSigner,
   keyFingerprint,
   pemSigner,
   type SignatureEntry,
+  type SignatureEnvelope,
   signVerified,
+  type TrustedKey,
   verifySignature,
   verifyThreshold,
-  type SignatureEnvelope,
-  type TrustedKey,
 } from "../signing.js";
-import { canonicalJson } from "../digest.js";
 import { CHANNEL_SCHEMA } from "./metadata.js";
 import { refreshRoot, roleTrust, rootExpired } from "./root.js";
 import { readSourceFile } from "./source.js";
@@ -420,6 +420,7 @@ export async function signChannel(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Unknown channel ${options.channel}`,
+      { userAction: `Use one of ${RELEASE_CHANNELS.join(", ")}` },
     );
   // An unreadable or non-Ed25519 key fails here, before anything is written.
   const accepted: TrustedKey[] = [];
@@ -536,6 +537,9 @@ export async function signChannel(
       throw new PiShipError(
         "CONFIG_INVALID",
         `Channel sequence must increase (current ${previous.sequence})`,
+        {
+          userAction: `Pass --sequence ${previous.sequence + 1} or higher, or leave --sequence out`,
+        },
       );
     // Both files are prepared, and the signature checked against the
     // signer's public key, before the channel directory is touched: a

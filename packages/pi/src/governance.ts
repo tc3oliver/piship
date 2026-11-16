@@ -599,6 +599,9 @@ export function governModelRuntime(
         "Provider login is disabled; this distribution manages credentials",
         {
           component: "inference",
+          userAction: managed.command
+            ? `Sign in with ${managed.command} login in a terminal; the distribution supplies the model credentials`
+            : "Nothing to sign in to here; the distribution supplies the model credentials",
         },
       );
     };
@@ -608,6 +611,7 @@ export function governModelRuntime(
         "User-supplied API keys are disabled in managed mode",
         {
           component: "inference",
+          userAction: `The distribution supplies the model credentials; choose an allowed model with /model${managed.command ? ` (${managed.command} models lists them)` : ""}, or ask your administrator for access to another`,
         },
       );
     };
