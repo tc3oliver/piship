@@ -208,6 +208,17 @@ extra: true
     );
   });
 
+  it("shows a binary file's YAML errors as a few short snippets, not its content", () => {
+    const line = `\u001b[31m${"\u0000x: : [".repeat(200)}`;
+    const error = failure(manifest(`${line}\n`.repeat(100)));
+    expect(error.kind).toBe("YAML parse failure");
+    expect(error.errors.length).toBe(11);
+    expect(error.message).toMatch(/\d+ more YAML errors not shown/);
+    expect(error.message).not.toContain("\u0000");
+    expect(error.message).not.toContain("\u001b");
+    expect(error.message.length).toBeLessThan(6000);
+  });
+
   it("names a key repeated in one mapping and says to merge the blocks", () => {
     const error = failure(
       manifest(`${valid}updates:\n  channel: stable\nupdates:\n  trust: {}\n`),

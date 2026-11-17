@@ -5,6 +5,7 @@ import { isLoopbackHost } from "@piship/contracts";
 import { RuntimeReferenceError, resolveTemplate } from "@piship/schema";
 import {
   abandonedTemporaryCount,
+  compareVersions,
   installHome,
   inspectInstalledLauncher,
   installedRuntimeMatches,
@@ -163,7 +164,13 @@ function updateDoctor(
         requireTarget: true,
         verifyContents: false,
       });
-      ok("rollback", `${status.previous} retained`);
+      // After a rollback the retained release is the newer one: update returns to it.
+      if (status.active && compareVersions(status.previous, status.active) > 0)
+        ok(
+          "rollback",
+          `${status.previous} retained, newer than the active ${status.active}; use ${ctx.metadata.app.command} update to return to it`,
+        );
+      else ok("rollback", `${status.previous} retained`);
     } catch (error) {
       warn(
         "rollback",
