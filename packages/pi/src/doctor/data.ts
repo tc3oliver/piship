@@ -118,7 +118,8 @@ export interface AccessData {
     readonly runtime: ActivatedAccess["runtime"]["kind"];
     /** Origin of the managed endpoint, when there is one. */
     readonly gatewayOrigin?: string;
-    readonly allowedModels: number;
+    /** How many models are allowed, or "any" when nothing restricts them. */
+    readonly allowedModels: number | "any";
     readonly selectedModel?: string;
   };
   readonly activationError?: string;
@@ -620,7 +621,9 @@ async function collectAccess(
           activation: {
             runtime: activated.runtime.kind,
             ...(gatewayOrigin ? { gatewayOrigin } : {}),
-            allowedModels: activated.config.allowedModels.length,
+            allowedModels: activated.config.modelsRestricted
+              ? activated.config.allowedModels.length
+              : "any",
             ...(activated.selectedModel
               ? { selectedModel: activated.selectedModel }
               : {}),

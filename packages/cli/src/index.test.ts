@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markLocalBuild, PI_VERSION, shellArg } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -671,6 +671,21 @@ describe("help", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/^ {2}validate\s+Check a manifest/m);
     expect(result.stdout).toContain("piship <command> --help");
+  });
+
+  it("asks to add the bin directory to PATH only when it is not there", async () => {
+    const bin = join(tmpdir(), "piship-help-bin");
+    vi.stubEnv("PISHIP_BIN_HOME", bin);
+    try {
+      vi.stubEnv("PATH", "/usr/bin");
+      expect((await run(["--help"])).stdout).toContain(
+        `Install defaults: ${bin} (add to PATH yourself)`,
+      );
+      vi.stubEnv("PATH", `/usr/bin${delimiter}${bin}`);
+      expect((await run(["--help"])).stdout).not.toContain("add to PATH");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([

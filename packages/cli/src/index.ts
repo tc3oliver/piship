@@ -1200,7 +1200,7 @@ export async function runCli(
   if (command === undefined || command === "--help" || command === "-h") {
     const width = Math.max(...commands.map((item) => item.length)) + 2;
     output.stdout(
-      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  -h, --help     Show this help\n  -v, --version  Show PiShip version`,
+      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()}${pathHint(binHome()) ? " (add to PATH yourself)" : ""}\n\nOptions:\n  -h, --help     Show this help\n  -v, --version  Show PiShip version`,
     );
     return 0;
   }
@@ -1559,7 +1559,7 @@ async function runAuthoring(
     markLocalBuild(built);
     output.stderr(unqualifiedBuildNotice(target));
     output.stdout(
-      `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
+      `Built ${built}\nNext: node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user; ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke first if you have not.`,
     );
   }
   return 0;
@@ -1655,7 +1655,7 @@ async function runDevOrTest(
     output.stdout(
       rest.includes("--json")
         ? result.stdout.trim()
-        : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
+        : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
     );
   else if (!interactive) output.stdout(result.stdout.trim());
   // A declared server that did not start is a broken build, not a pass.

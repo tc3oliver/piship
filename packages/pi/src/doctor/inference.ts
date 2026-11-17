@@ -13,6 +13,6 @@ export function inferenceGroup(data: DoctorData, out: DoctorSection): void {
   else if (access.activation)
     out.ok(
       "models",
-      `${access.activation.allowedModels} allowed; default ${access.activation.selectedModel ?? "Pi default"}`,
+      `${access.activation.allowedModels === "any" ? "any model" : access.activation.allowedModels} allowed; default ${access.activation.selectedModel ?? "Pi default"}`,
     );
 }

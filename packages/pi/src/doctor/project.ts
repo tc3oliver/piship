@@ -57,7 +57,9 @@ export function projectGroup(data: DoctorData, out: DoctorSection): void {
   }
   const trust = inspection.extensionTrust;
   if (!trust) return;
-  const label = "project trust for extensions";
+  // Whether extensions such as pi-code get the project's Claude Code
+  // configuration; not the `extensions` trust dimension.
+  const label = "Claude Code config";
   const reason = `${trust.decidedBy ? `${trust.decidedBy.path}: ` : ""}${trust.reason}`;
   // Nothing found and the managed default withholding trust is the intended
   // state of a project the policy does not know, not a problem to fix.
@@ -76,5 +78,6 @@ export function projectGroup(data: DoctorData, out: DoctorSection): void {
       label,
       "asks at launch; extensions such as pi-code load the project Claude Code configuration only when it is approved",
     );
+  else if (trust.surfaces.length === 0) out.info(label, "none found");
   else out.ok(label, `trusted (${trust.reason})`);
 }

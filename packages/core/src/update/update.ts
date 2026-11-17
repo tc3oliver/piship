@@ -114,7 +114,7 @@ export function selectChannel(
   };
 }
 
-function resolveSource(
+export function resolveSource(
   lock: DistributionLock,
   override: string | undefined,
   env: NodeJS.ProcessEnv,
@@ -123,14 +123,24 @@ function resolveSource(
   if (override) return checkUpdateSource(override, "--from", transport);
   const template = lock.updates?.source;
   if (!template)
-    throw new PiShipError(
-      "UPDATE_FAILED",
-      `${lock.app.name} declares no update source; pass --from <directory|url>`,
-      {
-        component: "update",
-        userAction: `Run ${lock.app.command} update --from <directory|url> with the update source your distribution owner publishes`,
-      },
-    );
+    throw lock.deployment.mode === "personal"
+      ? // The personal owner builds their own updates; no one publishes them.
+        new PiShipError(
+          "UPDATE_FAILED",
+          `${lock.app.name} has no update source configured`,
+          {
+            component: "update",
+            userAction: `Rebuild and reinstall it from your piship.yaml, or set updates.source there, run piship lock, and reinstall; update --from <directory|url> takes a one-off source`,
+          },
+        )
+      : new PiShipError(
+          "UPDATE_FAILED",
+          `${lock.app.name} declares no update source; pass --from <directory|url>`,
+          {
+            component: "update",
+            userAction: `Run ${lock.app.command} update --from <directory|url> with the update source your distribution owner publishes`,
+          },
+        );
   let resolved: string;
   try {
     resolved = resolveTemplate(
