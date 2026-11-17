@@ -820,11 +820,12 @@ describe("McpGovernor environment filtering (test runtime)", () => {
     await governor.start();
     const echo = governor.tools().find((t) => t.tool === "echo_env");
     const names = JSON.parse((await echo?.call({}))?.text ?? "[]") as string[];
-    expect(names.filter((n) => !osAdded(n))).toEqual([
-      "DOCS_MODE",
-      "LANG",
-      "PATH",
-    ]);
+    // On Windows PATH is one of the variables osAdded already filters out.
+    expect(names.filter((n) => !osAdded(n))).toEqual(
+      process.platform === "win32"
+        ? ["DOCS_MODE", "LANG"]
+        : ["DOCS_MODE", "LANG", "PATH"],
+    );
   });
 });
 
