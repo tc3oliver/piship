@@ -373,6 +373,35 @@ describe.runIf(tasksRun)("a background task", () => {
     );
   });
 
+  it("tells the person when a task ends on its own, not only the model", async () => {
+    const { session, call } = await open();
+    const notices: [string, string][] = [];
+    session.attachNotices((message, level) => notices.push([message, level]));
+    const { ctx } = context();
+    await call("task_start")({ command: "echo done" }, ctx);
+    await call("task_start")(
+      { command: "echo failing && false" },
+      context(true).ctx,
+    );
+    await vi.waitFor(() => expect(notices).toHaveLength(2));
+    expect(notices).toEqual(
+      expect.arrayContaining([
+        [
+          expect.stringMatching(
+            /^Background task \w+ exited \(exit code 0\): echo done$/,
+          ),
+          "info",
+        ],
+        [
+          expect.stringMatching(
+            /exited \(exit code 1\): echo failing && false$/,
+          ),
+          "warning",
+        ],
+      ]),
+    );
+  });
+
   it("refuses an id that is not this session's", async () => {
     const { call } = await open();
     const other = await open();

@@ -125,6 +125,15 @@ const WRAPPERS = new Set([
   "parallel",
 ]);
 
+/** Why a grant cannot name `program` in its commands; undefined when it can. */
+export function programRefusal(program: string): string | undefined {
+  if (!PROGRAM.test(program))
+    return `command is not a plain program name: ${program}`;
+  if (WRAPPERS.has(program.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "")))
+    return `command runs other commands, so it cannot be granted: ${program}`;
+  return undefined;
+}
+
 const isStrings = (value: unknown): boolean =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -212,6 +221,30 @@ function hostForms(resource: string): string[] {
   return port ? [url.hostname, `${url.hostname}:${port}`] : [];
 }
 
+/**
+ * The programs a grant must list to cover a shell command, one per command
+ * of its chain; undefined when no grant can cover it. Plain commands only:
+ * quoted metacharacters are data, while substitutions, redirects, wrappers,
+ * globbed program names, ambiguous syntax and `git push` fail closed.
+ */
+export function grantShellPrograms(
+  command: string,
+  platform: GrantPlatform = process.platform === "win32" ? "win32" : "posix",
+): string[] | undefined {
+  const parts =
+    command.length > 4096 || /[\n\r]/.test(command)
+      ? undefined
+      : chainSegments(command, platform);
+  const programs = parts?.map((part) => grantCommandWords(part, platform)?.[0]);
+  return programs?.length &&
+    programs.every(
+      (program) => program !== undefined && !/[{}*?[]/.test(program),
+    ) &&
+    gitPushResources(command).length === 0
+    ? (programs as string[])
+    : undefined;
+}
+
 function askCovered(
   grant: TaskGrant,
   ask: GrantAsk,
@@ -235,26 +268,10 @@ function askCovered(
     case "tool.execute":
       return list(scope.tools).includes(ask.resource);
     case "shell.execute": {
-      // Plain commands only, chained or not: every one must start with a
-      // granted program. Quoted metacharacters are data, while
-      // substitutions, redirects, wrappers and ambiguous syntax fail closed.
-      const parts =
-        ask.resource.length > 4096 || /[\n\r]/.test(ask.resource)
-          ? undefined
-          : chainSegments(ask.resource, platform);
-      const programs = parts?.map(
-        (part) => grantCommandWords(part, platform)?.[0],
-      );
+      const programs = grantShellPrograms(ask.resource, platform);
       return (
         programs !== undefined &&
-        programs.length > 0 &&
-        programs.every(
-          (program) =>
-            program !== undefined &&
-            !/[{}*?[]/.test(program) &&
-            list(scope.commands).includes(program),
-        ) &&
-        gitPushResources(ask.resource).length === 0
+        programs.every((program) => list(scope.commands).includes(program))
       );
     }
     case "mcp.tool.call":
@@ -444,14 +461,8 @@ export function validateGrant(grant: TaskGrant, limits: GrantLimits): string[] {
       errors.push(`invalid MCP server id: ${server}`);
   }
   for (const program of scope.commands ?? []) {
-    if (!PROGRAM.test(program))
-      errors.push(`command is not a plain program name: ${program}`);
-    else if (
-      WRAPPERS.has(program.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, ""))
-    )
-      errors.push(
-        `command runs other commands, so it cannot be granted: ${program}`,
-      );
+    const refusal = programRefusal(program);
+    if (refusal) errors.push(refusal);
   }
   for (const tool of scope.tools ?? []) {
     if (GLOB_CHARS.test(tool))
