@@ -281,14 +281,15 @@ function reportLogin(
   access: DistributionAccess,
   result: LoginResult,
 ): void {
+  // Without an identity provider (personal by design) only the credential is news.
   const identity = result.identity
-    ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
-    : "No identity provider is configured.";
+    ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).\n`
+    : "";
   const credential =
     result.credential.state === "delegated"
       ? `Credential: ${access.credentialMode} (no stored secret).`
       : `Credential: ${access.credentialMode} stored in ${access.store?.description ?? "no store"}${result.credential.metadata?.expires_at ? `; expires ${result.credential.metadata.expires_at}` : ""}.`;
-  ctx.out(`${identity}\n${credential}`);
+  ctx.out(`${identity}${credential}`);
   for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
   if (access.store?.kind === "file")
     ctx.err(

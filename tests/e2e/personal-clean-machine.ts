@@ -378,7 +378,8 @@ export function myPiLocalFlow(): void {
     // secret store, from standard input and never as an argument.
     const login = await s.run(["login"], `${key}\n`);
     expect(login.status, login.stderr).toBe(0);
-    expect(login.stdout).toContain("No identity provider is configured");
+    expect(login.stdout).not.toContain("identity provider");
+    expect(login.stdout).toContain("Credential: ");
     expect(existsSync(join(state, "secrets"))).toBe(true);
     expect(existsSync(join(state, "identity"))).toBe(false);
     expectOnlyInStore(s.state, join(state, "secrets"), key);
