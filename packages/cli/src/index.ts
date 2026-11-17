@@ -34,6 +34,7 @@ import {
   formatDiff,
   formatExplanation,
   formatInspection,
+  failedMcpServers,
   formatSmokeSummary,
   describeFootprint,
   formatMigrationReport,
@@ -1688,13 +1689,22 @@ export async function runCli(
           `Pi launch failed: ${launcherFailure({ ...result, stderr }, "Pi")}${hint}`,
         );
       }
+      const declared = Object.entries(manifest.resources)
+        .filter(([, paths]) => paths.length)
+        .map(([kind]) => kind);
+      const failedMcp = failedMcpServers(result.stdout);
       if (command === "test")
         output.stdout(
           rest.includes("--json")
             ? result.stdout.trim()
-            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed\n${formatSmokeSummary(result.stdout.trim())}\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`,
+            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
         );
       else if (!interactive) output.stdout(result.stdout.trim());
+      // A declared server that did not start is a broken build, not a pass.
+      if (failedMcp.length && !interactive)
+        throw new Error(
+          `MCP server ${failedMcp.join(", ")} failed to start; see the mcp lines above.`,
+        );
     } else if (command === "doctor") {
       const artifact = artifactFor(target, command, output.stderr);
       const app = payloadApp(artifact);
