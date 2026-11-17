@@ -781,8 +781,12 @@ export class PolicyEngine {
     const written = this.#decideWritten(action, resource);
     if (written.effect === "deny") return written;
     // A deny or ask rule also judges each command run through `sudo`,
-    // `env`, `nice` and the like; its allow rules never widen this way.
-    const stricter = this.#unprefixed(action, resource)
+    // `env`, `nice` and the like, and each fragment of a command that cannot
+    // be split; its allow rules never widen this way.
+    const stricter = [
+      ...this.#unprefixed(action, resource),
+      ...this.#fragments(action, resource),
+    ]
       .map((inner) => this.#decide(action, inner))
       .filter(
         (decision) =>
@@ -796,6 +800,24 @@ export class PolicyEngine {
     if (effect === written.effect) return written;
     const deciding = stricter.find((entry) => entry.effect === effect);
     return { ...(deciding as PolicyDecision), resource };
+  }
+
+  /**
+   * A command too long or too complex to split (a substitution, a grouping,
+   * a backtick) cut at every character that could start a command, quotes
+   * ignored, so deny and ask rules still see `rm -rf /` in `x $(y); rm -rf /`.
+   * It over-splits; that only ever refuses more, as allow rules never match
+   * a fragment.
+   */
+  #fragments(action: string, resource: string): string[] {
+    if (action !== "shell.execute" || chainSegments(resource, PLATFORM))
+      return [];
+    const fragments = new Set<string>();
+    for (const part of resource.split(/[;&|()`<>\r\n]/)) {
+      const fragment = part.trim().replace(/\$$/, "").trim();
+      if (fragment && fragment !== resource) fragments.add(fragment);
+    }
+    return [...fragments];
   }
 
   /** POSIX shell commands of `resource` with their transparent prefixes removed. */

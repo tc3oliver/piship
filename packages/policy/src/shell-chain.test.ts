@@ -428,3 +428,62 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe("commands that cannot be split", () => {
+  const denying = new PolicyEngine({
+    policy: makePolicy({
+      default: "allow",
+      enforced: [rule("e.rm", "shell.execute", "rm -rf**", "deny")],
+      defaults: [rule("d.push", "shell.execute", "git push*", "ask")],
+    }),
+    context: ctx,
+  });
+  const run = (resource: string) =>
+    denying.evaluate({ action: "shell.execute", resource });
+
+  it.each([
+    ["substitution", "true $(echo); rm -rf /"],
+    ["inside a substitution", "echo $(rm -rf /)"],
+    ["backtick", "echo `rm -rf /`"],
+    ["subshell", "(cd /; rm -rf /)"],
+    ["process substitution", "cat <(rm -rf /)"],
+    ["variable in quotes", 'echo "$HOME"; rm -rf /'],
+    ["over 4096 characters", `echo ${"a".repeat(4100)}; rm -rf /`],
+    ["over 4096 with a newline", `echo ${"a".repeat(4100)}\nrm -rf /`],
+  ])("still reaches deny rules in each command: %s", (_, command) => {
+    expect(run(command)).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+  });
+
+  it("still reaches ask rules in each command", () => {
+    expect(run("true $(echo) && git push origin main")).toMatchObject({
+      effect: "ask",
+      ruleId: "d.push",
+    });
+  });
+
+  it("leaves a command no rule targets alone", () => {
+    for (const command of [
+      "echo $(date)",
+      "echo `whoami` > /dev/null",
+      `echo ${"a".repeat(4100)}; ls`,
+    ])
+      expect(run(command)).toMatchObject({
+        effect: "allow",
+        ruleId: BUILTIN_DEFAULT_RULE,
+      });
+  });
+
+  it("never lets an allow rule match a fragment", () => {
+    const asking = new PolicyEngine({
+      policy: makePolicy({
+        default: "ask",
+        defaults: [rule("d.id", "shell.execute", "id", "allow")],
+      }),
+      context: ctx,
+    });
+    for (const command of ["true $(id)", "true `id`", "(id)", "true; (id)"])
+      expect(
+        asking.evaluate({ action: "shell.execute", resource: command }).effect,
+      ).toBe("ask");
+  });
+});
