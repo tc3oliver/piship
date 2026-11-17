@@ -1127,14 +1127,15 @@ async function prepareLock(
 /**
  * What to do after an install, by deployment mode: a managed distribution
  * needs its runtime variables set and a `login`; a personal one with Pi's
- * own providers signs in inside Pi.
+ * own providers signs in inside Pi. `signedIn` is `signedInClasses` of the
+ * adopted state, which a `piship test` run may already have signed in.
  */
 export function installNext(
   receipt: {
     app: { command: string };
     payload: string;
   },
-  signedIn = false,
+  signedIn: readonly string[] = [],
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const command = receipt.app.command;
@@ -1169,7 +1170,7 @@ export function installNext(
         ? ` An IDE or desktop launcher does not read your shell profile, so set ${variables.join(", ")} there too.`
         : "";
     // An adopted (test or earlier) state may already hold a session.
-    return signedIn
+    return signedIn.includes("an identity session")
       ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.${launcher}`
       : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.${launcher}`;
   }
@@ -1179,7 +1180,9 @@ export function installNext(
   )
     return `Next: run ${command}, then sign in inside Pi with /login. ${command} --help lists its commands.`;
   if (lock?.access?.credential.provider === "local-secret")
-    return `Next: run ${command} login to store the API key, then ${command}. ${command} --help lists its commands.`;
+    return signedIn.includes("a runtime credential")
+      ? `Next: run ${command}; its API key is already stored. ${command} --help lists its commands.`
+      : `Next: run ${command} login to store the API key, then ${command}. ${command} --help lists its commands.`;
   return `Next: run ${command} --help to see its commands, then ${command} to start.`;
 }
 /** What to do about a `runtime.pi` that is not the pinned Pi. */
@@ -1880,9 +1883,7 @@ async function runLifecycle(
         pathHint(dirname(receipt.commandPath)),
         installNext(
           receipt,
-          signedInClasses(
-            runtimeStateDirectory({ value: receipt.app.id }),
-          ).includes("an identity session"),
+          signedInClasses(runtimeStateDirectory({ value: receipt.app.id })),
         ),
       ]
         .filter(Boolean)

@@ -1,6 +1,6 @@
 # Your first distribution
 
-This page takes you from nothing to an installed, branded Pi command: `init`, `validate`, `test`, `build`, `install`. It builds a personal distribution, which signs in with Pi's own providers; a company distribution adds identity, a credential broker, and a gateway ([enterprise integration](enterprise-integration.md)). The commands below were run in this order on a clean checkout.
+This page takes you from nothing to an installed, branded Pi command: `init`, `validate`, `test`, `build`, `install`. It builds a personal distribution, which signs in with Pi's own providers ([step 4](#4-edit-and-repeat) shows how to point it at your own OpenAI-compatible endpoint instead); a company distribution adds identity, a credential broker, and a gateway ([enterprise integration](enterprise-integration.md)). The commands below were run in this order on a clean checkout.
 
 You need Node.js 22.19 or newer (and npm 11 or newer once you add Pi packages, for `piship lock`) and a PiShip checkout that has been built once:
 
@@ -76,7 +76,16 @@ piship validate my-agent/piship.yaml
 piship test my-agent/piship.yaml
 ```
 
-`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming `build` and the install command.
+`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming the install command.
+
+A distribution that stores its own API key (`credential.provider: local-secret`, as in the [own endpoint example](#use-your-own-openai-compatible-endpoint)) has no key on the first run, so `test` fails with `CREDENTIAL_REQUIRED` and names the built command. Store the key with it, then test again:
+
+```bash
+dist/my-agent/bin/my-agent login       # paste the key; dist\my-agent\bin\my-agent.cmd on Windows
+piship test my-agent/piship.yaml --model-request   # also sends one request to the endpoint
+```
+
+The key lands in the state `test` created, which `install` adopts in step 6, so the installed command needs no second `login`. Run that `login` only after a `test`: before one, it creates state that `install` refuses without `--use-existing-state`.
 
 The first build or test downloads the runtime packages from the npm registry (registry.npmjs.org, or the registry npm is configured to use), which can take a few minutes; later builds use the cache. In a terminal it shows each step as it goes, such as `Installing the runtime packages (npm ci; needs npm registry access, up to 10 minutes)...`; without a terminal (a script or CI) it still prints that one line on stderr before npm starts, and `release` likewise before its npm audit.
 
@@ -107,7 +116,7 @@ mcp:
   servers:
     notes:
       transport: stdio
-      module: ./resources/mcp/notes-server.mjs
+      module: ./resources/mcp/notes-server.mjs   # copy it first, see below
 models:
   default: anthropic/claude-sonnet-4-5       # provider/model, as Pi lists it
   allowed: [anthropic/claude-sonnet-4-5]
@@ -116,7 +125,40 @@ policy:
     - { id: ask-push-main, action: git.push, resource: origin/main, effect: ask }
 ```
 
+`init` creates only `resources/AGENTS.md`; every other path must exist before `validate` accepts it. The `notes` server above is the personal example's, so copy it from your PiShip checkout:
+
+```bash
+mkdir -p my-agent/resources/mcp
+cp ~/src/piship/examples/personal/resources/mcp/notes-server.mjs my-agent/resources/mcp/
+```
+
 Each field is described in the manifest reference: [resources](manifest.md#resources-and-trust-classes), [Pi packages](manifest.md#pi-packages-v1alpha6), [MCP](manifest.md#mcp), [models](manifest.md#access-fields-v1alpha2-and-later), and [policy](manifest.md#policy). The [personal example](../examples/personal/piship.yaml) declares instructions, skills, an extension, prompts, a theme, and an MCP server. `test` reports what loaded (`resources  instructions 1, skills 1, extensions 1, ...` and one line per MCP server), and the built command's `policy explain <action> <resource>` shows which rule decides an action (`dist/<id>/bin/<command> policy explain git.push origin/main`).
+
+### Use your own OpenAI-compatible endpoint
+
+To use a model server you run (llama.cpp, Ollama, vLLM, or a hosted OpenAI-compatible API) instead of Pi's providers, replace the `credential` and `inference` entries `init` wrote with:
+
+```yaml
+variables: [MY_AGENT_MODEL_URL]   # set where my-agent runs, such as http://127.0.0.1:8080/v1
+credential:
+  provider: local-secret           # `my-agent login` asks for the key; `logout` deletes it
+  storage:
+    provider: system               # or `file`: an owner-only plaintext file
+inference:
+  provider: openai-compatible
+  baseUrl: ${MY_AGENT_MODEL_URL}
+  liveCatalog: true                # `my-agent models` shows which allowed models the server lists
+models:
+  default: local/coder             # sent to the server as-is: a name it serves, such as an Ollama tag
+  allowed: [local/coder]
+  catalog:
+    local/coder:
+      name: Local Coder
+      contextWindow: 32000
+      maxOutputTokens: 2048
+```
+
+Set `MY_AGENT_MODEL_URL` in the shell before `test`, then store the key as [step 3](#3-test-it) shows. For a server without a key, use `credential: {provider: none}` without `storage`. The [local model variant](../examples/personal/README.md#local-model-variant) of the personal example is this setup with a stand-in server to try it against, and the [manifest reference](manifest.md#access-fields-v1alpha2-and-later) describes each field.
 
 After you change `piship.yaml` or a resource, run `dev` or `test` again. A lock that no longer matches is relocked for you (`Relocked <path>/piship.lock`). With Pi packages declared, that happens only while no package input changed (a package declaration, `packageTrust`, the release settings, or a stored package lockfile): packages are resolved over the network and pinned in the lock, so after such a change `dev` and `test` stop and ask you to run `lock` yourself. Bundled `fd` and `rg` are read from PiShip's download cache when the old lock pins them, so they do not stop it:
 
@@ -149,7 +191,7 @@ my-agent --help
 my-agent
 ```
 
-A personal distribution signs in inside Pi: run `my-agent` and use `/login`. A managed distribution instead needs its runtime variables set and a `my-agent login`; the install prints which.
+A personal distribution signs in inside Pi: run `my-agent` and use `/login`. One with its own endpoint already has the key you stored during `test`; without that, run `my-agent login` once. A managed distribution instead needs its runtime variables set and a `my-agent login`; the install prints which.
 
 To install a rebuilt copy over the one you have, run the install again with `--replace`; its state is kept.
 

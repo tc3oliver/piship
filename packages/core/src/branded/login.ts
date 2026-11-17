@@ -292,7 +292,7 @@ function reportLogin(
   for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
   if (access.store?.kind === "file")
     ctx.err(
-      "Warning: credentials use the explicitly enabled plaintext file fallback, not platform secure storage.",
+      "Warning: storage.provider: file keeps credentials in an owner-only plaintext file, not platform secure storage.",
     );
 }
 

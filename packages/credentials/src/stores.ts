@@ -569,7 +569,8 @@ function windowsAccount(env: NodeJS.ProcessEnv = process.env): string | null {
 
 export class RestrictedFileSecretStore implements SecretStore {
   readonly kind = "file";
-  readonly description = "restricted plaintext file (explicit opt-in fallback)";
+  readonly description =
+    "restricted plaintext file (storage.provider: file, owner-only)";
   readonly #platform: NodeJS.Platform;
   readonly #run: CommandRunner;
   readonly #account: string | null;
