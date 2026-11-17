@@ -656,7 +656,7 @@ describe("renderDoctor", () => {
     );
   });
 
-  it("keeps runtime, company config, and integration apart", () => {
+  it("keeps runtime, distribution config, and integration apart", () => {
     const report = renderDoctor(
       doctorData("managed", { access: accessData() }),
     );
@@ -670,7 +670,7 @@ describe("renderDoctor", () => {
     expect(json.verification.integration.state).toBe("not-applicable");
     expect(group(report.render(), "Verification")).toEqual([
       expect.stringContaining("runtime"),
-      expect.stringContaining("company config"),
+      expect.stringContaining("distribution config"),
       expect.stringContaining("integration"),
     ]);
   });

@@ -134,7 +134,8 @@ describe("personal access modes without enterprise identity (local fixtures)", (
           mode === "local-secret" ? `${acceptedKey}\n` : undefined,
         );
         expect(login.status, login.stderr).toBe(0);
-        expect(login.stdout).toContain("No identity provider is configured");
+        expect(login.stdout).not.toContain("identity provider");
+        expect(login.stdout).toContain("Credential: ");
         if (mode === "none") expect(login.stdout).toContain("no stored secret");
       };
       const state = join(temp, "state", "mypi");

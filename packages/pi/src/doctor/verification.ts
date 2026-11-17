@@ -13,7 +13,7 @@ export function verificationGroup(
   report.setVerification(states);
   for (const [label, item] of [
     ["runtime", states.runtime],
-    ["company config", states.config],
+    ["distribution config", states.config],
     ["integration", states.integration],
   ] as const) {
     const line =

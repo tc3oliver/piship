@@ -100,7 +100,8 @@ describe("personal local model variant (loopback model server)", () => {
     expect(before.stderr).toContain("CREDENTIAL_REQUIRED");
     const login = await run(["login"], `${key}\n`);
     expect(login.status, login.stderr).toBe(0);
-    expect(login.stdout).toContain("No identity provider is configured");
+    expect(login.stdout).not.toContain("identity provider");
+    expect(login.stdout).toContain("Credential: ");
 
     const smoke = await run(["--smoke-model"]);
     expect(smoke.status, smoke.stderr).toBe(0);
