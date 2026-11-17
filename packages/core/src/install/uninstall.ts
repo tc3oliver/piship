@@ -68,7 +68,16 @@ function holdForUninstall(
   try {
     receipt = readInstallReceipt(id);
   } catch (error) {
-    if (!recoverableReceipt(error)) throw error;
+    if (!recoverableReceipt(error)) {
+      // An uninstall without --purge kept the state; a second one finds only it.
+      if (
+        error instanceof Error &&
+        error.message.startsWith("No PiShip installation recorded") &&
+        existsSync(runtimeStateDirectory({ value: id }))
+      )
+        error.message += ` Its state remains in ${runtimeStateDirectory({ value: id })}; to delete it: ${pishipCommand()} purge ${id} --yes`;
+      throw error;
+    }
     return holdDamagedForUninstall(id);
   }
   const apps = appDirectory(id);

@@ -54,6 +54,8 @@ PiShip does not replace your identity provider, gateway, or sandbox. It connects
 
 You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces; macOS has its sandbox built in.
 
+A distribution of your own bundles Pi's search tools, `fd` and `rg`, only for its `release.targets`: by default `linux-x64`, `darwin-arm64` and `win32-x64` (`linux-arm64` and `darwin-x64` can be added). On any other machine, such as Linux on ARM, install `fd` and `rg` on `PATH`; without them a start runs Pi offline rather than wait for Pi to download them.
+
 Building your own instead? [Your first distribution](docs/first-distribution.md) goes from `init` to an installed command in five steps, and a personal distribution needs no identity provider or gateway.
 
 ```bash

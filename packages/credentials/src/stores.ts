@@ -241,6 +241,11 @@ export class MacKeychainSecretStore implements SecretStore {
 const SECRET_SERVICE_CHUNK = 8000;
 const SECRET_SERVICE_ACTION =
   "Install and unlock a Secret Service keyring (such as GNOME Keyring) and libsecret's secret-tool (on Debian and Ubuntu, the gnome-keyring and libsecret-tools packages), or set credential.storage.provider to file in piship.yaml, then lock and build the distribution again";
+// Over SSH a keyring may be installed while no D-Bus session bus runs.
+const NO_SESSION_BUS =
+  /autolaunch D-Bus|DBUS_SESSION_BUS_ADDRESS|Cannot spawn a message bus/i;
+const NO_SESSION_BUS_ACTION =
+  "No D-Bus session bus is running (typical over SSH). Start one and unlock the keyring in it: run dbus-run-session -- bash, then in that shell gnome-keyring-daemon --unlock --components=secrets (type the keyring password, then Ctrl-D), and run the command again there. Or set credential.storage.provider to file in piship.yaml, then lock and build the distribution again";
 
 /** Linux Secret Service (GNOME Keyring, KWallet) through libsecret's secret-tool. */
 export class SecretServiceSecretStore implements SecretStore {
@@ -258,7 +263,13 @@ export class SecretServiceSecretStore implements SecretStore {
     );
   }
   #unavailable(detail: string): PiShipError {
-    return unavailable(this.description, detail, SECRET_SERVICE_ACTION);
+    return unavailable(
+      this.description,
+      detail,
+      NO_SESSION_BUS.test(detail)
+        ? NO_SESSION_BUS_ACTION
+        : SECRET_SERVICE_ACTION,
+    );
   }
   /**
    * A lookup that finds nothing exits 1 with no message, and so does one on a

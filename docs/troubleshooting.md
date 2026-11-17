@@ -60,6 +60,15 @@ Every code PiShip reports is defined in `packages/contracts/src/errors.ts`. A re
 `storage.provider: system` on Linux uses the Secret Service through libsecret's `secret-tool`. WSL, an SSH session, and a headless server often have neither `secret-tool` nor an unlocked keyring, and `login` then fails with `SECRET_STORE_UNAVAILABLE`, for example `Linux Secret Service secret store is unavailable: secret-tool was not found (spawnSync secret-tool ENOENT)`. Either:
 
 - install and unlock a Secret Service keyring and `secret-tool` (on Debian and Ubuntu, the `gnome-keyring` and `libsecret-tools` packages, with a D-Bus session and the keyring unlocked), then run `<command> login` again; or
+- with a keyring installed but no D-Bus session bus (typical over SSH: `secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY`), start a session bus and unlock the keyring in it, then sign in from that shell:
+
+  ```bash
+  dbus-run-session -- bash
+  gnome-keyring-daemon --unlock --components=secrets   # type the keyring password, then Ctrl-D
+  <command> login
+  ```
+
+  The keyring stays unlocked only while that shell runs; or
 - set `credential.storage: {provider: file}` in `piship.yaml` (a managed manifest also sets `acknowledgePlaintext: true`), then lock and build the distribution again and run `<command> login`. Secrets are then owner-only plaintext files under the state directory, not platform secure storage.
 
 A sign-in that stops because the store cannot be reached leaves nothing behind. A discarded marker lists the references it names that were never confirmed written (`unconfirmed`: a first sign-in names its new reference before it writes the secret, until the write succeeds). When the marker's store command is not installed, those references are dropped at the next `login`, `logout`, `sandbox login`, or `purge`, and the command says which; so switching to the file store is enough. A confirmed reference (a secret a logout or replacement could not delete, or one a first sign-in wrote before it was interrupted) stays tracked and fails closed even then, since the command may be missing only now (a reduced `PATH` in a launcher, an uninstalled package) while the secret exists: restore the command, then run `<command> logout`. A marker left by v0.8.0 has no `unconfirmed` list and cannot tell the two apart, so all of its references are treated as unconfirmed and dropped when the command is not installed; one that names a secret that really exists leaves it in the platform store, never used: remove it with the platform store's own tool (Keychain Access, Credential Manager, or a Secret Service browser such as Seahorse) if it matters. References whose store answers but fails (a locked keyring, no D-Bus session) stay tracked, never used: `<command> doctor` reports them, and `<command> login` or `<command> logout` deletes them once that store works.

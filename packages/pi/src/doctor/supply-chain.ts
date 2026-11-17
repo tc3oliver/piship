@@ -17,7 +17,12 @@ export function supplyChainGroup(data: DoctorData, out: DoctorSection): void {
       `${missing.join(" and ")} not found, and not bundled (runtime.searchTools): Pi would download them at startup and wait for it, so a launch skips the download and runs Pi offline; install them, or bundle them in the distribution`,
     );
   for (const tool of searchToolStatus(data.ctx.metadata, data.ctx.agentDir))
-    if (tool.pinned)
+    if (!tool.bundled)
+      out.info(
+        `search tool ${tool.tool}`,
+        `not bundled for ${process.platform}-${process.arch} (the lock pins ${tool.version} for other targets only); Pi uses the one on PATH`,
+      );
+    else if (tool.pinned)
       out.ok(
         `search tool ${tool.tool}`,
         `${tool.version} bundled; Pi runs it from its tool directory before PATH`,

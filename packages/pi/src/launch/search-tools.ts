@@ -386,12 +386,10 @@ export function deferredToolDownloads(
   platform: NodeJS.Platform = process.platform,
   target = `${process.platform}-${process.arch}`,
 ): SearchTool[] {
-  // A lock that pins tools for other targets only bundles nothing here.
   const pinned = SEARCH_TOOLS.filter((tool) => lock.searchTools?.[tool]);
   const bundled =
     !!lock.searchTools &&
-    (!pinned.length ||
-      pinned.some((tool) => lock.searchTools?.[tool]?.targets[target]));
+    (!pinned.length || searchToolsBundledFor(lock, target));
   if (
     lock.deployment.mode !== "personal" ||
     bundled ||
@@ -402,6 +400,14 @@ export function deferredToolDownloads(
   return toolsPiWouldDownload(agentDir, env, platform);
 }
 
+/** Whether the lock pins a search tool for `target`; one that pins them for other targets only bundles nothing here. */
+export function searchToolsBundledFor(
+  lock: Pick<DistributionLock, "searchTools">,
+  target = `${process.platform}-${process.arch}`,
+): boolean {
+  return SEARCH_TOOLS.some((tool) => lock.searchTools?.[tool]?.targets[target]);
+}
+
 /**
  * Doctor's view: each bundled tool and whether Pi's tool directory holds the
  * pinned executable.
@@ -410,7 +416,13 @@ export function searchToolStatus(
   lock: Pick<DistributionLock, "searchTools">,
   agentDir: string,
   target = `${process.platform}-${process.arch}`,
-): { tool: SearchTool; version: string; path: string; pinned: boolean }[] {
+): {
+  tool: SearchTool;
+  version: string;
+  path: string;
+  bundled: boolean;
+  pinned: boolean;
+}[] {
   return SEARCH_TOOLS.flatMap((tool) => {
     const locked = lock.searchTools?.[tool];
     if (!locked) return [];
@@ -424,6 +436,7 @@ export function searchToolStatus(
         tool,
         version: locked.version,
         path,
+        bundled: !!entry,
         pinned: !!entry && matches(path, entry.binary),
       },
     ];

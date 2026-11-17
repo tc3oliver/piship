@@ -33,7 +33,7 @@ describe("doctor --json", () => {
     const command = join(artifact, "bin", "mypi");
     writeFileSync(
       command,
-      '#!/usr/bin/env node\nprocess.stderr.write("no model reachable\\n");\nprocess.exit(3);\n',
+      '#!/usr/bin/env node\nprocess.stderr.write("Notice: fd not found on PATH and not bundled\\nno model reachable\\n");\nprocess.exit(3);\n',
     );
     chmodSync(command, 0o755);
     const out: string[] = [];
@@ -48,7 +48,8 @@ describe("doctor --json", () => {
       distribution: { id: "mypi", version: "1.0.0" },
       healthy: false,
     });
-    expect(report.error).toMatch(/^Pi launch failed: .*no model reachable/);
+    // The start notice is left out, so the real error leads.
+    expect(report.error).toBe("Pi launch failed: no model reachable");
     expect(err.join("\n")).toContain("Pi launch failed");
   });
 });

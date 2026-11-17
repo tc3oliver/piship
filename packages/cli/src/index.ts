@@ -845,6 +845,14 @@ function launcherFailure(
   what: string,
 ): string {
   const message = result.stderr.trim();
+  // A start notice (such as the fd/rg PI_OFFLINE one) precedes the real
+  // error; leave it out unless it is all the launcher said.
+  const errors = message
+    .split("\n")
+    .filter((line) => !line.startsWith("Notice: "))
+    .join("\n")
+    .trim();
+  if (errors) return errors;
   if (message) return message;
   const how =
     result.status === null

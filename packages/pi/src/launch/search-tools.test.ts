@@ -27,6 +27,7 @@ import {
   installSearchTools,
   piToolDirectory,
   searchToolStatus,
+  searchToolsBundledFor,
   toolsPiWouldDownload,
 } from "./search-tools.js";
 
@@ -150,6 +151,13 @@ describe("bundled search tools at launch", () => {
     expect(
       deferredToolDownloads(personal, agentDir, env, "linux", "linux-x64"),
     ).toEqual([]);
+    expect(searchToolsBundledFor(lock, "linux-arm64")).toBe(false);
+    expect(searchToolsBundledFor(lock, "linux-x64")).toBe(true);
+    // Doctor reports the tool as not bundled here rather than as missing.
+    expect(searchToolStatus(lock, agentDir, "linux-arm64")).toMatchObject([
+      { tool: "fd", bundled: false, pinned: false },
+      { tool: "rg", bundled: false, pinned: false },
+    ]);
   });
 
   it("does nothing for a distribution without bundled tools", () => {
