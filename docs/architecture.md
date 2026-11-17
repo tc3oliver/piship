@@ -15,7 +15,7 @@ The layers arrived in order. The personal distribution core came first (`piship/
 
 | Package | Responsibility |
 | --- | --- |
-| `@piship/schema` | Validates `piship/v1alpha1` through `piship/v1alpha6`, including the v1alpha4 `updates` and `release` sections, the v1alpha5 update trust bootstrap, the v1alpha6 tool, model, package, and `data` sections, runtime references, and step-wise alpha migration from a registry keyed by `(from, to)` |
+| `@piship/schema` | Validates `piship/v1alpha1` through `piship/v1alpha6` and the stable `piship/v1`, including the v1alpha4 `updates` and `release` sections, the v1alpha5 update trust bootstrap, the v1alpha6 tool, model, package, and `data` sections, runtime references, and step-wise alpha migration from a registry keyed by `(from, to)` |
 | `@piship/contracts` | Separate `IdentityProvider`, `CredentialProvider`, `SecretStore`, and `InferenceProvider` contracts; the policy decision and audit event contracts; `SecretValue` redaction; `PiShipError` codes; managed network policy; the owned temporary directories every package creates and reclaims ([below](#temporary-directories)) |
 | `@piship/policy` | Policy engine and rule precedence, glob and path matching, `policy explain` rendering, project identification and resource discovery, resource and provider trust, capability state |
 | `@piship/audit` | Metadata-first audit log with file and HTTP sinks, the failure matrix, and local metrics, including update and rollback outcome counters |
