@@ -341,9 +341,9 @@ export async function sandboxPull(
       return;
     }
   }
-  const head = (await git(root, ["rev-parse", "HEAD"])).stdout
-    .toString("utf8")
-    .trim();
+  // With no commit yet, rev-parse exits 128 but still prints "HEAD".
+  const parsed = await git(root, ["rev-parse", "HEAD"]);
+  const head = parsed.code === 0 ? parsed.stdout.toString("utf8").trim() : "";
   const base = checkpoint.meta.baseHead;
   if (branch === undefined && base && head && base !== head)
     ctx.out(
