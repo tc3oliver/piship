@@ -69,7 +69,7 @@ A user-local, content-addressed store of file objects can supply the runtime, Pi
 For a `piship/v1alpha2` payload the branded command:
 
 1. Loads the target and distribution lock, checks the lock against the install receipt, then boots the pinned Pi version without scanning the rest of the payload (`runtime.verifyAtLaunch: true` scans it).
-2. Refuses to run if `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+2. With `NODE_TLS_REJECT_UNAUTHORIZED=0`, refuses to run in managed mode (`TLS_POLICY_VIOLATION`); in personal mode removes the variable for this launch with a notice and goes on.
 3. Resolves the allowlisted `${NAME}` runtime references from the launch environment; a missing value fails with `CONFIG_UNAVAILABLE`.
 4. In managed mode, removes ambient credential variables (and proxy variables unless inherited) from the process environment, then applies the proxy and CA policy.
 5. Loads the identity session from state, refreshing it when it is about to expire; without one it fails with `IDENTITY_REQUIRED`.
