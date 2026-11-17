@@ -576,14 +576,18 @@ describe("the --yolo indicator", () => {
     }
   });
 
-  it("has no indicator, and no /auto in a personal session, without it", async () => {
+  it("has no indicator in a personal session without it", async () => {
     const { session } = await open({ mode: "personal" });
     const { handlers, commands } = hooks(session);
     const started = context(async () => false);
     await handlers.get("session_start")?.({}, started.ctx);
     expect(started.status.at(-1)).toBeUndefined();
     expect(started.notices).toEqual([]);
-    expect(commands.has("auto")).toBe(false);
+    const shown = context(async () => false);
+    await commands.get("auto")?.handler("status", shown.ctx);
+    expect(shown.notices.at(-1)?.message).toMatch(
+      /^Auto mode: off: auto mode is for managed distributions/,
+    );
   });
 
   it("ends with /auto off, restores the prompts, and is recorded", async () => {

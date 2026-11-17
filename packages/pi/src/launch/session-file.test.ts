@@ -198,7 +198,7 @@ describe("--session <id>", () => {
     const { file, id } = persistedSession();
     const manager = SessionManager.open(file, sessionDir, project);
     expect(brandedResumeLine(manager, "mypi")).toBe(
-      `Resume it governed with: mypi --session ${id} (the pi command above starts it without mypi's policy)`,
+      `Resume this session governed with: mypi --session ${id} (Pi's own pi command starts it without mypi's policy)`,
     );
     expect(
       brandedResumeLine(SessionManager.inMemory(project), "mypi"),

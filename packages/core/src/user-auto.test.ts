@@ -120,10 +120,19 @@ describe("<command> auto", () => {
       expect(events()).toEqual([]);
     }
     const personal = context(undefined, "personal");
+    const policyFile = join(personal.ctx.stateDir, "config", "policy.json");
     await expect(runAuto(personal.ctx, ["on"])).rejects.toMatchObject({
       code: "POLICY_DENIED",
       message: expect.stringContaining("in personal mode you own the policy"),
+      userAction: expect.stringContaining(
+        `allow rules for what should run without a prompt to ${policyFile}, or start one session with ${personal.ctx.metadata.app.command} --yolo`,
+      ),
     });
+    // Status says the same, not "not allowed by this distribution".
+    await runAuto(personal.ctx, ["status"]);
+    expect(personal.out.at(-1)).toBe(
+      `Auto mode: off: auto mode is for managed distributions; in personal mode you own the policy. Add allow rules for what should run without a prompt to ${policyFile}, or start one session with ${personal.ctx.metadata.app.command} --yolo.`,
+    );
   });
 
   it("switches on and off when allowed, audited before it changes", async () => {
