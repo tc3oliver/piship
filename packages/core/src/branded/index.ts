@@ -8,7 +8,12 @@ export {
   governedLock,
   openAccess,
 } from "./context.js";
-export { runAuto, userAutoDenied, yoloRefusal } from "./auto.js";
+export {
+  personalAutoStatus,
+  runAuto,
+  userAutoDenied,
+  yoloRefusal,
+} from "./auto.js";
 export { runConfig } from "./config.js";
 export { releasesWithoutDataSweep, sweepDistributionData } from "./data.js";
 export {

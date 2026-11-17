@@ -798,5 +798,5 @@ export function brandedResumeLine(
     ? sessionManager.getSessionFile()
     : undefined;
   if (!file || !existsSync(file)) return undefined;
-  return `Resume it governed with: ${command} --session ${sessionManager.getSessionId()} (the pi command above starts it without ${command}'s policy)`;
+  return `Resume this session governed with: ${command} --session ${sessionManager.getSessionId()} (Pi's own pi command starts it without ${command}'s policy)`;
 }

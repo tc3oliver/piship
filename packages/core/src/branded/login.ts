@@ -636,7 +636,9 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     .map(([, name]) => name);
   if (!kept.length) {
     ctx.out(
-      `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; ${sessions}.`,
+      Object.values(before).some(Boolean)
+        ? `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; ${sessions}.`
+        : `There was no stored sign-in to clear for ${ctx.metadata.app.name}; ${sessions}.`,
     );
     return;
   }

@@ -236,6 +236,15 @@ describe("branded logout", () => {
     ]);
   });
 
+  it("says there was no stored sign-in when nothing was stored", async () => {
+    const { ctx, out, err } = context();
+    await runLogout(ctx);
+    expect(err).toEqual([]);
+    expect(out).toEqual([
+      "There was no stored sign-in to clear for AcmeCode; sessions were preserved.",
+    ]);
+  });
+
   it("clears local credentials and attributes the audit to the (issuer, subject) principal", async () => {
     const { ctx, out, err, path } = context();
     const secrets = await signIn(ctx);

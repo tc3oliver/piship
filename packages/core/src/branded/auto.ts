@@ -1,5 +1,6 @@
 // `<command> auto on|off|status`: the user's auto mode switch, which the
 // distribution must allow (`policy.userAuto: allowed`).
+import { join } from "node:path";
 import { formatError, PiShipError, principalId } from "@piship/contracts";
 import type { DistributionLock } from "../index.js";
 import {
@@ -12,21 +13,39 @@ import {
 import { type BrandedContext, governedLock, recordAudit } from "./context.js";
 import { lifecycleNetwork } from "./lifecycle.js";
 
+const PERSONAL_AUTO =
+  "Auto mode is for managed distributions; in personal mode you own the policy";
+
+/** What a personal user does instead of auto mode. */
+function personalAutoAction(
+  command: string,
+  stateDir: string,
+  grants: boolean,
+): string {
+  return `Add allow rules for what should run without a prompt to ${join(stateDir, "config", "policy.json")}, or start one session with ${command} --yolo${grants ? ", or type /grant <folder> in a session to approve a folder for a while" : ""}`;
+}
+
+/** `auto status` in a personal distribution, after "Auto mode: ". */
+export function personalAutoStatus(
+  command: string,
+  stateDir: string,
+  grants = false,
+): string {
+  return `off: ${PERSONAL_AUTO.charAt(0).toLowerCase()}${PERSONAL_AUTO.slice(1)}. ${personalAutoAction(command, stateDir, grants)}.`;
+}
+
 /** Why this distribution's user cannot switch auto mode on. */
 export function userAutoDenied(
   command: string,
   mode: "personal" | "managed",
+  stateDir: string,
   grants = false,
 ): PiShipError {
   return mode === "personal"
-    ? new PiShipError(
-        "POLICY_DENIED",
-        "Auto mode is for managed distributions; in personal mode you own the policy",
-        {
-          component: "policy",
-          userAction: `Add allow rules for what should run without a prompt to config/policy.json in the ${command} state directory${grants ? ", or type /grant <folder> in a session to approve a folder for a while" : ""}`,
-        },
-      )
+    ? new PiShipError("POLICY_DENIED", PERSONAL_AUTO, {
+        component: "policy",
+        userAction: personalAutoAction(command, stateDir, grants),
+      })
     : new PiShipError(
         "POLICY_DENIED",
         "This distribution does not allow auto mode (policy.userAuto is off)",
@@ -90,11 +109,13 @@ export async function runAuto(
   const policy = lock?.governance.manifest.policy;
   const status = userAutoStatus(ctx.stateDir, policy, ctx.mode);
   if (action === "status") {
-    ctx.out(`Auto mode: ${describeUserAuto(status)}`);
+    ctx.out(
+      `Auto mode: ${ctx.mode === "personal" ? personalAutoStatus(command, ctx.stateDir) : describeUserAuto(status)}`,
+    );
     return;
   }
   if (!lock || !policy || !status.allowed) {
-    if (action === "on") throw userAutoDenied(command, ctx.mode);
+    if (action === "on") throw userAutoDenied(command, ctx.mode, ctx.stateDir);
     // Turning off is always possible; a switch left from an earlier
     // release that allowed it has no effect, so nothing is audited.
     setUserAuto(ctx.stateDir, false);

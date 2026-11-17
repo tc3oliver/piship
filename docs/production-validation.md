@@ -89,6 +89,6 @@ An organization that prohibits public session export therefore needs an endpoint
 
 - Pi adds its own `/bug` hint to a PiShip identity or credential failure in the TUI ([#139](https://github.com/tc3oliver/piship/issues/139)). The command itself sends its report through PiShip's network policy, so a managed launch, which is private-only, refuses it unless the report service's host is allowed ([security](security.md#network-and-tls)).
 - A user's `!` shell command still writes its full output through Pi's temp file, so a temp filesystem that fills while Pi writes it (`ENOSPC`) is not contained ([#64](https://github.com/tc3oliver/piship/issues/64), [security](security.md#tools-shell-and-plan-mode)).
-- The terminal title is still "π", and the exit hint still names `pi --session-dir ... --session ...`. PiShip prints `Resume it governed with: <command> --session <id>` after it, and the branded command takes `--session <id>`; without it the branded command continues the project's most recent session, and `--new-session` starts a new one ([architecture](architecture.md)).
+- The terminal title is still "π", and the exit hint still names `pi --session-dir ... --session ...`. PiShip prints `Resume this session governed with: <command> --session <id>` after it, and the branded command takes `--session <id>`; without it the branded command continues the project's most recent session, and `--new-session` starts a new one ([architecture](architecture.md)).
 
 The [status page](status.md#known-limits-and-non-claims) lists these with the rest of the known limits.

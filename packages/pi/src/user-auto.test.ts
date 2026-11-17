@@ -484,10 +484,24 @@ describe("user auto mode in a governed session", () => {
     }
   });
 
-  it("is never offered in personal mode", async () => {
-    const { session } = await open({ mode: "personal", on: true });
+  it("is never on in personal mode, and /auto says how to own the policy", async () => {
+    const { session, stateDir } = await open({ mode: "personal", on: true });
     expect(session.userAuto.active).toBe(false);
-    expect(hooks(session).commands.has("auto")).toBe(false);
+    const auto = hooks(session).commands.get("auto");
+    if (!auto) throw new Error("/auto is not registered");
+    const policyFile = join(stateDir, "config", "policy.json");
+    const status = context(async () => false);
+    await auto.handler("status", status.ctx);
+    expect(status.notices.at(-1)).toContain(
+      "Auto mode: off: auto mode is for managed distributions; in personal mode you own the policy.",
+    );
+    expect(status.notices.at(-1)).toContain(policyFile);
+    expect(status.notices.at(-1)).toContain("--yolo");
+    const on = context(async () => false);
+    await auto.handler("on", on.ctx);
+    expect(on.notices.at(-1)).toMatch(/^POLICY_DENIED.*you own the policy/);
+    expect(on.notices.at(-1)).toContain(policyFile);
+    expect(session.userAuto.active).toBe(false);
   });
 
   it("switches with /auto, audited, and stores the switch for later sessions", async () => {

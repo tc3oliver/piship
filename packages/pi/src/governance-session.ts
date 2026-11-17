@@ -589,6 +589,7 @@ export class GovernanceSession {
         throw userAutoDenied(
           this.options.lock.app.command,
           this.options.lock.deployment.mode,
+          this.options.stateDir,
           this.grantsAllowed,
         );
       this.audit.assertAvailable();

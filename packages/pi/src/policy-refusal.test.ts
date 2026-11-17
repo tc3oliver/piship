@@ -24,6 +24,19 @@ describe("a policy refusal", () => {
     );
   });
 
+  it("adds no second period after a reason that ends a sentence", () => {
+    expect(
+      policyRefusal(
+        gov,
+        decision({ reason: "No network from the shell." }),
+        "curl",
+        false,
+      ),
+    ).toBe(
+      "curl is not allowed by acme rule no-curl: No network from the shell. Ask the distribution owner.",
+    );
+  });
+
   it("says the user declined, not that a rule did", () => {
     const text = policyRefusal(
       gov,

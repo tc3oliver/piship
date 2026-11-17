@@ -14,7 +14,11 @@ import {
   redact,
   type ToolCallFailure,
 } from "@piship/contracts";
-import { describeUserAuto, describeYolo } from "@piship/core";
+import {
+  describeUserAuto,
+  describeYolo,
+  personalAutoStatus,
+} from "@piship/core";
 import type { ToolExposure } from "@piship/schema";
 import { CODEMODE_TOOL, widerExposure } from "./governance/exposure.js";
 import { remoteWorkdir } from "./governance/sandbox.js";
@@ -59,7 +63,11 @@ async function autoCommand(
       gov.yolo
         ? describeYolo(mode)
         : mode === "personal"
-          ? "yolo is off for this session"
+          ? personalAutoStatus(
+              gov.options.lock.app.command,
+              gov.options.stateDir,
+              gov.grantsAllowed,
+            )
           : describeUserAuto(gov.userAuto)
     }`;
   else if (action === "on" || action === "off")
@@ -281,16 +289,17 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
             "warning",
           );
       });
-      // Managed, or a personal session started with --yolo (to see it and
-      // end it): a personal user owns the policy (config/policy.json).
-      if (gov.options.lock.deployment.mode === "managed" || gov.yolo)
-        pi.registerCommand("auto", {
-          description:
-            gov.options.lock.deployment.mode === "managed"
-              ? "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply"
-              : "Yolo: show whether every ask is approved without a prompt in this session (status), or end it (off)",
-          handler: (args, ctx) => autoCommand(gov, args, ctx),
-        });
+      // In personal mode the user owns the policy (config/policy.json), so
+      // /auto explains that, and shows or ends a --yolo session.
+      pi.registerCommand("auto", {
+        description:
+          gov.options.lock.deployment.mode === "managed"
+            ? "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply"
+            : gov.yolo
+              ? "Yolo: show whether every ask is approved without a prompt in this session (status), or end it (off)"
+              : "Auto mode: in personal mode you own the policy; status says how to approve actions without a prompt",
+        handler: (args, ctx) => autoCommand(gov, args, ctx),
+      });
       if (gov.grantsAllowed)
         pi.registerCommand("grant", {
           description:
