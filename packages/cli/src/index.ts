@@ -22,6 +22,7 @@ import {
   checkGovernance,
   inertRuleWarnings,
   shellGlobWarnings,
+  mcpModuleWarnings,
   unapprovedLoadWarnings,
   emptyPackageWarnings,
   checkPiVersion,
@@ -1468,6 +1469,7 @@ async function runAuthoring(
       ...shellGlobWarnings(manifest),
       ...inertRuleWarnings(manifest),
       ...checkSkills(manifest, target),
+      ...mcpModuleWarnings(manifest, target),
     ])
       output.stderr(`Warning: ${warning.path}: ${warning.message}`);
     for (const item of unenforced)
@@ -1604,7 +1606,10 @@ async function runDevOrTest(
       `${pishipCommand()} dev starts the interactive session and needs a terminal. Without one, run ${pishipCommand()} dev ${shellArg(target)} --smoke (the headless launch, JSON) or ${pishipCommand()} test ${shellArg(target)} (the acceptance smoke).`,
     );
   const manifest = readManifest(target);
-  for (const warning of checkSkills(manifest, target))
+  for (const warning of [
+    ...checkSkills(manifest, target),
+    ...mcpModuleWarnings(manifest, target),
+  ])
     output.stderr(`Warning: ${warning.path}: ${warning.message}`);
   await prepareLock(target, manifest, output);
   const progress = progressReporter(output.stderr);

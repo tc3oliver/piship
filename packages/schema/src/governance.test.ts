@@ -1485,7 +1485,15 @@ describe("v1alpha3 MCP", () => {
     [
       { transport: "stdio", command: "docs; rm -rf ~" },
       "mcp.servers.docs.command",
-      "without path separators",
+      "put its arguments in args",
+    ],
+    [
+      {
+        transport: "stdio",
+        command: "npx -y @modelcontextprotocol/server-memory",
+      },
+      "mcp.servers.docs.command",
+      "put its arguments in args",
     ],
     [
       { transport: "stdio", command: "..", args: [] },

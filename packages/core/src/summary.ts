@@ -79,6 +79,21 @@ function oneLine(text: string): string {
   return line.length > 160 ? `${line.slice(0, 157)}...` : line;
 }
 
+/**
+ * An MCP start failure on one line. Node's stderr starts with a source
+ * location, so the stderr part keeps the line naming the error instead.
+ */
+function mcpReason(reason: string): string {
+  const marker = " (stderr: ";
+  const at = reason.indexOf(marker);
+  if (at < 0) return oneLine(reason);
+  let stderr = reason.slice(at + marker.length);
+  if (stderr.endsWith(")")) stderr = stderr.slice(0, -1);
+  const lines = stderr.split(" | ");
+  const line = lines.find((item) => /Error\b/.test(item)) ?? lines.at(-1);
+  return oneLine(`${reason.slice(0, at)}${marker}${line})`);
+}
+
 const row = (label: string, value: string) => `  ${label.padEnd(11)}${value}`;
 /** A labelled list: the label on the first line only. */
 const rows = (label: string, values: readonly string[]) =>
@@ -310,7 +325,7 @@ export function formatSmokeSummary(
           "mcp",
           gov.mcp.map(
             (server) =>
-              `${server.id} ${server.state}${server.reason ? `: ${oneLine(server.reason)}` : ""}`,
+              `${server.id} ${server.state}${server.reason ? `: ${mcpReason(server.reason)}` : ""}`,
           ),
         ),
       );

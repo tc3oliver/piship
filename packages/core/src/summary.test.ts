@@ -131,6 +131,29 @@ describe("formatSmokeSummary", () => {
     expect(text.split("\n").at(-1)?.length).toBeLessThan(200);
   });
 
+  it("keeps the stderr line that names the error, not Node's preamble", () => {
+    const text = formatSmokeSummary(
+      JSON.stringify({
+        ...smoke,
+        governance: {
+          ...smoke.governance,
+          mcp: [
+            {
+              id: "weather",
+              state: "failed",
+              reason:
+                "MCP server weather exited (code 1) (stderr: node:internal/modules/esm/resolve:272 | throw new ERR_MODULE_NOT_FOUND( | ^ | Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@modelcontextprotocol/sdk' imported from /x/weather.mjs | Node.js v22.19.0)",
+            },
+          ],
+        },
+      }),
+    );
+    expect(text).toContain(
+      "weather failed: MCP server weather exited (code 1) (stderr: Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@modelcontextprotocol/sdk'",
+    );
+    expect(text).not.toContain("esm/resolve");
+  });
+
   it("names the bundled search tools Pi's find and grep used", () => {
     expect(formatSmokeSummary(JSON.stringify(smoke))).not.toContain(
       "  search ",
