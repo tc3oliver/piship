@@ -57,7 +57,7 @@ export function checkLockedPackageSources(
         "POLICY_DENIED",
         "source",
         `${item.path}@${item.version} comes from ${origin}, which is not in release.sources (${sources.join(", ")})`,
-        undefined,
+        `Add ${origin} to release.sources if it is an approved origin, or resolve the package from one already listed`,
         stage,
       );
     if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(item.integrity))
@@ -76,8 +76,19 @@ export function checkLockedPackageSources(
         "POLICY_DENIED",
         "install-script",
         `${item.path}@${item.version} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
-        undefined,
+        installScriptAction(`${item.path}@${item.version}`),
         stage,
       );
   }
+}
+
+/**
+ * What to do about an unreviewed install script. Only a Pi package closure
+ * entry (`pi-packages/...`) can be reviewed in `release.installScripts`; the
+ * runtime closure is reviewed by PiShip itself.
+ */
+export function installScriptAction(script: string): string | undefined {
+  return script.startsWith("pi-packages/")
+    ? `Review what the script does, then add "${script}" to release.installScripts`
+    : undefined;
 }

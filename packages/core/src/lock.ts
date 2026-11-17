@@ -14,6 +14,7 @@ import {
   PISHIP_SCHEMA_V1ALPHA6,
   readManifest,
   type UpdateTrustKey,
+  type ValidationDiagnostic,
 } from "@piship/schema";
 import { PI_VERSION, PISHIP_VERSION } from "./compatibility.js";
 import { canonicalJson, digest, hash } from "./digest.js";
@@ -226,6 +227,17 @@ export function lockManifest(manifestPath: string): string {
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;
+}
+
+/** Locked Pi packages whose resource filters select nothing, so they load nothing. */
+export function emptyPackageWarnings(lockPath: string): ValidationDiagnostic[] {
+  const lock = JSON.parse(readFileSync(lockPath, "utf8")) as DistributionLock;
+  return (lock.packages ?? [])
+    .filter((item) => item.resources.length === 0)
+    .map((item) => ({
+      path: "resources.packages",
+      message: `package ${item.id} provides no resources under its filters, so it loads nothing; check its filters or remove it`,
+    }));
 }
 /**
  * Relocks offline when no Pi package can resolve differently: the package

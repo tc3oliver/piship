@@ -223,6 +223,7 @@ export function checkGitDeclaration(
       "POLICY_DENIED",
       id,
       `ref ${JSON.stringify(ref)} is not a full commit SHA, which packageTrust.git.requireCommitSha requires`,
+      `Pin the full 40-character commit SHA instead, for example from git ls-remote ${url} ${JSON.stringify(ref)}`,
     );
   if (!ref.trim() || ref.startsWith("-") || /[\s:?*[\\^~]|\.\./.test(ref))
     throw packageError(

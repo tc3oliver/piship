@@ -18,6 +18,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkToolExposure,
+  emptyPackageWarnings,
   LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_V1ALPHA6,
   lockManifest,
@@ -288,5 +289,29 @@ describe("lock piship-lock/v1alpha6", () => {
     expect(() =>
       resolveLock(project(V6.replace("id: acmepi,", "id: radius,"))),
     ).toThrow(expect.objectContaining({ code: "RADIUS_PROVIDER_RESERVED" }));
+  });
+});
+
+describe("emptyPackageWarnings", () => {
+  it("names each locked package whose filters select no resources", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-empty-package-"));
+    roots.push(root);
+    const path = join(root, "piship.lock");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        packages: [
+          { id: "loads", resources: [{ kind: "skills", path: "a" }] },
+          { id: "filtered-out", resources: [] },
+        ],
+      }),
+    );
+    expect(emptyPackageWarnings(path)).toEqual([
+      {
+        path: "resources.packages",
+        message:
+          "package filtered-out provides no resources under its filters, so it loads nothing; check its filters or remove it",
+      },
+    ]);
   });
 });

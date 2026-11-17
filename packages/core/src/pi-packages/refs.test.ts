@@ -219,7 +219,10 @@ describe("git declarations", () => {
       /abbreviated/,
     );
     expect(() => checkGitDeclaration(git(url, "v1.2.0"), managed)).toThrow(
-      /requireCommitSha/,
+      expect.objectContaining({
+        message: expect.stringMatching(/requireCommitSha/),
+        userAction: `Pin the full 40-character commit SHA instead, for example from git ls-remote ${url} "v1.2.0"`,
+      }),
     );
     expect(() => checkGitDeclaration(git(url, "HEAD"), managed)).toThrow(
       /requireCommitSha/,

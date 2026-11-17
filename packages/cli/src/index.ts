@@ -23,6 +23,7 @@ import {
   inertRuleWarnings,
   shellGlobWarnings,
   unapprovedLoadWarnings,
+  emptyPackageWarnings,
   checkPiVersion,
   PI_VERSION,
   checkStateMigration,
@@ -1523,6 +1524,7 @@ async function runAuthoring(
     for (const warning of [
       ...launchWarnings(locked),
       ...unapprovedLoadWarnings(locked),
+      ...emptyPackageWarnings(written),
     ])
       output.stderr(`Warning: ${warning.path}: ${warning.message}`);
     output.stdout(

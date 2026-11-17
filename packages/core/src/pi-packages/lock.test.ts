@@ -455,14 +455,19 @@ describe("Pi packages in the lock", () => {
     const manifest = distribution();
     write(dirname(manifest), { "packages/team/binding.gyp": "{}\n" });
     let key = "";
+    let action: string | undefined;
     try {
       lockPackages(manifest);
     } catch (error) {
       key = /pi-packages\/team\/package@sha256-[0-9a-f]{64}/.exec(
         (error as Error).message,
       )?.[0] as string;
+      action = (error as { userAction?: string }).userAction;
     }
     expect(key).toMatch(/^pi-packages\/team\/package@sha256-[0-9a-f]{64}$/);
+    expect(action).toBe(
+      `Review what the script does, then add "${key}" to release.installScripts`,
+    );
     // The key the gate names is one the manifest can record.
     writeFileSync(
       manifest,
