@@ -212,6 +212,33 @@ export function releaseLogout(
 }
 
 /**
+ * The piship.mjs that can purge `id` once it is uninstalled, as a shell
+ * argument: the extracted release directory it was installed from while that
+ * still holds it, else a placeholder for the release or build. Read it before
+ * the uninstall, which deletes the receipt that records the directory.
+ */
+export function purgeManager(id: string): string {
+  let release: { readonly directory?: string } | undefined;
+  try {
+    const receipt = readInstallReceipt(id);
+    release = receipt.releases.find(
+      (item) => item.version === receipt.active,
+    )?.release;
+  } catch {
+    // No readable receipt: the uninstall itself reports that.
+  }
+  const recorded =
+    typeof release?.directory === "string"
+      ? join(release.directory, "payload", "piship.mjs")
+      : undefined;
+  return recorded && existsSync(recorded)
+    ? shellArg(recorded)
+    : release
+      ? "<release>/payload/piship.mjs"
+      : `dist/${id}/piship.mjs`;
+}
+
+/**
  * Delete, confirming each deletion, the platform secret-store entries that
  * the metadata in `state` references; the file store's go with the state
  * directory. Throws SECRET_STORE_UNAVAILABLE, deleting no state, when one

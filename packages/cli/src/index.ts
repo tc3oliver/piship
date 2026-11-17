@@ -55,6 +55,7 @@ import {
   lockNeedsNetwork,
   lockStatus,
   pishipCommand,
+  purgeManager,
   shellArg,
   signedInClasses,
   markLocalBuild,
@@ -2030,8 +2031,14 @@ async function runLifecycle(
       const live = flags.has("--without-logout")
         ? []
         : signedInClasses(runtimeStateDirectory({ value: first }));
+      const manager = purgeManager(first);
+      const preserved = uninstallDistribution(first, { removeEditedShim });
+      // Run from the installed payload, this piship.mjs is gone now.
+      const script = process.argv[1];
+      const purge =
+        script && !existsSync(script) ? `node ${manager}` : pishipCommand();
       output.stdout(
-        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}\nTo delete it: ${pishipCommand()} purge ${shellArg(first)} --yes`,
+        `Uninstalled ${first}. State preserved: ${preserved}\nTo delete it: ${purge} purge ${shellArg(first)} --yes`,
       );
       if (live.length)
         output.stderr(
