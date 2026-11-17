@@ -1783,10 +1783,11 @@ describe("Pi session seams used by governance", () => {
       expect(seen).toEqual(["file", "inline"]);
     });
 
-    it("keeps an enforced cache warming mode off against /settings and Pi's streaming default", async () => {
-      // Pi's own default, which PiShip overrides by always writing the mode.
-      expect(SettingsManager.inMemory().getCacheWarmingMode()).toBe(
-        "streaming",
+    it("keeps an enforced cache warming mode off against /settings and Pi's own default", async () => {
+      // Pi's own default (streaming through 1.5.0, idle from 1.5.2), which
+      // PiShip overrides by always writing the mode. Only "not off" matters.
+      expect(["streaming", "idle"]).toContain(
+        SettingsManager.inMemory().getCacheWarmingMode(),
       );
       const settingsManager = SettingsManager.inMemory({
         retry: { enabled: false },
