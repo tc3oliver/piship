@@ -40,6 +40,20 @@ const IMPORT: Readonly<Record<Platform, number>> = {
   win32: 0.9,
 };
 
+/** Each platform's median, computed once: the shard sort asks for it per comparison. */
+const MEDIAN: Readonly<Record<Platform, number>> = {
+  linux: median(COLUMN.linux),
+  darwin: median(COLUMN.darwin),
+  win32: median(COLUMN.win32),
+};
+
+function median(column: 0 | 1 | 2): number {
+  const all = Object.values(DURATIONS)
+    .map((seconds) => seconds[column])
+    .sort((a, b) => a - b);
+  return all[Math.floor(all.length / 2)] ?? 0;
+}
+
 function platformOf(platform: NodeJS.Platform): Platform {
   return platform === "darwin" || platform === "win32" ? platform : "linux";
 }
@@ -57,10 +71,7 @@ export function unitSeconds(
   const target = platformOf(platform);
   const known = DURATIONS[unitFileKey(path)];
   if (known) return known[COLUMN[target]] + IMPORT[target];
-  const all = Object.values(DURATIONS)
-    .map((seconds) => seconds[COLUMN[target]])
-    .sort((a, b) => a - b);
-  return (all[Math.floor(all.length / 2)] ?? 0) + IMPORT[target];
+  return MEDIAN[target] + IMPORT[target];
 }
 
 /**
