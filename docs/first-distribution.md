@@ -50,7 +50,7 @@ mkdir "$HOME\agents"; cd "$HOME\agents"
 piship init ./my-agent
 ```
 
-This writes `my-agent/piship.yaml` and `my-agent/resources/AGENTS.md`. The directory name becomes the distribution id and the command name, so it must start with a lowercase letter and use only lowercase letters, digits, and single hyphens. For a directory that does not follow that, such as `my_agent`, name the distribution yourself:
+This writes `my-agent/piship.yaml` and `my-agent/resources/AGENTS.md`. The directory name becomes the distribution id and the command name (uppercase letters in it are lowercased), so it must start with a lowercase letter and use only lowercase letters, digits, and single hyphens. For a directory that does not follow that, such as `my_agent`, name the distribution yourself:
 
 ```bash
 piship init ./my_agent --id my-agent
@@ -154,6 +154,10 @@ A personal distribution signs in inside Pi: run `my-agent` and use `/login`. A m
 To install a rebuilt copy over the one you have, run the install again with `--replace`; its state is kept.
 
 Remove it with `node dist/my-agent/piship.mjs uninstall my-agent` (add `--purge --yes` to delete its state too). Uninstall keeps the state and prints the `purge` command that deletes it; after a release installed with its `install.sh`, that command names the extracted release's own `piship.mjs` while the directory is still there. Once nothing is left in them, uninstall and purge also remove the empty `apps` and `receipts` folders and, at their default locations, `~/.local/share/piship` and `~/.piship`. Commands that take an id (`uninstall`, `purge`, `update`) want `my-agent`, not a path: given `my-agent/piship.yaml` they say so and name the manifest's `app.id`.
+
+## Updating PiShip
+
+To move to a newer PiShip, run `git pull` in your clone, then `npm ci && npm run build`. Rebuild and reinstall the distribution afterwards; [agent setup, step 9](agent-setup.md#9-upgrade-an-existing-distribution) has the full upgrade.
 
 ## Where to go next
 

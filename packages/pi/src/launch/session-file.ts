@@ -43,6 +43,7 @@ export const MAX_RESUME_BYTES = 64 * 1024 * 1024;
 /** Pi reads at most this much of a file to find its header (discovery). */
 const HEADER_SCAN_BYTES = 1024 * 1024;
 const READ_CHUNK = 1024 * 1024;
+const HEADER_CHUNK = 8 * 1024;
 
 type Entry = Record<string, unknown>;
 
@@ -52,43 +53,53 @@ function isEntry(value: unknown): value is Entry {
 
 /** The first record of the file, as Pi's bounded header scan finds it. */
 function readHeader(path: string): Entry | undefined {
-  let text: string;
-  let complete: boolean;
   const fd = openSync(path, "r");
   try {
     const buffer = Buffer.alloc(HEADER_SCAN_BYTES + 1);
     let length = 0;
-    while (length < buffer.length) {
-      const read = readSync(fd, buffer, length, buffer.length - length, null);
-      if (read === 0) break;
+    // The header is the first line: read a little at a time and stop once a
+    // whole line parses, instead of reading the scan limit from every file.
+    for (;;) {
+      const eof = length >= buffer.length;
+      const read = eof
+        ? 0
+        : readSync(
+            fd,
+            buffer,
+            length,
+            Math.min(HEADER_CHUNK, buffer.length - length),
+            null,
+          );
       length += read;
+      const complete = length <= HEADER_SCAN_BYTES;
+      const lines = buffer
+        .subarray(0, Math.min(length, HEADER_SCAN_BYTES))
+        .toString("utf8")
+        .split("\n");
+      // The last line is unfinished while more of the file may follow, and
+      // past the scan limit it is cut; Pi does not read beyond it.
+      const ended = read === 0 && complete;
+      if (!ended) lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let value: unknown;
+        try {
+          value = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!value) continue;
+        return isEntry(value) &&
+          value.type === "session" &&
+          typeof value.id === "string"
+          ? value
+          : undefined;
+      }
+      if (read === 0) return undefined;
     }
-    complete = length <= HEADER_SCAN_BYTES;
-    text = buffer
-      .subarray(0, Math.min(length, HEADER_SCAN_BYTES))
-      .toString("utf8");
   } finally {
     closeSync(fd);
   }
-  const lines = text.split("\n");
-  // Past the scan limit the last line is cut; Pi does not read beyond it.
-  if (!complete) lines.pop();
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!value) continue;
-    return isEntry(value) &&
-      value.type === "session" &&
-      typeof value.id === "string"
-      ? value
-      : undefined;
-  }
-  return undefined;
 }
 
 /**

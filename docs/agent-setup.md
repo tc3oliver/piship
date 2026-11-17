@@ -52,7 +52,7 @@ If the person does not want a clone, use the PiShip CLI that every release archi
 
 **Never run the archive's `install.sh` or `install.ps1` for this.** They install that archive's own distribution (for example `devcode`), not the admin tooling.
 
-What is tested: a payload moved out of its build tree running `init`, `lock`, and `build`, and, once [#418](https://github.com/tc3oliver/piship/pull/418) merges, `validate`, `keygen --encrypt`, `trust-root init`, `release`, `verify-release`, and `sign-channel`, are covered by Ubuntu Portable E2E (nightly and release qualification). macOS and Windows CI do not run them. It is the same code as the clone's CLI. `release` builds only for the machine's own OS and CPU, so a distribution for several targets needs one machine per target.
+What is tested: a payload moved out of its build tree running `init`, `lock`, and `build`, `validate`, `keygen --encrypt`, `trust-root init`, `release`, `verify-release`, and `sign-channel`, are covered by Ubuntu Portable E2E (nightly and release qualification). macOS and Windows CI do not run them. It is the same code as the clone's CLI. `release` builds only for the machine's own OS and CPU, so a distribution for several targets needs one machine per target.
 
 ## 2. Ask the person
 

@@ -667,6 +667,20 @@ describe("finding the most recent session", () => {
     );
     expect(mostRecentSession(join(temp, "missing"), project)).toBeUndefined();
   });
+
+  it("finds a header longer than one read chunk", () => {
+    const file = join(sessionDir, "long-header.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: "long",
+      timestamp: new Date().toISOString(),
+      cwd: project,
+      padding: "x".repeat(20_000),
+    };
+    writeFileSync(file, `${JSON.stringify(header)}\n{"type":"message"}\n`);
+    expect(mostRecentSession(sessionDir, project)).toBe(file);
+  });
 });
 
 const DIST = pathToFileURL(

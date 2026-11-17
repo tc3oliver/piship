@@ -806,12 +806,36 @@ export function assertPayloadPackageJson(artifact: string): void {
       },
     );
 }
+/** What a failed launcher run says: its stderr, or how it ended when it said nothing. */
+function launcherFailure(
+  result: {
+    status: number | null;
+    signal?: NodeJS.Signals | null;
+    stderr: string;
+  },
+  what: string,
+): string {
+  const message = result.stderr.trim();
+  if (message) return message;
+  const how =
+    result.status === null
+      ? result.signal
+        ? `was stopped by signal ${result.signal}`
+        : "could not be started"
+      : `exited with status ${result.status}`;
+  return `${what} ${how} without a message. Run ${pishipCommand()} doctor for details.`;
+}
 function runLauncher(
   artifact: string,
   command: string,
   args: string[],
   interactive = false,
-): { status: number | null; stdout: string; stderr: string } {
+): {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+} {
   assertPayloadPackageJson(artifact);
   const target = join(artifact, "bin", command);
   const options = {
@@ -827,6 +851,7 @@ function runLauncher(
       : spawnSync(target, args, options);
   return {
     status: result.status,
+    signal: result.signal,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? result.error?.message ?? "",
   };
@@ -841,7 +866,13 @@ function runLauncherLive(
   command: string,
   args: string[],
   stderr: (message: string) => void,
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
+): Promise<{
+  status: number | null;
+  signal?: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  streamed?: boolean;
+}> {
   assertPayloadPackageJson(artifact);
   const target = join(artifact, "bin", command);
   const options: SpawnOptions = {
@@ -854,6 +885,7 @@ function runLauncherLive(
       : spawn(target, args, options);
   let stdout = "";
   let pending = "";
+  let streamed = false;
   child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
     stdout += chunk;
   });
@@ -861,14 +893,15 @@ function runLauncherLive(
     const lines = (pending + chunk).split("\n");
     pending = lines.pop() ?? "";
     for (const line of lines) stderr(line);
+    streamed ||= chunk.trim() !== "";
   });
   return new Promise((done) => {
     child.on("error", (error: Error) =>
       done({ status: null, stdout, stderr: error.message }),
     );
-    child.on("close", (status: number | null) => {
+    child.on("close", (status: number | null, signal) => {
       if (pending) stderr(pending);
-      done({ status, stdout, stderr: "" });
+      done({ status, signal, stdout, stderr: "", streamed });
     });
   });
 }
@@ -1471,7 +1504,7 @@ export async function runCli(
           "explain",
         ]);
         if (result.status !== 0)
-          throw new Error(result.stderr || String(result.status));
+          throw new Error(launcherFailure(result, `${command} config explain`));
         output.stdout(result.stdout.trimEnd());
       }
     } else if (command === "lock") {
@@ -1626,7 +1659,9 @@ export async function runCli(
             /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)
             ? `\nFor this test build, set them in this shell (staging values will do), then run ${pishipCommand()} ${command} ${shellArg(target)} again. ${pishipCommand()} validate ${shellArg(target)} lists them.`
             : "";
-        throw new Error(`Pi launch failed: ${stderr || result.status}${hint}`);
+        throw new Error(
+          `Pi launch failed: ${launcherFailure({ ...result, stderr }, "Pi")}${hint}`,
+        );
       }
       if (command === "test")
         output.stdout(
@@ -1656,7 +1691,7 @@ export async function runCli(
       }
       const result = runLauncher(artifact, app.command, ["--smoke"]);
       if (result.status !== 0)
-        throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
+        throw new Error(`Pi launch failed: ${launcherFailure(result, "Pi")}`);
       const smoke = result.stdout.trim();
       if (json) {
         let parsed: unknown = smoke;
@@ -1905,8 +1940,8 @@ async function runLifecycle(
     if (result.stdout.trim()) output.stdout(result.stdout.trimEnd());
     if (result.status !== 0) {
       // Shown live already, unless the release did not start.
-      if (!live || result.stderr.trim())
-        output.stderr(result.stderr.trim() || `${command} failed`);
+      if (!("streamed" in result && result.streamed))
+        output.stderr(launcherFailure(result, command));
       return 1;
     }
     if (result.stderr.trim()) output.stderr(result.stderr.trimEnd());
