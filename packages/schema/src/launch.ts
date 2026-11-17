@@ -9,7 +9,7 @@ import {
   type AccessManifest,
   type DeploymentMode,
 } from "./access.js";
-import type { GovernanceManifest } from "./governance.js";
+import type { GovernanceManifest, PolicyRule } from "./governance.js";
 import { governanceReferences } from "./governance-parse.js";
 import { spoofableHostName, spoofableHostWarning } from "./http-transport.js";
 import type { Manifest, ValidationDiagnostic } from "./index.js";
@@ -624,14 +624,8 @@ export function unknownMcpServerRules(
           : [];
       }
       if (rule.action !== "mcp.tool.call") return [];
-      const tool = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(resource);
-      if (tool)
-        return [
-          {
-            path: at,
-            message: `${rule.id} (${rule.effect} mcp.tool.call) names the model-facing tool ${resource}, so it matches nothing; write it as ${tool[1]}:${tool[2]} (<server>:<tool>)`,
-          },
-        ];
+      const modelFacing = modelFacingMcpMessage(rule);
+      if (modelFacing) return [{ path: at, message: modelFacing }];
       const separator = resource.indexOf(":");
       const server = separator < 0 ? resource : resource.slice(0, separator);
       return unknown(server)
@@ -696,26 +690,99 @@ export function unmatchablePathRules(
   if (!policy) return [];
   return (["enforced", "defaults"] as const).flatMap((list) =>
     policy[list].flatMap((rule, index) => {
-      if (
-        rule.effect === "allow" ||
-        !["filesystem.read", "filesystem.write", "filesystem.*"].includes(
-          rule.action,
-        )
-      )
-        return [];
-      const why = unmatchablePath(rule.resource);
-      return why
-        ? [
-            {
-              path: `policy.${list}[${index}].resource`,
-              message: why.startsWith("only at the filesystem root")
-                ? `${rule.id} (${rule.effect} ${rule.action}) matches ${rule.resource} ${why}`
-                : `${rule.id} (${rule.effect} ${rule.action}) never matches ${rule.resource}: ${why}`,
-            },
-          ]
+      const message = unmatchablePathMessage(rule);
+      return message
+        ? [{ path: `policy.${list}[${index}].resource`, message }]
         : [];
     }),
   );
+}
+
+function unmatchablePathMessage(rule: PolicyRule): string | undefined {
+  if (
+    rule.effect === "allow" ||
+    !["filesystem.read", "filesystem.write", "filesystem.*"].includes(
+      rule.action,
+    )
+  )
+    return undefined;
+  const why = unmatchablePath(rule.resource);
+  if (!why) return undefined;
+  return why.startsWith("only at the filesystem root")
+    ? `${rule.id} (${rule.effect} ${rule.action}) matches ${rule.resource} ${why}`
+    : `${rule.id} (${rule.effect} ${rule.action}) never matches ${rule.resource}: ${why}`;
+}
+
+/** An mcp.tool.call rule naming the model-facing tool (`mcp__docs__search`). */
+function modelFacingMcpMessage(rule: PolicyRule): string | undefined {
+  if (rule.action !== "mcp.tool.call") return undefined;
+  const tool = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(rule.resource);
+  return tool
+    ? `${rule.id} (${rule.effect} mcp.tool.call) names the model-facing tool ${rule.resource}, so it matches nothing; write it as ${tool[1]}:${tool[2]} (<server>:<tool>)`
+    : undefined;
+}
+
+/**
+ * A shell.execute deny or ask whose resource uses `*` but no `**`: `*` stops
+ * at `/`, so `rm -rf *` lets `rm -rf /` and `rm -rf ./x` through.
+ */
+export function shellGlobMessage(rule: PolicyRule): string | undefined {
+  return rule.action === "shell.execute" &&
+    rule.effect !== "allow" &&
+    rule.resource.includes("*") &&
+    !rule.resource.includes("**")
+    ? `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replaceAll("*", "**")}")`
+    : undefined;
+}
+
+const LOAD_ACTIONS = new Set<string>([
+  "resource.load",
+  "skill.load",
+  "instruction.load",
+  "extension.load",
+]);
+
+/**
+ * Why a rule parses but can never match: a `git.push` resource is
+ * `<remote>/<branch>`, and a load resource is `<class>:./<path>` or
+ * `<class>:**`.
+ */
+export function inertRuleMessage(rule: PolicyRule): string | undefined {
+  if (rule.action === "git.push" && /\s/.test(rule.resource))
+    return `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/main"), not a command`;
+  if (
+    rule.action === "git.push" &&
+    !rule.resource.includes("/") &&
+    !rule.resource.includes("**")
+  )
+    return `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/${rule.resource}", or "**/${rule.resource}" for any remote)`;
+  // `<class>:` then `./...` or a glob; builtin and project resources are
+  // named differently (`builtin:<name>`, `project:<path>`).
+  const colon = rule.resource.indexOf(":");
+  const rest = rule.resource.slice(colon + 1);
+  if (
+    LOAD_ACTIONS.has(rule.action) &&
+    ["certified", "company", "user"].includes(rule.resource.slice(0, colon)) &&
+    !rest.startsWith("./") &&
+    !rest.startsWith("*")
+  )
+    return `"${rule.resource}" never matches: a ${rule.action} resource is <class>:./<path> or <class>:** (for example "company:./resources/skills/**")`;
+  return undefined;
+}
+
+/**
+ * The manifest's rule checks that need nothing but the rule itself, for rules
+ * from outside the manifest (team, project, and user policy files).
+ */
+export function ruleWarnings(rule: PolicyRule): string[] {
+  const shell = shellGlobMessage(rule);
+  const inert = inertRuleMessage(rule);
+  return [
+    unmatchablePathMessage(rule),
+    modelFacingMcpMessage(rule),
+    shell && `${rule.id}: ${shell}`,
+    inert && `${rule.id}: ${inert}`,
+  ].filter((message): message is string => message !== undefined);
 }
 
 /**

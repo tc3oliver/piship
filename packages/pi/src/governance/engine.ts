@@ -12,6 +12,7 @@ import {
   identifyProject,
   linkedClaudeSettings,
   normalizePathResource,
+  type PolicyDiagnostic,
   PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -29,8 +30,14 @@ import { type ContainmentReport, enforcesPathPolicy } from "@piship/sandbox";
 import type { PolicyRule } from "@piship/schema";
 import type { GovernanceOptions } from "./options.js";
 
-/** The user's `config/policy.json`; an invalid file names itself. */
-export function readUserRules(stateDir: string): PolicyRule[] {
+/**
+ * The user's `config/policy.json`; an invalid file names itself. Rule
+ * warnings go to `warnings` when given.
+ */
+export function readUserRules(
+  stateDir: string,
+  warnings?: PolicyDiagnostic[],
+): PolicyRule[] {
   const path = join(stateDir, "config", "policy.json");
   if (!existsSync(path)) return [];
   let value: unknown;
@@ -44,12 +51,12 @@ export function readUserRules(stateDir: string): PolicyRule[] {
     );
   }
   try {
-    return [
-      ...parseRuleList(value, path, {
-        narrowingOnly: false,
-        layer: "user-preference",
-      }).rules,
-    ];
+    const parsed = parseRuleList(value, path, {
+      narrowingOnly: false,
+      layer: "user-preference",
+    });
+    warnings?.push(...parsed.diagnostics);
+    return [...parsed.rules];
   } catch (error) {
     if (!(error instanceof PiShipError)) throw error;
     throw new PiShipError(error.code, error.message, {
@@ -62,6 +69,7 @@ export function readUserRules(stateDir: string): PolicyRule[] {
 async function readTeamRules(
   distributionDir: string,
   adapter: string | undefined,
+  warnings?: PolicyDiagnostic[],
 ): Promise<PolicyRule[]> {
   if (!adapter) return [];
   const path = join(
@@ -85,12 +93,15 @@ async function readTeamRules(
       { component: "policy" },
     );
   }
-  return withIgnored(
-    parseRuleList(exported, `the policy adapter ${adapter}`, {
-      narrowingOnly: true,
-      layer: "team-project",
-    }),
+  const parsed = parseRuleList(exported, `the policy adapter ${adapter}`, {
+    narrowingOnly: true,
+    layer: "team-project",
+  });
+  // The engine reports ignored allow rules itself.
+  warnings?.push(
+    ...parsed.diagnostics.filter((item) => item.ruleId === undefined),
   );
+  return withIgnored(parsed);
 }
 
 /** Keep ignored allow rules so the engine reports them in explain and doctor. */
@@ -232,23 +243,28 @@ export async function buildEngine(
 ): Promise<PolicyEngine> {
   const manifest = options.lock.governance.manifest;
   const projectRules = readProjectRestrictions(candidates);
+  const warnings: PolicyDiagnostic[] = [];
+  const teamRules = await readTeamRules(
+    options.distributionDir,
+    manifest.policy.adapter,
+    warnings,
+  );
+  const userRules = readUserRules(options.stateDir, warnings);
   return new PolicyEngine({
     // `data.export.<r>` is sugar for a distribution-enforced session.export rule.
     policy: withSessionExportRules(
       manifest.policy,
       options.lock.data?.declared,
     ),
-    teamRules: await readTeamRules(
-      options.distributionDir,
-      manifest.policy.adapter,
-    ),
+    teamRules,
     projectRules: withIgnored(projectRules),
     // The engine reports ignored rules itself; this keeps the rest (a
-    // restriction file that could not be read).
-    diagnostics: projectRules.diagnostics.filter(
-      (item) => item.ruleId === undefined,
-    ),
-    userRules: readUserRules(options.stateDir),
+    // restriction file that could not be read, rules that never match).
+    diagnostics: [
+      ...warnings,
+      ...projectRules.diagnostics.filter((item) => item.ruleId === undefined),
+    ],
+    userRules,
     // Managed: the distribution owns the policy, so user rules only narrow.
     userRuleMode:
       options.lock.deployment.mode === "managed"

@@ -921,6 +921,44 @@ describe("parseRuleList", () => {
     expect(parsed.ignored.map((r) => r.rule.id)).toEqual(["p.allow"]);
     expect(parsed.diagnostics[0]?.message).toContain("narrowing only");
   });
+  it("warns about team, project, and user rules that never match", () => {
+    const rules = [
+      { id: "secrets", action: "filesystem.read", resource: "secrets/**" },
+      { id: "env", action: "filesystem.read", resource: ".env" },
+      { id: "curl", action: "shell.execute", resource: "curl *" },
+      { id: "docs", action: "mcp.tool.call", resource: "mcp__docs__search" },
+      { id: "fine", action: "filesystem.read", resource: "workspace/.env" },
+    ].map((item) => ({ ...item, effect: "deny", reason: "no" }));
+    const parsed = parseRuleList(rules, "/p/.piship/policy.json", {
+      narrowingOnly: true,
+    });
+    // Every rule is kept as written: matching does not change.
+    expect(parsed.rules).toHaveLength(5);
+    expect(
+      parsed.diagnostics.map((item) => [item.source, item.ruleId]),
+    ).toEqual(Array(4).fill(["/p/.piship/policy.json", undefined]));
+    const [secrets, env, curl, docs] = parsed.diagnostics.map(
+      (item) => item.message,
+    );
+    expect(secrets).toContain("never matches secrets/**: it is relative");
+    expect(env).toContain("env (deny filesystem.read) never matches .env");
+    expect(curl).toContain(
+      'curl: "curl *" does not match arguments containing /',
+    );
+    expect(docs).toContain("write it as docs:search");
+    // The rules really match nothing they were meant to.
+    const decide = engine({ projectRules: parsed.rules });
+    for (const [action, resource] of [
+      ["filesystem.read", join(context.workspaceRoot, "secrets", "key")],
+      ["filesystem.read", join(context.workspaceRoot, ".env")],
+      ["shell.execute", "curl https://x/a"],
+      ["mcp.tool.call", "docs:search"],
+    ] as const)
+      expect(
+        decide.evaluate({ action, resource }).ruleId,
+        `${action} ${resource}`,
+      ).not.toMatch(/^(secrets|env|curl|docs)$/);
+  });
   it.each([
     [{ rules: "x" }, "rules must be an array"],
     [{ other: [] }, "unknown field"],
