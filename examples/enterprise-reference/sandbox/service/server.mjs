@@ -119,7 +119,7 @@ if (
   service.start().catch((error) => {
     process.stderr.write(
       error?.code === "EADDRINUSE"
-        ? `sandbox: cannot start: ${config.listenHost} port ${config.listenPort} is in use; set SANDBOX_LISTEN_PORT to a free port\n`
+        ? `sandbox: cannot start: ${config.listenHost} port ${config.listenPort} is in use (EADDRINUSE); set SANDBOX_LISTEN_PORT to a free port\n`
         : `sandbox: cannot start (${error?.code ?? "error"})\n`,
     );
     stop(1);
