@@ -466,11 +466,12 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
     throw error;
   }
   recordLifecycleMetric(ctx, "rollback", "ok");
+  // Committed: the notices are printed even when the audit below throws.
+  for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
   await auditLifecycle(ctx, "runtime.rollback", "allowed", {
     from: result.from,
     to: result.to,
   });
-  for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
   const access = ctx.metadata.access;
   // A cleared credential is reported as a notice, so the claim is made only without one.
   const signIn =
