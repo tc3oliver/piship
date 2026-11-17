@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -352,6 +354,50 @@ describe("piship pack", () => {
     expect((await rejection(readRuntimeArchive(corrupt))).code).toBe(
       "INTEGRITY_FAILED",
     );
+  });
+
+  it.each([
+    ["app.command", (l: any) => (l.app.command = "../../../../escaped")],
+    ["resource path", (l: any) => (l.resources[0].path = "../../../escaped")],
+  ])("refuses a lock with an unsafe %s before writing", async (_n, edit) => {
+    const { path } = project();
+    const built = await pack(path, {
+      runtimes: [await runtime(path, "linux-x64")],
+      outputRoot: temp(),
+    });
+    const unpacked = temp();
+    await extractArchive(built.archive, unpacked, { expectedRoot: built.name });
+    const dir = join(unpacked, built.name);
+    const lockFile = join(dir, "pack", "piship.lock");
+    const lock = JSON.parse(readFileSync(lockFile, "utf8"));
+    edit(lock);
+    const text = `${JSON.stringify(lock, null, 2)}\n`;
+    writeFileSync(lockFile, text);
+    const digest = (b: string) => createHash("sha256").update(b).digest("hex");
+    const meta = join(dir, "pack.json");
+    const metadata = JSON.parse(readFileSync(meta, "utf8"));
+    metadata.lockSha256 = digest(text);
+    const metaText = JSON.stringify(metadata);
+    writeFileSync(meta, metaText);
+    const sums = join(dir, "checksums.txt");
+    writeFileSync(
+      sums,
+      readFileSync(sums, "utf8")
+        .split("\n")
+        .map((line) =>
+          line.endsWith("  pack/piship.lock")
+            ? `${digest(text)}  pack/piship.lock`
+            : line.endsWith("  pack.json")
+              ? `${digest(metaText)}  pack.json`
+              : line,
+        )
+        .join("\n"),
+    );
+    const staging = temp();
+    const error = await rejection(composePack(dir, staging));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(error.message).toMatch(/unsafe/);
+    expect(existsSync(join(staging, "payload"))).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(

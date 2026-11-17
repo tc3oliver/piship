@@ -280,6 +280,37 @@ function runtimeArchive(
   );
 }
 
+/** The manifest's command rule; the lock names the launcher file by it. */
+const COMMAND = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
+
+function refuseUnsafeLockPaths(lock: DistributionLock): void {
+  const unsafe = (path: unknown): boolean =>
+    typeof path !== "string" ||
+    path === "" ||
+    path.includes("\\") ||
+    path.includes("\0") ||
+    path.startsWith("/") ||
+    /^[A-Za-z]:/.test(path) ||
+    path
+      .split("/")
+      .some((part) => part === "" || part === "." || part === "..");
+  const bad = !COMMAND.test(String(lock.app?.command))
+    ? "app.command"
+    : !Array.isArray(lock.resources) ||
+        lock.resources.some((resource) => unsafe(resource?.path))
+      ? "resource path"
+      : undefined;
+  if (bad)
+    throw new PiShipError(
+      "LOCK_INVALID",
+      `The pack's piship.lock has an unsafe ${bad}; nothing was installed`,
+      {
+        component: "install",
+        userAction: "Ask the publisher for a new pack",
+      },
+    );
+}
+
 /**
  * Verify a pack and its runtime archive against each other, place the pack
  * over the runtime payload, and run the local acceptance check. Nothing is
@@ -297,6 +328,8 @@ export async function composePack(
   const lock = JSON.parse(
     readFileSync(join(pack.directory, "pack", "piship.lock"), "utf8"),
   ) as DistributionLock;
+  // Checked before the first write: payload paths below come from the lock.
+  refuseUnsafeLockPaths(lock);
   // The sandbox gate is the lock's, so a pack that excluded this target for
   // it says what a release build for it says.
   // Imported here: the release modules import this package's index, which
