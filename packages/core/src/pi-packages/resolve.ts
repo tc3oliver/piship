@@ -20,6 +20,13 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { lockedAgentFiles } from "../agent-files.js";
 import { canonicalJson } from "../digest.js";
+import {
+  adoptInstallTree,
+  discardTree,
+  lookupTree,
+  materializeInstallTree,
+  piPackageCacheFor,
+} from "../runtime-cache.js";
 import { type CommandRunner, mustRun, runCommand } from "./command.js";
 import { expandPackageResources } from "./expand.js";
 import {
@@ -57,6 +64,12 @@ export interface PackageContext {
   readonly run?: CommandRunner;
   /** Parent for working directories; defaults to the OS temporary directory. */
   readonly workDir?: string;
+  /**
+   * `piship build`: take a package's installed dependencies from the runtime
+   * cache (`piPackageCacheFor`) instead of running `npm ci`, and publish them
+   * there after one. Every check of the installed tree runs either way.
+   */
+  readonly installCache?: boolean;
 }
 
 /** A locked package plus the per-package npm lockfile stored beside the lock. */
@@ -771,10 +784,47 @@ function materialize(
       (item) => item.path === `node_modules/${declaration.package}`,
     )?.resolved as string;
   }
-  mustRun(run, id, "npm", ["ci", ...NPM_FLAGS, ...npmArgs(declaration, git)], {
-    cwd: directory,
-    env,
-  });
+  const install = () =>
+    mustRun(
+      run,
+      id,
+      "npm",
+      ["ci", ...NPM_FLAGS, ...npmArgs(declaration, git)],
+      { cwd: directory, env },
+    );
+  // Everything that decides what `npm ci` installs here; the host is added by the cache.
+  const cache =
+    pin && context.installCache
+      ? piPackageCacheFor(
+          {
+            lockfileSha256: sha256(lockfile),
+            manifestSha256: sha256(manifest),
+            flags: NPM_FLAGS,
+            registry: npmArgs(declaration, "").slice(1),
+          },
+          context.env ?? process.env,
+        )
+      : undefined;
+  const hit = cache && lookupTree(cache, "package");
+  let placed = false;
+  if (cache && hit)
+    try {
+      // Copied, never linked: pretranspile and strip change the vendored tree.
+      materializeInstallTree(hit, directory, { strip: false, link: false });
+      placed = true;
+    } catch {
+      discardTree(cache, "package");
+      rmSync(join(directory, "node_modules"), { recursive: true, force: true });
+    }
+  if (!placed) {
+    install();
+    const adopted = cache && adoptInstallTree(cache, directory, "package");
+    if (adopted?.moved)
+      materializeInstallTree(adopted.tree, directory, {
+        strip: false,
+        link: false,
+      });
+  }
   checkInstalledModules(id, directory, parsed);
   if (declaration.source === "npm") {
     const installed = readJson<PackageJson>(

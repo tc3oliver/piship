@@ -531,6 +531,7 @@ export function buildDistribution(
         options.progress?.(
           "Vendoring the Pi packages (npm ci --ignore-scripts)",
         );
+        const vendoring = process.hrtime.bigint();
         vendored = vendorPiPackages(
           lock,
           readManifest(manifestPath),
@@ -538,8 +539,10 @@ export function buildDistribution(
           stage,
           {
             supplyChainGates: options.supplyChainGates !== false,
+            installCache: wanted !== undefined,
           },
         );
+        debugTiming("pi package vendoring", vendoring);
         // The runtime was stripped before the packages were vendored, so the
         // maps and declarations they ship are removed here.
         if (strip)
