@@ -35,12 +35,12 @@ export function credentialGroup(data: DoctorData, out: DoctorSection): void {
     if (pending?.stale)
       out.warn(
         "pending request",
-        `credential request ${pending.idempotencyKey} is older than broker retention; renewal fails until you run ${data.ctx.metadata.app.command} logout, then ${data.ctx.metadata.app.command} login`,
+        `a credential request is older than broker retention; renewal fails until you run ${data.ctx.metadata.app.command} logout, then ${data.ctx.metadata.app.command} login`,
       );
     else if (pending)
       out.warn(
         "pending request",
-        `credential request ${pending.idempotencyKey} is unresolved; the next renewal repeats it`,
+        `a credential request is unresolved; the next renewal repeats it. If renewal keeps failing, run ${data.ctx.metadata.app.command} logout, then ${data.ctx.metadata.app.command} login`,
       );
   }
   if (data.ctx.mode === "managed")

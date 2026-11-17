@@ -125,7 +125,7 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
     if (proxied.length)
       out.bad(
         endpoint.key,
-        `plain HTTP to ${proxied.join(", ")} would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add ${proxied.join(", ")} to NO_PROXY`,
+        `plain HTTP to ${proxied.join(", ")} would go through a proxy that is not a private host, so PiShip refuses it; add ${proxied.join(", ")} to NO_PROXY`,
       );
     if (endpoint.proxyOnly) continue;
     // Loopback traffic never leaves this machine, so it is not exposed.
@@ -166,7 +166,11 @@ function networkLines(data: DoctorData, out: DoctorSection): void {
     return;
   }
   const network = access.network;
-  if (access.tlsError) out.bad("TLS verification", "DISABLED in environment");
+  if (access.tlsError)
+    out.bad(
+      "TLS verification",
+      "off: NODE_TLS_REJECT_UNAUTHORIZED=0 is set; unset it and declare any enterprise CA in network.tls.additionalCA",
+    );
   else out.ok("TLS verification", "on");
   const hosts = network.allowHosts.join(", ");
   if (network.privateOnly)
@@ -184,7 +188,7 @@ function networkLines(data: DoctorData, out: DoctorSection): void {
   for (const item of network.undeclared)
     out.warn(
       item.label,
-      `host ${item.host} is not a declared endpoint or in network.allowHosts; private-only requests to it fail with NETWORK_DENIED`,
+      `host ${item.host} is not a declared endpoint or in network.allowHosts; PiShip refuses private-only requests to it`,
     );
   const approved = network.approved;
   if (!network.inheritProxy)
@@ -280,9 +284,8 @@ function egressLines(data: DoctorData, out: DoctorSection): void {
     );
     return;
   }
-  if (data.access?.network.privateOnly)
-    out.ok("egress: Pi", "PiShip: private-only, declared hosts");
-  else
+  // A private-only policy is already reported as "outbound".
+  if (!data.access?.network.privateOnly)
     out.info(
       "egress: Pi",
       "not restricted by PiShip (network.privateOnly is off)",

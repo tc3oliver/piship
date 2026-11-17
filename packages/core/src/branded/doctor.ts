@@ -35,7 +35,7 @@ export function lifecycleDoctor(
   const local = ctx.mode === "personal" ? info : warn;
   if (group === "Supply Chain") supplyChainDoctor(ctx, ok);
   else if (group === "Release") releaseDoctor(ctx, ok, local);
-  else updateDoctor(ctx, ok, warn, local);
+  else updateDoctor(ctx, ok, warn, local, info);
 }
 
 function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
@@ -55,7 +55,7 @@ function releaseDoctor(
   if (active?.release?.pack)
     ok(
       "release",
-      `company pack ${active.release.pack.version} on runtime PiShip ${active.release.runtime?.pishipVersion ?? active.release.piship} (pack sha256 ${short(active.release.pack.sha256)})`,
+      `company pack ${active.release.pack.version} on runtime PiShip ${active.release.runtime?.pishipVersion ?? active.release.piship}`,
     );
   else if (active?.release)
     ok(
@@ -72,6 +72,7 @@ function updateDoctor(
   ok: DoctorLine,
   warn: DoctorLine,
   local: DoctorLine,
+  info: DoctorLine,
 ): void {
   const { metadata } = ctx;
   // Doctor attempts temporary maintenance before collecting this report.
@@ -101,10 +102,10 @@ function updateDoctor(
   else if (launcher)
     warn(
       "launcher",
-      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor and the end of a session replace it`,
+      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor could not replace it (it is replaced only by the active release, and needs write access to the install directory): run doctor from the installed command, or reinstall`,
     );
   if (!metadata.updates) {
-    warn("updates", `not configured (${metadata.manifest.schema})`);
+    warn("updates", "not configured by this distribution");
   } else {
     ok(
       "channel",
@@ -192,7 +193,7 @@ function updateDoctor(
   )
     warn(
       "last check",
-      `${failed.kind} failed at ${failed.time}: ${failed.code}: ${failed.reason}`,
+      `${failed.kind} failed at ${failed.time}: ${failed.reason}`,
     );
   if (status.leftovers.length)
     warn(
@@ -206,7 +207,7 @@ function updateDoctor(
         `${status.runtimeLeases.live} live session(s)${status.runtimeLeases.held.length ? ` on ${status.runtimeLeases.held.join(", ")}` : ""}`,
       );
     if (status.runtimeLeases.stale)
-      warn(
+      info(
         "runtime leases",
         `${status.runtimeLeases.stale} stale lease record(s) from sessions that ended without cleaning up; they hold nothing back and are removed by uninstall or repair`,
       );
