@@ -4,8 +4,8 @@ import { type Dirent, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readInstallReceipt, runtimeStateDirectory } from "../index.js";
-import { shellArg } from "../invocation.js";
 import {
+  purgeManager,
   removeEmptyPiShipDirectories,
   signedInClasses,
 } from "../install/purge.js";
@@ -199,17 +199,7 @@ export async function runUninstall(
     (item) => item.version === receipt.active,
   )?.release;
   const fromRelease = Boolean(release);
-  // The release directory it came from, while that still holds the manager.
-  const recorded =
-    typeof release?.directory === "string"
-      ? join(release.directory, "payload", "piship.mjs")
-      : undefined;
-  const manager =
-    recorded && existsSync(recorded)
-      ? shellArg(recorded)
-      : fromRelease
-        ? "<release>/payload/piship.mjs"
-        : `dist/${id}/piship.mjs`;
+  const manager = purgeManager(id);
   uninstallDistribution(id, { removeEditedShim, ownSession: true });
   removeEmptyPiShipDirectories();
   ctx.out(

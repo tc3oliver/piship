@@ -259,6 +259,30 @@ describe("uninstall --purge", () => {
     expect(existsSync(state)).toBe(false);
   });
 
+  it("names a purge command that outlives the uninstall when run from the installed piship.mjs", async () => {
+    const { payload } = installRecorder();
+    seedState();
+    const lines: string[] = [];
+    const argv = process.argv;
+    process.argv = [argv[0] as string, join(payload, "piship.mjs")];
+    try {
+      expect(
+        await runCli(["uninstall", ID], {
+          stdout: (message) => lines.push(message),
+          stderr: (message) => lines.push(message),
+        }),
+      ).toBe(0);
+    } finally {
+      process.argv = argv;
+    }
+    expect(existsSync(payload)).toBe(false);
+    const text = lines.join("\n");
+    expect(text).not.toContain(payload);
+    expect(text).toContain(
+      `To delete it: node dist/${ID}/piship.mjs purge ${ID} --yes`,
+    );
+  });
+
   it("purge accepts --yes and --without-logout in either order, and a second uninstall names it", async () => {
     installRecorder();
     const state = seedState();
