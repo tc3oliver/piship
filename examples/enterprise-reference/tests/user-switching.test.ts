@@ -183,17 +183,21 @@ describe.skipIf(process.platform === "win32")(
         );
 
         // A preference for a model the distribution allows but Bob is not
-        // entitled to is accepted, and every launch then refuses it, naming
-        // the recovery: PiShip never substitutes another model. The models
-        // listing still works, since it uses no selection. Choosing an
-        // entitled one recovers.
-        expect(
-          (await acme.run(["config", "set", "model", "acme/general"])).status,
-        ).toBe(0);
-        const unavailable = await acme.run(["--smoke"]);
-        expect(unavailable.status).toBe(1);
-        expect(unavailable.stderr).toContain("MODEL_UNAVAILABLE");
-        expect(unavailable.stderr).toContain("config unset model");
+        // entitled to is refused when it is set, naming the entitled models,
+        // so no launch is left to fail on it. The models listing still works,
+        // since it uses no selection. Choosing an entitled one is stored.
+        const refused = await acme.run([
+          "config",
+          "set",
+          "model",
+          "acme/general",
+        ]);
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("MODEL_UNAVAILABLE");
+        expect(refused.stderr).toContain("acme/coder");
+        expect((await acme.smoke()).access.selectedModel).not.toBe(
+          "acmecode-reference/acme/general",
+        );
         const listing = await acme.run(["models"]);
         expect(listing.status, listing.stderr).toBe(0);
         expect(listing.stdout).toContain("acme/coder");
