@@ -1678,7 +1678,7 @@ export async function runCli(
               .join("\n")
           : result.stderr;
         const hint = signIn
-          ? `\nThis build is not installed: sign in to the test state with ${shellArg(join(artifact, "bin", process.platform === "win32" ? `${lock.app.command}.cmd` : lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
+          ? `\nThis build is not installed: sign in to the test state with node ${shellArg(join(artifact, "bin", lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
           : // The branded "Ask your administrator" speaks to users; whoever
             // runs this test build is the one who chooses the values.
             /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)

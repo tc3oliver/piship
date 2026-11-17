@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PISHIP_VERSION, verifySignature } from "@piship/core";
+import { PISHIP_VERSION, shellArg, verifySignature } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsArgv } from "../helpers/distribution.js";
@@ -233,7 +233,7 @@ describe("CLI", () => {
     // The branded "Run acmecode login" names a command not installed yet.
     expect(tested.stderr).not.toContain("Action: Run acmecode login");
     expect(tested.stderr).toMatch(
-      /dist[\\/]acmecode[\\/]bin[\\/]acmecode(\.cmd)?'? login, then run .* test /,
+      /node '?"?[^\n]*dist[\\/]acmecode[\\/]bin[\\/]acmecode'?"? login, then run .* test /,
     );
   }, 180000);
   it("dev validates, builds from source, and launches the isolated command headlessly", () => {
@@ -315,7 +315,9 @@ describe("CLI", () => {
     const built = run(bin, "build", manifest);
     expect(built.status, built.stderr).toBe(0);
     // The next step names the real command, not a `piship` that is not on PATH.
-    expect(built.stdout).toContain(`Next: node ${bin} test ${manifest}`);
+    expect(built.stdout).toContain(
+      `Next: node ${shellArg(bin)} test ${shellArg(manifest)}`,
+    );
     // A local build says it is not the qualified artifact, beside its output.
     expect(built.stderr).toContain("unqualified local build");
     expect(built.stderr).toContain(`Run node ${bin} release ${manifest} `);

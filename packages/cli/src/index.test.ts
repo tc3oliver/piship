@@ -851,7 +851,7 @@ describe("the first-run journey from the directory above the source", () => {
   it("takes the source directory, or ./piship.yaml, as the manifest", async () => {
     const validated = await run(["validate", "my-agent"]);
     expect(validated.status).toBe(0);
-    expect(validated.stdout).toMatch(/^Next: .* test .*piship\.yaml /m);
+    expect(validated.stdout).toMatch(/^Next: .* test .*piship\.yaml"? /m);
     process.chdir("my-agent");
     expect((await run(["validate"])).status).toBe(0);
   });
@@ -861,7 +861,7 @@ describe("the first-run journey from the directory above the source", () => {
     const result = await run(["dev", "my-agent"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("dev starts the interactive session");
-    expect(result.stderr).toMatch(/ dev \S*piship\.yaml --smoke /);
+    expect(result.stderr).toMatch(/ dev .*piship\.yaml"? --smoke /);
     expect(result.stderr).not.toContain("Pi launch failed");
     expect(existsSync(join("my-agent", "piship.lock"))).toBe(false);
   });
@@ -882,7 +882,7 @@ describe("the first-run journey from the directory above the source", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).not.toContain("INTEGRITY_FAILED");
       expect(result.stderr).toContain(
-        `my-agent is the source of a distribution (it holds piship.yaml), not a built one. Build it with piship build my-agent, then run piship ${command} ${join("dist", "my-agent")}.`,
+        `my-agent is the source of a distribution (it holds piship.yaml), not a built one. Build it with piship build my-agent, then run piship ${command} ${shellArg(join("dist", "my-agent"))}.`,
       );
     },
   );
@@ -1484,7 +1484,7 @@ describe("init", () => {
     ).toBe(0);
     const manifest = join(directory, "piship.yaml");
     expect(stdout.join("\n")).toBe(
-      `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest} (the first test writes piship.lock; build and release need that lock to be current).`,
+      `Created ${manifest}\nNext: piship validate ${shellArg(manifest)}, then piship test ${shellArg(manifest)} (the first test writes piship.lock; build and release need that lock to be current).`,
     );
   });
 
@@ -1551,7 +1551,7 @@ describe("init", () => {
       const result = await run(["init", directory]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(`not a valid distribution id`);
-      expect(result.stderr).toContain(`init ${directory} --id ${id}`);
+      expect(result.stderr).toContain(`init ${shellArg(directory)} --id ${id}`);
       expect(existsSync(directory)).toBe(false);
     }
   });
