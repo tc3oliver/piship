@@ -98,6 +98,7 @@ export {
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
+export { mcpModuleWarnings } from "./mcp-module-check.js";
 export { checkSkills, type SkillWarning } from "./skills-check.js";
 export {
   checkSearchTools,

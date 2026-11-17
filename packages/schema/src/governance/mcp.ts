@@ -121,7 +121,9 @@ function parseServer(
       if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(command))
         unsafe(
           `${path}.command`,
-          "Use a bare executable name without path separators; use module for a ./ script",
+          /\s/.test(command)
+            ? "Use a bare executable name; put its arguments in args (command: npx, args: [-y, <package>])"
+            : "Use a bare executable name without path separators; use module for a ./ script",
         );
       launch = { command };
     }
