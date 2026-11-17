@@ -471,9 +471,11 @@ async function readPack(
  * new metadata is signed; then the metadata and its signature are each
  * replaced through a temporary file and a rename.
  */
-export async function signChannel(
-  options: SignChannelOptions,
-): Promise<{ readonly path: string; readonly metadata: ChannelMetadata }> {
+export async function signChannel(options: SignChannelOptions): Promise<{
+  readonly path: string;
+  readonly metadata: ChannelMetadata;
+  readonly warnings: readonly string[];
+}> {
   if (!(RELEASE_CHANNELS as readonly string[]).includes(options.channel))
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -506,11 +508,17 @@ export async function signChannel(
   const verified: { archive: string; release: VerifiedRelease }[] = [];
   const packs: ReadPack[] = [];
   const declared: DeclaredTrust[] = [];
+  const warnings: string[] = [];
   try {
     const declare = async (
       lock: DistributionLock,
       distribution: string,
     ): Promise<void> => {
+      const allowed = lock.updates?.channels;
+      if (allowed && !allowed.some((name) => name === options.channel)) {
+        const warning = `${distribution} allows the channels ${allowed.join(", ")}, not ${options.channel}: its users cannot select ${options.channel}`;
+        if (!warnings.includes(warning)) warnings.push(warning);
+      }
       for (const key of channelTrustFromLock(lock)) accept(key);
       const trust = await declaredTrust(directory, lock, distribution, now);
       if (
@@ -704,7 +712,7 @@ export async function signChannel(
     // refuses it, as does the next sign-channel.
     replaceFile(path, text);
     replaceFile(`${path}.sig`, signatureText);
-    return { path, metadata };
+    return { path, metadata, warnings };
   } finally {
     for (const { release } of verified) release.cleanup();
   }

@@ -93,6 +93,19 @@ export interface LaunchOptions {
   readonly args: readonly string[];
 }
 
+const SIMPLE_COMMAND_USAGE: Readonly<Record<string, string>> = {
+  login:
+    "Sign in; run bare at a terminal in a managed distribution, it then starts the session.",
+  logout: "Sign out and remove the stored sign-in.",
+  models: "List the models this distribution offers.",
+  rollback: "Return to the previously installed release.",
+  version: "Print the distribution, PiShip, and Pi versions.",
+};
+
+/** `help` after a command means its `--help`. */
+const helpArgs = (rest: readonly string[]): readonly string[] =>
+  rest.length === 1 && rest[0] === "help" ? ["--help"] : rest;
+
 /** Starts Pi's real SDK/runtime and the branded management commands. */
 export async function launchPiDistribution(
   options: LaunchOptions,
@@ -433,6 +446,16 @@ export async function launchPiDistribution(
   }
   startupMark("search_tools_done");
   if (!sessionOption) {
+    // `<command> <cmd> --help` (or `help`) shows that command's usage; the
+    // five below otherwise match only with no further argument.
+    const wantsHelp =
+      args.length === 2 &&
+      (args[1] === "--help" || args[1] === "-h" || args[1] === "help");
+    const simpleUsage = command ? SIMPLE_COMMAND_USAGE[command] : undefined;
+    if (wantsHelp && simpleUsage) {
+      ctx.out(`Usage: ${metadata.app.command} ${command}\n\n${simpleUsage}`);
+      return;
+    }
     if (args.length === 1 && command === "login") {
       // A failed or cancelled login throws here and starts nothing.
       await runLogin(ctx);
@@ -441,12 +464,12 @@ export async function launchPiDistribution(
       return runInteractive(ctx, requestedModel, newSession);
     }
     if (args.length === 1 && command === "logout") return runLogout(ctx);
-    if (command === "doctor") return runDoctor(ctx, rest);
+    if (command === "doctor") return runDoctor(ctx, helpArgs(rest));
     if (args.length === 1 && command === "models") return runModels(ctx);
-    if (command === "update") return runUpdate(ctx, rest);
+    if (command === "update") return runUpdate(ctx, helpArgs(rest));
     if (args.length === 1 && command === "rollback") return runRollback(ctx);
-    if (command === "uninstall") return runUninstall(ctx, rest);
-    if (command === "config") return runConfig(ctx, rest);
+    if (command === "uninstall") return runUninstall(ctx, helpArgs(rest));
+    if (command === "config") return runConfig(ctx, helpArgs(rest));
     // Every sandbox subcommand goes to the runner, which refuses anything
     // but login, logout and pull without echoing the command line: a
     // mistyped one may hold the secret.

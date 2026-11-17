@@ -133,6 +133,8 @@ export interface BuiltPack {
   readonly archive: string;
   readonly sha256: string;
   readonly metadata: PackMetadata;
+  /** The lock's default update channel, for the next step's sign-channel. */
+  readonly channel: string;
   /** Things the pack did without, for the command to say. */
   readonly warnings: readonly string[];
 }
@@ -595,6 +597,7 @@ export async function buildPack(
       archive,
       sha256: result.sha256,
       metadata,
+      channel: lock.updates?.channel ?? "stable",
       warnings,
     };
   } finally {
