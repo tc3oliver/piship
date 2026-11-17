@@ -45,6 +45,46 @@ const fixture = vi.hoisted(() => ({
   versions: 0,
   /** The command and arguments of each npm run. */
   runs: [] as [string, readonly string[]][],
+  /** Pi packages the lock is given, and the gates each vendoring ran with. */
+  packages: undefined as unknown[] | undefined,
+  vendorGates: [] as boolean[],
+  gateFails: false,
+}));
+
+vi.mock("./lock.js", async (original) => {
+  const lock = await original<typeof import("./lock.js")>();
+  return {
+    ...lock,
+    requireCurrentLock: (path: string) => {
+      const current = lock.requireCurrentLock(path);
+      return fixture.packages
+        ? { ...current, packages: fixture.packages }
+        : current;
+    },
+  };
+});
+// npm runs here, through the mocked spawnSync, not in a thread.
+vi.mock("./background-process.js", () => ({
+  startBackgroundProcess: () => {
+    throw new Error("no thread in this test");
+  },
+}));
+// Vendoring stands in for the Pi package gates: it fails a gated build when told.
+vi.mock("./pi-packages/lock.js", async (original) => ({
+  ...(await original<typeof import("./pi-packages/lock.js")>()),
+  vendorPiPackages: (
+    _lock: unknown,
+    _manifest: unknown,
+    _base: string,
+    _payload: string,
+    options: { readonly supplyChainGates?: boolean } = {},
+  ) => {
+    const gated = options.supplyChainGates !== false;
+    fixture.vendorGates.push(gated);
+    if (gated && fixture.gateFails)
+      throw new Error("an unreviewed install script");
+    return [];
+  },
 }));
 
 vi.mock("./runtime-dependencies.js", async (original) => ({
@@ -130,6 +170,9 @@ afterEach(() => {
   fixture.copies = fixture.links = fixture.cps = fixture.removals = 0;
   fixture.versions = 0;
   fixture.runs.length = 0;
+  fixture.packages = undefined;
+  fixture.vendorGates.length = 0;
+  fixture.gateFails = false;
 });
 afterAll(() => rmSync(fixture.input, { recursive: true, force: true }));
 
@@ -253,6 +296,41 @@ describe("local payload reuse", () => {
     expect(buildDistribution(p.manifest, p.output, {})).toBe(output);
     expect(buildDistribution(p.manifest, p.output, options)).toBe(output);
     expect(fixture.installs).toBe(1);
+  });
+
+  describe("with Pi packages", () => {
+    const team = { id: "team", source: "local", class: "user", resources: [] };
+
+    it("lets test reuse a build's gated output, and build reuse it again", () => {
+      const p = project();
+      fixture.packages = [team];
+      const output = buildDistribution(p.manifest, p.output, {});
+      expect(buildDistribution(p.manifest, p.output, options)).toBe(output);
+      expect(buildDistribution(p.manifest, p.output, {})).toBe(output);
+      expect(buildDistribution(p.manifest, p.output, options)).toBe(output);
+      expect(fixture.installs).toBe(1);
+      expect(fixture.vendorGates).toEqual([true]);
+    });
+
+    it("never lets build reuse a test output that skipped the gates", () => {
+      const p = project();
+      fixture.packages = [team];
+      buildDistribution(p.manifest, p.output, options);
+      buildDistribution(p.manifest, p.output, {});
+      expect(fixture.installs).toBe(2);
+      expect(fixture.vendorGates).toEqual([false, true]);
+    });
+
+    it("fails the build on a gate a test output skipped", () => {
+      const p = project();
+      fixture.packages = [team];
+      fixture.gateFails = true;
+      buildDistribution(p.manifest, p.output, options);
+      expect(() => buildDistribution(p.manifest, p.output, {})).toThrow(
+        "an unreviewed install script",
+      );
+      expect(fixture.vendorGates).toEqual([false, true]);
+    });
   });
 
   it("rejects stale resource locks before taking a cache hit", () => {
