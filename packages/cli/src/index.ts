@@ -730,6 +730,8 @@ async function lockFor(target: string): Promise<DistributionLock> {
   }
   if (existsSync(path) && existsSync(join(path, "release.json")))
     return (await verifyRelease(path)).lock;
+  if (isDistributionSource(path))
+    return requireCurrentLock(join(target, "piship.yaml"));
   if (existsSync(path)) return verifyPayload(path);
   return verifyPayload(installedReceipt(target).payload);
 }
@@ -1740,24 +1742,22 @@ async function runOperations(
     removeEmptyPiShipDirectories();
   } else if (command === "inspect") {
     const path = resolve(target);
-    const info =
+    // A file is a manifest, a lock, or a release archive (verified first).
+    const fileLock =
       existsSync(path) && statSync(path).isFile()
-        ? (() => {
-            const lock = requireCurrentLock(target);
-            return inspection(
-              lock,
-              runtimeStateDirectory({ value: lock.app.id }),
-            );
-          })()
-        : (() => {
-            const artifact = artifactFor(target, command, output.stderr);
-            const lock = verifyPayload(artifact);
-            return inspection(
-              lock,
-              runtimeStateDirectory({ value: lock.app.id }),
-              artifact,
-            );
-          })();
+        ? await lockFor(target)
+        : undefined;
+    const info = fileLock
+      ? inspection(fileLock, runtimeStateDirectory({ value: fileLock.app.id }))
+      : (() => {
+          const artifact = artifactFor(target, command, output.stderr);
+          const lock = verifyPayload(artifact);
+          return inspection(
+            lock,
+            runtimeStateDirectory({ value: lock.app.id }),
+            artifact,
+          );
+        })();
     output.stdout(
       rest.includes("--json")
         ? JSON.stringify(info, null, 2)

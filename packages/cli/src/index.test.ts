@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markLocalBuild, PI_VERSION, shellArg } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1477,6 +1477,38 @@ describe("inspect", () => {
   it("names the pinned update keys in the human summary", async () => {
     const result = await inspect([]);
     expect(result.stdout).toMatch(/^ {2}trust\s+no pinned update keys$/m);
+  });
+
+  it("verifies a release archive instead of reading it as a manifest", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "piship-cli-inspect-"));
+    try {
+      const archive = join(directory, "a-1.0.0-darwin-arm64.tar.gz");
+      writeFileSync(archive, `\u0000\u001b[31m${"binary: : [".repeat(5000)}`);
+      const stderr: string[] = [];
+      const status = await runCli(["inspect", archive], {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      });
+      expect(status).toBe(1);
+      const text = stderr.join("\n");
+      expect(text).not.toContain("YAML");
+      expect(text).not.toContain("binary: :");
+      expect(text.length).toBeLessThan(2000);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("diff reads a source directory's piship.yaml, not a payload", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(["diff", manifest, dirname(manifest)], {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    expect(stderr.join("\n")).not.toContain("inventory.json");
+    expect(status).toBe(0);
+    expect(stdout.join("\n")).toContain("No release-impact changes.");
   });
 });
 

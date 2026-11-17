@@ -599,6 +599,9 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     const error = caught(() => checkReleaseInputs(path));
     expect(error.code).toBe("LOCK_INVALID");
     expect(error.message).toMatch(/Release gate lock: .*stale/);
+    expect(error.userAction).toMatch(
+      /^Review the manifest and resource changes, then run .* lock .*piship\.yaml/,
+    );
   });
 
   it("lock: refuses a tampered lock file", () => {
@@ -614,9 +617,10 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
 
   it("lock: refuses a missing lock", () => {
     const { path } = project({ lock: false });
-    expect(caught(() => checkReleaseInputs(path)).message).toMatch(
-      /Release gate lock: Lockfile missing/,
-    );
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.message).toMatch(/Release gate lock: Lockfile missing/);
+    // A first release has no lock to review against.
+    expect(error.userAction).toMatch(/^Run .* lock .*piship\.yaml$/);
   });
 
   it("schema: refuses a v1alpha3 manifest", () => {

@@ -33,7 +33,7 @@ import {
   uninstallAndPurgeDistribution,
 } from "./install/index.js";
 import type { MigrationReport } from "./migration.js";
-import { updateDistribution } from "./update/index.js";
+import { rollbackDistribution, updateDistribution } from "./update/index.js";
 import { commitAfterClear } from "./update/state.js";
 
 useLifecycleHomes();
@@ -80,6 +80,16 @@ describe.runIf(HOST_EVIDENCED)("a retained release that is gone", () => {
     const [line] = doctorLines();
     expect(line).toMatch(/^! rollback 1\.0\.0 is recorded as retained but/);
     expect(line).toContain(`piship.mjs repair ${ID}`);
+  });
+
+  it("doctor says a release retained by a rollback is newer and returned to by update", async () => {
+    const { opts } = await installed();
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, opts);
+    const command = readInstallReceipt(ID).app.command;
+    expect(doctorLines()).toEqual([
+      `ok rollback 1.1.0 retained, newer than the active 1.0.0; use ${command} update to return to it`,
+    ]);
   });
 
   it("the launcher names the repair for an active release an interrupted repair removed", async () => {

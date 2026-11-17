@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { systemError } from "@piship/contracts";
+import { printable, systemError } from "@piship/contracts";
 import { valid as validSemver } from "semver";
 import { type Document, LineCounter, parseDocument } from "yaml";
 import {
@@ -775,8 +775,11 @@ export function locateInSource(
 /** Throw every syntax error of a YAML document as one ManifestError. */
 function yamlProblems(document: Document, label: string, source: string): void {
   if (!document.errors.length) return;
-  throw ManifestError.combine(
-    document.errors.map((item) => {
+  // A binary or wrong file yields hundreds of errors on huge lines: show the
+  // first few, each with a short printable snippet, never the raw content.
+  const hidden = document.errors.length - YAML_ERRORS_SHOWN;
+  throw ManifestError.combine([
+    ...document.errors.slice(0, YAML_ERRORS_SHOWN).map((item) => {
       // A pasted snippet (trust-root init's updates:) often repeats a section.
       const key =
         item.code === "DUPLICATE_KEY"
@@ -787,13 +790,30 @@ function yamlProblems(document: Document, label: string, source: string): void {
         label,
         key
           ? `${key}: appears twice in the same mapping (again at line ${item.linePos?.[0].line}); merge the two ${key}: blocks into one`
-          : item.message,
+          : shortSnippet(item.message),
       );
       const start = item.linePos?.[0];
       if (start) problem.position = { line: start.line, column: start.col };
       return problem;
     }),
-  );
+    ...(hidden > 0
+      ? [
+          new ManifestError(
+            "YAML parse failure",
+            label,
+            `${hidden} more YAML errors not shown; is this file a manifest?`,
+          ),
+        ]
+      : []),
+  ]);
+}
+const YAML_ERRORS_SHOWN = 10;
+/** A YAML error message with control characters masked and each line cut short. */
+function shortSnippet(message: string): string {
+  return printable(message)
+    .split("\n")
+    .map((line) => (line.length > 120 ? `${line.slice(0, 120)}...` : line))
+    .join("\n");
 }
 /**
  * The text of a manifest file. A missing file is a ManifestError; a

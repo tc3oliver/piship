@@ -12,6 +12,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PiShipError, stopwatch, systemError } from "@piship/contracts";
+import { updateRoleKeys } from "@piship/schema";
 import { hash } from "../digest.js";
 import {
   assertDisjointRoots,
@@ -310,6 +311,32 @@ export async function installDistribution(
       channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
     );
     const unpinned = expectedKeys.filter((key) => !pinned.has(key));
+    // A root key is pinned too, but --expect-key checks the channel key that
+    // signs updates; say so instead of calling the artifact untrusted.
+    const trustUpdates = lock.updates?.trust;
+    const bootstrap =
+      trustUpdates && "bootstrap" in trustUpdates
+        ? trustUpdates.bootstrap
+        : undefined;
+    const rootKeys = new Set(
+      (bootstrap ? updateRoleKeys(bootstrap, "root") : []).map((key) =>
+        keyFingerprint(key.publicKey),
+      ),
+    );
+    if (unpinned.length && unpinned.every((key) => rootKeys.has(key)))
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `Install check: ${unpinned.join(", ")} is ${lock.app.id}@${lock.app.version}'s root key; --expect-key takes the channel key, which is ${channelTrustFromLock(
+          lock,
+        )
+          .map((key) => `${key.id} ${keyFingerprint(key.publicKey)}`)
+          .join(", ")}`,
+        {
+          component: "install",
+          userAction:
+            "Repeat with --expect-key set to the channel key fingerprint, after confirming it with the publisher",
+        },
+      );
     if (unpinned.length)
       throw new PiShipError(
         "INTEGRITY_FAILED",

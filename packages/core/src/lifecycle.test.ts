@@ -902,6 +902,22 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(malformed.code).toBe("CONFIG_INVALID");
   });
 
+  it("says an expected root key fingerprint is the root key and names the channel key, installing nothing", async () => {
+    const root = generateSigningKey("test-root");
+    const a = await release("1.0.0", true, undefined, [KEY], [root]);
+    const error = await rejection(
+      installDistribution(a.archive, false, {
+        expectedKeys: [keyFingerprint(root.publicKey)],
+      }),
+    );
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toContain(
+      `${keyFingerprint(root.publicKey)} is ${ID}@1.0.0's root key; --expect-key takes the channel key, which is ${KEY.id} ${keyFingerprint(KEY.publicKey)}`,
+    );
+    expect(error.message).not.toContain("does not pin");
+    expect(apps()).toEqual([]);
+  });
+
   it("refuses collisions and unowned state, leaving nothing behind", async () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);

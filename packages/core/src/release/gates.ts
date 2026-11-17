@@ -2,7 +2,7 @@
 // surfaces, package sources and install scripts, policy, certification, and
 // sandbox.
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   manifestContainment,
@@ -34,7 +34,7 @@ import { effectivePackageTrust } from "../pi-packages/trust.js";
 import { checkSearchToolSources } from "../search-tools/index.js";
 import { gate } from "./shared.js";
 import { checkLockedPackageSources } from "./sources.js";
-import { pishipCommand } from "../invocation.js";
+import { pishipCommand, shellArg } from "../invocation.js";
 
 /** The release name `<id>-<version>-<target>`. */
 export function releaseName(lock: DistributionLock, target: string): string {
@@ -258,7 +258,8 @@ export function requireReleaseLock(manifestPath: string): DistributionLock {
       "LOCK_INVALID",
       "lock",
       (error as Error).message,
-      `Review the manifest and resource changes, then run ${pishipCommand()} lock`,
+      // A first release has no lock yet: nothing to review against.
+      `${existsSync(join(dirname(resolve(manifestPath)), "piship.lock")) ? "Review the manifest and resource changes, then run" : "Run"} ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
   }
   if (
