@@ -684,6 +684,16 @@ describe("creating a sandbox", () => {
     assert.equal(carol.json().error.code, "workspace_not_allowed");
     assert.equal(carol.text, outside.text);
     assert.equal(carol.text.includes(workspace), false);
+    // The operator's log names which check refused each, and never the path.
+    const refusals = service
+      .logs()
+      .split("\n")
+      .filter((line) => line.includes('"event":"sandbox.create.refused"'))
+      .slice(-2);
+    assert.match(refusals[0], /"reason":"outside_workspace_roots"/);
+    assert.match(refusals[1], /"reason":"owned_by_another_user"/);
+    for (const line of refusals)
+      assert.equal(line.includes(service.root), false);
     assert.equal(runCalls(service).length, before, "docker was asked to run");
     // No `.git/piship-workspace` was made in a project the key may not use.
     assert.equal(
@@ -1091,6 +1101,15 @@ describe("a runtime that is down", () => {
       assert.equal(down.status, 503);
       assert.equal(down.json().error.code, "runtime_unavailable");
       assert.equal(runCalls(service).length, 0);
+      // The operator's log says why, once, not at every check.
+      const logged = service
+        .logs()
+        .split("\n")
+        .filter((line) =>
+          line.includes('"event":"service.runtime_unavailable"'),
+        );
+      assert.equal(logged.length, 1);
+      assert.match(logged[0], /"reason":"Cannot connect to the Docker daemon"/);
     } finally {
       await service.stop();
     }
@@ -1674,6 +1693,26 @@ describe("the life of the service", () => {
         await second.stop();
       }
     } finally {
+      await first.stop();
+    }
+  });
+
+  it("starts without a runtime, and says why in its log", async () => {
+    const first = await startService();
+    try {
+      first.fault("DOWN");
+      const { second, lines } = again(first);
+      await second.start();
+      try {
+        assert.match(
+          lines.join(""),
+          /"event":"service.runtime_unavailable","reason":"Cannot connect to the Docker daemon"/,
+        );
+      } finally {
+        await second.stop();
+      }
+    } finally {
+      first.fault("DOWN", false);
       await first.stop();
     }
   });

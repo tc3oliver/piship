@@ -48,7 +48,9 @@ const env = { ...loadEnv(join(here, "..", ".env")), ...process.env };
 const password = env[`REFERENCE_${user.toUpperCase()}_PASSWORD`];
 if (!password) fail(`no password for ${user}; run scripts/generate-env.mjs`);
 
-const base = `http://127.0.0.1:${env.KEYCLOAK_PORT ?? 18080}`;
+// A stack started with KEYCLOAK_PORT=0 records the port Docker chose as
+// KEYCLOAK_PUBLISHED_PORT (README, Ports).
+const base = `http://127.0.0.1:${env.KEYCLOAK_PUBLISHED_PORT || env.KEYCLOAK_PORT || 18080}`;
 const realm = `${base}/realms/piship-reference/protocol/openid-connect`;
 const clientId = "acmecode";
 // The client registers the port-less http://127.0.0.1/callback, which

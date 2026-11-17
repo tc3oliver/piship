@@ -35,6 +35,20 @@ export class SandboxError extends Error {
   }
 }
 
+/**
+ * The runtime's own reason a docker CLI call failed, for the operator's log
+ * only: its last stderr line (which may name the image or a socket), with
+ * control characters removed. The logger cuts it to its length limit.
+ */
+function failureReason(result) {
+  const line = result.stderr.trim().split("\n").at(-1) ?? "";
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing them is the point
+  const clean = line.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  if (clean) return clean;
+  if (result.timedOut) return "the docker CLI timed out";
+  return result.error ? "the docker CLI did not start" : "no message";
+}
+
 const MAX_COMMAND_BYTES = 100_000;
 const MAX_PATH = 4096;
 const MAX_PROTECTED = 256;
@@ -220,7 +234,7 @@ export class Sandboxes {
   #reserved = 0;
   #closed = false;
   #timer;
-  #runtime = { ok: false, at: 0 };
+  #runtime = { ok: undefined, at: 0 };
 
   /**
    * `owner` reads a workspace's owner and group (a test seam: the tests
@@ -256,6 +270,13 @@ export class Sandboxes {
       "--filter",
       `label=piship.sandbox.owner=${this.#config.uid}`,
     ]);
+    // The service starts without a runtime, and answers 503 until it comes up.
+    if (listed.code !== 0) {
+      this.#log("service.runtime_unavailable", {
+        reason: failureReason(listed),
+      });
+      this.#runtime = { ok: false, at: 0 };
+    }
     const stale = listed.stdout.split("\n").filter(Boolean);
     if (stale.length > 0)
       await this.#docker.run(["rm", "--force", ...stale], {
@@ -293,8 +314,14 @@ export class Sandboxes {
       ["version", "--format", "{{.Server.Version}}"],
       { timeoutMs: 10_000 },
     );
-    this.#runtime = { ok: answer.code === 0, at: this.#now() };
-    return this.#runtime.ok;
+    const ok = answer.code === 0;
+    // Logged when it stops answering, not at every check while it is down.
+    if (!ok && this.#runtime.ok !== false)
+      this.#log("service.runtime_unavailable", {
+        reason: failureReason(answer),
+      });
+    this.#runtime = { ok, at: this.#now() };
+    return ok;
   }
 
   async status(owner) {
@@ -329,11 +356,17 @@ export class Sandboxes {
    * or root's, so a caller learns nothing about directories it may not use.
    */
   #plan(user, request) {
+    // The caller gets one answer; the operator's log gets which check
+    // refused it, as a fixed code that never holds the path.
     const refused = new SandboxError(
       422,
       "workspace_not_allowed",
       "The workspace is not a directory this service may mount",
     );
+    const refuse = (reason) => {
+      this.#log("sandbox.create.refused", { owner: user.id, reason });
+      return refused;
+    };
     // Every check below is made on the stat of the one directory held at its
     // canonical path, and the mount is later compared with its identity.
     let real;
@@ -345,15 +378,17 @@ export class Sandboxes {
       if (!held?.stat.isDirectory()) throw refused;
       ownership = this.#owner(real, held.stat);
     } catch {
-      throw refused;
+      throw refuse("not_a_directory");
     }
     if (!this.#config.workspaceRoots.some((root) => within(root, real)))
-      throw refused;
+      throw refuse("outside_workspace_roots");
     if (user.roots && !user.roots.some((root) => within(root, real)))
-      throw refused;
-    if (UNSAFE_PATH.test(real)) throw refused;
-    if (ownership.uid === 0 || ownership.gid === 0) throw refused;
-    if (!user.unbound && ownership.uid !== user.uid) throw refused;
+      throw refuse("outside_key_roots");
+    if (UNSAFE_PATH.test(real)) throw refuse("unsafe_path");
+    if (ownership.uid === 0 || ownership.gid === 0)
+      throw refuse("owned_by_root");
+    if (!user.unbound && ownership.uid !== user.uid)
+      throw refuse("owned_by_another_user");
     const unsupported = (message) =>
       new SandboxError(409, "workspace_unsupported", message);
     const dotGit = join(real, ".git");
@@ -556,9 +591,7 @@ export class Sandboxes {
       // last line, which may name the image or a path) and never to the caller.
       this.#log("sandbox.create.failed", {
         owner,
-        reason:
-          started.stderr.trim().split("\n").at(-1) ||
-          (started.error ? "the docker CLI did not start" : "no message"),
+        reason: failureReason(started),
       });
       await this.#docker.run(["rm", "--force", name]);
       throw new SandboxError(
