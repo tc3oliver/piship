@@ -89,7 +89,11 @@ jobs:
           git push origin "$branch"
           gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
             --title "test: refresh unit shard durations" \
-            --body "Refresh unit shard timing estimates from the four most recent successful main CI runs. Each run must contain all eight unit shards; incomplete samples fail without opening a PR.\n\nRefs #332."
+            --body-file - <<'EOF'
+          Refresh unit shard timing estimates from the four most recent successful main CI runs. Each run must contain all eight unit shards; incomplete samples fail without opening a PR.
+
+          Refs #332.
+          EOF
           # PR events created by GITHUB_TOKEN do not start checks. Dispatch
           # both required workflows on this exact branch instead.
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"

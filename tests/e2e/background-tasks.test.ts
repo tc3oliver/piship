@@ -274,9 +274,13 @@ describe.runIf(process.platform === "win32")(
             : []),
         ];
         services.state.toolResults = [];
+        // vitest.config.ts turns the compiled Job Object helper off; a user's
+        // install supervises through it, so the owner here does too.
+        const ownerEnv = { ...env };
+        delete ownerEnv.PISHIP_WINDOWS_JOB_HELPER;
         const owner = spawn(process.execPath, [entry, "--smoke-model"], {
           cwd: project,
-          env,
+          env: ownerEnv,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         });
