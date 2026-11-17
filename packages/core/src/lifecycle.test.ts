@@ -1297,6 +1297,26 @@ await installDistribution(artifact);
       expect(existsSync(receipt.commandPath)).toBe(false);
     });
 
+  it("finishes an interrupted first install only with the artifact it committed", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const killed = spawnSync(
+      process.execPath,
+      installChild("writeFileSync", /bin[/\\]acmepi(\.cmd)?$/, payload),
+      { encoding: "utf8" },
+    );
+    expect(killed.status, killed.stderr).not.toBe(0);
+    const other = fakeAssemble(project("2.0.0"), temp("piship-payload-"));
+    await expect(installDistribution(other)).rejects.toThrow(
+      new RegExp(
+        `install of ${ID}@1\\.0\\.0 was interrupted; this artifact is ${ID}@2\\.0\\.0.*--replace.*uninstall ${ID}`,
+      ),
+    );
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(
+      (await installDistribution(other, false, { replace: true })).active,
+    ).toBe("2.0.0");
+  });
+
   it("names the directory in the way when no installation is recorded", async () => {
     const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
     mkdirSync(appsDir(), { recursive: true });
