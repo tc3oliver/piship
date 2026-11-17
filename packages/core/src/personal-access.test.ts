@@ -63,8 +63,11 @@ function manifestFor(mode: Mode): Manifest {
   const document = readManifestDocument(
     join(examples, "personal", "local-model", "piship.yaml"),
   ) as Record<string, unknown> & {
+    inference: Record<string, unknown>;
     models: { allowed: string[]; catalog: Record<string, unknown> };
   };
+  // Nothing listens at the test endpoint, so no live catalog request.
+  document.inference.liveCatalog = false;
   document.credential =
     mode === "local-secret"
       ? { provider: "local-secret", storage: { provider: "file" } }
@@ -294,7 +297,8 @@ describe("personal distributions without identity", () => {
     );
     const document = readManifestDocument(
       join(examples, "personal", "local-model", "piship.yaml"),
-    ) as Record<string, unknown>;
+    ) as Record<string, unknown> & { inference: Record<string, unknown> };
+    document.inference.liveCatalog = false;
     document.credential = {
       provider: "adapter",
       adapter: "./adapters/local.mjs",

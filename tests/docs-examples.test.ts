@@ -196,6 +196,29 @@ describe("documented examples", () => {
     });
   });
 
+  it("the minimal local-model manifest parses in personal mode", () => {
+    const snippet = block(
+      "docs/manifest.md",
+      "yaml",
+      "baseUrl: http://localhost:11434/v1",
+    );
+    const directory = temporary();
+    writeFileSync(
+      join(directory, "piship.yaml"),
+      [
+        "schema: piship/v1",
+        "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+        `runtime: { pi: "${PI_VERSION}" }`,
+        "deployment: { mode: personal }",
+        "updates: { channel: stable, channels: [stable] }",
+        snippet,
+      ].join("\n"),
+    );
+    const manifest = readManifest(join(directory, "piship.yaml"));
+    expect(manifest.access?.credential.provider).toBe("none");
+    expect(manifest.access?.models.default).toBe("local/coder");
+  });
+
   it("the README manifest is a complete manifest PiShip accepts on its own", () => {
     const snippet = block("README.md", "yaml", "schema: piship/v1");
     const directory = temporary();

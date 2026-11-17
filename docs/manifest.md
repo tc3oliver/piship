@@ -69,12 +69,15 @@ In both modes, `http-broker` needs an identity; `pi-native` credentials and `pi-
 
 A personal manifest defaults to `identity.mode: none` with `pi-native` credentials and inference. It may instead use `local-secret` or `none` credentials with an `openai-compatible` endpoint, including a local model server. The personal file store does not require `acknowledgePlaintext`.
 
-An `openai-compatible` endpoint needs `models.allowed` and a `models.catalog` entry for every allowed model in personal mode too. A minimal local-model manifest:
+An `openai-compatible` endpoint needs a `credential`, `models.allowed`, and a `models.catalog` entry for every allowed model in personal mode too, and should set `models.default`: without it, `validate` warns and each launch needs `--model`. Each model id is sent to the server unchanged as the request's `model`, so it must be a name the server serves, such as an Ollama tag (`qwen2.5-coder:7b`). `liveCatalog: true` lets `<command> models` and launch report which allowed models the server actually lists; local servers such as Ollama, llama.cpp, and vLLM serve `GET /v1/models`. A minimal local-model manifest for a server without authentication:
 
 ```yaml
+credential:
+  provider: none
 inference:
   provider: openai-compatible
   baseUrl: http://localhost:11434/v1
+  liveCatalog: true
 models:
   default: local/coder
   allowed: [local/coder]

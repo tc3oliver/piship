@@ -119,6 +119,9 @@ export async function createModelRuntime(
               kind: "pi-native",
               allowedModelKeys,
               restricted: effective?.modelsRestricted ?? false,
+              ...(effective?.userNarrowedFrom
+                ? { userNarrowedFrom: effective.userNarrowedFrom }
+                : {}),
               ...(allowedModelKeys.length
                 ? {
                     dispatchModelKeys: [

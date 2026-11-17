@@ -538,6 +538,13 @@ function parseCredential(
     if (credential[secret] !== undefined)
       fail(`credential.${secret}`, "Secrets are never declared in piship.yaml");
   const provider = credential.provider;
+  if (provider === undefined && inferenceProvider === "openai-compatible")
+    fail(
+      "credential.provider",
+      mode === "managed"
+        ? "An openai-compatible endpoint needs a credential: set credential.provider to http-broker or adapter"
+        : "An openai-compatible endpoint needs a credential: set credential.provider to none for a local server without authentication, or local-secret for an API key",
+    );
   if (
     provider !== "http-broker" &&
     provider !== "local-secret" &&

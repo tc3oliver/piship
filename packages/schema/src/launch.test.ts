@@ -120,7 +120,7 @@ describe("HTTP audit sinks under a private-only network policy", () => {
     deployment: { mode: "personal" },
     identity: { mode: "none" },
     credential: { provider: "local-secret" },
-    models: { allowed: ["acme/coder"], catalog },
+    models: { default: "acme/coder", allowed: ["acme/coder"], catalog },
   });
   it("rejects a required sink whose host the launch can never contact", () => {
     rejects(
@@ -287,7 +287,7 @@ describe("Streamable HTTP MCP servers", () => {
     deployment: { mode: "personal" },
     identity: { mode: "none" },
     credential: { provider: "local-secret" },
-    models: { allowed: ["acme/coder"], catalog },
+    models: { default: "acme/coder", allowed: ["acme/coder"], catalog },
   });
   const runtime = { credential: "runtime" };
   it("accepts a runtime-credential server on the gateway origin and an allowed host", () => {

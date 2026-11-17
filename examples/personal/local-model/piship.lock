@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-4c10b124ac4ca20025b7a653fd58dd1e9a90868bd02447cac1269d5a53c86691"
+    "sha256": "sha256-bc00c4b56407ce00e0700ea9bbf452744d66812be66d5604b5b0bb8beffa91f0"
   },
   "app": {
     "id": "mypi-local",
@@ -998,7 +998,7 @@
       "provider": "openai-compatible",
       "baseUrl": "${MYPI_MODEL_URL}",
       "api": "openai-completions",
-      "liveCatalog": false
+      "liveCatalog": true
     },
     "models": {
       "default": "local/coder",
@@ -1255,7 +1255,7 @@
     "mcp": "sha256-9c86a5a216a08e2e5c954edae514fa193e41a151a6f6ba4fdc3fbd979d9f9ae9",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
-    "access": "sha256-efd3aa71c428e55cf99ae5deb727965df33e9570117d95056d6bb83247f0a93f"
+    "access": "sha256-c9295516fb726d899d694c0cf93c240a3ba635359789c80fbe9c8918325330df"
   },
   "updates": {
     "channel": "stable",

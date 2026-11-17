@@ -41,6 +41,12 @@ export interface EffectiveConfig {
    * empty `allowedModels` then means no model is selectable, not "any model".
    */
   readonly modelsRestricted: boolean;
+  /**
+   * The allowlist before the user's own narrowing, when there is one: a model
+   * in it but not in `allowedModels` is unavailable by preference, not
+   * refused by the distribution. `"any"` when nothing else restricted models.
+   */
+  readonly userNarrowedFrom?: readonly string[] | "any";
   readonly entries: readonly ExplainedValue[];
   /** Visible problems, such as a user preference that policy overrides. */
   readonly notices: readonly string[];
@@ -383,13 +389,15 @@ export function resolveEffectiveConfig(
     );
     sources.push("credential entitlement");
   }
+  let userNarrowedFrom: readonly string[] | "any" | undefined;
   if (preferences.modelsAllowed) {
     // Users only narrow: without any other restriction their list is the
     // allowlist; otherwise it intersects the enforced, allowed, and entitled set.
-    allowed =
-      sources.length > 1 || policy.allowed.length
-        ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
-        : [...preferences.modelsAllowed];
+    const restricted = sources.length > 1 || policy.allowed.length > 0;
+    userNarrowedFrom = restricted ? allowed : "any";
+    allowed = restricted
+      ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
+      : [...preferences.modelsAllowed];
     sources.push("user narrowing");
   }
   entries.push({
@@ -403,6 +411,7 @@ export function resolveEffectiveConfig(
     values,
     allowedModels: allowed,
     modelsRestricted: policy.allowed.length > 0 || sources.length > 1,
+    ...(userNarrowedFrom ? { userNarrowedFrom } : {}),
     entries,
     notices,
   };

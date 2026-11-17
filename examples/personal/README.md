@@ -93,7 +93,7 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
 [`local-model/piship.yaml`](local-model/piship.yaml) is MyPi Local (`mypi-local`), a smaller personal distribution for a local OpenAI-compatible model server, such as llama.cpp, Ollama, or vLLM, with no enterprise identity:
 
 - `credential.provider: local-secret` with `storage.provider: system`: `mypi-local login` asks for the key and keeps it in the system secret store; `logout` deletes it. Use `storage: {provider: file}` for owner-only plaintext files (a personal distribution needs no `acknowledgePlaintext`), or `credential.provider: none` without `storage` for a server without a key.
-- `inference.provider: openai-compatible` with `baseUrl: ${MYPI_MODEL_URL}` and a one-model catalog, `local/coder`. The URL must use HTTPS, or `http` on `127.0.0.1`, `localhost`, or `[::1]`.
+- `inference.provider: openai-compatible` with `baseUrl: ${MYPI_MODEL_URL}`, `liveCatalog: true`, and a one-model catalog, `local/coder`. The URL may use HTTPS, or plain `http` to loopback or to a private or internal host (such as `192.168.1.20` or `gpu.lan`); plain HTTP to a public host is refused, and `inference.httpTransport: https` refuses it to any host but loopback. Each catalog id is sent to the server unchanged, so it must be a name the server serves, such as an Ollama tag. With `liveCatalog: true`, `mypi-local models` and launch report which allowed models the server actually lists.
 
 `local-model/model-server.mjs` is a stand-in server with canned replies, for trying the variant without a model. It is test infrastructure, not a model. In a first terminal, from the repository root after `npm ci` and `npm run build`:
 
