@@ -73,4 +73,15 @@ describe.runIf(HOST_EVIDENCED)("doctor last check", () => {
       expect.stringMatching(/^ok last check available 1\.1\.0 \(/),
     ]);
   });
+
+  it("does not record a failed one-off --check --from", async () => {
+    await installed();
+    const empty = mkdtempSync(join(tmpdir(), "piship-empty-source-"));
+    scratch.push(empty);
+    const error = await rejection(
+      runUpdate(context(), ["--check", "--from", empty]),
+    );
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(lastCheck()).toEqual([]);
+  });
 });
