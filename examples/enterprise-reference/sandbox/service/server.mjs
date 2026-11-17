@@ -87,8 +87,10 @@ if (
   fileURLToPath(import.meta.url) === resolve(process.argv[1])
 ) {
   let service;
+  let config;
   try {
-    service = createSandboxServer(loadConfig(process.env));
+    config = loadConfig(process.env);
+    service = createSandboxServer(config);
   } catch (error) {
     process.stderr.write(`sandbox: ${error.message}\n`);
     process.exit(2);
@@ -115,7 +117,11 @@ if (
     process.stdin.resume();
   }
   service.start().catch((error) => {
-    process.stderr.write(`sandbox: cannot start (${error?.code ?? "error"})\n`);
+    process.stderr.write(
+      error?.code === "EADDRINUSE"
+        ? `sandbox: cannot start: ${config.listenHost} port ${config.listenPort} is in use (EADDRINUSE); set SANDBOX_LISTEN_PORT to a free port\n`
+        : `sandbox: cannot start (${error?.code ?? "error"})\n`,
+    );
     stop(1);
   });
 }

@@ -1313,6 +1313,14 @@ describe("configuration: back-channel URLs", () => {
         );
   });
 
+  it("refuses port 0, which a stack started without its published ports would carry", () => {
+    for (const name of ["BROKER_ISSUER", "BROKER_GATEWAY_BASE_URL"])
+      assert.throws(
+        () => load({ [name]: "http://127.0.0.1:0/realms/piship-reference" }),
+        new RegExp(`^Error: ${name} must not use port 0`),
+      );
+  });
+
   it("with BROKER_ALLOW_INSECURE_BACKCHANNEL=true, accepts http to a container name only", () => {
     const insecure = { BROKER_ALLOW_INSECURE_BACKCHANNEL: "true" };
     const config = load({

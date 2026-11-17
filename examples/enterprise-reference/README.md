@@ -35,6 +35,8 @@ Every port variable may be `0`, which lets Docker choose a free port on `127.0.0
 Keycloak needs no port in advance: its host name is pinned to `127.0.0.1` and the scheme and port come from the request (`KC_HOSTNAME=127.0.0.1`), so asked on the port Docker published, it names the issuer `http://127.0.0.1:<that port>/realms/piship-reference`, whatever the `Host` header claims for the host. The broker does need two ports: it checks the issuer and returns LiteLLM's URL as `base_url`. With `KEYCLOAK_PORT=0` or `LITELLM_PORT=0`, start in two steps and give it the ports Docker chose, as the tests do:
 
 ```sh
+PROJECT=piship-reference-ports        # any Compose project name not in use
+ENV_FILE="$(mktemp -d)/.env"          # a new env file; the default .env is untouched
 KEYCLOAK_PORT=0 LITELLM_PORT=0 MOCK_UPSTREAM_PORT=0 POSTGRES_PORT=0 BROKER_PORT=0 \
   node scripts/generate-env.mjs --out "$ENV_FILE"
 compose=(docker compose -p "$PROJECT" --env-file "$ENV_FILE")

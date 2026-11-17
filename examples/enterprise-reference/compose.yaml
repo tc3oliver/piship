@@ -143,7 +143,8 @@ services:
       # Tokens carry the loopback issuer; the JWKS is read on the back channel.
       # KEYCLOAK_PUBLISHED_PORT and LITELLM_PUBLISHED_PORT name the ports
       # Docker chose when KEYCLOAK_PORT or LITELLM_PORT is 0; the broker then
-      # starts after Keycloak and LiteLLM, once they are known.
+      # starts after Keycloak and LiteLLM, once they are known. Without them
+      # the URLs below carry port 0, and the broker refuses to start.
       BROKER_ISSUER: http://127.0.0.1:${KEYCLOAK_PUBLISHED_PORT:-${KEYCLOAK_PORT:-18080}}/realms/piship-reference
       BROKER_JWKS_URL: http://keycloak:8080/realms/piship-reference/protocol/openid-connect/certs
       BROKER_LITELLM_URL: http://litellm:4000

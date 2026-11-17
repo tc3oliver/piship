@@ -31,6 +31,12 @@ export function loadConfig(env) {
       throw new Error(`${name} must be an http(s) URL`);
     if (parsed.username || parsed.password)
       throw new Error(`${name} must not embed credentials`);
+    // A stack started with KEYCLOAK_PORT=0 or LITELLM_PORT=0 and without the
+    // published ports would otherwise fail only at the first sign-in.
+    if (parsed.port === "0")
+      throw new Error(
+        `${name} must not use port 0; give it the port Docker published (KEYCLOAK_PUBLISHED_PORT or LITELLM_PUBLISHED_PORT in the reference stack)`,
+      );
     return value;
   };
   const allowInsecureBackchannel = (() => {
