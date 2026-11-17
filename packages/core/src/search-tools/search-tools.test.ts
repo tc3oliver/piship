@@ -69,7 +69,7 @@ const sha = (content: Buffer | string) =>
 
 interface TarEntry {
   readonly name: string;
-  readonly type?: "0" | "1" | "2" | "5";
+  readonly type?: "0" | "1" | "2" | "5" | "x";
   readonly data?: string | Buffer;
   readonly mode?: number;
 }
@@ -358,6 +358,45 @@ describe("the search tool archive reader", () => {
     expect(() => readSearchToolArchive(tarGz(entries), "tar.gz", "fd")).toThrow(
       message,
     );
+  });
+
+  it("honors a PAX path and refuses malformed PAX records", () => {
+    const pax = (body: string) => ({
+      name: "pax",
+      type: "x" as const,
+      data: body,
+    });
+    const record = (key: string, value: string) => {
+      const body = ` ${key}=${value}\n`;
+      let length = body.length + 1;
+      while (`${length}${body}`.length !== length) length++;
+      return `${length}${body}`;
+    };
+    expect(
+      readSearchToolArchive(
+        tarGz([
+          pax(record("path", `${root}/fd`)),
+          { name: "placeholder", data: "binary" },
+        ]),
+        "tar.gz",
+        "fd",
+      ).entry,
+    ).toBe(`${root}/fd`);
+    for (const body of [
+      record("size", "0x10"),
+      record("size", ""),
+      record("size", "1e3"),
+      "0x14 path=x/fd\n",
+      record("path", `${root}/fd`).slice(0, -1) + "!",
+      `99 path=${root}/fd\n`,
+    ])
+      expect(() =>
+        readSearchToolArchive(
+          tarGz([pax(body), { name: `${root}/fd`, data: "binary" }]),
+          "tar.gz",
+          "fd",
+        ),
+      ).toThrow(/Corrupt archive: (malformed PAX record|invalid PAX size)/);
   });
 
   it("refuses a symlink anywhere in the archive, not only at the executable", () => {

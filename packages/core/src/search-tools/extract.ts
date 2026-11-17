@@ -5,7 +5,7 @@
 // non-regular entry fail the whole archive, so an archive that would be
 // unsafe to unpack is refused even though only a few files are taken.
 import { crc32, gunzipSync, inflateRawSync } from "node:zlib";
-import { entrySegments } from "../archive.js";
+import { entrySegments, paxEntrySize, parsePax } from "../archive.js";
 
 /** Upstream archives are a few MB; this bounds decompression. */
 const MAX_UNPACKED_BYTES = 256 * 1024 * 1024;
@@ -62,7 +62,7 @@ function tarEntries(archive: Buffer): Entry[] {
     if (block.toString("latin1", 257, 262) !== "ustar")
       throw corrupt("not a ustar header");
     const type = String.fromCharCode(block[156] as number);
-    const size = pax?.has("size") ? Number(pax.get("size")) : octal(124, 12);
+    const size = paxEntrySize(pax) ?? octal(124, 12);
     if (!Number.isSafeInteger(size) || size < 0)
       throw corrupt("invalid entry size");
     const start = offset + 512;
@@ -92,23 +92,6 @@ function tarEntries(archive: Buffer): Entry[] {
     if (entries.length > MAX_ENTRIES) throw corrupt("too many entries");
   }
   return entries;
-}
-
-function parsePax(data: Buffer): Map<string, string> {
-  const records = new Map<string, string>();
-  let offset = 0;
-  while (offset < data.length) {
-    const space = data.indexOf(0x20, offset);
-    const length = Number(data.toString("latin1", offset, space));
-    if (space === -1 || !Number.isSafeInteger(length) || length <= 0)
-      throw corrupt("malformed PAX record");
-    const record = data.toString("utf8", space + 1, offset + length - 1);
-    const equals = record.indexOf("=");
-    if (equals <= 0) throw corrupt("malformed PAX record");
-    records.set(record.slice(0, equals), record.slice(equals + 1));
-    offset += length;
-  }
-  return records;
 }
 
 /** Every entry of a zip archive, from its central directory. */
