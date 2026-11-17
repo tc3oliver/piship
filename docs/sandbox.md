@@ -95,7 +95,7 @@ sandbox:
 | `namespace` | `kubernetes-agent-sandbox` | Namespace of the SandboxClaims |
 | `template` | `e2b-compatible`, `kubernetes-agent-sandbox` | E2B template ID, or the SandboxWarmPool name |
 | `workdir` | `e2b-compatible`, `kubernetes-agent-sandbox` | Absolute remote directory that maps to the workspace. Default `/home/user`; with `workspace: remote` and `e2b-compatible`, `/home/<user>/workspace` (`/root/workspace` for `root`), created empty |
-| `user` | `e2b-compatible` | The sandbox user commands run as (envd's `Authorization: Basic <user>:`). Default `user`, as E2B expects; CubeSandbox needs `root`. Without `workspace: remote` the default `workdir` stays `/home/user`, so set `workdir` together with `user` (for example `/root/repo`); with it, the default follows the user |
+| `user` | `e2b-compatible` | The sandbox user commands run as (envd's `Authorization: Basic <user>:`). Default `user`, as E2B expects; CubeSandbox is expected to need `root` (not verified against a live CubeSandbox). Without `workspace: remote` the default `workdir` stays `/home/user`, so set `workdir` together with `user` (for example `/root/repo`); with it, the default follows the user |
 | `lifetimeSeconds` | `e2b-compatible`, `kubernetes-agent-sandbox` | piship/v1alpha6: how long the sandbox lives, 1 to 86400 seconds (default 3600). It is renewed while the session uses it (four times per lifetime for a remote workspace, even when idle), so this is the idle time after which an abandoned sandbox disappears |
 | `workspace` | `e2b-compatible` and `custom` | piship/v1alpha6: `remote` makes the sandbox hold the only live copy of the project; the host working tree changes only through `<command> sandbox pull` ([Remote workspace](#remote-workspace)). Omitted keeps today's behavior. `native` and `kubernetes-agent-sandbox` fail `validate` |
 | `credential` | remote and `custom` | `none` (default), `runtime` (the inference runtime credential, only on its origin), or `stored` (the sandbox credential stored with `sandbox login`, bound to the user and the endpoint origins; needs `endpoint`); see [Credentials](#credentials) |
@@ -145,6 +145,33 @@ A custom adapter module may export `sandboxCredential`, a standard `CredentialPr
 Without a credential PiShip can send, use `credential: none` with an endpoint that needs no client credential, such as `kubectl proxy` and a port-forwarded router on loopback, or an authenticating proxy.
 
 PiShip calls remote backends through its managed fetch, so the proxy, CA, and `network.privateOnly` settings apply. With `privateOnly`, every host must be listed in `network.allowHosts`; E2B's data plane uses one host per sandbox (`49983-<id>.<domain>`), so an e2b-compatible backend works with `privateOnly` only when that host is known and allowed.
+
+#### The E2B API an e2b-compatible service must answer
+
+PiShip has been tested only against a mock E2B server. An operator of another E2B-compatible service, such as CubeSandbox, can check it against the calls the backend makes (`packages/sandbox/src/remote/e2b.ts`).
+
+Control plane, at `sandbox.endpoint`. Only these requests carry the stored credential, as `X-API-Key`:
+
+| Request | Body sent | What PiShip reads |
+| --- | --- | --- |
+| `GET health` | — | Any 2xx means available |
+| `POST sandboxes` | `templateID` (`sandbox.template`, default `base`, or a snapshot ID), `timeout` (`lifetimeSeconds`), `metadata`, `allow_internet_access` (false in deny mode) | `sandboxID` (letters, digits, `-`), optional `domain` (else the endpoint's host without a leading `api.`), optional `envdAccessToken` |
+| `POST sandboxes/<id>/timeout` | `timeout` | 2xx renews; 404 or 410 means the sandbox expired |
+| `POST sandboxes/<id>/snapshots` | `memory: false` | `snapshotID`. 404, 405, or 501 means snapshots are unsupported (remote workspace cache only) |
+| `DELETE templates/<snapshot id>` | — | 2xx or 404 |
+| `DELETE sandboxes/<id>` | — | Best effort at session end |
+
+envd (data plane), at `<scheme>://49983-<sandboxID>.<domain>`, the endpoint's scheme on its default port. Every request carries `E2b-Sandbox-Id: <sandboxID>`, `E2b-Sandbox-Port: 49983`, `Connect-Protocol-Version: 1`, and `X-Access-Token: <envdAccessToken>` when the service returned one; the control-plane key is never sent here. Command and file requests also carry `Authorization: Basic <base64 of "<sandbox.user>:">`.
+
+| Request | Protocol | Use |
+| --- | --- | --- |
+| `POST process.Process/Start` | Connect server stream (`application/connect+json`); runs `/bin/bash -l -c <command>` with `envs`, `cwd`, and a `tag` | stdout and stderr (base64) and the exit code |
+| `POST process.Process/SendSignal` | Connect unary JSON, `{process: {tag}, signal: "SIGNAL_SIGKILL"}` | Cancelling a command |
+| `GET /files?path=<absolute>&username=<user>` | Raw bytes | Reading a file; 404 means it does not exist |
+| `POST /files?path=<absolute>&username=<user>` | `multipart/form-data`, one part named `file` | Writing a file, creating its parent directories |
+| `POST filesystem.Filesystem/Stat` | Connect unary JSON, `{path}` | `entry.type` (`FILE_TYPE_FILE`, `FILE_TYPE_DIRECTORY`); 404 means it does not exist |
+
+The file calls serve a remote workspace (`workspace: remote`).
 
 ## Lifecycle
 

@@ -534,6 +534,10 @@ describe("sandbox pull", () => {
     expect(failed?.message).toContain(paths.meta);
     expect(failed?.message).toMatch(/unreadable/);
     expect(failed?.userAction).toMatch(/demo sandbox pull --discard/);
+    // The patch is the only copy: say where it is before offering --discard.
+    expect(failed?.userAction).toContain(
+      `copy ${paths.patch} somewhere safe first`,
+    );
     await runSandbox(ctx, ["pull", "--discard"]);
     expect(existsSync(paths.patch)).toBe(false);
     expect(existsSync(paths.meta)).toBe(false);

@@ -525,7 +525,7 @@ export function seedDecision(
 }
 
 export function sandboxGoneMessage(command: string): string {
-  return `The sandbox expired or was lost. Changes up to the last checkpoint are saved: exit, run ${command} sandbox pull to review them, then start a new session.`;
+  return `The sandbox expired or was lost. Changes up to the last checkpoint are saved; changes made after it are gone. Exit, run ${command} sandbox pull to review them, then start a new session.`;
 }
 
 function sandboxGone<T>(gov: GovernanceSession, work: Promise<T>): Promise<T> {

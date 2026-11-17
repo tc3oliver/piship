@@ -235,7 +235,7 @@ export async function sandboxPull(
     }
     throw failure(
       `The stored checkpoint record ${paths.meta} is unreadable (damaged or incomplete), so the patch ${paths.patch} cannot be pulled safely`,
-      `Run ${ctx.metadata.app.command} sandbox pull --discard to drop it`,
+      `To keep the changes, copy ${paths.patch} somewhere safe first: --discard deletes it. Then run ${ctx.metadata.app.command} sandbox pull --discard to drop the record`,
     );
   }
   if (!checkpoint) {

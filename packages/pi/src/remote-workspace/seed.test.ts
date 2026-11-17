@@ -137,6 +137,7 @@ describe("seedRemoteWorkspace", () => {
         { path: "big.bin", reason: "too-large" },
       ]);
       expect(progress).toEqual([
+        "Uploading 1 file (0.0 MiB) to the sandbox",
         "Uploading to the sandbox: 1/1 parts, 0.0 of 0.0 MiB",
       ]);
     },
@@ -347,6 +348,7 @@ describe("seedRemoteWorkspace", () => {
       expect(sizes).toHaveLength(2);
       for (const bytes of sizes) expect(bytes).toBeLessThan(1024 * 1024);
       expect(progress).toEqual([
+        "Uploading 3 files (40.0 MiB) to the sandbox",
         "Uploading to the sandbox: 1/2 parts, 20.0 of 40.0 MiB",
         "Uploading to the sandbox: 2/2 parts, 40.0 of 40.0 MiB",
       ]);
