@@ -203,6 +203,19 @@ const TRANSPARENT_PREFIXES: Readonly<Record<string, string>> = {
   command: "",
   exec: "a",
 };
+/** Shell keywords and grouping that precede a command (`{ rm -rf /; }`). */
+const COMMAND_KEYWORDS = new Set([
+  "{",
+  "!",
+  "if",
+  "then",
+  "else",
+  "elif",
+  "do",
+  "while",
+  "until",
+  "coproc",
+]);
 const LONG_OPTIONS_WITH_VALUE = new Set([
   "--user",
   "--group",
@@ -241,7 +254,9 @@ function unprefixedCommand(command: string): string | undefined {
     const name = head?.[1]?.split("/").pop() ?? "";
     const valued = Object.hasOwn(TRANSPARENT_PREFIXES, name)
       ? TRANSPARENT_PREFIXES[name]
-      : undefined;
+      : COMMAND_KEYWORDS.has(name)
+        ? ""
+        : undefined;
     if (!head || valued === undefined) break;
     rest = rest.slice(head[0].length);
     for (;;) {
@@ -529,6 +544,11 @@ export interface PolicyExplanation {
 
 export const BUILTIN_DEFAULT_RULE = "builtin:default";
 export const BUILTIN_UNKNOWN_ACTION_RULE = "builtin:unknown-action";
+/** Asks for a command too large to check piece by piece. */
+export const BUILTIN_SHELL_LIMIT_RULE = "builtin:shell-limit";
+const MAX_FRAGMENTS = 4096;
+/** Where a command that cannot be split may start another command. */
+const FRAGMENT_CUT = /[;&|()`<>\r\n]/;
 
 const isUserFirst = (match: RuleMatch) =>
   match.layer === "user-preference" && match.first;
@@ -783,9 +803,10 @@ export class PolicyEngine {
     // A deny or ask rule also judges each command run through `sudo`,
     // `env`, `nice` and the like, and each fragment of a command that cannot
     // be split; its allow rules never widen this way.
+    const fragments = this.#fragments(action, resource);
     const stricter = [
       ...this.#unprefixed(action, resource),
-      ...this.#fragments(action, resource),
+      ...(fragments ?? []),
     ]
       .map((inner) => this.#decide(action, inner))
       .filter(
@@ -793,6 +814,14 @@ export class PolicyEngine {
           decision.ruleId !== BUILTIN_DEFAULT_RULE &&
           (decision.effect === "deny" || decision.effect === "ask"),
       );
+    if (!fragments)
+      stricter.push({
+        ...written,
+        effect: "ask",
+        ruleId: BUILTIN_SHELL_LIMIT_RULE,
+        reason: `The command has more than ${MAX_FRAGMENTS} pieces to check`,
+        layer: "builtin",
+      });
     const effect = strictest(
       written.effect,
       ...stricter.map((entry) => entry.effect),
@@ -807,15 +836,25 @@ export class PolicyEngine {
    * a backtick) cut at every character that could start a command, quotes
    * ignored, so deny and ask rules still see `rm -rf /` in `x $(y); rm -rf /`.
    * It over-splits; that only ever refuses more, as allow rules never match
-   * a fragment.
+   * a fragment. Undefined past `MAX_FRAGMENTS`, which then asks.
    */
-  #fragments(action: string, resource: string): string[] {
-    if (action !== "shell.execute" || chainSegments(resource, PLATFORM))
+  #fragments(action: string, resource: string): string[] | undefined {
+    // A fragment holds no cut character, so recursion stops one level down.
+    if (
+      action !== "shell.execute" ||
+      !FRAGMENT_CUT.test(resource) ||
+      chainSegments(resource, PLATFORM)
+    )
       return [];
     const fragments = new Set<string>();
-    for (const part of resource.split(/[;&|()`<>\r\n]/)) {
-      const fragment = part.trim().replace(/\$$/, "").trim();
-      if (fragment && fragment !== resource) fragments.add(fragment);
+    for (const part of resource.split(FRAGMENT_CUT)) {
+      // Drop trailing blanks and the `$` of `$(`, with a loop for CodeQL.
+      let end = part.length;
+      while (end > 0 && /[\s$]/.test(part[end - 1] as string)) end--;
+      const fragment = part.slice(0, end).trim();
+      if (!fragment || fragment === resource) continue;
+      fragments.add(fragment);
+      if (fragments.size > MAX_FRAGMENTS) return undefined;
     }
     return [...fragments];
   }
@@ -959,10 +998,14 @@ export class PolicyEngine {
     const resource = this.normalizeResource(request);
     const { action } = request;
     const segments = this.#segments(action, resource);
+    const fragments = this.#fragments(action, resource);
+    if (!fragments) return true;
     if (
-      [...(segments ?? []), ...this.#unprefixed(action, resource)].some(
-        (segment) => this.keepsPrompt({ ...request, resource: segment }),
-      )
+      [
+        ...(segments ?? []),
+        ...this.#unprefixed(action, resource),
+        ...fragments,
+      ].some((segment) => this.keepsPrompt({ ...request, resource: segment }))
     )
       return true;
     return [
