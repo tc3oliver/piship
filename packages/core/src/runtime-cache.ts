@@ -62,10 +62,12 @@ import { isRuntimeIrrelevant } from "./payload.js";
 import { renameWithRetry } from "./rename-retry.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import { searchToolCacheDirectory } from "./search-tools/index.js";
+import type { PayloadPackage } from "./supply-chain.js";
 import { windowsNpmInvocation } from "./windows-npm.js";
 
 const SCHEMA = "piship-runtime-cache/v3";
-const ROOT_FILES = ["package.json", "package-lock.json"];
+/** PiShip's files at the payload root, copied from the build input. */
+export const ROOT_FILES = ["package.json", "package-lock.json"];
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
 const KEEP = { install: 3, framework: 3, bundle: 6 } as const;
@@ -805,12 +807,21 @@ interface BundleRecord {
   readonly kind: "bundle";
   readonly key: string;
   readonly files: Readonly<Record<string, { size: number; sha256: string }>>;
+  readonly metadata?: BundleMetadata;
+}
+
+/** What bundle.json records of the tree the bundle was made from. */
+export interface BundleMetadata {
+  readonly components: readonly PayloadPackage[];
+  readonly entries: readonly string[];
 }
 
 export interface BundleTree {
   readonly tree: string;
   /** SHA-256 of every file, as verified when the entry was read. */
   readonly inventory: Readonly<Record<string, string>>;
+  /** Absent from entries stored before it was recorded. */
+  readonly metadata?: BundleMetadata;
 }
 
 /**
@@ -848,7 +859,12 @@ export function lookupBundle(
     return undefined;
   }
   touch(path);
-  return { tree, inventory };
+  const metadata = record.metadata;
+  return Array.isArray(metadata?.components) &&
+    Array.isArray(metadata.entries) &&
+    metadata.entries.every((entry) => typeof entry === "string")
+    ? { tree, inventory, metadata }
+    : { tree, inventory };
 }
 
 /** Publish the bundled files of `payload` (`names`, hashed as `inventory`). */
@@ -858,6 +874,7 @@ export function storeBundle(
   payload: string,
   inventory: Readonly<Record<string, string>>,
   names: readonly string[],
+  metadata?: BundleMetadata,
 ): void {
   let holding: string;
   try {
@@ -883,6 +900,7 @@ export function storeBundle(
       kind: "bundle",
       key,
       files,
+      ...(metadata ? { metadata } : {}),
     };
     writeFileSync(join(holding, RECORD), JSON.stringify(record));
     publish(

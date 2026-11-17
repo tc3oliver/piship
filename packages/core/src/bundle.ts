@@ -25,8 +25,11 @@ import {
   TRANSIENT_RETRY_MS,
 } from "./rename-retry.js";
 import {
+  type BundleMetadata,
+  type BundleTree,
   bundleEntryKey,
   lookupBundle,
+  lookupInstallTree,
   placeBundle,
   type RuntimeCache,
   storeBundle,
@@ -59,6 +62,45 @@ export interface BundleOptions {
   readonly components?: readonly PayloadPackage[];
   /** Told whether the bundled runtime came from the cache or the bundler ran. */
   readonly onCache?: (found: "hit" | "miss") => void;
+  /**
+   * The cached bundle `lookupCachedBundle` found, for a payload that holds no
+   * installed tree: it is placed, and nothing is read from a tree.
+   */
+  readonly cached?: CachedBundle;
+}
+
+export interface CachedBundle extends BundleTree {
+  readonly metadata: BundleMetadata;
+  /** The installed tree's identity (the digest of its file list). */
+  readonly install: string;
+}
+
+/**
+ * The bundled runtime `bundleDistribution` would take from `cache`, found
+ * without placing the installed tree: the key needs only that tree's esbuild
+ * version. Undefined on a miss, or for an entry stored before it recorded
+ * what bundle.json needs.
+ */
+export function lookupCachedBundle(
+  cache: RuntimeCache,
+): CachedBundle | undefined {
+  const tree = lookupInstallTree(cache);
+  if (!tree) return undefined;
+  let esbuild: string;
+  try {
+    esbuild = JSON.parse(
+      readFileSync(
+        join(tree.tree, "node_modules", "esbuild", "package.json"),
+        "utf8",
+      ),
+    ).version;
+  } catch {
+    return undefined;
+  }
+  const found = lookupBundle(cache, bundleEntryKey(cache, esbuild));
+  return found?.metadata
+    ? { ...found, metadata: found.metadata, install: tree.digest }
+    : undefined;
 }
 
 /**
@@ -136,7 +178,11 @@ export function bundleDistribution(
   // paths esbuild reports and the root they are made relative to agree.
   payload = realpathSync.native(payload);
   const strip = options.strip ?? options.cache?.strip === true;
-  const components = options.components ?? listPayloadPackages(payload);
+  const prebundled = options.cached;
+  const components =
+    prebundled?.metadata.components ??
+    options.components ??
+    listPayloadPackages(payload);
   const runtime = join(payload, "runtime");
   const original = join(payload, ".bundle-input");
   const entries: Record<string, string> = {};
@@ -145,116 +191,132 @@ export function bundleDistribution(
     entries[name] = source;
     shims.push({ file, entry: name });
   };
-  for (const name of workspacePackages) {
-    const directory = join(payload, "node_modules", "@piship", name);
-    const manifest = JSON.parse(
-      readFileSync(join(directory, "package.json"), "utf8"),
+  // A cached bundle placed without its tree needs none of this.
+  if (!prebundled) {
+    for (const name of workspacePackages) {
+      const directory = join(payload, "node_modules", "@piship", name);
+      const manifest = JSON.parse(
+        readFileSync(join(directory, "package.json"), "utf8"),
+      );
+      for (const [key, value] of Object.entries(manifest.exports ?? {})) {
+        const target =
+          typeof value === "string"
+            ? value
+            : (value as { import?: string }).import;
+        if (!target?.endsWith(".js")) continue;
+        const file = join(directory, target);
+        const entry = `piship-${name}${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`;
+        add(
+          entry,
+          file,
+          name === "pi" && key === "."
+            ? join(directory, "dist", "bundle.js")
+            : file,
+        );
+      }
+    }
+    // Public module shims preserve extension imports.
+    const upstream = join(payload, "node_modules", "@earendil-works");
+    for (const name of [
+      "pi-coding-agent",
+      "pi-ai",
+      "pi-agent-core",
+      "pi-codemode",
+      "pi-tui",
+    ]) {
+      const directory = join(upstream, name);
+      const manifest = JSON.parse(
+        readFileSync(join(directory, "package.json"), "utf8"),
+      );
+      const keys =
+        name === "pi-ai"
+          ? [".", "./compat", "./models", "./oauth", "./providers/all"]
+          : ["."];
+      for (const key of keys) {
+        const declared =
+          manifest.exports?.[key] ??
+          (key.startsWith("./providers/")
+            ? {
+                import: wildcardTarget(
+                  manifest.exports["./providers/*"].import,
+                  key.slice("./providers/".length),
+                ),
+              }
+            : undefined);
+        const target =
+          typeof declared === "string"
+            ? declared
+            : (declared?.import ?? (key === "." ? manifest.main : undefined));
+        if (target)
+          add(
+            `${name}${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`,
+            join(directory, target),
+          );
+      }
+    }
+    const typebox = join(payload, "node_modules", "typebox");
+    const typeboxManifest = JSON.parse(
+      readFileSync(join(typebox, "package.json"), "utf8"),
     );
-    for (const [key, value] of Object.entries(manifest.exports ?? {})) {
-      const target =
-        typeof value === "string"
-          ? value
-          : (value as { import?: string }).import;
-      if (!target?.endsWith(".js")) continue;
-      const file = join(directory, target);
-      const entry = `piship-${name}${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`;
+    for (const [key, value] of Object.entries(typeboxManifest.exports)) {
+      const target = (value as { import: string }).import;
       add(
-        entry,
-        file,
-        name === "pi" && key === "."
-          ? join(directory, "dist", "bundle.js")
-          : file,
+        `typebox${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`,
+        join(typebox, target),
       );
     }
-  }
-  // Public module shims preserve extension imports.
-  const upstream = join(payload, "node_modules", "@earendil-works");
-  for (const name of [
-    "pi-coding-agent",
-    "pi-ai",
-    "pi-agent-core",
-    "pi-codemode",
-    "pi-tui",
-  ]) {
-    const directory = join(upstream, name);
-    const manifest = JSON.parse(
-      readFileSync(join(directory, "package.json"), "utf8"),
-    );
-    const keys =
-      name === "pi-ai"
-        ? [".", "./compat", "./models", "./oauth", "./providers/all"]
-        : ["."];
-    for (const key of keys) {
-      const declared =
-        manifest.exports?.[key] ??
-        (key.startsWith("./providers/")
-          ? {
-              import: wildcardTarget(
-                manifest.exports["./providers/*"].import,
-                key.slice("./providers/".length),
-              ),
-            }
-          : undefined);
-      const target =
-        typeof declared === "string"
-          ? declared
-          : (declared?.import ?? (key === "." ? manifest.main : undefined));
-      if (target)
-        add(
-          `${name}${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`,
-          join(directory, target),
-        );
-    }
-  }
-  const typebox = join(payload, "node_modules", "typebox");
-  const typeboxManifest = JSON.parse(
-    readFileSync(join(typebox, "package.json"), "utf8"),
-  );
-  for (const [key, value] of Object.entries(typeboxManifest.exports)) {
-    const target = (value as { import: string }).import;
+    // Pi's extension loader resolves the pi-ai import of an extension to this
+    // file by its path next to the loader (Pi 1.5.0).
     add(
-      `typebox${key === "." ? "" : key.slice(1).replaceAll("/", "-")}`,
-      join(typebox, target),
+      "pi-ai-extension-view",
+      join(
+        upstream,
+        "pi-coding-agent",
+        "dist",
+        "core",
+        "extensions",
+        "pi-ai-extension-view.js",
+      ),
+    );
+    add(
+      "codemode-worker",
+      join(upstream, "pi-codemode", "dist", "runtime", "worker.js"),
+      join(
+        payload,
+        "node_modules",
+        "@piship",
+        "pi",
+        "dist",
+        "bundle-worker.js",
+      ),
+    );
+    // This is an upstream runtime asset, not an integration import. Preserve its
+    // code untouched and let the bundler follow its own relative dependencies.
+    add(
+      "image-resize-worker",
+      join(
+        upstream,
+        "pi-coding-agent",
+        "dist",
+        "utils",
+        "image-resize-worker.js",
+      ),
     );
   }
-  // Pi's extension loader resolves the pi-ai import of an extension to this
-  // file by its path next to the loader (Pi 1.5.0).
-  add(
-    "pi-ai-extension-view",
-    join(
-      upstream,
-      "pi-coding-agent",
-      "dist",
-      "core",
-      "extensions",
-      "pi-ai-extension-view.js",
-    ),
-  );
-  add(
-    "codemode-worker",
-    join(upstream, "pi-codemode", "dist", "runtime", "worker.js"),
-    join(payload, "node_modules", "@piship", "pi", "dist", "bundle-worker.js"),
-  );
-  // This is an upstream runtime asset, not an integration import. Preserve its
-  // code untouched and let the bundler follow its own relative dependencies.
-  add(
-    "image-resize-worker",
-    join(
-      upstream,
-      "pi-coding-agent",
-      "dist",
-      "utils",
-      "image-resize-worker.js",
-    ),
-  );
   const load = createRequire(join(payload, "package.json"));
-  const key = options.cache
-    ? bundleEntryKey(options.cache, load("esbuild/package.json").version)
-    : undefined;
+  const key =
+    options.cache && !prebundled
+      ? bundleEntryKey(options.cache, load("esbuild/package.json").version)
+      : undefined;
   const cached =
-    options.cache && key ? lookupBundle(options.cache, key) : undefined;
+    prebundled ??
+    (options.cache && key ? lookupBundle(options.cache, key) : undefined);
   let placed = false;
-  if (cached) {
+  if (prebundled) {
+    // No tree to bundle from instead: a failure here stands.
+    placeBundle(prebundled, payload);
+    placed = true;
+  } else if (cached) {
     renameWithRetry(join(payload, "node_modules"), original);
     try {
       placeBundle(cached, payload);
@@ -418,7 +480,7 @@ export function bundleDistribution(
         {
           format: "esbuild-node-esm",
           components,
-          entries: Object.keys(entries),
+          entries: prebundled?.metadata.entries ?? Object.keys(entries),
           files: readdirSync(runtime).length,
         },
         null,
@@ -443,6 +505,13 @@ export function bundleDistribution(
         (name) =>
           name.startsWith("runtime/") || name.startsWith("node_modules/"),
       ),
+      {
+        // Vendored Pi packages are not part of the bundle's key.
+        components: components.filter((item) =>
+          item.path.startsWith("node_modules/"),
+        ),
+        entries: Object.keys(entries),
+      },
     );
   writeFileSync(
     join(payload, "metadata", "inventory.json"),

@@ -21,7 +21,7 @@ import {
   refreshCachedDistribution,
   writeBuildCache,
 } from "./build-cache.js";
-import { bundleDistribution } from "./bundle.js";
+import { bundleDistribution, lookupCachedBundle } from "./bundle.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { requireCurrentLock } from "./lock.js";
 import {
@@ -58,6 +58,7 @@ import {
   materializeInstallTree,
   plainInventory,
   publishFrameworkTree,
+  ROOT_FILES,
   type RuntimeCache,
   runtimeCacheFor,
   writeFrameworkFiles,
@@ -568,17 +569,37 @@ export function buildDistribution(
       writeFileSync(join(stage, "piship.mjs"), portableCliSource());
       debugTiming("resource/payload assembly", started);
     };
-    const trees = placeRuntime(stage, {
-      cache: runtimeCache,
-      strip,
-      // The bundler drops the whole tree, so deleting from it is wasted work.
-      leaveWhole: bundling || deferred,
-      progress: options.progress,
-      found: options.onRuntimeCache,
-      meanwhile: assemble,
-      // Only a distribution with Pi packages to vendor has work worth a thread.
-      overlap: (lock.packages?.length ?? 0) > 0,
-    });
+    // A cached bundle ships no file of the installed tree, so the tree is not
+    // placed. Bundling vendored Pi packages runs the tree's esbuild: they do.
+    const prebundled =
+      bundling && runtimeCache && !lock.packages?.length
+        ? lookupCachedBundle(runtimeCache)
+        : undefined;
+    if (prebundled) {
+      options.progress?.("Reusing the cached runtime packages");
+      for (const name of ROOT_FILES)
+        copyFileSync(join(buildInput, name), join(stage, name));
+      options.onRuntimeCache?.({
+        status: "hit",
+        entry: prebundled.install,
+        linked: 0,
+        copied: 0,
+      });
+      assemble();
+    }
+    const trees = prebundled
+      ? []
+      : placeRuntime(stage, {
+          cache: runtimeCache,
+          strip,
+          // The bundler drops the whole tree, so deleting from it is wasted work.
+          leaveWhole: bundling || deferred,
+          progress: options.progress,
+          found: options.onRuntimeCache,
+          meanwhile: assemble,
+          // Only a distribution with Pi packages to vendor has work worth a thread.
+          overlap: (lock.packages?.length ?? 0) > 0,
+        });
     phase = process.hrtime.bigint();
     if (vendored.length && wantsBundle) {
       // release.bundle covers the Pi packages too: a closure that is safe to
@@ -634,6 +655,7 @@ export function buildDistribution(
       options.progress?.("Bundling the portable runtime");
       bundleDistribution(stage, {
         ...(runtimeCache ? { cache: runtimeCache } : {}),
+        ...(prebundled ? { cached: prebundled } : {}),
         strip,
       });
       debugTiming("runtime bundling and inventory", phase);

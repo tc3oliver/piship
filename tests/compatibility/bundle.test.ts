@@ -66,14 +66,18 @@ function cachedBuild(cache: string, output: string) {
   delete buildEnv.PISHIP_BUILD_INPUT;
   const manifest = join(root, "source", "piship.yaml");
   const core = join(repository, "packages/core/dist");
-  const script = `import {buildDistribution, requireCurrentLock} from ${esmImport(join(core, "index.js"))}; import {runtimeCacheFor} from ${esmImport(join(core, "runtime-cache.js"))}; const steps = []; const built = buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(output)}, {supplyChainGates: false, cache: false, runtimeCache: runtimeCacheFor(requireCurrentLock(${JSON.stringify(manifest)})), progress: (step) => steps.push(step)}); console.log(JSON.stringify({built, steps}));`;
+  const script = `import {buildDistribution, requireCurrentLock} from ${esmImport(join(core, "index.js"))}; import {runtimeCacheFor} from ${esmImport(join(core, "runtime-cache.js"))}; const steps = []; const reports = []; const built = buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(output)}, {supplyChainGates: false, cache: false, runtimeCache: runtimeCacheFor(requireCurrentLock(${JSON.stringify(manifest)})), progress: (step) => steps.push(step), onRuntimeCache: (report) => reports.push(report)}); console.log(JSON.stringify({built, steps, reports}));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
     { cwd: repository, encoding: "utf8", env: buildEnv, timeout: 120_000 },
   );
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout) as { built: string; steps: string[] };
+  return JSON.parse(result.stdout) as {
+    built: string;
+    steps: string[];
+    reports: { status: string; linked: number; copied: number }[];
+  };
 }
 
 describe("real bundled Pi runtime", () => {
@@ -229,6 +233,10 @@ describe("real bundled Pi runtime", () => {
     const warm = cachedBuild(cache, join(root, "cached-warm"));
     expect(warm.steps).toContain("Reusing the cached runtime packages");
     expect(installing(warm.steps)).toBe(false);
+    // The bundle was cached: none of the installed tree's files was placed.
+    expect(warm.reports).toEqual([
+      expect.objectContaining({ status: "hit", linked: 0, copied: 0 }),
+    ]);
     expect(
       readdirSync(join(cache, "runtime")).filter((name) =>
         /^[ifb]-[0-9a-f]{20}$/.test(name),
@@ -239,6 +247,12 @@ describe("real bundled Pi runtime", () => {
     // Neither the cache nor skipping the strip first changes a shipped byte.
     expect(inventory(cold.built)).toBe(inventory(payload));
     expect(inventory(warm.built)).toBe(inventory(payload));
+    const listing = (directory: string) =>
+      files(directory)
+        .map((path) => path.slice(directory.length))
+        .sort();
+    // The inventories above compare every file's digest; this adds the listing.
+    expect(listing(warm.built)).toEqual(listing(cold.built));
     const smoke = spawnSync(
       process.execPath,
       [join(warm.built, "bin", "mypi"), "--smoke"],
