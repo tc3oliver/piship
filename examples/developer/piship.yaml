@@ -830,7 +830,8 @@ policy:
 
 mcp:
   mode: explicit
-  # pi-code reads .mcp.json itself, after it has asked about the project.
+  # Governs PiShip's own MCP only. pi-code reads .mcp.json itself and still
+  # starts those servers after its own trust prompt; this does not stop it.
   project: deny
 
 # Optional for a personal distribution. On Linux or macOS, `required: true`
