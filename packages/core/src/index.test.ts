@@ -314,7 +314,9 @@ describe("init", () => {
     const plain = readFileSync(path, "utf8");
     expect(plain).not.toMatch(/^runtime:/m);
     expect(plain).not.toContain("searchTools");
-    expect(plain).not.toContain("github.com");
+    // github.com stays only in the docs links.
+    expect(plain).not.toContain("https://github.com,");
+    expect(plain).not.toContain("https://github.com]");
     expect(plain).toContain("sources: [https://registry.npmjs.org]");
     const manifest = readManifest(path);
     expect(manifest.runtime.searchTools).toBeUndefined();
@@ -353,6 +355,44 @@ describe("init", () => {
       { pattern: "*", exposure: "hidden" },
     ]);
   });
+
+  it.each([
+    ["personal", false],
+    ["managed", true],
+  ] as const)(
+    "writes %s example blocks that all validate once uncommented",
+    (mode, managed) => {
+      const root = mkdtempSync(join(tmpdir(), "piship-init-"));
+      roots.push(root);
+      const path = initDistribution(join(root, `${mode}-agent`), { managed });
+      // An example line is an indented `#` and three spaces; uncommenting it
+      // leaves the indent before the `#`. (The top-level variable list in
+      // the managed header is prose, not an example.)
+      let uncommented = 0;
+      const text = readFileSync(path, "utf8")
+        .split("\n")
+        .map((line) => {
+          const match = /^( +)# {3}(.+)$/.exec(line);
+          if (!match) return line;
+          uncommented += 1;
+          return `${match[1]}${match[2]}`;
+        })
+        .join("\n")
+        // The collector sink's URL variable must be declared.
+        .replace("variables:\n", "variables:\n  - AUDIT_COLLECTOR_URL\n");
+      expect(uncommented).toBe(managed ? 14 : 0);
+      writeFileSync(path, text);
+      const manifest = readManifest(path);
+      expect(() => checkGovernance(manifest, path)).not.toThrow();
+      if (!managed) return;
+      expect(manifest.governance?.mcp.servers[0]?.id).toBe("docs");
+      expect(manifest.governance?.audit.sinks).toMatchObject([
+        { id: "local", required: false },
+        { id: "collector", type: "http", required: true },
+      ]);
+      expect(manifest.access?.inference.liveCatalog).toBe(true);
+    },
+  );
 });
 
 describe("init mode", () => {

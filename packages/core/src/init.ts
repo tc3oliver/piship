@@ -8,6 +8,9 @@ import {
 import { pishipCommand, shellArg } from "./invocation.js";
 import { isDistributionId, suggestDistributionId } from "./state-paths.js";
 
+// Absolute: a new distribution repository does not contain PiShip's docs.
+const DOCS = "https://github.com/tc3oliver/piship/blob/main/docs";
+
 /**
  * Governance and lifecycle sections shared by both init templates: explicit
  * safe defaults for the deployment mode, and updates disabled until a source
@@ -61,6 +64,7 @@ function initGovernance(managed: boolean, id: string): string {
 `;
   const policy = managed
     ? `# Unmatched actions ask the person; headless runs resolve ask to deny.
+# Reference: ${DOCS}/manifest.md#policy
 policy:
   default: ask
 ${projectTrust}  # Routine work runs without a prompt (workspace reads and writes, tests,
@@ -87,10 +91,12 @@ ${projectTrust}  # Routine work runs without a prompt (workspace reads and write
       resource: "**"
       effect: allow
 `
-    : `policy:
+    : `# Reference: ${DOCS}/manifest.md#policy
+policy:
   default: allow
 ${projectTrust}`;
   return `${policy}# No MCP servers until they are declared and reviewed.
+# Reference: ${DOCS}/manifest.md#mcp
 mcp:
   mode: ${managed ? "allowlist" : "off"}
 ${
@@ -108,8 +114,10 @@ ${
 `
     : ""
 }# Set required: true to fail the launch when the OS sandbox is unavailable.
+# Reference: ${DOCS}/manifest.md#sandbox
 sandbox:
   required: false
+# Reference: ${DOCS}/manifest.md#audit
 audit:
 ${
   managed
@@ -118,12 +126,13 @@ ${
     - id: local
       type: file
       required: false
-  # A company collector: list its variable under variables, and set
-  # required: true to fail the launch when it is unreachable.
-  #   - id: collector
-  #     type: http
-  #     url: \${AUDIT_COLLECTOR_URL}
-  #     required: false
+    # A company collector: list its variable under variables. required: true
+    # fails the launch when it is unreachable; an optional HTTP sink drops
+    # the events it cannot deliver, and validate warns about it.
+    #   - id: collector
+    #     type: http
+    #     url: \${AUDIT_COLLECTOR_URL}
+    #     required: true
 `
     : `  enabled: false
 `
@@ -131,7 +140,7 @@ ${
 # updates.source is an https URL or a \${NAME} runtime variable listed under
 # variables; a local directory (a file share, say) works only through such a
 # variable, set to an absolute path. piship trust-root init prints the
-# trust.bootstrap block.
+# trust.bootstrap block. Reference: ${DOCS}/manifest.md#update-trust-bootstrap-v1alpha5
 updates:
   channel: stable
   channels: [stable]
@@ -209,7 +218,7 @@ app:
 #   ${prefix}_CREDENTIAL_BROKER_URL    credential broker endpoint
 #   ${prefix}_CREDENTIAL_REVOKE_URL    credential broker revoke endpoint
 #   ${prefix}_LLM_GATEWAY_URL          OpenAI-compatible LLM gateway base URL
-# The contract each service must follow: docs/enterprise-integration.md.
+# The contract each service must follow: ${DOCS}/enterprise-integration.md
 variables:
   - ${prefix}_OIDC_ISSUER
   - ${prefix}_OIDC_CLIENT_ID
@@ -238,6 +247,9 @@ inference:
   baseUrl: \${${prefix}_LLM_GATEWAY_URL}
   # openai-completions or openai-responses, whichever the gateway speaks.
   api: openai-completions
+  # Set liveCatalog so launch and the models command report which allowed
+  # models the gateway actually lists:
+  #   liveCatalog: true
 # The models people may use: replace example/coder with the gateway's model
 # IDs. Every allowed ID needs a catalog entry.
 models:
@@ -272,9 +284,11 @@ ${initGovernance(true, id)}`,
         bundle
           ? `runtime:
   # fd and rg ship in the payload, pinned and digest-checked. Without them
-  # Pi downloads them on the first prompt and waits 24 to 30 seconds. \`piship
+  # a launch runs Pi offline instead of waiting for Pi to download them, so
+  # file-name autocomplete and rg are missing, and doctor warns. \`piship
   # lock\` downloads them once per release target, so it needs network access
   # to github.com (listed under release.sources below).
+  # Reference: ${DOCS}/manifest.md#bundled-search-tools-v1alpha6
   searchTools:
     mode: bundled
 `
@@ -297,7 +311,15 @@ ${initGovernance(false, id)}release:
 `,
     );
   }
-  writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
+  writeFileSync(
+    join(root, "resources", "AGENTS.md"),
+    `# ${id}
+
+Every session of this distribution loads these instructions. Put here what
+the agent should always know: coding conventions, preferred commands and
+tools, and what to avoid. A repository's own AGENTS.md adds to it.
+`,
+  );
   // `build`, `dev` and `test` write dist/<id> under the directory they run in.
   writeFileSync(join(root, ".gitignore"), "dist/\n");
   // piship.lock records the digest of every resource's bytes. Git for Windows
