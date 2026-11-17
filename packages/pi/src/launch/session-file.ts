@@ -692,9 +692,9 @@ export function resumeRefusal(
   if (!problem) return undefined;
   const why =
     problem.kind === "oversized"
-      ? `it is ${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit for resuming a session automatically`
+      ? `it is ${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit for resuming a session, and PiShip has no way to resume past it`
       : `it is damaged and Pi would continue without the damaged part (${printable(problem.reason)})`;
-  return `That session is not resumed: ${why}. The file was not loaded or changed. Start a new session here instead.`;
+  return `That session is not resumed: ${why}. The file (${resolve(target)}) was not loaded or changed. Start a new session here instead.`;
 }
 
 /**

@@ -91,7 +91,9 @@ async function add(
   const maxMinutes = Math.floor(gov.grantMaxTtlMs / 60_000);
   minutes ??= Math.min(DEFAULT_TTL_MINUTES, maxMinutes);
   if (minutes > maxMinutes)
-    throw new Error(`A task grant lasts at most ${duration(maxMinutes)} here`);
+    throw new Error(
+      `A task grant lasts at most ${duration(maxMinutes)} here (policy.taskGrants.maxTtlMinutes)`,
+    );
   if (target && /^~(?:$|[/\\])/.test(target))
     throw new Error("/grant does not expand ~; use an absolute path");
   // `.` and no path are the project, not the current directory.

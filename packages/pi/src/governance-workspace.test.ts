@@ -26,7 +26,11 @@ import type {
 import type { ManagedFetch } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { governanceHooks, workflowExtension } from "./builtins.js";
+import {
+  DEFAULT_BUILD_PROMPT,
+  governanceHooks,
+  workflowExtension,
+} from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
 
 const posix = process.platform !== "win32";
@@ -513,3 +517,9 @@ describe.skipIf(!posix || asRoot)(
     });
   },
 );
+
+describe("Build mode prompt", () => {
+  it("tells the model to search through bash, since grep, find and ls are excluded", () => {
+    expect(DEFAULT_BUILD_PROMPT).toMatch(/no grep, find or ls tools.*bash/);
+  });
+});

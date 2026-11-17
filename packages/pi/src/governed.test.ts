@@ -2233,6 +2233,17 @@ describe("governed read resource bounds", () => {
     );
   });
 
+  it("does not send Plan mode to bash for a huge file", async () => {
+    const { session, workspace } = await open();
+    session.workflowMode = "plan";
+    sparse(join(workspace, "huge.log"), HUGE);
+    const read = tool(governedTools(session, workspace), "read");
+    const error = await run(read, { path: "huge.log" }).catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/over the 16\.0MB limit/);
+    expect((error as Error).message).toContain("/build");
+    expect((error as Error).message).not.toContain("Use bash");
+  });
+
   it("refuses a file just over the limit", async () => {
     const { session, workspace } = await open();
     sparse(join(workspace, "over.log"), GOVERNED_READ_LIMIT_BYTES + 1);
