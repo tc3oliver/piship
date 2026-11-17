@@ -387,7 +387,7 @@ describe("the search tool archive reader", () => {
       record("size", ""),
       record("size", "1e3"),
       "0x14 path=x/fd\n",
-      record("path", `${root}/fd`).replace("\n", "!"),
+      record("path", `${root}/fd`).slice(0, -1) + "!",
       `99 path=${root}/fd\n`,
     ])
       expect(() =>
