@@ -128,7 +128,7 @@ describe.runIf(HOST_EVIDENCED)("doctor install checks", () => {
     rmSync(receipt.commandPath);
     const [line] = updateGroup().filter((item) => item.startsWith("! command"));
     expect(line).toContain(`${receipt.commandPath} is missing`);
-    expect(line).toContain(`piship.mjs repair ${ID} `);
+    expect(line).toMatch(new RegExp(`piship\\.mjs"? repair ${ID} `));
   });
 
   // Permissions do not stop file creation on Windows, and root ignores them.
