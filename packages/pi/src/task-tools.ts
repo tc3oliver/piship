@@ -8,6 +8,7 @@ import {
   getShellConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { printable, redact } from "@piship/contracts";
 import {
   leadingPartial,
   type TaskEvent,
@@ -70,7 +71,7 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
       const code =
         task.exitCode !== null ? ` (exit code ${task.exitCode})` : "";
       gov.notice(
-        `Background task ${task.id} ${task.status}${code}: ${task.command.split("\n")[0]?.slice(0, 60)}`,
+        `Background task ${task.id} ${task.status}${code}: ${printable(redact(task.command.split("\n")[0] ?? "")).slice(0, 60)}`,
         task.status === "exited" && task.exitCode === 0 ? "info" : "warning",
       );
     },
