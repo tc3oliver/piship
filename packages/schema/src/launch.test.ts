@@ -523,7 +523,13 @@ describe("tool.execute denials", () => {
       "web_*",
     ])
       expect(denials(resource)).toEqual([]);
-    expect(denials("web_fetch", "allow")).toEqual([]);
+    expect(denials("web_fetch", "allow")).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("policy.default decides"),
+      }),
+    ]);
+    expect(denials("web_fetch", "ask")).toHaveLength(1);
+    expect(denials("bash", "allow")).toEqual([]);
     expect(denials("mcp__other__drop")).toHaveLength(1);
   });
 });

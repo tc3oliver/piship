@@ -58,7 +58,7 @@ describe("formatDecision", () => {
         "Enforcement:\n  enforced (control-plane)",
         "Layer:\n  distribution-enforced",
         "Reason:\n  Destructive document tools need a change ticket",
-        "Other matching rules:\n  acme.mcp.default (distribution-default, allow)\n  me.docs (user-preference, ask)",
+        "Other matching rules:\n  acme.mcp.default (distribution-default, allow, replaced by a matching user rule)\n  me.docs (user-preference, ask)",
         "Ignored rules:\n  team.docs.allow (team): team rules are narrowing only; allow is ignored",
       ].join("\n\n"),
     );

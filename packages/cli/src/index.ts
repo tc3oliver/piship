@@ -20,6 +20,7 @@ import {
   checkSkills,
   checkToolExposure,
   checkGovernance,
+  inertRuleWarnings,
   shellGlobWarnings,
   unapprovedLoadWarnings,
   checkPiVersion,
@@ -1405,6 +1406,7 @@ export async function runCli(
         ...launchWarnings(manifest),
         ...unapprovedLoadWarnings(manifest),
         ...shellGlobWarnings(manifest),
+        ...inertRuleWarnings(manifest),
         ...checkSkills(manifest, target),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);

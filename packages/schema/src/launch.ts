@@ -530,7 +530,7 @@ export const KNOWN_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A `tool.execute` deny naming one tool that is not built in and not a tool
+ * A `tool.execute` rule naming one tool that is not built in and not a tool
  * of a declared MCP server matches nothing PiShip knows of: an extension
  * may register that name at run time, or it is a typo and blocks nothing.
  */
@@ -545,13 +545,12 @@ export function unknownToolDenials(manifest: Manifest): ValidationDiagnostic[] {
   return (["enforced", "defaults"] as const).flatMap((list) =>
     policy[list].flatMap((rule, index) =>
       rule.action === "tool.execute" &&
-      rule.effect === "deny" &&
       !/[*?[\]{}]/.test(rule.resource) &&
       !named(rule.resource)
         ? [
             {
               path: `policy.${list}[${index}].resource`,
-              message: `${rule.id} denies tool ${rule.resource}, which is not a Pi or PiShip tool or a tool of a declared MCP server (mcp__<server>__<tool>). An extension tool is only known at run time, so this deny matches it if an extension registers that exact name; otherwise it blocks nothing`,
+              message: `${rule.id} ${rule.effect === "deny" ? "denies" : `${rule.effect}s`} tool ${rule.resource}, which is not a Pi or PiShip tool or a tool of a declared MCP server (mcp__<server>__<tool>). An extension tool is only known at run time, so this rule matches it if an extension registers that exact name; otherwise it never applies${rule.effect === "deny" ? " and blocks nothing" : " and policy.default decides"}`,
             },
           ]
         : [],

@@ -208,6 +208,66 @@ export function shellGlobWarnings(manifest: Manifest): ValidationDiagnostic[] {
   );
 }
 
+const LOAD_ACTIONS = new Set<string>([
+  "resource.load",
+  "skill.load",
+  "instruction.load",
+  "extension.load",
+]);
+
+/**
+ * Rules that parse but can never match: a `git.push` resource is
+ * `<remote>/<branch>`, and a load resource is `<class>:./<path>` or
+ * `<class>:**`.
+ */
+export function inertRuleWarnings(manifest: Manifest): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  return [
+    ...policy.enforced.map((rule) => ["enforced", rule] as const),
+    ...policy.defaults.map((rule) => ["defaults", rule] as const),
+  ].flatMap(([layer, rule]) => {
+    const path = `policy.${layer}.${rule.id}`;
+    if (rule.action === "git.push" && /\s/.test(rule.resource))
+      return [
+        {
+          path,
+          message: `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/main"), not a command`,
+        },
+      ];
+    if (
+      rule.action === "git.push" &&
+      !rule.resource.includes("/") &&
+      !rule.resource.includes("**")
+    )
+      return [
+        {
+          path,
+          message: `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/${rule.resource}", or "**/${rule.resource}" for any remote)`,
+        },
+      ];
+    // `<class>:` then `./...` or a glob; builtin and project resources are
+    // named differently (`builtin:<name>`, `project:<path>`).
+    const colon = rule.resource.indexOf(":");
+    const rest = rule.resource.slice(colon + 1);
+    if (
+      LOAD_ACTIONS.has(rule.action) &&
+      ["certified", "company", "user"].includes(
+        rule.resource.slice(0, colon),
+      ) &&
+      !rest.startsWith("./") &&
+      !rest.startsWith("*")
+    )
+      return [
+        {
+          path,
+          message: `"${rule.resource}" never matches: a ${rule.action} resource is <class>:./<path> or <class>:** (for example "company:./resources/skills/**")`,
+        },
+      ];
+    return [];
+  });
+}
+
 /**
  * Rules that deny or ask for an action no runtime seam enforces. A managed
  * finding that is neither acknowledged nor audit-only throws
