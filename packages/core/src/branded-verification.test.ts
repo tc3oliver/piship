@@ -229,9 +229,11 @@ describe("doctor verification states", () => {
     const evidence = {
       gateway: { lastReachableAt: "2026-10-29T01:00:00.000Z" },
     } as MetricsSnapshot;
-    expect(verificationStates(ctx, evidence).integration.state).toBe(
-      "verified",
-    );
+    expect(verificationStates(ctx, evidence).integration).toMatchObject({
+      state: "verified",
+      detail:
+        "last seen on this machine, not checked now: the model gateway last answered at 2026-10-29T01:00:00.000Z",
+    });
     // A personal distribution on Pi's own providers has nothing to log in to.
     expect(
       verificationStates(installed(undefined, personal), none).integration

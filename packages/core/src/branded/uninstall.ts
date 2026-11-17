@@ -146,6 +146,22 @@ export async function runUninstall(
       },
     );
   const live = signedInClasses(state);
+  // A local-secret key never expires and has no remote side to revoke: only
+  // logout deletes it from the secret store.
+  if (
+    !withoutLogout &&
+    !purge &&
+    live.length === 1 &&
+    live[0] === "a runtime credential" &&
+    ctx.metadata.access?.credential.provider === "local-secret"
+  )
+    throw new PiShipError(
+      "CONFIG_UNAVAILABLE",
+      `${app.name} still has its API key stored. Once it is uninstalled there is no ${app.command} left to delete it, and the key would remain in the secret store`,
+      {
+        userAction: `Run ${app.command} logout to delete the stored key, then ${app.command} uninstall again; or add --without-logout to uninstall and keep the key in the secret store`,
+      },
+    );
   if (live.length && !withoutLogout && !purge)
     throw new PiShipError(
       "CONFIG_INVALID",

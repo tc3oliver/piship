@@ -1006,7 +1006,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     // not this distribution's own state.
     marker("other");
     await expect(installDistribution(a.archive)).rejects.toThrow(
-      /State already exists for acmepi: saved data that this distribution did not create.*run the install again with --use-existing-state/,
+      /State already exists for acmepi: saved data that no install of this distribution created\. It may come from running the distribution from its build folder.*run the install again with --use-existing-state/,
     );
     rmSync(join(stateDir(), "state.json"));
     await expect(installDistribution(a.archive)).rejects.toThrow(
@@ -4380,6 +4380,37 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         expect(out.join("\n")).toContain(
           `run purge from the build you installed: node dist/${ID}/piship.mjs purge ${ID} --yes in the directory you built in.`,
         );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "refuses while a local-secret key is stored and says logout deletes it",
+      async () => {
+        const { receipt, ctx } = await installed();
+        const metadata = {
+          ...ctx.metadata,
+          access: {
+            ...ctx.metadata.access,
+            credential: { provider: "local-secret" },
+          },
+        } as typeof ctx.metadata;
+        write(
+          join(stateDir(), "credentials-metadata", "inference.json"),
+          JSON.stringify({
+            schema: "piship-credential-metadata/v1",
+            credential_ref: `piship:${ID}:inference#1`,
+          }),
+        );
+        const error = await rejection(runUninstall({ ...ctx, metadata }, []));
+        expect(error.code).toBe("CONFIG_UNAVAILABLE");
+        expect(error.message).toContain(
+          "the key would remain in the secret store",
+        );
+        expect(error.message).not.toContain("until it expires");
+        expect(error.userAction).toMatch(
+          /^Run acmepi logout to delete the stored key, then acmepi uninstall again/,
+        );
+        expect(existsSync(receipt.commandPath)).toBe(true);
       },
     );
 

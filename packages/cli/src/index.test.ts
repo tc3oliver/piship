@@ -2089,6 +2089,17 @@ describe("what to do after an install", () => {
       );
   });
 
+  it("tells a personal local-secret distribution to log in first", () => {
+    expect(
+      installNext(
+        receipt({
+          deployment: { mode: "personal" },
+          access: { credential: { provider: "local-secret" }, variables: [] },
+        }),
+      ),
+    ).toMatch(/^Next: run acme login to store the API key, then acme\./);
+  });
+
   it("falls back to the generic next step when the lock cannot be read", () => {
     expect(installNext({ app: { command: "acme" }, payload: temp })).toBe(
       "Next: run acme --help to see its commands, then acme to start.",

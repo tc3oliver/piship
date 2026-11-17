@@ -687,7 +687,9 @@ export class DistributionAccess {
         client: this.#client(),
       });
     else if (mode === "local-secret")
-      provider = new LocalSecretCredentialProvider();
+      provider = new LocalSecretCredentialProvider({
+        userAction: `Run ${this.options.app.command} login to store it`,
+      });
     else if (mode === "none") provider = new NoCredentialProvider();
     else if (mode === "adapter")
       provider = boundedCredentialProvider(
@@ -716,6 +718,7 @@ export class DistributionAccess {
       );
     this.#credential = new CredentialManager({
       distributionId: this.options.app.id,
+      command: this.options.app.command,
       provider,
       store: this.store,
       metadataPath: this.paths.credential,

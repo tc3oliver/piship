@@ -416,10 +416,10 @@ export function verificationStates(
       ? "a sign-in credential was acquired"
       : undefined,
     metrics.gateway?.lastReachableAt
-      ? `the model gateway answered at ${metrics.gateway.lastReachableAt}`
+      ? `the model gateway last answered at ${metrics.gateway.lastReachableAt}`
       : undefined,
     metrics.modelCatalog?.fetchedAt
-      ? `the model catalog was fetched at ${metrics.modelCatalog.fetchedAt}`
+      ? `the model catalog was last fetched at ${metrics.modelCatalog.fetchedAt}`
       : undefined,
   ].filter((item): item is string => item !== undefined);
   const access = ctx.metadata.access;
@@ -438,7 +438,8 @@ export function verificationStates(
     : evidence.length
       ? {
           state: "verified",
-          detail: `on this machine ${evidence.join("; ")}`,
+          // Past evidence: the Gateway group is the live check.
+          detail: `last seen on this machine, not checked now: ${evidence.join("; ")}`,
         }
       : {
           state: "not-tested",
