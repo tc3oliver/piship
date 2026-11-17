@@ -11,7 +11,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { chainSegments } from "./shell-words.js";
 import { NO_CONTAINMENT, PolicyEngine, chainsBeyondPattern } from "./index.js";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
-import { BUILTIN_DEFAULT_RULE } from "./engine.js";
+import { BUILTIN_DEFAULT_RULE, BUILTIN_SHELL_LIMIT_RULE } from "./engine.js";
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), "piship-chain-")));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -425,6 +425,179 @@ describe.skipIf(process.platform === "win32")(
         "env --split-string='rm -rf /'",
       ])
         expect(run(prefixed, command).ruleId).toBe(BUILTIN_DEFAULT_RULE);
+    });
+  },
+);
+
+describe("commands that cannot be split", () => {
+  const denying = new PolicyEngine({
+    policy: makePolicy({
+      default: "allow",
+      enforced: [rule("e.rm", "shell.execute", "rm -rf**", "deny")],
+      defaults: [rule("d.push", "shell.execute", "git push*", "ask")],
+    }),
+    context: ctx,
+  });
+  const run = (resource: string) =>
+    denying.evaluate({ action: "shell.execute", resource });
+
+  it.each([
+    ["substitution", "true $(echo); rm -rf /"],
+    ["inside a substitution", "echo $(rm -rf /)"],
+    ["backtick", "echo `rm -rf /`"],
+    ["subshell", "(cd /; rm -rf /)"],
+    ["process substitution", "cat <(rm -rf /)"],
+    ["variable in quotes", 'echo "$HOME"; rm -rf /'],
+    ["over 4096 characters", `echo ${"a".repeat(4100)}; rm -rf /`],
+    ["over 4096 with a newline", `echo ${"a".repeat(4100)}\nrm -rf /`],
+  ])("still reaches deny rules in each command: %s", (_, command) => {
+    expect(run(command)).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+  });
+
+  it("still reaches ask rules in each command", () => {
+    expect(run("true $(echo) && git push origin main")).toMatchObject({
+      effect: "ask",
+      ruleId: "d.push",
+    });
+  });
+
+  it("leaves a command no rule targets alone", () => {
+    for (const command of [
+      "echo $(date)",
+      "echo `whoami` > /dev/null",
+      `echo ${"a".repeat(4100)}; ls`,
+    ])
+      expect(run(command)).toMatchObject({
+        effect: "allow",
+        ruleId: BUILTIN_DEFAULT_RULE,
+      });
+  });
+
+  it("ends on a run of `$` before a substitution", () => {
+    const command = `true ${"$".repeat(20000)}(rm -rf /)`;
+    expect(run(command)).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+    expect(run(`true ${"$".repeat(20000)}(x)`).effect).toBe("allow");
+  });
+
+  it("asks instead of checking more than 4096 pieces", () => {
+    const pieces = Array.from({ length: 5000 }, (_, i) => `cd a${i}`);
+    const command = `$(:);${pieces.join(";")}`;
+    expect(run(command)).toMatchObject({
+      effect: "ask",
+      ruleId: BUILTIN_SHELL_LIMIT_RULE,
+    });
+    expect(
+      denying.keepsPrompt({ action: "shell.execute", resource: command }),
+    ).toBe(true);
+    // A deny matching the text as written still wins over the limit.
+    expect(run(`rm -rf /;${command}`).effect).toBe("deny");
+  });
+
+  it("still denies a piece past the 4096-piece limit", () => {
+    const pieces = Array.from({ length: 5000 }, (_, i) => `a${i}`);
+    expect(run(`$(:);${pieces.join(";")};rm -rf /`)).toMatchObject({
+      effect: "deny",
+      ruleId: "e.rm",
+    });
+    expect(run(`$(:);${pieces.join(";")};sudo rm -rf /`)).toMatchObject({
+      effect: "deny",
+      ruleId: "e.rm",
+    });
+  });
+
+  it("keeps an enforced ask in a piece under auto mode", () => {
+    const enforcedAsk = new PolicyEngine({
+      policy: makePolicy({
+        default: "allow",
+        enforced: [rule("e.push", "shell.execute", "git push*", "ask")],
+      }),
+      context: ctx,
+    });
+    expect(
+      enforcedAsk.keepsPrompt({
+        action: "shell.execute",
+        resource: "true $(x); git push",
+      }),
+    ).toBe(true);
+  });
+
+  // Prefixes are stripped for POSIX shells only.
+  it.skipIf(process.platform === "win32")(
+    "strips a prefix in a piece: `sudo` after a substitution",
+    () => {
+      expect(run("true $(x); sudo rm -rf $HOME")).toMatchObject({
+        effect: "deny",
+        ruleId: "e.rm",
+      });
+    },
+  );
+
+  it.each(["ask", "deny"] as const)(
+    "keeps an allow spelled with metacharacters under default %s",
+    (fallback) => {
+      const strict = new PolicyEngine({
+        policy: makePolicy({
+          default: fallback,
+          defaults: [rule("d.date", "shell.execute", "echo $(date)", "allow")],
+        }),
+        context: ctx,
+      });
+      expect(
+        strict.evaluate({ action: "shell.execute", resource: "echo $(date)" }),
+      ).toMatchObject({ effect: "allow", ruleId: "d.date" });
+    },
+  );
+
+  it("never lets an allow rule match a fragment", () => {
+    const asking = new PolicyEngine({
+      policy: makePolicy({
+        default: "ask",
+        defaults: [rule("d.id", "shell.execute", "id", "allow")],
+      }),
+      context: ctx,
+    });
+    for (const command of ["true $(id)", "true `id`", "(id)", "true; (id)"])
+      expect(
+        asking.evaluate({ action: "shell.execute", resource: command }).effect,
+      ).toBe("ask");
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "shell keywords and grouping before a command",
+  () => {
+    const policy = (fallback: "allow" | "ask") =>
+      new PolicyEngine({
+        policy: makePolicy({
+          default: fallback,
+          enforced: [rule("e.rm", "shell.execute", "rm -rf**", "deny")],
+          defaults: [rule("d.npm", "shell.execute", "npm test", "allow")],
+        }),
+        context: ctx,
+      });
+
+    it.each([
+      "{ rm -rf /; }",
+      "if true; then rm -rf /; fi",
+      "if true; then :; else rm -rf /; fi",
+      "while true; do rm -rf /; done",
+      "! rm -rf /",
+      "coproc rm -rf /",
+    ])("reaches deny rules: %s", (command) => {
+      expect(
+        policy("allow").evaluate({
+          action: "shell.execute",
+          resource: command,
+        }),
+      ).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+    });
+
+    it("never widens an allow rule", () => {
+      for (const command of ["{ npm test; }", "! npm test", "then npm test"])
+        expect(
+          policy("ask").evaluate({ action: "shell.execute", resource: command })
+            .effect,
+        ).toBe("ask");
     });
   },
 );
