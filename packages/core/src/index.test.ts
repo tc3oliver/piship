@@ -24,6 +24,7 @@ import {
   shellArg,
   suggestDistributionId,
   requireCurrentLock,
+  inertRuleWarnings,
   shellGlobWarnings,
   unapprovedLoadWarnings,
   resolveLock,
@@ -574,5 +575,41 @@ describe("the command PiShip prints for its next step", () => {
   it("falls back to piship when the running script is not PiShip", () => {
     expect(pishipCommand("/usr/bin/vitest")).toBe("piship");
     expect(pishipCommand(undefined)).toBe("piship");
+  });
+});
+
+describe("inert rule warnings", () => {
+  it("warns on git.push and load resources that can never match", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-inert-"));
+    roots.push(root);
+    const path = initDistribution(join(root, "acme-agent"), { managed: true });
+    const rule = (id: string, action: string, resource: string) =>
+      `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: deny }\n`;
+    const yaml = readFileSync(path, "utf8");
+    expect(inertRuleWarnings(readManifest(path))).toEqual([]);
+    writeFileSync(
+      path,
+      yaml.replace(
+        /^policy:\n/m,
+        `policy:\n  enforced:\n${[
+          rule("p-bare", "git.push", "main"),
+          rule("p-cmd", "git.push", "git push origin main"),
+          rule("p-ok", "git.push", "origin/main"),
+          rule("p-any", "git.push", "**/main"),
+          rule("l-bad", "skill.load", "company:resources/skills/**"),
+          rule("l-ok", "skill.load", "company:./resources/skills/**"),
+          rule("l-all", "extension.load", "company:**"),
+          rule("l-builtin", "extension.load", "builtin:piship-workflow"),
+          rule("l-star", "resource.load", "**"),
+        ].join("")}`,
+      ),
+    );
+    expect(
+      inertRuleWarnings(readManifest(path)).map((item) => item.path),
+    ).toEqual([
+      "policy.enforced.p-bare",
+      "policy.enforced.p-cmd",
+      "policy.enforced.l-bad",
+    ]);
   });
 });

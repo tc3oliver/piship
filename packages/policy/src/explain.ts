@@ -114,7 +114,7 @@ export function formatDecision(
         "Other matching rules",
         ...others.map(
           (match) =>
-            `${match.ruleId} (${match.layer}, ${match.effect}${match.first ? "" : ", shadowed by an earlier rule in its layer"})`,
+            `${match.ruleId} (${match.layer}, ${match.effect}${match.replaced ? ", replaced by a matching user rule" : match.first ? "" : ", shadowed by an earlier rule in its layer"})`,
         ),
       ),
     );

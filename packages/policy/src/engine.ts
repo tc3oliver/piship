@@ -512,6 +512,8 @@ export interface RuleMatch {
   readonly reason?: string;
   /** True for the first match of its layer, the one that counts. */
   readonly first: boolean;
+  /** A distribution default a matching user rule replaces, so it decides nothing. */
+  readonly replaced?: true;
 }
 
 export interface PolicyExplanation {
@@ -527,6 +529,9 @@ export interface PolicyExplanation {
 
 export const BUILTIN_DEFAULT_RULE = "builtin:default";
 export const BUILTIN_UNKNOWN_ACTION_RULE = "builtin:unknown-action";
+
+const isUserFirst = (match: RuleMatch) =>
+  match.layer === "user-preference" && match.first;
 
 export class PolicyEngine {
   readonly id: string;
@@ -1001,6 +1006,10 @@ export class PolicyEngine {
         });
       }
     }
+    if (!this.#userNarrowing && matches.some(isUserFirst))
+      for (const [index, match] of matches.entries())
+        if (match.layer === "distribution-default" && match.first)
+          matches[index] = { ...match, replaced: true };
     const ignored = this.#ignored.map((item) => ({
       ...item,
       matches: this.#matches(
