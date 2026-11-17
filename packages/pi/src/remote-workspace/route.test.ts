@@ -59,7 +59,7 @@ describe("mapSandboxPath", () => {
 describe("sandboxGoneMessage", () => {
   it("names the saved changes and the next step", () => {
     expect(sandboxGoneMessage("acme")).toBe(
-      "The sandbox expired or was lost. Changes up to the last checkpoint are saved: exit, run acme sandbox pull to review them, then start a new session.",
+      "The sandbox expired or was lost. Changes up to the last checkpoint are saved; changes made after it are gone. Exit, run acme sandbox pull to review them, then start a new session.",
     );
   });
 });

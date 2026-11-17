@@ -355,6 +355,10 @@ export async function seedRemoteWorkspace(
   const uploaded: string[] = [];
   let sent = 0;
   let commit = "";
+  // Said before the first part, so a large seed does not start silent.
+  options.progress?.(
+    `Uploading ${files.length} file${files.length === 1 ? "" : "s"} (${mib(total)} MiB) to the sandbox`,
+  );
   for (const [index, part] of parts.entries()) {
     const entries: TarEntry[] = [];
     for (let at = 0; at < part.length; at += CONCURRENCY) {

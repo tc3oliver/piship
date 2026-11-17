@@ -111,7 +111,10 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     initProject();
     const ws = workspace("s1");
     await ws.ensureSeeded();
-    expect(notices[0]).toMatch(/^Uploading to the sandbox: 1\/1 parts/);
+    expect(notices[0]).toMatch(
+      /^Uploading \d+ files? \([\d.]+ MiB\) to the sandbox$/,
+    );
+    expect(notices[1]).toMatch(/^Uploading to the sandbox: 1\/1 parts/);
     await ws.checkpoint();
     expect(diffs).toBe(0);
     patch = diff("a.txt");

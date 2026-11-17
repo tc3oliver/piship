@@ -38,7 +38,8 @@ export interface E2bCompatibleOptions extends RemoteBackendOptions {
   readonly lifetimeSeconds?: number;
   /**
    * The user commands run as inside the sandbox (envd's Basic user). Default
-   * `user`, as E2B templates expect; CubeSandbox runs commands as `root`.
+   * `user`, as E2B templates expect; CubeSandbox is expected to run them as
+   * `root` (unverified).
    */
   readonly user?: string;
   /**
@@ -436,8 +437,8 @@ export class E2bCompatibleBackend implements SandboxBackend {
       throw Object.assign(
         new Error(
           gone
-            ? `the sandbox expired or was lost: ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`
-            : `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; start a new session to get a fresh sandbox`,
+            ? `the sandbox expired or was lost: ${await describeFailure(renewed)}; changes made after the last checkpoint are gone. Start a new session to get a fresh sandbox`
+            : `the sandbox is no longer available (it may have expired): ${await describeFailure(renewed)}; changes made after the last checkpoint may be gone. Start a new session to get a fresh sandbox`,
         ),
         // The session says what to do next: only it knows its command name.
         gone ? { code: "SANDBOX_GONE" } : {},

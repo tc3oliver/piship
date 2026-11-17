@@ -313,7 +313,9 @@ describe("remote workspace file access", () => {
         sandbox.files?.read(join(workspace, "a")),
       ).rejects.toMatchObject({
         code: "SANDBOX_GONE",
-        message: expect.stringMatching(/expired or was lost/),
+        message: expect.stringMatching(
+          /expired or was lost.*changes made after the last checkpoint are gone/,
+        ),
       });
       await expect(
         sandbox.exec("true", workspace, { onData: () => {} }),
