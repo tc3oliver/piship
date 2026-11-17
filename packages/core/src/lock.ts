@@ -21,6 +21,7 @@ import { pishipCommand, shellArg } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
 import {
   type DistributionLock,
+  type LockedPiPackage,
   LOCK_SCHEMA_V1ALPHA2,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
@@ -260,6 +261,33 @@ export function relockKeepingPackages(
   if (inputs(recorded) !== inputs(lock)) return undefined;
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;
+}
+/**
+ * Ids of `source: local` Pi packages whose files changed since the lock was
+ * written. Relocking them can run npm for their dependencies, so `dev` and
+ * `test` name them instead of relocking on their own.
+ */
+export function changedLocalPackages(manifestPath: string): string[] {
+  const base = dirname(resolve(manifestPath));
+  const manifest = readManifest(manifestPath);
+  let recorded: readonly LockedPiPackage[] = [];
+  try {
+    recorded =
+      (
+        JSON.parse(
+          readFileSync(join(base, "piship.lock"), "utf8"),
+        ) as Partial<DistributionLock>
+      ).packages ?? [];
+  } catch {
+    return [];
+  }
+  const current = currentPiPackages(manifest, base);
+  return current
+    .filter((item) => {
+      const old = recorded.find((entry) => entry.id === item.id);
+      return item.source === "local" && old && old.tree !== item.tree;
+    })
+    .map((item) => item.id);
 }
 /** An exact npm version, which names one immutable tarball. */
 const EXACT_VERSION =

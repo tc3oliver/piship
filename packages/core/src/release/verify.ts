@@ -1,5 +1,11 @@
 // Consumer verification of a release directory or archive.
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
@@ -39,6 +45,27 @@ export interface VerifiedRelease {
   readonly archiveSha256?: string;
   /** Removes the extraction directory when the input was an archive. */
   readonly cleanup: () => void;
+}
+
+/**
+ * An archive whose file name differs from its root (a browser's
+ * `name (1).tar.gz`) is not tampered with: the root check stays, and the
+ * message says to restore the name.
+ */
+function extractionFailure(error: Error, path: string): PiShipError {
+  const root = /^Archive entry outside root "[^"]*": ([^/]+)\//.exec(
+    error.message,
+  )?.[1];
+  return root
+    ? new PiShipError(
+        "CONFIG_INVALID",
+        `The archive file name ${basename(path)} does not match its contents, which are in ${root}/`,
+        {
+          component: "release",
+          userAction: `If the file was renamed, for example by a browser download, rename it to ${root}.tar.gz and run the command again`,
+        },
+      )
+    : fail(error.message);
 }
 
 function fail(message: string, userAction?: string): PiShipError {
@@ -108,6 +135,26 @@ export async function verifyRelease(
       `${path} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, recorded tests, or checksums`,
       `Run ${pishipCommand()} release <manifest> to build the qualified release`,
     );
+  if (!statSync(path).isFile() && !existsSync(join(path, "release.json"))) {
+    // A build's output directory or its `releases/` folder holds archives, not
+    // one release: say which to pass instead of calling the build tampered.
+    const archives = [path, join(path, "releases")].flatMap((folder) =>
+      existsSync(folder) && statSync(folder).isDirectory()
+        ? readdirSync(folder)
+            .filter((name) => name.endsWith(".tar.gz"))
+            .map((name) => join(folder, name))
+        : [],
+    );
+    if (archives.length)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${path} is a build output folder, not a release`,
+        {
+          component: "release",
+          userAction: `Pass the archive or a release directory instead: ${archives.join(", ")}`,
+        },
+      );
+  }
   if (statSync(path).isFile()) {
     const checkDigest = (actual: string): void =>
       checkArchiveDigest(path, actual, options.expectedSha256);
@@ -170,7 +217,7 @@ export async function verifyRelease(
           : {}),
     }).catch((error: Error) => {
       own?.remove();
-      throw fail(error.message);
+      throw extractionFailure(error, path);
     });
     directory = join(parent, "x", extracted.root);
     writtenFiles = extracted.files;
@@ -275,7 +322,7 @@ async function extractVerifiedPayload(
     mapEntry: (name) =>
       name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
   }).catch((error: Error) => {
-    throw fail(error.message);
+    throw extractionFailure(error, path);
   });
   try {
     const archiveSha256 = extracted.sha256 as string;

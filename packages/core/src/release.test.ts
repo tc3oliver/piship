@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -3417,6 +3418,34 @@ describe("release stages", () => {
     const built = await build(path);
     expect(isUnqualifiedPayload(built.directory)).toBe(false);
     expect(isUnqualifiedPayload(join(built.directory, "payload"))).toBe(true);
+  });
+
+  it("asks to restore the file name of a renamed archive instead of calling it tampered", async () => {
+    const { dir, path } = project();
+    const built = await build(path);
+    const renamed = join(
+      dir,
+      `${basename(built.archive, ".tar.gz")} (1).tar.gz`,
+    );
+    copyFileSync(built.archive, renamed);
+    const error = await rejection(verifyRelease(renamed));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.userAction).toContain(
+      `rename it to ${basename(built.archive)}`,
+    );
+    expect(error.userAction).not.toMatch(/Do not install/);
+  });
+
+  it("tells an author who passes a build output folder which archive to verify", async () => {
+    const { path } = project();
+    const built = await build(path);
+    const releases = dirname(built.archive);
+    for (const folder of [releases, dirname(releases)]) {
+      const error = await rejection(verifyRelease(folder));
+      expect(error.code).toBe("CONFIG_INVALID");
+      expect(error.userAction).toContain(built.archive);
+      expect(error.message).not.toMatch(/checksums/);
+    }
   });
 
   it("runs a command without blocking and reports every way it can end", async () => {

@@ -20,6 +20,7 @@ import {
   checkSkills,
   checkToolExposure,
   checkGovernance,
+  shellGlobWarnings,
   unapprovedLoadWarnings,
   checkPiVersion,
   PI_VERSION,
@@ -47,6 +48,7 @@ import {
   isUnqualifiedPayload,
   keyFingerprint,
   lockManifest,
+  changedLocalPackages,
   lockNeedsNetwork,
   lockStatus,
   pishipCommand,
@@ -1077,10 +1079,16 @@ async function prepareLock(
   const progress = progressReporter(output.stderr);
   await downloadSearchToolArchives(target, progress ? { progress } : {});
   if (status === "stale" && lockNeedsNetwork(manifest)) {
-    if (!relockKeepingPackages(target))
+    if (!relockKeepingPackages(target)) {
+      const local = changedLocalPackages(target);
+      if (local.length)
+        throw new Error(
+          `Lockfile is stale: the files of the local Pi package ${local.join(", ")} changed since piship.lock was written. Relock to record them (this can run npm for the package's dependencies): ${lockCommand}`,
+        );
       throw new Error(
         `Lockfile is stale: a Pi package declaration, packageTrust, the release settings, or a stored package lockfile changed, or PiShip was upgraded, since piship.lock was written. Locking resolves Pi packages over the network and pins them, so relock on purpose: ${lockCommand}`,
       );
+    }
   } else lockManifest(target);
   // `target` is the manifest file; the lock sits beside it.
   const lockPath = join(dirname(target), "piship.lock");
@@ -1379,6 +1387,7 @@ export async function runCli(
       for (const warning of [
         ...launchWarnings(manifest),
         ...unapprovedLoadWarnings(manifest),
+        ...shellGlobWarnings(manifest),
         ...checkSkills(manifest, target),
       ])
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);

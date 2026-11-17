@@ -27,6 +27,7 @@ import {
   type TestContext,
 } from "vitest";
 import {
+  changedLocalPackages,
   lockManifest,
   relockKeepingPackages,
   requireCurrentLock,
@@ -247,6 +248,22 @@ describe("Pi packages in the lock", () => {
     );
     writeFileSync(stored, `${readFileSync(stored, "utf8")}\n`);
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+  }, 120_000);
+
+  it("names a local package whose files changed, and none for other edits", (context) => {
+    requireNpm11(context);
+    const manifest = lockedDistribution();
+    const base = dirname(manifest);
+    expect(changedLocalPackages(manifest)).toEqual([]);
+    write(base, { "resources/AGENTS.md": "# Reviewer, edited\n" });
+    expect(changedLocalPackages(manifest)).toEqual([]);
+    write(base, {
+      "packages/team/skills/triage/SKILL.md":
+        "---\nname: triage\ndescription: Triage an issue.\n---\nEdited.\n",
+    });
+    expect(changedLocalPackages(manifest)).toEqual(["team"]);
+    // The automatic relock still stops: the package is relocked on purpose.
+    expect(relockKeepingPackages(manifest)).toBeUndefined();
   }, 120_000);
 
   it("relocks offline after an edit that leaves every package input as locked", (context) => {

@@ -24,6 +24,7 @@ import {
   shellArg,
   suggestDistributionId,
   requireCurrentLock,
+  shellGlobWarnings,
   unapprovedLoadWarnings,
   resolveLock,
   runtimeStateDirectory,
@@ -473,6 +474,32 @@ describe("unapproved load warnings", () => {
     ]);
     expect(unapprovedLoadWarnings(readManifest(path))[0]?.message).toBe(
       './resources/ext: no policy rule allows extension.load company:./resources/ext, so policy.default (ask) asks at every launch and headless runs leave it out; add a policy.defaults allow rule for extension.load on "company:**"',
+    );
+  });
+});
+
+describe("shell glob warnings", () => {
+  it("warns on a shell.execute deny or ask using * without **", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-glob-"));
+    roots.push(root);
+    const path = initDistribution(join(root, "acme-agent"), { managed: true });
+    const rule = (id: string, resource: string, effect: string) =>
+      `    - { id: ${id}, action: shell.execute, resource: "${resource}", effect: ${effect} }\n`;
+    const yaml = readFileSync(path, "utf8");
+    expect(shellGlobWarnings(readManifest(path))).toEqual([]);
+    writeFileSync(
+      path,
+      yaml.replace(
+        /^policy:\n/m,
+        `policy:\n  enforced:\n${rule("no-rm", "rm -rf *", "deny")}${rule("rm-ok", "rm -rf **", "deny")}${rule("ls-ok", "ls *", "allow")}`,
+      ),
+    );
+    const warnings = shellGlobWarnings(readManifest(path));
+    expect(warnings.map((item) => item.path)).toEqual([
+      "policy.enforced.no-rm",
+    ]);
+    expect(warnings[0]?.message).toContain(
+      "does not match arguments containing /",
     );
   });
 });
