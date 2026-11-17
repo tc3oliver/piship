@@ -1,5 +1,12 @@
 // The doctor groups that need no Pi runtime or governed session.
-import { statfsSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  rmSync,
+  statfsSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 import { LocalMetrics, type MetricsSnapshot } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { RuntimeReferenceError, resolveTemplate } from "@piship/schema";
@@ -14,6 +21,7 @@ import {
   verifyPayloadContents,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
+import { shellArg } from "../invocation.js";
 import { installedHere, readFailedAttempt } from "./lifecycle.js";
 
 /** The doctor groups whose lines need no Pi runtime or governed session. */
@@ -69,6 +77,25 @@ function releaseDoctor(
   else ok("release", "none; running from a build directory");
 }
 
+/**
+ * Whether the state directory takes a file: when it does not, every session
+ * fails to start, while the rest of doctor can still pass. One that does not
+ * exist yet is created by the first launch.
+ */
+function stateWritable(ctx: BrandedContext, warn: DoctorLine): void {
+  if (!existsSync(ctx.stateDir)) return;
+  const probe = join(ctx.stateDir, `.doctor-${process.pid}.tmp`);
+  try {
+    writeFileSync(probe, "", { flag: "wx", mode: 0o600 });
+    rmSync(probe, { force: true });
+  } catch (error) {
+    warn(
+      "state",
+      `${ctx.stateDir} is not writable (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}), so ${ctx.metadata.app.command} cannot start a session. Give your user write access to that directory, then run doctor again`,
+    );
+  }
+}
+
 function updateDoctor(
   ctx: BrandedContext,
   ok: DoctorLine,
@@ -85,6 +112,7 @@ function updateDoctor(
       "temporaries",
       `${abandoned} abandoned PiShip temporary director${abandoned === 1 ? "y" : "ies"} could not be removed; check the permissions of the OS temp directory and the install home`,
     );
+  stateWritable(ctx, warn);
   const here = installedHere(ctx);
   if (!here) {
     warn("installation", "not installed; running from a build directory");
@@ -106,6 +134,17 @@ function updateDoctor(
       "launcher",
       `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor could not replace it (it is replaced only by the active release, and needs write access to the install directory): run doctor from the installed command, or reinstall`,
     );
+  // A deleted shim leaves the command missing from a new shell while
+  // everything else checks out; repair from the installed release writes it.
+  if (!lstatSync(here.commandPath, { throwIfNoEntry: false })) {
+    const payload = here.releases.find(
+      (item) => item.version === here.active,
+    )?.payload;
+    warn(
+      "command",
+      `${here.commandPath} is missing, so ${metadata.app.command} is not found in a new shell. Restore it with: node ${shellArg(join(payload ?? ctx.distributionDir, "piship.mjs"))} repair ${metadata.app.id} ${shellArg(payload ?? ctx.distributionDir)}`,
+    );
+  }
   if (!metadata.updates) {
     warn("updates", "not configured by this distribution");
   } else {

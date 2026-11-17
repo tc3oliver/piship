@@ -16,7 +16,7 @@ import {
 } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { removeTrustState } from "./trust-state.js";
-import { ownsCommandShim } from "./launcher.js";
+import { inspectInstalledLauncher, ownsCommandShim } from "./launcher.js";
 import {
   assertSignedOut,
   deleteReferencedSecrets,
@@ -68,7 +68,7 @@ function holdForUninstall(
   try {
     receipt = readInstallReceipt(id);
   } catch (error) {
-    if (!recoverableReceipt(error)) {
+    if (!recoverableReceipt(error) && !receiptlessInstall(id)) {
       // An uninstall without --purge kept the state; a second one finds only it.
       if (
         error instanceof Error &&
@@ -148,6 +148,14 @@ function recoverableReceipt(error: unknown): boolean {
 }
 
 /**
+ * An install whose receipt was deleted: no receipt, but `apps/<id>` holds a
+ * launcher PiShip wrote for this id.
+ */
+function receiptlessInstall(id: string): boolean {
+  return !existsSync(receiptPath(id)) && !!inspectInstalledLauncher(id);
+}
+
+/**
  * The command shims in the current bin home that run `launcher`: the exact
  * content PiShip writes, in a regular file (never through a symlink).
  */
@@ -165,7 +173,7 @@ function shimsRunning(launcher: string): string[] {
 }
 
 /**
- * The uninstall of a distribution whose receipt cannot be used. Nothing the
+ * The uninstall of a distribution whose receipt cannot be used or is gone. Nothing the
  * receipt names is trusted: only the paths derived from the id under the
  * current homes are removed (`apps/<id>`, the receipt, and the shims whose
  * exact content runs `apps/<id>/launch.mjs`), under the same locks and
@@ -192,7 +200,7 @@ function holdDamagedForUninstall(id: string): {
       readInstallReceipt(id);
       repaired = true;
     } catch (error) {
-      if (!recoverableReceipt(error)) throw error;
+      if (!recoverableReceipt(error) && !receiptlessInstall(id)) throw error;
     }
     if (repaired) throw new Error(`Install ownership changed for ${id}; retry`);
     const live = runtimeLeases(id, true).filter((lease) => lease.live);

@@ -33,7 +33,7 @@ import { appDirectory, readInstallReceipt, VERSION_NAME } from "./receipt.js";
 export function launcherSource(id: string): string {
   return stampLauncherBuild(`// PiShip launcher for ${id}: runs the active release named by the install receipt.
 // launcher-build: ${LAUNCHER_BUILD_PLACEHOLDER}
-import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync, existsSync, utimesSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync, existsSync, utimesSync } from "node:fs";
 import { enableCompileCache } from "node:module";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -186,10 +186,20 @@ const clearGate = () => {
   try { if (readFileSync(gatePath, "utf8") === gateRecord) rmSync(gatePath, { force: true }); } catch {}
 };
 process.on("exit", clearGate);
+// A record that cannot be written (a read-only directory, a file in the way)
+// stops the launch with what to fix rather than a stack trace.
+const writeRecord = (directory, path, bytes) => {
+  try {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    console.error(${JSON.stringify(`Could not register a launch of ${id}: `)} + error.message + ". Make " + join(home, ".runtime-leases") + " a directory you can write to (move aside any file in its place), then run the command again.");
+    process.exit(1);
+  }
+};
 const launchingDir = join(home, ".runtime-leases", ".launching");
-mkdirSync(launchingDir, { recursive: true, mode: 0o700 });
 const launching = join(launchingDir, randomUUID() + ".json");
-writeFileSync(launching, JSON.stringify({ schema: "piship-launching-lease/v1", ...self }) + "\\n", { flag: "wx", mode: 0o600 });
+writeRecord(launchingDir, launching, JSON.stringify({ schema: "piship-launching-lease/v1", ...self }) + "\\n");
 const clearLaunching = () => { try { rmSync(launching, { force: true }); } catch {} };
 process.on("exit", clearLaunching);
 let payload;
@@ -221,7 +231,14 @@ if (!payload && missing) {
   process.exit(1);
 }
 if (!payload) {
-  console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
+  // The branded command cannot uninstall without a receipt; a release left in
+  // this directory can (it removes only what PiShip owns and keeps state).
+  let cli;
+  try {
+    const found = readdirSync(home).find((name) => ${VERSION_NAME.toString()}.test(name) && existsSync(join(home, name, "piship.mjs")));
+    if (found) cli = 'node "' + join(home, found, "piship.mjs") + '"';
+  } catch {}
+  console.error(${JSON.stringify(`The ${id} install receipt `)} + resolve(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}) + ${JSON.stringify(` is missing or damaged, so ${id} cannot start. Remove the broken install (its state is kept) with: `)} + (cli ?? "piship") + ${JSON.stringify(` uninstall ${id}, then install ${id} again.`)});
   process.exit(1);
 }
 mark("receipt_resolved");
@@ -235,10 +252,9 @@ mark("receipt_resolved");
 // the release from being removed.
 const leaseInstance = randomUUID();
 const leaseDirectory = join(home, ".runtime-leases", version);
-mkdirSync(leaseDirectory, { recursive: true, mode: 0o700 });
 const leasePath = join(leaseDirectory, leaseInstance + ".json");
 const leaseBytes = JSON.stringify({ schema: "piship-runtime-lease/v1", ...self, instance: leaseInstance, version }) + "\\n";
-writeFileSync(leasePath, leaseBytes, { flag: "wx", mode: 0o600 });
+writeRecord(leaseDirectory, leasePath, leaseBytes);
 const leaseBeat = setInterval(() => { try { const now = new Date(); utimesSync(leasePath, now, now); } catch {} }, 15000);
 leaseBeat.unref();
 process.on("exit", () => {
