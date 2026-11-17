@@ -1792,7 +1792,7 @@ async function runLifecycle(
       progress: progressReporter(output.stderr),
     });
     output.stdout(
-      `Built qualified release ${built.name} (built for channel ${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThe release is not signed yet: users get it through a signed channel or verified provenance.\nNext: ${pishipCommand()} verify-release ${shellArg(built.archive)} (ideally on another machine), then ${pishipCommand()} sign-channel <channel-dir> ${shellArg(built.archive)} --channel candidate --key <private-key-file> --key-id <id>`,
+      `Built qualified release ${built.name} (built for channel ${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThe release is not signed yet: users get it through a signed channel or verified provenance.\nNext: ${pishipCommand()} verify-release ${shellArg(built.archive)} (ideally on another machine), then ${pishipCommand()} sign-channel <channel-dir> ${shellArg(built.archive)} --channel ${built.metadata.channel} --key <private-key-file> --key-id <id>`,
     );
     // Where the runtime came from is no part of the release, so it goes to
     // stderr and to the build-info file beside the archive.
@@ -1850,7 +1850,7 @@ async function runLifecycle(
         .map(([target, reason]) => `\n  excluded  ${target}: ${reason}`)
         .join(
           "",
-        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.\nNext: ${pishipCommand()} sign-channel <channel-dir> ${built.archive} --channel candidate --key <private-key-file> --key-id <id>${repeated["--runtime"].map((item) => ` --runtime ${item}`).join("")}`,
+        )}\nThis pack is unsigned and was not composed or tested with a runtime here: publish it through a signed channel.\nNext: ${pishipCommand()} sign-channel <channel-dir> ${shellArg(built.archive)} --channel ${built.channel} --key <private-key-file> --key-id <id>${repeated["--runtime"].map((item) => ` --runtime ${shellArg(item)}`).join("")}`,
     );
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
@@ -2075,6 +2075,7 @@ async function runLifecycle(
       ...(sequence ? { sequence } : {}),
       ...(expiresDays ? { expiresDays } : {}),
     });
+    for (const warning of signed.warnings) output.stderr(`Warning: ${warning}`);
     // A pack's runtime archives are published beside it.
     const added = artifacts.map((item) => basename(item));
     const runtimeArchives = (signed.metadata.packs ?? [])

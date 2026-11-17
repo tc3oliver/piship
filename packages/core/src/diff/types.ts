@@ -74,7 +74,7 @@ export const DIFF_TESTS = {
   managed:
     "against staging: the branded login, --smoke-model, and logout (identity, credentials, inference)",
   release:
-    "piship verify-release, then update and rollback through the candidate channel on a test machine",
+    "piship verify-release, then update and rollback through an update channel on a test machine",
   migration:
     "migration review: piship migrate --check, and no change in this diff besides the schema",
 } as const;

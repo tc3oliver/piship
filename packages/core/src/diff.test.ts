@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PISHIP_VERSION } from "./compatibility.js";
+import { keyFingerprint } from "./signing.js";
 import {
   DIFF_TESTS,
   diffLocks,
@@ -818,7 +819,9 @@ describe("diffLocks", () => {
         reason: "Changes who can publish updates.",
       }),
     ]);
-    expect(report.changes[1]?.after).toMatch(/^sha256:[0-9a-f]{12}$/);
+    // The same value keygen, trust-root, doctor and install --expect-key print.
+    expect(report.changes[1]?.after).toBe(keyFingerprint(keyB));
+    expect(report.changes[1]?.after).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(JSON.stringify(report)).not.toContain(keyB);
     expect(report.requiredTests).toContain(DIFF_TESTS.release);
   });

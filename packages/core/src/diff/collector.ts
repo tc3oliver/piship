@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { isLoopbackHost } from "@piship/contracts";
+import { keyFingerprint } from "../signing.js";
 import type {
   AnyLock,
   DiffArea,
@@ -255,7 +255,7 @@ export function origin(value: string | undefined): string | undefined {
 }
 
 export function fingerprint(publicKey: string): string {
-  return `sha256:${createHash("sha256").update(publicKey).digest("hex").slice(0, 12)}`;
+  return keyFingerprint(publicKey);
 }
 
 export function rank(

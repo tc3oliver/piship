@@ -2580,6 +2580,24 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     now: () => new Date("2026-06-02T00:00:00Z"),
   };
 
+  it("warns, without refusing, when the channel is not one the lock allows", async () => {
+    const { dir, path } = project();
+    const built = await build(path);
+    const sign = (name: "stable" | "dev") =>
+      signChannel({
+        directory: join(dir, `channel-${name}`),
+        channel: name,
+        archives: [built.archive],
+        privateKeyPem: KEY.privateKeyPem,
+        keyId: KEY.id,
+        now: () => new Date("2026-06-01T00:00:00Z"),
+      });
+    expect((await sign("stable")).warnings).toEqual([]);
+    const { warnings } = await sign("dev");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("stable, candidate, not dev");
+  });
+
   it("verifies a valid signature and lists the archive", async () => {
     const { channelDir, built, signed } = await channel();
     const { metadata, keyId } = await readChannel(
