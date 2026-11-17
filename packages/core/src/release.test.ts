@@ -2544,6 +2544,41 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         ).rejects.toThrow(/does not match the expected/);
         expect(existsSync(second)).toBe(false);
       });
+      it("refuses an archive without release.json or with another release schema", async () => {
+        const { path } = project();
+        const built = await build(path);
+        const release = (payload: string) =>
+          join(payload, "..", "release.json");
+        const missing = await edited(built, (payload) =>
+          rmSync(release(payload)),
+        );
+        const first = join(temp(), "dest");
+        expect(
+          (
+            await rejection(
+              verifyRelease(missing, { ...consumer, payloadTo: first }),
+            )
+          ).message,
+        ).toMatch(/release\.json is missing/);
+        expect(existsSync(first)).toBe(false);
+        const other = await edited(built, (payload) => {
+          const metadata = JSON.parse(readFileSync(release(payload), "utf8"));
+          writeFileSync(
+            release(payload),
+            JSON.stringify({ ...metadata, schema: "x" }),
+          );
+        });
+        expect(
+          (
+            await rejection(
+              verifyRelease(other, {
+                ...consumer,
+                payloadTo: join(temp(), "dest"),
+              }),
+            )
+          ).message,
+        ).toMatch(/unsupported release metadata x/);
+      });
     });
     it("rejects a replaced inventory that release.json does not bind", async () => {
       const { path } = project();
@@ -3150,6 +3185,37 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       "redirected stable.json to another origin (https://cdn.example.test)",
     );
     expect(contacted).toEqual(["updates.example.test"]);
+    // A redirect without Location, a downgrade to http, and a same-origin
+    // loop are each refused by name.
+    // Stops after 100 answers, so a missing hop limit fails instead of hanging.
+    const redirecting = (location?: string) => {
+      let calls = 0;
+      return (async () =>
+        ++calls > 100
+          ? new Response("loop", { status: 500 })
+          : new Response(null, {
+              status: 302,
+              headers: location ? { location } : {},
+            })) as unknown as typeof fetch;
+    };
+    for (const [location, message] of [
+      [undefined, /HTTP 302 for stable\.json without a valid Location/],
+      [
+        "http://updates.example.test/stable.json",
+        /from https to http:\/\/updates\.example\.test/,
+      ],
+      ["/stable.json", /redirected stable\.json more than \d+ times/],
+    ] as const)
+      expect(
+        (
+          await rejection(
+            readChannel(base, "stable", {
+              ...options,
+              fetcher: redirecting(location),
+            }),
+          )
+        ).message,
+      ).toMatch(message);
     // 429 is retryable and carries Retry-After.
     const limited = (async () =>
       new Response("slow down", {
