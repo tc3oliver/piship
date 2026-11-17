@@ -22,7 +22,7 @@ import { type ActivatedAccess, SandboxCredential } from "@piship/core";
 import type { WorkspaceReport } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderDoctor } from "../commands/doctor.js";
+import { renderDoctor, signInFailure } from "../commands/doctor.js";
 import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import type { AccessData, DoctorData, GovernanceData } from "./data.js";
@@ -612,6 +612,56 @@ describe("renderDoctor", () => {
     expect(group(report.render(), "Identity")).toContain(
       `  ✗ ${"session".padEnd(20)} not signed in; run acmecode login`,
     );
+  });
+
+  it("does not send the user to login when activation failed for another reason", () => {
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          credential: { state: "absent" },
+          activationError:
+            "CREDENTIAL_ACQUIRE_FAILED: The credential broker returned HTTP 503",
+        }),
+      }),
+    );
+    expect(group(report.render(), "Credential")).toContain(
+      `  ✗ ${"state".padEnd(20)} absent; activation could not obtain one; see the Inference activation line`,
+    );
+  });
+
+  it("closes with an identity error when signing in is all that failed", () => {
+    const closing = (overrides: Partial<AccessData>) => {
+      const data = doctorData("managed", { access: accessData(overrides) });
+      return signInFailure(data, renderDoctor(data));
+    };
+    const signedOut = {
+      signedIn: false,
+      credential: { state: "absent" },
+      activationError: "IDENTITY_REQUIRED: You are not signed in",
+      identityError: "IDENTITY_REQUIRED: You are not signed in",
+      identityErrorCode: "IDENTITY_REQUIRED",
+    } as const;
+    expect(closing(signedOut)).toBe("IDENTITY_REQUIRED");
+    expect(
+      closing({
+        ...signedOut,
+        signedIn: true,
+        identityErrorCode: "IDENTITY_EXPIRED",
+      }),
+    ).toBe("IDENTITY_EXPIRED");
+    expect(closing({ signedIn: false })).toBe("IDENTITY_REQUIRED");
+    // Anything else failing keeps the configuration error.
+    expect(closing({ ...signedOut, configError: "bad" })).toBeUndefined();
+    expect(
+      closing({ ...signedOut, identityErrorCode: "IDENTITY_INVALID" }),
+    ).toBeUndefined();
+    expect(
+      closing({
+        activationError: "GATEWAY_UNREACHABLE: down",
+        credential: { state: "absent" },
+      }),
+    ).toBeUndefined();
+    expect(closing({ ...signedOut, workload: true })).toBeUndefined();
   });
 
   it("says what stale credential state remains and which command clears it (#196)", () => {

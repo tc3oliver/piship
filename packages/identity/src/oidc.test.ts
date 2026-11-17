@@ -347,8 +347,8 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
 
     it("refresh: an invalid_grant names the branded login command, or plain login without one", async () => {
       for (const [command, action] of [
-        ["acmecode", "Run acmecode login again"],
-        [undefined, "Run login again"],
+        ["acmecode", "Run acmecode login"],
+        [undefined, "Run login"],
       ] as const) {
         const identity = provider(command ? { command } : {});
         const session = await identity.login({ openUrl: approve });
@@ -358,9 +358,26 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
         });
         await expect(identity.refresh(session)).rejects.toMatchObject({
           code: "IDENTITY_EXPIRED",
+          message:
+            "Your sign-in has expired; the identity provider no longer accepts it (invalid_grant)",
           userAction: action,
         });
       }
+    });
+
+    it("sign-in: a refused code sends the user to the administrator after one retry", async () => {
+      services.knobs.tokenFaults.push({
+        status: 400,
+        body: { error: "invalid_grant" },
+      });
+      await expect(
+        provider({ command: "acmecode" }).login({ openUrl: approve }),
+      ).rejects.toMatchObject({
+        code: "IDENTITY_EXPIRED",
+        message: "Sign-in failed: token endpoint returned invalid_grant",
+        userAction:
+          "Run acmecode login once more; if it fails again, contact your administrator",
+      });
     });
 
     it("sign-in: a token endpoint outage is retryable", async () => {

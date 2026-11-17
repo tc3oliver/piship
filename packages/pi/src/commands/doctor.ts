@@ -110,13 +110,59 @@ export async function runDoctor(
   // of a session, so the report below names the one that runs next. It never
   // throws; a launcher it could not replace is reported under Update.
   refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
-  const report = renderDoctor(await collectDoctorData(ctx));
+  const data = await collectDoctorData(ctx);
+  const report = renderDoctor(data);
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),
   );
-  if (report.failed)
-    throw new PiShipError(
-      "CONFIG_UNAVAILABLE",
-      `${ctx.metadata.app.name} doctor found problems: ${report.summary()}`,
+  if (report.failed) {
+    const message = `${ctx.metadata.app.name} doctor found problems: ${report.summary()}`;
+    const signIn = signInFailure(data, report);
+    throw signIn
+      ? new PiShipError(signIn, message, {
+          component: "identity",
+          userAction: `Run ${command} login`,
+        })
+      : new PiShipError("CONFIG_UNAVAILABLE", message);
+  }
+}
+
+// The checks a missing or expired sign-in fails on its own.
+const SIGN_IN_CHECKS = new Set([
+  "Identity/session",
+  "Credential/state",
+  "Inference/activation",
+]);
+
+/**
+ * IDENTITY_REQUIRED or IDENTITY_EXPIRED when signing in again is all the
+ * failed checks need; undefined when anything else failed too.
+ */
+export function signInFailure(
+  data: DoctorData,
+  report: DoctorReport,
+): "IDENTITY_REQUIRED" | "IDENTITY_EXPIRED" | undefined {
+  const access = data.access;
+  // A workload identity is obtained per run; `login` does not fix it.
+  if (!access || access.workload || access.tlsError) return undefined;
+  const code = access.identityErrorCode;
+  if (
+    code !== undefined &&
+    code !== "IDENTITY_REQUIRED" &&
+    code !== "IDENTITY_EXPIRED"
+  )
+    return undefined;
+  // Signed in, with activation failing for a reason other than the identity.
+  if (code === undefined && (access.signedIn || access.activationError))
+    return undefined;
+  const failed = report
+    .toJSON()
+    .groups.flatMap(({ group, checks }) =>
+      checks
+        .filter((check) => check.status === "fail")
+        .map((check) => `${group}/${check.label}`),
     );
+  return failed.every((check) => SIGN_IN_CHECKS.has(check))
+    ? (code ?? "IDENTITY_REQUIRED")
+    : undefined;
 }

@@ -29,7 +29,13 @@ export function credentialGroup(data: DoctorData, out: DoctorSection): void {
     else
       out.bad(
         "state",
-        `${credential?.state ?? "unknown"}; ${credential?.notice ? `${credential.notice}; ` : ""}${login}`,
+        `${credential?.state ?? "unknown"}; ${credential?.notice ? `${credential.notice}; ` : ""}${
+          // Signing in again does not fix an activation that failed for
+          // another reason, such as a broker outage.
+          access.activationError && !access.identityError
+            ? "activation could not obtain one; see the Inference activation line"
+            : login
+        }`,
       );
     const pending = access.pendingIssuance;
     if (pending?.stale)
