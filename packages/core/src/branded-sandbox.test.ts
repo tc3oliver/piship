@@ -313,6 +313,21 @@ describe("sandbox login", () => {
     );
   });
 
+  it("prints usage for --help on the sandbox command and its subcommands, storing nothing", async () => {
+    const { ctx, out } = context();
+    for (const args of [["--help"], ["login", "--help"], ["logout", "-h"]]) {
+      out.length = 0;
+      await runSandbox(ctx, args);
+      expect(out.join("\n")).toMatch(/^Usage: \S+ sandbox login\n/);
+    }
+    expect(existsSync(sandboxFile(ctx))).toBe(false);
+    await expect(
+      runSandbox(ctx, ["login", "x", "--help"]),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
+  });
+
   it("stores nothing for a malformed entry", async () => {
     const { ctx } = context();
     await signIn(ctx);

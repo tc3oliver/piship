@@ -223,6 +223,27 @@ export async function runSandbox(
   ctx: BrandedContext,
   args: readonly string[],
 ): Promise<void> {
+  const help = (arg: string | undefined) =>
+    arg === "--help" || arg === "-h" || arg === "help";
+  if (
+    (args.length === 1 && help(args[0])) ||
+    (args.length === 2 &&
+      (args[0] === "login" || args[0] === "logout") &&
+      help(args[1]))
+  ) {
+    const command = ctx.metadata.app.command;
+    ctx.out(
+      [
+        `Usage: ${command} sandbox login`,
+        `       ${command} sandbox logout`,
+        `       ${command} sandbox pull --help`,
+        "  login   store the sandbox service credential; it prompts for the secret or reads the first line of stdin, never the command line",
+        "  logout  delete the stored sandbox credential",
+        "  pull    apply or discard the changes a remote-workspace session left",
+      ].join("\n"),
+    );
+    return;
+  }
   if (args.length === 1 && args[0] === "login") return sandboxLogin(ctx);
   if (args.length === 1 && args[0] === "logout") return sandboxLogout(ctx);
   if (args[0] === "pull") return sandboxPull(ctx, args.slice(1));

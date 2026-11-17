@@ -602,8 +602,7 @@ export class SandboxCredential {
       return {
         ...base,
         state: "origin-mismatch",
-        notice:
-          "It was stored for another sandbox endpoint than the one configured now; it is not sent",
+        notice: `It was stored for another sandbox endpoint than the one configured now; it is not sent. Check the sandbox endpoint's runtime variables, or run ${this.#options.command} sandbox login to store a credential for this endpoint`,
       };
     return { ...base, state: "valid" };
   }

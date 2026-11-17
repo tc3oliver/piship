@@ -2,12 +2,13 @@
 // call would otherwise find out as an error the model sees. The in-sandbox
 // checks run on the sandbox doctor's own governed session already created, and
 // change nothing in it.
+import { join } from "node:path";
 import type { ActiveSandbox } from "@piship/sandbox";
 import { ARCHIVE, MARKER } from "../remote-workspace/seed.js";
 import type { DoctorSection } from "./report.js";
 
 export interface RemoteWorkspaceProbe {
-  /** The file API answered a `stat` of the project directory. */
+  /** The file API answered a `stat` of a path in the project directory. */
   readonly files: boolean;
   readonly tar: boolean;
   readonly gzip: boolean;
@@ -53,7 +54,11 @@ export async function probeRemoteWorkspace(
   } as const;
   if (!sandbox.files) return { ...unknown, error: "no file API" };
   try {
-    await sandbox.files.stat(root, { signal: AbortSignal.timeout(30_000) });
+    // The file API refuses the project root itself; any answer for a path in
+    // it, including "missing", proves the API works.
+    await sandbox.files.stat(join(root, MARKER), {
+      signal: AbortSignal.timeout(30_000),
+    });
   } catch (error) {
     return { ...unknown, error: `the file API failed: ${String(error)}` };
   }

@@ -375,10 +375,13 @@ export async function sandboxPull(
   const sessionId =
     checkpoint.meta.session.replace(/[^0-9A-Za-z._-]/g, "").slice(0, 8) ||
     checkpoint.meta.createdAt.replace(/[^0-9A-Za-z]/g, "");
+  // The command to run again: the same --branch the user gave, or none.
   const cmdBranch =
     typeof branch === "string"
       ? `${cmd} --branch ${shellArg(branch)}`
-      : `${cmd} --branch`;
+      : branch === undefined
+        ? cmd
+        : `${cmd} --branch`;
   // No hook and no fsmonitor in any git command of this flow. The user's own clean/smudge
   // filters stay, as in a normal pull: they are the user's git configuration.
   const quiet = [
