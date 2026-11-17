@@ -251,11 +251,8 @@ describe("real bundled Pi runtime", () => {
       files(directory)
         .map((path) => path.slice(directory.length))
         .sort();
+    // The inventories above compare every file's digest; this adds the listing.
     expect(listing(warm.built)).toEqual(listing(cold.built));
-    for (const path of listing(cold.built))
-      expect(readFileSync(join(warm.built, path)), path).toEqual(
-        readFileSync(join(cold.built, path)),
-      );
     const smoke = spawnSync(
       process.execPath,
       [join(warm.built, "bin", "mypi"), "--smoke"],
