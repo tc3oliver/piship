@@ -178,9 +178,12 @@ describe("install from a pack", () => {
         "Get it from whoever gave you this pack",
       );
       copyFileSync(runtime, join(unpacked, basename(runtime)));
+      // A browser renames a second download; the pinned digest still matches.
+      const renamed = join(root, "piship-runtime (1).tar.gz");
+      copyFileSync(runtime, renamed);
       const installed = spawnSync("sh", [script, "--use-existing-state"], {
         encoding: "utf8",
-        env,
+        env: { ...env, PISHIP_RUNTIME_ARCHIVE: renamed },
       });
       expect(installed.status, installed.stderr).toBe(0);
       const version = await branded(command, ["version"], { cwd: root, env });

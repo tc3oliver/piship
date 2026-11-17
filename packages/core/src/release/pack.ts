@@ -272,33 +272,43 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 command -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# dash runs no EXIT trap on a signal; exiting turns Ctrl-C into one.
+trap 'exit 130' INT HUP TERM
 cat > "$tmp/find-runtime.mjs" <<'PISHIP_FIND_RUNTIME'
 ${FIND_RUNTIME}PISHIP_FIND_RUNTIME
 archive=$(node "$tmp/find-runtime.mjs" "$here")
-root=$(basename "$archive" .tar.gz)
 tar -xzf "$archive" -C "$tmp"
-PISHIP_RUNTIME_ARCHIVE="$archive" node "$tmp/$root/payload/piship.mjs" install "$here" --runtime "$archive" "$@"
+# The archive's one folder, whatever the file was renamed to: its digest is pinned.
+for root in "$tmp"/*/; do :; done
+PISHIP_RUNTIME_ARCHIVE="$archive" node "\${root}payload/piship.mjs" install "$here" --runtime "$archive" "$@"
 `,
     ps1: `# Installs this Company Pack for the current user on the runtime archive it
 # pins. The archive's SHA-256 is checked before any of its code runs.
+# Run: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error 'Node.js 22.19.0 or newer is required. Install Node separately.'; exit 1 }
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js 22.19.0 or newer is required. Install Node separately.'); exit 1 }
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
+$encoding = [Console]::OutputEncoding
 try {
   $find = @'
 ${FIND_RUNTIME}'@
   # WriteAllText writes no byte order mark, which Node would read as source.
   [System.IO.File]::WriteAllText((Join-Path $tmp 'find-runtime.mjs'), $find)
+  # Node writes UTF-8; Windows PowerShell 5.1 would read it in the OEM code page.
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
   $archive = node (Join-Path $tmp 'find-runtime.mjs') $here
+  [Console]::OutputEncoding = $encoding
   if ($LASTEXITCODE -ne 0) { exit 1 }
-  $root = [System.IO.Path]::GetFileName($archive) -replace '\\.tar\\.gz$', ''
   tar -xzf $archive -C $tmp
   if ($LASTEXITCODE -ne 0) { exit 1 }
-  node (Join-Path $tmp "$root\\payload\\piship.mjs") install $here --runtime $archive @args
+  # The archive's one folder, whatever the file was renamed to: its digest is pinned.
+  $root = (Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1).FullName
+  node (Join-Path $root 'payload\\piship.mjs') install $here --runtime $archive @args
   exit $LASTEXITCODE
 } finally {
+  [Console]::OutputEncoding = $encoding
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 `,
