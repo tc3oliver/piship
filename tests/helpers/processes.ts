@@ -1,7 +1,9 @@
 // Real processes for tests of rules that depend on a process ID: one that has
-// exited, and one that keeps running. Call `stopLiveProcesses` after each
-// test (`afterEach(stopLiveProcesses)`) so no live process outlives it.
+// exited, and one that keeps running. Importing this module stops every live
+// process after each test of the importing file, so none outlives its test
+// even when the file forgets `afterEach(stopLiveProcesses)`.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { afterEach } from "vitest";
 
 const children: ChildProcess[] = [];
 
@@ -22,3 +24,5 @@ export function livePid(): number {
 export function stopLiveProcesses(): void {
   for (const child of children.splice(0)) child.kill();
 }
+
+afterEach(stopLiveProcesses);
