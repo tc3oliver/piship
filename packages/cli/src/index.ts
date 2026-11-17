@@ -52,6 +52,7 @@ import {
   isUnqualifiedPayload,
   keyFingerprint,
   lockManifest,
+  lockOwnedByOther,
   changedLocalPackages,
   lockNeedsNetwork,
   lockStatus,
@@ -1484,6 +1485,7 @@ async function runAuthoring(
       names.filter((name) => !process.env[name]);
     const missingLaunch = unset(variables.launch);
     const missingUpdate = unset(variables.update);
+    const otherLock = lockOwnedByOther(target);
     output.stdout(
       [
         "Manifest is valid.",
@@ -1515,7 +1517,9 @@ async function runAuthoring(
               `Update transport ${manifest.lifecycle.updates.transport}${manifest.lifecycle.updates.transport === "http-allowed" ? ": the update channel may use plain HTTP to a private or internal host; integrity by signature only" : ""}.`,
             ]
           : []),
-        `Next: ${pishipCommand()} test ${shellArg(target)} writes piship.lock if needed, builds, and runs the acceptance smoke; ${pishipCommand()} lock ${shellArg(target)} only writes the lock.`,
+        otherLock === undefined
+          ? `Next: ${pishipCommand()} test ${shellArg(target)} writes piship.lock if needed, builds, and runs the acceptance smoke; ${pishipCommand()} lock ${shellArg(target)} only writes the lock.`
+          : `Next: the piship.lock beside it is the lock of app ${otherLock}, so locking here would replace it; copy this manifest into its own directory as piship.yaml, then run ${pishipCommand()} test on it there.`,
       ].join("\n"),
     );
     for (const warning of [

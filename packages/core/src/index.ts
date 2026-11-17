@@ -46,6 +46,7 @@ export {
   emptyPackageWarnings,
   lockManifest,
   lockNeedsNetwork,
+  lockOwnedByOther,
   lockStatus,
   type LockStatus,
   relockKeepingPackages,

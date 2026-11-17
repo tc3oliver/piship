@@ -75,7 +75,23 @@ export function mustRun(
         ? "INTEGRITY_FAILED"
         : "UPDATE_FAILED",
       id,
-      `${command} ${subcommand ?? args[0] ?? ""} failed: ${result.stderr.trim().split("\n").slice(0, 6).join(" ").slice(0, 600)}`,
+      `${command} ${subcommand ?? args[0] ?? ""} failed: ${result.stderr
+        .trim()
+        .split("\n")
+        // npm's JavaScript stack says nothing about the cause.
+        .filter((line) => !/^(npm error)?\s+at /.test(line))
+        .slice(0, 6)
+        .join(" ")
+        .slice(0, 600)}`,
+      command === "npm" && NPM_REGISTRY_FAILURE.test(result.stderr)
+        ? NPM_REGISTRY_ACTION
+        : undefined,
     );
   return result.stdout;
 }
+
+/** npm could not reach the registry, or the registry refused it. */
+const NPM_REGISTRY_FAILURE =
+  /\b(ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|E401|E403|E404)\b/;
+const NPM_REGISTRY_ACTION =
+  "Resolving and installing Pi packages needs npm registry access: check the network and proxy (`npm config get registry`, `proxy`, `https-proxy`), and the registry credentials in your npm configuration for E401/E403, then run the command again";
