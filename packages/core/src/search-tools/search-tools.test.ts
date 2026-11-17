@@ -679,6 +679,28 @@ describe("downloading the upstream archives", () => {
     });
   });
 
+  it("downloads the archives together and a failing one fails the lock cleanly", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetch: Fetch = async (url) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((done) => setTimeout(done, 20));
+      inFlight--;
+      if (url.pathname.includes("BurntSushi"))
+        return new Response("nope", { status: 500 });
+      return new Response(new Uint8Array(Buffer.from("archive")));
+    };
+    await expect(
+      downloadSearchToolArchives(project(), { fetch }),
+    ).rejects.toThrow(/Search tool download of ripgrep/);
+    expect(peak).toBeGreaterThan(1);
+    const left = existsSync(join(cache, "search-tools"))
+      ? readdirSync(join(cache, "search-tools"))
+      : [];
+    expect(left.filter((name) => name.endsWith(".partial"))).toEqual([]);
+  });
+
   it("checks the source gate before downloading anything", async () => {
     const server = host(() => new Response("never"));
     await expect(

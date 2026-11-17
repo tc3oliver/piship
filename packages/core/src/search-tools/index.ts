@@ -394,23 +394,28 @@ export async function downloadSearchToolArchives(
   const manifest = readManifest(manifestPath);
   const policy = lockNetworkPolicy(manifest.access);
   const recorded = recordedSearchTools(dirname(resolve(manifestPath)));
-  for (const request of checkSearchTools(manifest))
-    for (const target of request.targets) {
-      const asset = searchToolAsset(request.tool, request.version, target);
-      const path = cachePath(asset, options.env);
-      const pinned =
-        recorded?.[request.tool]?.version === request.version
-          ? recorded[request.tool]?.targets?.[target]
-          : undefined;
-      if (
-        pinned?.url === asset.url &&
-        existsSync(path) &&
-        sha256(readFileSync(path)) === pinned.archive
-      )
-        continue;
-      options.progress?.(`Downloading ${asset.name}`);
-      store(path, await download(asset.url, policy, options));
-    }
+  // Archives are independent and each lands via an atomic rename, so they
+  // download together; the first failure rejects and leaves no partial file.
+  await Promise.all(
+    checkSearchTools(manifest).flatMap((request) =>
+      request.targets.map(async (target) => {
+        const asset = searchToolAsset(request.tool, request.version, target);
+        const path = cachePath(asset, options.env);
+        const pinned =
+          recorded?.[request.tool]?.version === request.version
+            ? recorded[request.tool]?.targets?.[target]
+            : undefined;
+        if (
+          pinned?.url === asset.url &&
+          existsSync(path) &&
+          sha256(readFileSync(path)) === pinned.archive
+        )
+          return;
+        options.progress?.(`Downloading ${asset.name}`);
+        store(path, await download(asset.url, policy, options));
+      }),
+    ),
+  );
 }
 
 /**
