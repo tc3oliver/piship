@@ -243,7 +243,6 @@ PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還
 - **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）。更早的基準版本（各有 GitHub pre-release）和各版變更見 [docs/status.md](docs/status.md) 與 [changelog](CHANGELOG.md)。
 - `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
-- `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
 - 還沒驗證過：真實公司正式環境的 IdP 或 gateway；實際部署的 E2B、CubeSandbox 或 Kubernetes Agent Sandbox；Windows 的本機沙箱（Windows 請改用遠端沙箱）。
 
