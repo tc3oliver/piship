@@ -78,7 +78,7 @@ try {
   const { launchPiDistribution } = await import("@piship/pi");
   mark("pi_loaded");
   await launchPiDistribution({ distributionDir: directory, metadata, args: process.argv.slice(2) });
-} catch (error) { console.error(formatError(error)); process.exitCode = 1; }
+} catch (error) { console.error(formatError(error)); process.exitCode = error?.usage === true ? 2 : 1; }
 `);
 }
 export function portableCliSource(): string {

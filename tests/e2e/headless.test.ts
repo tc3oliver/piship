@@ -412,7 +412,7 @@ describe("headless workload distribution (local fixtures)", () => {
     }
     expect(brokerCalls().length).toBe(brokerBefore);
     const print = await run(["-p", "hi"]);
-    expect(print.status).toBe(1);
+    expect(print.status).toBe(2);
     expect(print.stderr).toContain("Unknown branded command option: -p\n");
     expect(print.stderr).not.toMatch(/-p hi/);
     expect(print.stderr).toContain("no non-interactive prompt mode");
@@ -475,7 +475,7 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(unproven.stderr).toContain("not started by a running session");
     expect(unproven.stderr).not.toContain("canary-task");
     const unmarked = await child(["Task: canary-task"], "");
-    expect(unmarked.status).toBe(1);
+    expect(unmarked.status).toBe(2);
     expect(unmarked.stderr).toContain("Unknown branded command option");
     expect(unmarked.stderr).not.toContain("canary-task");
     const childYolo = await child(["--yolo", "Task: canary-task"]);

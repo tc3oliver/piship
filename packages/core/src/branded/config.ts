@@ -89,5 +89,6 @@ export async function runConfig(
   throw new PiShipError(
     "CONFIG_INVALID",
     `Usage: ${ctx.metadata.app.command} config explain [--json] | config set <key> <value> | config unset <key> | config trust list | config trust forget [<path>|--all]`,
+    { usage: true },
   );
 }

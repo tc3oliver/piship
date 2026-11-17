@@ -202,9 +202,14 @@ export async function sandboxPull(
     } else unknown = true;
   }
   if (unknown || (discard && (yes || showDiff || branch !== undefined)))
-    throw failure(
+    throw new PiShipError(
+      "CONFIG_INVALID",
       `${unknown ? "That option is not recognised. " : "--discard cannot be combined with other options. "}${usage(command)}`,
-      `Run ${command} sandbox pull --help, or ${command} sandbox pull --discard alone`,
+      {
+        component: "sandbox",
+        userAction: `Run ${command} sandbox pull --help, or ${command} sandbox pull --discard alone`,
+        usage: true,
+      },
     );
   const top = await git(process.cwd(), ["rev-parse", "--show-toplevel"]).catch(
     () => undefined,

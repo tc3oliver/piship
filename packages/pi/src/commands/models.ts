@@ -27,7 +27,11 @@ async function piModels(ctx: LaunchContext): Promise<Set<string> | undefined> {
   }
 }
 
-export async function runModels(ctx: LaunchContext): Promise<void> {
+/** `json` prints the same fields as the text, as one JSON object. */
+export async function runModels(
+  ctx: LaunchContext,
+  json = false,
+): Promise<void> {
   const prepared = await prepareAccess(ctx, undefined, true);
   if (!prepared.activated || prepared.activated.runtime.kind === "pi-native") {
     // Pi owns the catalog and the sign-in, so the list is what the
@@ -42,6 +46,25 @@ export async function runModels(ctx: LaunchContext): Promise<void> {
       (manifest?.catalog ?? []).map((entry) => [entry.id, entry.name]),
     );
     const ids = allowed.length > 0 ? allowed : [...(usable ?? [])].sort();
+    if (json) {
+      ctx.out(
+        JSON.stringify(
+          {
+            inference: "pi-native",
+            source: allowed.length > 0 ? "allowlist" : "pi",
+            models: ids.map((id) => ({
+              id,
+              ...(names.has(id) ? { name: names.get(id) } : {}),
+              selected: id === selected,
+              ...(usable === undefined ? {} : { ready: usable.has(id) }),
+            })),
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (ids.length === 0) {
       ctx.out(
         "Pi-native inference: no model has a provider set up yet. Start the command and use /login to sign in to a provider, then /model to choose a model.",
@@ -68,6 +91,35 @@ export async function runModels(ctx: LaunchContext): Promise<void> {
     return;
   }
   const { activated } = prepared;
+  if (json) {
+    ctx.out(
+      JSON.stringify(
+        {
+          inference: activated.runtime.kind,
+          models: activated.models.map((model) => {
+            const available =
+              activated.config.allowedModels.includes(model.id) &&
+              model.availability.available;
+            return {
+              id: model.id,
+              name: model.name,
+              selected: model.id === activated.selectedModel,
+              available,
+              ...(available
+                ? {}
+                : { reason: model.availability.reason ?? "excluded" }),
+              contextWindow: model.capabilities.contextWindow ?? null,
+              tools: model.capabilities.tools,
+              policyTags: model.policyTags,
+            };
+          }),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   for (const model of activated.models) {
     const allowed = activated.config.allowedModels.includes(model.id);
     const marker = model.id === activated.selectedModel ? "*" : " ";

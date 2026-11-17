@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PISHIP_ERROR_CODES } from "./errors.js";
+import { PISHIP_ERROR_CODES, PiShipError, UsageError } from "./errors.js";
 
 const packages = fileURLToPath(new URL("../../", import.meta.url));
 const definition = fileURLToPath(new URL("./errors.ts", import.meta.url));
@@ -88,5 +88,15 @@ describe("error codes", () => {
       corpus.some((source) => pattern.test(source)),
       `${code} is never produced; produce it somewhere or remove it`,
     ).toBe(true);
+  });
+});
+
+describe("usage errors", () => {
+  it("mark a refused command line, which the launcher exits 2 for", () => {
+    expect(new UsageError("Unknown option").usage).toBe(true);
+    expect(
+      new PiShipError("CONFIG_INVALID", "Usage: x", { usage: true }).usage,
+    ).toBe(true);
+    expect(new PiShipError("CONFIG_INVALID", "bad value").usage).toBe(false);
   });
 });

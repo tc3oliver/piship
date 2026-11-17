@@ -45,6 +45,7 @@ export async function runPolicy(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Usage: ${ctx.metadata.app.command} policy explain <action> <resource> [--json]`,
+      { usage: true },
     );
   const [, named, target] = words as [string, string, string];
   // A former action name (`model.use`) explains its current action.
@@ -96,6 +97,7 @@ export async function runCapabilities(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Usage: ${ctx.metadata.app.command} capabilities [--json]`,
+      { usage: true },
     );
   const lock = requireGovernedLock(ctx, "capabilities");
   const inspection = await inspectGovernance(

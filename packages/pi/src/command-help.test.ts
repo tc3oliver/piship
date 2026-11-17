@@ -55,3 +55,20 @@ describe("<command> --help for the one-word commands", () => {
     },
   );
 });
+
+describe("a refused command line", () => {
+  it.each([
+    [["--frobnicate"]],
+    [["models", "--yaml"]],
+    [["doctor", "--yaml"]],
+    [["--model"]],
+  ])("is a usage error, which the launcher exits 2 for: %j", async (args) => {
+    preparePiEnvironment("acmecode");
+    const error = await launchPiDistribution({
+      distributionDir: temp,
+      metadata,
+      args,
+    }).catch((caught: unknown) => caught);
+    expect((error as { usage?: unknown }).usage).toBe(true);
+  });
+});

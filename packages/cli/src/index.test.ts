@@ -677,7 +677,7 @@ describe("help", () => {
     ["validate", "validate [<manifest>]"],
     ["install", "install <artifact|release-dir|archive|pack>"],
     ["doctor", "doctor <artifact|id>"],
-    ["config", "config explain <manifest|artifact|id>"],
+    ["config", "config explain <manifest|artifact|id> [--json]"],
     ["update", "update <id>"],
     ["keygen", "keygen <private-key-file> --id <key-id>"],
   ])(
@@ -1836,6 +1836,40 @@ describe("config explain from a manifest", () => {
     expect(text).toMatch(
       /^updates\.transport\s+"http-allowed"\s+\[builtin-default\] — the update channel may use plain HTTP to a private or internal host by default/m,
     );
+  });
+
+  it("prints the rows as JSON with --json, before or after the manifest", async () => {
+    const manifest = fileURLToPath(
+      new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
+    );
+    for (const args of [
+      ["config", "explain", manifest, "--json"],
+      ["config", "explain", "--json", manifest],
+    ]) {
+      const out: string[] = [];
+      expect(
+        await runCli(args, {
+          stdout: (message) => out.push(message),
+          stderr: () => {},
+        }),
+      ).toBe(0);
+      const rows = JSON.parse(out.join("\n")) as { key: string }[];
+      expect(rows.map((row) => row.key)).toContain("schema");
+    }
+    for (const args of [
+      ["config", "explain", manifest, "--json", "--json"],
+      ["config", "explain", manifest, "--yaml"],
+      ["config", "explain", "--json"],
+    ]) {
+      const err: string[] = [];
+      expect(
+        await runCli(args, {
+          stdout: () => {},
+          stderr: (message) => err.push(message),
+        }),
+      ).toBe(2);
+      expect(err.join("\n")).toContain("Usage: piship config explain");
+    }
   });
 
   it("shows updates.transport http-allowed, which validate also reports", async () => {
