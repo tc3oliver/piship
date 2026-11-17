@@ -16,7 +16,7 @@ import {
   sep,
 } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { readManifest } from "@piship/schema";
+import { distributionNameProblem, readManifest } from "@piship/schema";
 import type { DistributionId } from "./lock-schema.js";
 
 const DISTRIBUTION_ID = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
@@ -26,8 +26,8 @@ export function isDistributionId(value: string): boolean {
 }
 /**
  * The nearest valid distribution id for a name that is not one: lowercase,
- * every other run of characters a single hyphen, a letter first. Undefined
- * when nothing usable is left.
+ * every other run of characters a single hyphen, a letter first, at most 64
+ * characters. Undefined when nothing usable is left.
  */
 export function suggestDistributionId(value: string): string | undefined {
   // One pass over the characters, so no pattern backtracks on a long run of
@@ -43,7 +43,10 @@ export function suggestDistributionId(value: string): string | undefined {
     } else separated = true;
   }
   if (!words) return undefined;
-  return isDistributionId(words) ? words : `app-${words}`;
+  // Cut to the length limit; words hold single hyphens, so at most one ends it.
+  let id = (isDistributionId(words) ? words : `app-${words}`).slice(0, 64);
+  if (id.endsWith("-")) id = id.slice(0, -1);
+  return distributionNameProblem(id) ? undefined : id;
 }
 /**
  * A manifest path or directory given where an id belongs: no slugified

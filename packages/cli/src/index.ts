@@ -73,6 +73,7 @@ import {
   releaseLogout,
   relockKeepingPackages,
   removeEmptyPiShipDirectories,
+  notInstalled,
   readInstallReceipt,
   readSigningPassphrase,
   repairDistribution,
@@ -697,7 +698,7 @@ function parseLockText(text: string, file: string): DistributionLock {
   } catch (error) {
     throw new PiShipError(
       "LOCK_INVALID",
-      `${file} is not a piship.lock this PiShip can read: ${(error as Error).message.replace(/^The pack's piship\.lock has /, "it has ").replace(/; nothing was installed$/, "")}`,
+      `${file} is not a piship.lock this PiShip can read: it has an unsafe ${(error as PiShipError).sanitizedDetail?.field}`,
       {
         component: "cli",
         userAction:
@@ -996,11 +997,7 @@ function installedPayloadOf(id: string): string | undefined {
   try {
     return readInstallReceipt(id).payload;
   } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      !error.message.startsWith("No PiShip installation recorded")
-    )
-      throw error;
+    if (!notInstalled(error)) throw error;
     return undefined;
   }
 }
@@ -1070,10 +1067,7 @@ function installedReceipt(target: string) {
   try {
     return readInstallReceipt(target);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("No PiShip installation recorded")
-    )
+    if (notInstalled(error))
       error.message = `${error.message} ${target} is not an existing path either; pass an installed id, or a manifest, payload directory, or archive.`;
     throw error;
   }

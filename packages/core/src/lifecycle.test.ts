@@ -4095,8 +4095,12 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(() => readInstallReceipt(ID)).toThrow(
       /No PiShip installation recorded for \S+\. (Installed: .+|No distribution is installed)\./,
     );
+    // Callers recognise it by this marker, never by the message text.
     expect(() => readInstallReceipt(ID)).toThrow(
-      /No PiShip installation recorded/,
+      expect.objectContaining({
+        code: "CONFIG_UNAVAILABLE",
+        sanitizedDetail: { id: ID, notInstalled: true },
+      }),
     );
     expect(lifecycleStatus(ID, requireCurrentLockFor(a.directory))).toEqual({
       installed: false,

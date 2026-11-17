@@ -1070,6 +1070,24 @@ describe("file system errors", () => {
     },
   );
 
+  it.each([
+    [
+      '{"schema":"piship-lock/v1","app":{"command":"a-"},"runtime":{},"resources":[]}',
+      "app.command",
+    ],
+    [
+      '{"schema":"piship-lock/v1","app":{"command":"a"},"runtime":{},"resources":[{"path":"../x"}]}',
+      "resource path",
+    ],
+  ])("names the unsafe field of a lock file: %j", async (content, field) => {
+    const path = join(temp, "unsafe.lock");
+    writeFileSync(path, content);
+    const result = await run(["diff", path, path]);
+    expect(result.stderr).toContain(
+      `${path} is not a piship.lock this PiShip can read: it has an unsafe ${field}\n`,
+    );
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "says a resource directory cannot be read, not that it does not exist",
     async () => {

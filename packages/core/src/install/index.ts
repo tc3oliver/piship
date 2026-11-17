@@ -22,6 +22,7 @@ export {
   type PurgeResult,
 } from "./purge.js";
 export {
+  notInstalled,
   RECEIPT_SCHEMA,
   readInstallReceipt,
   recoverInstallation,

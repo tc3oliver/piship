@@ -26,6 +26,7 @@ import {
 import {
   acquireLock,
   appDirectory,
+  notInstalled,
   readInstallReceipt,
   receiptPath,
   type InstallReceipt,
@@ -71,8 +72,7 @@ function holdForUninstall(
     if (!recoverableReceipt(error) && !receiptlessInstall(id)) {
       // An uninstall without --purge kept the state; a second one finds only it.
       if (
-        error instanceof Error &&
-        error.message.startsWith("No PiShip installation recorded") &&
+        notInstalled(error) &&
         existsSync(runtimeStateDirectory({ value: id }))
       )
         error.message += ` Its state remains in ${runtimeStateDirectory({ value: id })}; to delete it: ${pishipCommand()} purge ${id} --yes`;

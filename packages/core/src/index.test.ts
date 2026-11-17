@@ -560,6 +560,15 @@ describe("distribution ids", () => {
   it("has no suggestion when nothing usable is left", () => {
     expect(suggestDistributionId("___")).toBeUndefined();
   });
+  it("suggests only an id init accepts", () => {
+    const long = suggestDistributionId(`${"a".repeat(63)}_b${"c".repeat(40)}`);
+    expect(long).toBe("a".repeat(63));
+    expect(suggestDistributionId(`2${"a".repeat(100)}`)).toBe(
+      `app-2${"a".repeat(59)}`,
+    );
+    // A Windows device name is refused too, so it is not suggested.
+    expect(suggestDistributionId("Con!")).toBeUndefined();
+  });
   it("answers a very long run of hyphens at once", () => {
     const started = Date.now();
     expect(suggestDistributionId("-".repeat(200_000))).toBeUndefined();
