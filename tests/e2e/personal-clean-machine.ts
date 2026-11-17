@@ -401,7 +401,10 @@ export function myPiLocalFlow(): void {
     expect(realpathSync(first.agentDir)).toBe(
       realpathSync(join(state, "agent")),
     );
-    expect(requests).toEqual([]);
+    // The launch fetches the live model catalog with the stored key; it makes
+    // no model request.
+    expect(seen(requests)).toEqual(["GET /v1/models"]);
+    expect(requests[0]?.authorization).toBe(`Bearer ${key}`);
 
     // Model request: one request straight to the local endpoint with the
     // stored key, in the session the launch created.
@@ -417,8 +420,11 @@ export function myPiLocalFlow(): void {
         stopReason: "stop",
       },
     });
+    expect(
+      seen(requests).filter((item) => item === "POST /v1/chat/completions"),
+    ).toHaveLength(1);
     expect(new Set(seen(requests))).toEqual(
-      new Set(["POST /v1/chat/completions"]),
+      new Set(["GET /v1/models", "POST /v1/chat/completions"]),
     );
     for (const item of requests)
       expect(item.authorization).toBe(`Bearer ${key}`);
@@ -481,8 +487,8 @@ export function myPiLocalFlow(): void {
     });
 
     // Across the whole flow the model server saw only the stored key: three
-    // chat requests, one per model request, and the model lists doctor asked
-    // for. The update host saw only the signed channel, and the key is in
+    // chat requests, one per model request, and the model lists the launches
+    // and doctor asked for. The update host saw only the signed channel, and the key is in
     // state only in the secret store's file, encoded or not: the update and
     // rollback records hold no copy.
     expect(
