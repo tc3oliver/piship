@@ -1006,7 +1006,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     // not this distribution's own state.
     marker("other");
     await expect(installDistribution(a.archive)).rejects.toThrow(
-      /State already exists for acmepi: saved data that no install of this distribution created\. It may come from running the distribution from its build folder.*run the install again with --use-existing-state/,
+      /State already exists for acmepi: saved data with no ownership marker for this distribution and no install of it recorded\. It may come from running the distribution from its build folder.*run the install again with --use-existing-state/,
     );
     rmSync(join(stateDir(), "state.json"));
     await expect(installDistribution(a.archive)).rejects.toThrow(
@@ -1041,6 +1041,51 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(
       (await installDistribution(a.archive, true, { replace: true })).active,
     ).toBe("1.0.0");
+  });
+
+  it("adopts the unmarked state of a v0.13 install it replaces, and refuses other state before removing anything", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    // A v0.12 or v0.13 install wrote no state marker; its receipt vouches.
+    rmSync(join(stateDir(), "state.json"), { force: true });
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    const replaced = await installDistribution(b.archive, false, {
+      replace: true,
+    });
+    expect(replaced.active).toBe("1.1.0");
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(stateDir(), "state.json"), "utf8")),
+    ).toMatchObject({ distribution: ID });
+    // Another distribution's marker: refused while the install is intact.
+    write(
+      join(stateDir(), "state.json"),
+      JSON.stringify({ schema: "piship-state/v1", distribution: "other" }),
+    );
+    await expect(
+      installDistribution(a.archive, false, { replace: true }),
+    ).rejects.toThrow(/State already exists for acmepi/);
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    expect(apps()).toEqual(["1.1.0", "launch.mjs"]);
+    // Unmarked state with no receipt of this id: refused.
+    uninstallDistribution(ID);
+    rmSync(join(stateDir(), "state.json"));
+    await expect(
+      installDistribution(a.archive, false, { replace: true }),
+    ).rejects.toThrow(/State already exists for acmepi/);
+    expect(apps()).toEqual([]);
+  });
+
+  it("suggests update only for an installed release with update trust", async () => {
+    const a = await release("1.0.0");
+    await installDistribution(a.archive);
+    const receipt = JSON.parse(readFileSync(receiptFile(), "utf8"));
+    delete receipt.trustState;
+    writeFileSync(receiptFile(), JSON.stringify(receipt));
+    const collision = await rejection(installDistribution(a.archive));
+    expect(collision.message).toContain("run the install again with --replace");
+    expect(collision.message).not.toContain("update --from");
   });
 
   it("refuses to replace an installation a running session still uses", async () => {
