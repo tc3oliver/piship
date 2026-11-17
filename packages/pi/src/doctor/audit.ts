@@ -2,7 +2,9 @@
 // closed, each sink with its delivery counts, and local metrics. A sink is
 // shown by its host only: the path or query of a sink URL may carry routing
 // secrets.
+import { join } from "node:path";
 import {
+  AUDIT_LOG_FILE,
   AUDIT_SPOOL_LEASE_MS,
   AUDIT_SPOOL_MAX_BYTES,
   type AuditStatus,
@@ -14,7 +16,7 @@ import type { DoctorSection } from "./report.js";
 
 export interface AuditSinkTarget {
   readonly id: string;
-  /** `local file`, the host (and port) of an HTTP sink, or `unresolved`. */
+  /** The local log's path, the host (and port) of an HTTP sink, or `unresolved`. */
   readonly target: string;
 }
 
@@ -25,7 +27,7 @@ export function auditSinkTargets(
 ): AuditSinkTarget[] {
   return manifest.audit.sinks.map((sink) => {
     if (sink.type !== "http" || !sink.url)
-      return { id: sink.id, target: "local file" };
+      return { id: sink.id, target: join(ctx.stateDir, AUDIT_LOG_FILE) };
     try {
       const url = new URL(
         resolveTemplate(

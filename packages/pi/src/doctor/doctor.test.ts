@@ -221,6 +221,34 @@ function group(output: string, name: string): string[] {
   return lines.slice(start + 1, end < 0 ? undefined : end);
 }
 
+describe("Distribution group", () => {
+  const sessions = () => join(temp, "state", "sessions", "user");
+  it("names the state and session directories", () => {
+    expect(
+      group(
+        renderDoctor(doctorData("personal", {})).render(),
+        "Distribution",
+      ).slice(3),
+    ).toEqual([
+      `  - ${"state".padEnd(20)} ${join(temp, "state")}`,
+      `  - ${"sessions".padEnd(20)} ${sessions()}`,
+    ]);
+  });
+  it("names the signed-in principal's session directory", () => {
+    const lines = (access: AccessData) =>
+      group(
+        renderDoctor(doctorData("managed", { access })).render(),
+        "Distribution",
+      ).slice(4);
+    expect(lines(accessData({ sessionPrincipal: "abc123" }))).toEqual([
+      `  - ${"sessions".padEnd(20)} ${join(sessions(), "abc123")}`,
+    ]);
+    expect(lines(accessData())).toEqual([
+      `  - ${"sessions".padEnd(20)} ${sessions()} (a subdirectory per signed-in user)`,
+    ]);
+  });
+});
+
 describe("DoctorReport", () => {
   it("prints groups in the fixed order, whatever order they are written in, and skips empty ones", () => {
     const report = new DoctorReport("AcmeCode Doctor");
@@ -2703,7 +2731,7 @@ describe("Governance group", () => {
       `  ✓ ${"seam table".padEnd(20)} Pi 1.5.0`,
       `  ✓ ${"cache warming".padEnd(20)} off`,
       `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h (not acted on)`,
-      `  ! ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none; the logout purge never runs: sign-in is Pi's, and Pi's /logout purges nothing`,
+      `  ! ${"data purge".padEnd(20)} logout: cache, temp (not acted on); uninstall: none; the logout purge never runs: sign-in is Pi's, and Pi's /logout purges nothing`,
       `  ! ${"data retention".padEnd(20)} installed release 0.9.0 predates the data contract: rolled back to, it stops the retention sweep`,
     ]);
     const brokered = v6(base, {

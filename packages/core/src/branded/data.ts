@@ -58,6 +58,17 @@ export async function sweepDistributionData(
       ...(options.now === undefined ? {} : { now: options.now }),
     });
     for (const entry of result.classes) {
+      // Logout says what it removed in its closing line; a launch says it here.
+      const seconds = data.retention.sessions?.retentionSeconds;
+      if (
+        trigger === "launch" &&
+        entry.class === "sessions" &&
+        entry.removed &&
+        seconds
+      )
+        ctx.err(
+          `Removed ${entry.removed} session${entry.removed > 1 ? "s" : ""} older than ${seconds % 86_400 ? `${seconds / 3_600}h` : `${seconds / 86_400}d`} (data.sessions.retention)`,
+        );
       if (entry.unrecorded)
         ctx.err(
           `Warning: ${entry.class} past their retention were kept: the data.swept audit event was not recorded`,
