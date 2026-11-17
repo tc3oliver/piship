@@ -56,6 +56,27 @@ describe("<command> --help for the one-word commands", () => {
   );
 });
 
+describe("--help for config and policy subcommands", () => {
+  it.each([
+    [["config", "--help"], "config"],
+    [["config", "help"], "config"],
+    [["config", "set", "--help"], "config"],
+    [["config", "explain", "-h"], "config"],
+    [["policy", "--help"], "policy"],
+    [["policy", "explain", "--help"], "policy"],
+  ])("prints usage for %j", async (args, command) => {
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => {
+      lines.push(String(line));
+    });
+    preparePiEnvironment("acmecode");
+    await launchPiDistribution({ distributionDir: temp, metadata, args });
+    expect(lines.join("\n")).toMatch(
+      new RegExp(`^Usage: acmecode ${command} `),
+    );
+  });
+});
+
 describe("a refused command line", () => {
   it.each([
     [["--frobnicate"]],

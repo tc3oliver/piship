@@ -244,6 +244,34 @@ describe("personal distributions without identity", () => {
     expect(storedRefs()).toHaveLength(1);
   });
 
+  it("blames the user's own models.allowed, not the distribution, for an excluded pi-native model", async () => {
+    const manifest = manifestFor("pi-native");
+    const access = manifest.access as AccessManifest;
+    const distribution = open("pi-native");
+    const preferences = distribution.paths.preferences;
+    // Model first, narrowing second: the order config set cannot refuse.
+    setPreference(preferences, access, undefined, "model", "acme/coder");
+    setPreference(preferences, access, undefined, "models.allowed", "acme/x");
+    const refused = distribution.activate();
+    await expect(refused).rejects.toMatchObject({
+      code: "MODEL_UNAVAILABLE",
+      message: expect.stringContaining(
+        "excluded by your models.allowed preference",
+      ),
+      userAction: expect.stringContaining("config unset model"),
+    });
+    await expect(refused).rejects.not.toMatchObject({
+      message: expect.stringContaining("not allowed by this distribution"),
+    });
+    // The models listing never uses the selection, so it still works.
+    const listed = await distribution.activate({ listOnly: true });
+    expect(listed.selectedModel).toBeUndefined();
+    expect(listed.config.allowedModels).toEqual(["acme/x"]);
+    expect(listed.notices.join("\n")).toContain(
+      "Model acme/coder is excluded by your models.allowed preference",
+    );
+  });
+
   it.each(["local-secret", "none"] as const)(
     "keeps the model selection across login, logout, and login with %s credentials",
     async (mode) => {
