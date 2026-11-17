@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonicalJson, hash } from "./digest.js";
+import { COMMAND_NAME } from "@piship/schema";
 import type { DistributionLock } from "./lock-schema.js";
 
 const SCHEMA = "piship-local-build/v1";
@@ -117,7 +118,7 @@ export function readBuildCache(output: string): BuildCache | undefined {
       cache.schema !== SCHEMA ||
       !/^[0-9a-f]{64}$/.test(cache.key) ||
       !/^[0-9a-f]{64}$/.test(cache.runtimeKey) ||
-      !/^[a-z][a-z0-9-]*$/.test(cache.command)
+      !COMMAND_NAME.test(cache.command)
     )
       return undefined;
     if (

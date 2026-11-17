@@ -946,6 +946,9 @@ describe("file system errors", () => {
     "{",
     '{"schema":"piship-lock/v1"}',
     '{"schema":"piship-lock/v1","app":5,"runtime":{}}',
+    '{"schema":"piship-lock/v1","app":{"command":"a-"},"runtime":{},"resources":[]}',
+    '{"schema":"piship-lock/v1","app":{"command":"a"},"runtime":{},"resources":[{"path":"../x"}]}',
+    '{"schema":"piship-lock/v1","app":{"command":"a"},"runtime":{}}',
     "\u0000\u0001\u0002 binary",
   ])(
     "names a damaged lock file instead of failing inside it: %j",

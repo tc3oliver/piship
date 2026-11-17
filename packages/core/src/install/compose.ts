@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
+import { COMMAND_NAME } from "@piship/schema";
 import { extractArchive } from "../archive.js";
 import { hash } from "../digest.js";
 import { currentTarget } from "../compatibility.js";
@@ -280,10 +281,7 @@ function runtimeArchive(
   );
 }
 
-/** The manifest's command rule; the lock names the launcher file by it. */
-const COMMAND = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
-
-function refuseUnsafeLockPaths(lock: DistributionLock): void {
+export function refuseUnsafeLockPaths(lock: DistributionLock): void {
   const unsafe = (path: unknown): boolean =>
     typeof path !== "string" ||
     path === "" ||
@@ -294,7 +292,7 @@ function refuseUnsafeLockPaths(lock: DistributionLock): void {
     path
       .split("/")
       .some((part) => part === "" || part === "." || part === "..");
-  const bad = !COMMAND.test(String(lock.app?.command))
+  const bad = !COMMAND_NAME.test(String(lock.app?.command))
     ? "app.command"
     : !Array.isArray(lock.resources) ||
         lock.resources.some((resource) => unsafe(resource?.path))

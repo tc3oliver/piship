@@ -11,7 +11,7 @@ import {
 import { uptime } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { readManifest } from "@piship/schema";
+import { COMMAND_NAME, readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
 import { hashFilesInParallel, workerCount } from "./parallel-files.js";
 import { readInstallReceipt } from "./install/receipt.js";
@@ -463,8 +463,7 @@ export function payloadApp(directory: string): DistributionLock["app"] {
       readFileSync(join(resolve(directory), "piship.lock"), "utf8"),
     ) as DistributionLock;
     const command = lock.app?.command;
-    if (command && /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(command))
-      return lock.app;
+    if (command && COMMAND_NAME.test(command)) return lock.app;
   } catch {
     // Malformed metadata cannot identify this distribution.
   }
@@ -522,7 +521,7 @@ function repairAction(root?: string, onlyUnexpected = false): string {
   const installed =
     root &&
     basename(dirname(dirname(root))) === "apps" &&
-    /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
+    COMMAND_NAME.test(id as string);
   const name = installed ? id : "<id>";
   return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version: download that version's release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${name} <extracted release>; with the PiShip CLI: piship repair ${name} <release archive> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
 }

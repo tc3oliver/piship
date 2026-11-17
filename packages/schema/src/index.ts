@@ -316,6 +316,8 @@ function string(value: unknown, path: string): string {
     );
   return value;
 }
+/** The one command-name rule: the manifest, the lock and every launcher agree. */
+export const COMMAND_NAME = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
 function name(value: unknown, path: string): string {
   const result = string(value, path);
   if (
