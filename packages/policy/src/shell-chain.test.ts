@@ -521,12 +521,16 @@ describe("commands that cannot be split", () => {
     ).toBe(true);
   });
 
-  it("strips a prefix in a piece: `sudo` after a substitution", () => {
-    expect(run("true $(x); sudo rm -rf $HOME")).toMatchObject({
-      effect: "deny",
-      ruleId: "e.rm",
-    });
-  });
+  // Prefixes are stripped for POSIX shells only.
+  it.skipIf(process.platform === "win32")(
+    "strips a prefix in a piece: `sudo` after a substitution",
+    () => {
+      expect(run("true $(x); sudo rm -rf $HOME")).toMatchObject({
+        effect: "deny",
+        ruleId: "e.rm",
+      });
+    },
+  );
 
   it.each(["ask", "deny"] as const)(
     "keeps an allow spelled with metacharacters under default %s",
