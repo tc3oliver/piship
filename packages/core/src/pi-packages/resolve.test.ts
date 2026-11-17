@@ -6,9 +6,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -556,6 +558,106 @@ describe("npm packages", () => {
       expect(
         existsSync(join(directory, "node_modules", "@earendil-works")),
       ).toBe(false);
+    },
+    SLOW,
+  );
+
+  it(
+    "reuse a package's installed dependencies from the runtime cache, keyed by its lockfile",
+    () => {
+      const declaration = npmPackage("@company/pi-platform", "1.4.2");
+      const { locked, lockfile } = resolvedPlatform();
+      const cacheHome = join(root, "package-cache");
+      const calls: string[][] = [];
+      const ctx: PackageContext = {
+        ...context(),
+        installCacheRoot: join(cacheHome, "runtime"),
+        run: (command, args, options) => {
+          calls.push([command, ...args]);
+          return npmEleven(command, args, options);
+        },
+      };
+      let builds = 0;
+      const vendor = (pin = { locked, lockfile }) =>
+        vendorPiPackage(
+          declaration,
+          pin,
+          ctx,
+          join(root, "vendor-cached", String(builds++)),
+        );
+      const npmCi = () =>
+        npmCalls(calls).filter((call) => call[1] === "ci").length;
+      const leftPad = (vendored: { directory: string }) =>
+        readFileSync(
+          join(vendored.directory, "node_modules", "left-pad", "index.js"),
+          "utf8",
+        );
+
+      expect(vendor().installCache).toBe("miss");
+      expect(npmCi()).toBe(1);
+      // The second build places the cached tree: no npm ci, same checks.
+      const second = vendor();
+      expect(npmCi()).toBe(1);
+      expect(second.installCache).toBe("hit");
+      expect(second.locked).toEqual(locked);
+      expect(leftPad(second)).toBe("module.exports = (s) => s;\n");
+
+      // Another lockfile (same pins, other bytes) is another entry.
+      const relocked = `${lockfile}\n`;
+      const pin = {
+        locked: {
+          ...locked,
+          lockfileSha256: createHash("sha256").update(relocked).digest("hex"),
+        },
+        lockfile: relocked,
+      };
+      vendor(pin);
+      expect(npmCi()).toBe(2);
+      vendor(pin);
+      expect(npmCi()).toBe(2);
+
+      // A tampered entry is refused and replaced by a fresh install.
+      const runtime = join(cacheHome, "runtime");
+      for (const entry of readdirSync(runtime).filter((name) =>
+        name.startsWith("p-"),
+      ))
+        appendFileSync(
+          join(runtime, entry, "tree", "node_modules", "left-pad", "index.js"),
+          "// tampered\n",
+        );
+      const fresh = vendor();
+      expect(npmCi()).toBe(3);
+      expect(leftPad(fresh)).toBe("module.exports = (s) => s;\n");
+      vendor();
+      expect(npmCi()).toBe(3);
+
+      // A same-size change passes placement but fails the tree digest: the
+      // entry is discarded and one fresh install replaces it.
+      const extension = [
+        "node_modules",
+        "@company",
+        "pi-platform",
+        "extensions",
+        "platform.ts",
+      ];
+      const entries = () =>
+        readdirSync(runtime).filter(
+          (name) => name.startsWith("p-") && !name.endsWith(".d"),
+        );
+      for (const entry of entries()) {
+        const file = join(runtime, entry, "tree", ...extension);
+        const text = readFileSync(file, "utf8");
+        writeFileSync(file, text.replace("pad", "dap"));
+      }
+      const healed = vendor();
+      expect(npmCi()).toBe(4);
+      expect(healed.locked).toEqual(locked);
+      expect(healed.installCache).toBe("miss");
+      expect(
+        readFileSync(join(healed.directory, ...extension), "utf8"),
+      ).toContain("import pad");
+      expect(vendor().installCache).toBe("hit");
+      expect(npmCi()).toBe(4);
     },
     SLOW,
   );

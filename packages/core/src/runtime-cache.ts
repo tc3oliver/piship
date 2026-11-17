@@ -70,7 +70,9 @@ const SCHEMA = "piship-runtime-cache/v3";
 export const ROOT_FILES = ["package.json", "package-lock.json"];
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
-const KEEP = { install: 3, framework: 3, bundle: 6 } as const;
+const KEEP = { install: 3, framework: 3, bundle: 6, package: 12 } as const;
+/** Package entries this process used are never evicted, so one build of many packages keeps them all (a second's slack for coarse mtimes). */
+const STARTED = Date.now();
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -148,6 +150,42 @@ export interface HostFacts {
   readonly npm?: string;
 }
 
+/** What of this machine decides an npm-installed tree's bytes. */
+function hostKey(host: HostFacts) {
+  const [major, minor] = process.versions.node.split(".");
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    libc:
+      "libc" in host
+        ? host.libc
+        : libcFamily(process.platform, () => process.report?.getReport()),
+    node: `${major}.${minor}`,
+    npm: host.npm ?? npmVersion(),
+  };
+}
+
+/**
+ * The cache of one vendored Pi package's installed dependencies (its
+ * `node_modules`, the `package` layer), keyed by `install` (what decides the
+ * tree: the package's npm lockfile, its root manifest, and the npm flags) and
+ * this machine, exactly as the runtime's install layer is.
+ */
+export function piPackageCacheFor(
+  install: unknown,
+  root: string,
+  host: HostFacts = {},
+): RuntimeCache {
+  return {
+    root,
+    key: hash(
+      canonicalJson({ schema: SCHEMA, piPackage: install, ...hostKey(host) }),
+    ),
+    framework: "",
+    strip: false,
+  };
+}
+
 /** The runtime cache a build of `lock` on this machine reads and fills. */
 export function runtimeCacheFor(
   // A runtime release has no manifest: it is stripped, as the v1 defaults are.
@@ -156,7 +194,6 @@ export function runtimeCacheFor(
   env: NodeJS.ProcessEnv = process.env,
   host: HostFacts = {},
 ): RuntimeCache {
-  const [major, minor] = process.versions.node.split(".");
   const { package: pi, version, npmLockSha256, packages } = lock.runtime;
   return {
     root: join(dirname(searchToolCacheDirectory(env)), "runtime"),
@@ -164,14 +201,7 @@ export function runtimeCacheFor(
       canonicalJson({
         schema: SCHEMA,
         runtime: { package: pi, version, npmLockSha256, packages },
-        platform: process.platform,
-        arch: process.arch,
-        libc:
-          "libc" in host
-            ? host.libc
-            : libcFamily(process.platform, () => process.report?.getReport()),
-        node: `${major}.${minor}`,
-        npm: host.npm ?? npmVersion(),
+        ...hostKey(host),
       }),
     ),
     framework: hash(
@@ -184,8 +214,11 @@ export function runtimeCacheFor(
 }
 
 /** A name short enough for Windows paths: the key's first 20 hex digits. */
-const entryPath = (cache: RuntimeCache, kind: "i" | "f" | "b", key: string) =>
-  join(cache.root, `${kind}-${key.slice(0, 20)}`);
+const entryPath = (
+  cache: RuntimeCache,
+  kind: "i" | "f" | "p" | "b",
+  key: string,
+) => join(cache.root, `${kind}-${key.slice(0, 20)}`);
 
 /** Regular files under `root`, as `/`-separated relative paths. */
 function listFiles(root: string): string[] {
@@ -307,6 +340,7 @@ function prune(cache: RuntimeCache, budget: number): void {
       ["i-", KEEP.install],
       ["f-", KEEP.framework],
       ["b-", KEEP.bundle],
+      ["p-", KEEP.package],
     ] as const)
       for (const entry of names
         .filter((name) => name.startsWith(prefix) && !name.endsWith(".d"))
@@ -315,7 +349,8 @@ function prune(cache: RuntimeCache, budget: number): void {
           used: modified(join(cache.root, name, RECORD)),
         }))
         .sort((a, b) => b.used - a.used)
-        .slice(keep)) {
+        .slice(keep)
+        .filter((entry) => prefix !== "p-" || entry.used < STARTED - 1000)) {
         const hidden = hide(join(cache.root, entry.name));
         if (hidden) names.push(basename(hidden));
       }
@@ -373,10 +408,11 @@ function publish(
  * A tree entry is one of two layers: `install`, everything npm installs (the
  * third-party packages, keyed by the lock), and `framework`, PiShip's own
  * compiled output and build input snapshot (keyed by the build input digest).
- * Their paths never overlap, so a payload takes both.
+ * Their paths never overlap, so a payload takes both. A third, `package`, is
+ * the installed dependencies of one vendored Pi package (`piPackageCacheFor`).
  */
-type Layer = "install" | "framework";
-const LAYER_DIRECTORY = { install: "i", framework: "f" } as const;
+type Layer = "install" | "framework" | "package";
+const LAYER_DIRECTORY = { install: "i", framework: "f", package: "p" } as const;
 
 interface TreeRecord {
   readonly schema: string;
@@ -412,7 +448,7 @@ function filesDigest(files: Readonly<Record<string, number>>): string {
 }
 
 const layerKey = (cache: RuntimeCache, layer: Layer): string =>
-  layer === "install" ? cache.key : cache.framework;
+  layer === "framework" ? cache.framework : cache.key;
 const layerPath = (cache: RuntimeCache, layer: Layer): string =>
   entryPath(cache, LAYER_DIRECTORY[layer], layerKey(cache, layer));
 
@@ -567,11 +603,12 @@ function publishTree(
 export function adoptInstallTree(
   cache: RuntimeCache,
   stage: string,
+  layer: "install" | "package" = "install",
 ): AdoptedTree | undefined {
   let movedIn = false;
   return publishTree(
     cache,
-    "install",
+    layer,
     (location) => {
       try {
         renameWithRetry(

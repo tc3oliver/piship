@@ -2100,6 +2100,13 @@ describe("the runtime cache line of piship release", () => {
       "runtime cache: disabled",
     );
   });
+  it("names the Pi package dependencies that came from the cache, whatever the runtime did", () => {
+    expect(
+      runtimeCacheLine({ status: "disabled", piPackages: { hit: 5, miss: 1 } }),
+    ).toBe(
+      "runtime cache: disabled; Pi package dependencies: 5 from the cache, 1 installed into it",
+    );
+  });
 });
 
 describe("what to do after an install", () => {

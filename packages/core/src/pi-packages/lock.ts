@@ -243,11 +243,20 @@ export function vendorPiPackages(
   manifest: Manifest,
   base: string,
   payload: string,
-  options: { readonly supplyChainGates?: boolean } = {},
+  options: {
+    readonly supplyChainGates?: boolean;
+    /** The runtime cache directory whose Pi package entries are reused and filled (see `PackageContext`). */
+    readonly installCacheRoot?: string;
+  } = {},
 ): VendoredPiPackage[] {
   const locked = lock.packages ?? [];
   if (!locked.length) return [];
-  const context = packageContext(manifest, base);
+  const context = {
+    ...packageContext(manifest, base),
+    ...(options.installCacheRoot
+      ? { installCacheRoot: options.installCacheRoot }
+      : {}),
+  };
   const output: VendoredPiPackage[] = [];
   for (const entry of locked) {
     const declaration = declaredPackages(manifest).find(

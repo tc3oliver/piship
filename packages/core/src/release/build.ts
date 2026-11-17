@@ -26,7 +26,7 @@ import {
   currentTarget,
   type DistributionLock,
 } from "../index.js";
-import type { RuntimeCacheReport } from "../build.js";
+import type { PiPackageCacheReport, RuntimeCacheReport } from "../build.js";
 import { STATE_SCHEMAS } from "../migration.js";
 import { removeTree } from "../parallel-files.js";
 import { renameWithRetry } from "../rename-retry.js";
@@ -360,6 +360,12 @@ export async function buildRelease(
                   }
                   if (found.framework) provenance.framework = found.framework;
                   if (found.crossVolume) provenance.crossVolume = true;
+                },
+                onPiPackageCache: (counts: PiPackageCacheReport) => {
+                  timer.start(
+                    `pi package cache ${counts.hit} hit, ${counts.miss} miss`,
+                  )();
+                  provenance.piPackages = counts;
                 },
               }
             : {}),

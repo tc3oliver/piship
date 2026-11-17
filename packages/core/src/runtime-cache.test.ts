@@ -524,6 +524,21 @@ describe("install tree entries", () => {
     expect(lookupInstallTree(cacheOf(root, keys[1]))).toBeUndefined();
     expect(lookupInstallTree(cacheOf(root, keys[0]))).toBeDefined();
   });
+
+  it("never evicts a Pi package entry this process used, even past the twelve kept", () => {
+    const root = temp();
+    const keys = Array.from({ length: 14 }, (_, index) =>
+      index.toString(16).repeat(64),
+    );
+    for (const [index, key] of keys.entries()) {
+      const stage = join(root, `stage-${index}`);
+      mkdirSync(stage);
+      stageTree(stage);
+      adoptInstallTree(cacheOf(root, key), stage, "package");
+    }
+    for (const key of keys)
+      expect(lookupTree(cacheOf(root, key), "package")).toBeDefined();
+  });
 });
 
 /** The PiShip build input the fixture stands in for: a root manifest and lock, and two packages. */
