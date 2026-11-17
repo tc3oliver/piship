@@ -169,6 +169,15 @@ describe("piship pack", () => {
     expect(
       readFileSync(join(unpacked, built.name, "checksums.txt"), "utf8"),
     ).toContain("pack/resources/AGENTS.md");
+    const sh = readFileSync(join(unpacked, built.name, "install.sh"), "utf8");
+    expect(sh).toContain("trap 'exit 130' INT HUP TERM");
+    expect(sh).not.toContain("basename");
+    const ps1 = readFileSync(join(unpacked, built.name, "install.ps1"), "utf8");
+    expect(ps1).toContain(
+      "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    );
+    expect(ps1).toContain("[Console]::Error.WriteLine('Node.js");
+    expect(ps1).not.toContain("Write-Error");
   });
 
   it("is deterministic", async () => {

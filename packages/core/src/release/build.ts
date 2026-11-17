@@ -251,9 +251,10 @@ echo "Full verification of this release (every payload file, SBOM, notices) is s
     ps1: `# Installs this release's payload for the current user. The install checks the
 # release metadata and this machine's target; it does not hash every payload
 # file. Run verify-release on this directory for the full verification.
+# Run: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error 'Node.js 22.19.0 or newer is required. Install Node separately.'; exit 1 }
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js 22.19.0 or newer is required. Install Node separately.'); exit 1 }
 node "$here\\payload\\piship.mjs" install "$here" @args
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Output "Full verification of this release (every payload file, SBOM, notices) is separate: node \`"$here\\payload\\piship.mjs\`" verify-release \`"$here\`""

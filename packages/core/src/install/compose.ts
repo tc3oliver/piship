@@ -296,13 +296,21 @@ export async function verifyPack(
 /** Where the runtime archive for `target` is looked for besides an explicit path. */
 function runtimeArchive(
   source: string,
-  name: string,
+  { name, sha256 }: { name: string; sha256: string },
   explicit: string | undefined,
 ): string {
   if (explicit) {
     // A .sha256 file or another platform's archive would otherwise fail as
-    // a corrupt artifact; the name already says it is the wrong file.
-    if (basename(explicit) !== name)
+    // a corrupt artifact; the name already says it is the wrong file. A
+    // renamed copy (a browser's "... (1).tar.gz") is accepted by its digest.
+    if (
+      basename(explicit) !== name &&
+      !(
+        existsSync(explicit) &&
+        statSync(explicit).isFile() &&
+        hash(readFileSync(explicit)) === sha256
+      )
+    )
       throw new PiShipError(
         "CONFIG_INVALID",
         `This pack needs ${name} for ${currentTarget()}; you gave ${basename(explicit)}`,
@@ -412,8 +420,8 @@ export async function composePack(
     archiveSha256 = pinned.sha256;
     runtimePishipVersion = metadata.runtime.pishipVersion;
   } else {
-    const archive = runtimeArchive(path, pinned.name, options.runtime);
-    const root = rootName(archive);
+    const archive = runtimeArchive(path, pinned, options.runtime);
+    const root = rootName(pinned.name);
     const prefix = `${root}/payload/`;
     const extracted = await extractArchive(archive, payload, {
       expectedRoot: root,
