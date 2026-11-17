@@ -943,7 +943,7 @@ describe("parseRuleList", () => {
     expect(secrets).toContain("never matches secrets/**: it is relative");
     expect(env).toContain("env (deny filesystem.read) never matches .env");
     expect(curl).toContain(
-      'curl: "curl *" does not match arguments containing /',
+      'curl: "curl *" does not match arguments containing / or :',
     );
     expect(docs).toContain("write it as docs:search");
     // The rules really match nothing they were meant to.

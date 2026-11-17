@@ -723,15 +723,16 @@ function modelFacingMcpMessage(rule: PolicyRule): string | undefined {
 }
 
 /**
- * A shell.execute deny or ask whose resource uses `*` but no `**`: `*` stops
- * at `/`, so `rm -rf *` lets `rm -rf /` and `rm -rf ./x` through.
+ * A shell.execute deny or ask whose resource has a single `*` (not part of
+ * `**`): `*` stops at `/` and `:`, so `rm -rf *` lets `rm -rf /` through and
+ * `git push ** --force*` misses `--force-with-lease=main:abc`.
  */
 export function shellGlobMessage(rule: PolicyRule): string | undefined {
+  const single = /(?<!\*)\*(?!\*)/;
   return rule.action === "shell.execute" &&
     rule.effect !== "allow" &&
-    rule.resource.includes("*") &&
-    !rule.resource.includes("**")
-    ? `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replaceAll("*", "**")}")`
+    single.test(rule.resource)
+    ? `"${rule.resource}" does not match arguments containing / or :, because * stops at both; use ** (for example "${rule.resource.replace(new RegExp(single, "g"), "**")}")`
     : undefined;
 }
 
@@ -786,43 +787,50 @@ export function ruleWarnings(rule: PolicyRule): string[] {
 }
 
 /**
- * Enforced `filesystem.read` denies that no `sandbox.filesystem.read.deny`
+ * `filesystem.read` denies that no enforced `sandbox.filesystem.read.deny`
  * directory covers. They refuse Pi's file tools, but a command (`bash`, a
- * user's `!` command) reads files through the sandbox, so `cat .env` still
- * works. One warning names every such rule; it never refuses the manifest.
+ * user's `!` command) reads files through the sandbox, or without one when
+ * `sandbox.required` is not true, so `cat .env` still works. One warning per
+ * policy layer names every such rule; it never refuses the manifest.
  */
 export function uncontainedReadDenials(
   manifest: Manifest,
 ): ValidationDiagnostic[] {
   const governance = manifest.governance;
   if (!governance) return [];
-  const directories = governance.sandbox.filesystem.read.deny.map((entry) => {
-    let end = entry.length;
-    while (end > 0 && entry[end - 1] === "/") end--;
-    return entry.slice(0, end);
-  });
-  const uncovered = governance.policy.enforced.filter((rule) => {
-    if (
-      rule.effect !== "deny" ||
-      !["filesystem.read", "filesystem.*", "*"].includes(rule.action)
-    )
-      return false;
-    // The literal directory before the first glob character.
-    const literal = rule.resource.split(/[*?[{]/)[0] as string;
-    const prefix = literal.slice(0, literal.lastIndexOf("/") + 1);
-    const path = rule.resource === literal ? literal : prefix;
-    return !directories.some(
-      (dir) => dir !== "" && (path === dir || path.startsWith(`${dir}/`)),
-    );
-  });
-  return uncovered.length
-    ? [
-        {
-          path: "policy.enforced",
-          message: `${uncovered.map((rule) => `${rule.id} (${rule.resource})`).join(", ")}: these filesystem.read denies refuse the file tools only; a command such as cat in bash or a ! command can still read the files unless sandbox.filesystem.read.deny lists their directory (docs/sandbox.md#configuration)`,
-        },
-      ]
+  // The sandbox (and its read-deny list) runs only when it is required.
+  const required = governance.sandbox.required === true;
+  const directories = required
+    ? governance.sandbox.filesystem.read.deny.map((entry) => {
+        let end = entry.length;
+        while (end > 0 && entry[end - 1] === "/") end--;
+        return entry.slice(0, end);
+      })
     : [];
+  return (["enforced", "defaults"] as const).flatMap((layer) => {
+    const uncovered = governance.policy[layer].filter((rule) => {
+      if (
+        rule.effect !== "deny" ||
+        !["filesystem.read", "filesystem.*", "*"].includes(rule.action)
+      )
+        return false;
+      // The literal directory before the first glob character.
+      const literal = rule.resource.split(/[*?[{]/)[0] as string;
+      const prefix = literal.slice(0, literal.lastIndexOf("/") + 1);
+      const path = rule.resource === literal ? literal : prefix;
+      return !directories.some(
+        (dir) => dir !== "" && (path === dir || path.startsWith(`${dir}/`)),
+      );
+    });
+    return uncovered.length
+      ? [
+          {
+            path: `policy.${layer}`,
+            message: `${uncovered.map((rule) => `${rule.id} (${rule.resource})`).join(", ")}: these filesystem.read denies refuse the file tools only; a command such as cat in bash or a ! command can still read the files unless ${required ? "" : "sandbox.required is true and "}sandbox.filesystem.read.deny lists their directory (docs/sandbox.md#configuration)`,
+          },
+        ]
+      : [];
+  });
 }
 
 /**

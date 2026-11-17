@@ -56,6 +56,14 @@ export function manifestContainment(
   };
 }
 
+/** What the sandbox can enforce instead, for actions it partly covers. */
+const SANDBOX_HINTS: Partial<Record<string, string>> = {
+  "network.connect":
+    " (sandbox.required: true with sandbox.network.mode: deny enforces it)",
+  "web.request":
+    " (sandbox.required: true with sandbox.network.mode: deny stops commands such as curl, not this action)",
+};
+
 /**
  * Deny and ask rules the runtime cannot honor. Managed: an unsupported rule
  * is an error unless acknowledged, and an audit-only rule a warning naming
@@ -97,7 +105,7 @@ export function unenforcedRules(
           });
         continue;
       }
-      const unsupported = `${where}: ${rule.action} has no runtime seam in this Pi version, so the rule is neither prevented nor recorded`;
+      const unsupported = `${where}: ${rule.action} has no runtime seam in this Pi version, so the rule is neither prevented nor recorded${SANDBOX_HINTS[rule.action] ?? ""}`;
       if (mode === "personal")
         findings.push({ ...base, level: "warning", message: unsupported });
       else if (acknowledged.has(key))

@@ -38,6 +38,27 @@ describe("unenforcedRules", () => {
     expect(findings[0]?.message).not.toContain("acknowledgeUnenforced");
   });
 
+  it("names the deny sandbox as the alternative for network actions only", () => {
+    const findings = unenforcedRules(
+      "personal",
+      makePolicy({
+        enforced: [
+          rule("net", "network.connect", "**", "deny"),
+          rule("web", "web.request", "**", "deny"),
+          rule("mem", "memory.write", "**", "deny"),
+        ],
+      }),
+      NO_CONTAINMENT,
+    );
+    expect(findings[0]?.message).toContain(
+      "nor recorded (sandbox.required: true with sandbox.network.mode: deny enforces it)",
+    );
+    expect(findings[1]?.message).toContain(
+      "sandbox.network.mode: deny stops commands such as curl, not this action",
+    );
+    expect(findings[2]?.message).not.toContain("sandbox");
+  });
+
   it("accepts acknowledged rules by exact action:resource key", () => {
     const acknowledged: UnenforcedPolicy = {
       ...policy,

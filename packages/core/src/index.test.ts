@@ -532,16 +532,19 @@ describe("shell glob warnings", () => {
       path,
       yaml.replace(
         /^policy:\n/m,
-        `policy:\n  enforced:\n${rule("no-rm", "rm -rf *", "deny")}${rule("rm-ok", "rm -rf **", "deny")}${rule("ls-ok", "ls *", "allow")}`,
+        `policy:\n  enforced:\n${rule("no-rm", "rm -rf *", "deny")}${rule("rm-ok", "rm -rf **", "deny")}${rule("ls-ok", "ls *", "allow")}${rule("push-force", "git push ** --force*", "ask")}`,
       ),
     );
     const warnings = shellGlobWarnings(readManifest(path));
     expect(warnings.map((item) => item.path)).toEqual([
       "policy.enforced.no-rm",
+      "policy.enforced.push-force",
     ]);
     expect(warnings[0]?.message).toContain(
-      "does not match arguments containing /",
+      "does not match arguments containing / or :",
     );
+    // A ** elsewhere does not excuse the single *: --force* misses --force-with-lease=main:abc.
+    expect(warnings[1]?.message).toContain('"git push ** --force**"');
   });
 });
 
