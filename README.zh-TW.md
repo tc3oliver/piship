@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  Pi 是在終端機裡執行的開源 coding agent。PiShip 把它包裝成你自己的發行版，個人用或公司用都可以。
+</p>
+
+<p align="center">
   <a href="README.md">English</a> · 繁體中文
 </p>
 
@@ -54,9 +58,7 @@ PiShip 不取代你們的身分驗證、gateway 或沙箱服務，它負責把�
 
 需要 Node.js 22.19.0 以上。在 Linux 上跑 demo 還需要允許非特權 user namespace 的 bubblewrap；macOS 內建沙箱，不用另外裝。
 
-你自己的發行版只會替 `release.targets` 打包 Pi 的搜尋工具 `fd` 和 `rg`：預設是 `linux-x64`、`darwin-arm64` 和 `win32-x64`（可再加 `linux-arm64` 和 `darwin-x64`）。在其他機器上，例如 Linux on ARM，請自己把 `fd` 和 `rg` 裝到 `PATH`；沒有它們時，啟動會讓 Pi 離線執行，而不是等 Pi 下載。
-
-想直接做自己的？[Your first distribution](docs/first-distribution.md) 從 `init` 到裝好指令只要五步；personal 發行版不需要 IdP 也不需要 gateway。
+想直接做自己的？[Your first distribution](docs/first-distribution.md) 從 `init` 到裝好指令只要六步；personal 發行版不需要 IdP 也不需要 gateway。
 
 ```bash
 git clone https://github.com/tc3oliver/piship.git
@@ -71,7 +73,7 @@ node examples/demo-company/fixtures/local-services.mjs
 ```bash
 node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
-~/.local/bin/acmecode login
+~/.local/bin/acmecode login    # 會開瀏覽器，假公司立刻核准（設 PISHIP_NO_BROWSER=1 就只印出網址）
 ~/.local/bin/acmecode
 ```
 

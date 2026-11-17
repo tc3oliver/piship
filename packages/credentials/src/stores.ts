@@ -59,7 +59,7 @@ function checkRef(ref: string): void {
 function unavailable(
   kind: string,
   detail: string,
-  userAction = "Unlock or install the platform secret store, or explicitly opt in to the restricted file fallback",
+  userAction = "Unlock or install the platform secret store, or opt in to owner-only plaintext files: set credential.storage: { provider: file, acknowledgePlaintext: true } in piship.yaml, then lock and build the distribution again (see docs/troubleshooting.md)",
   unreachable = false,
 ): PiShipError {
   return new PiShipError(

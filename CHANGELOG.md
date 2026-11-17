@@ -200,6 +200,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - In managed mode, sandbox and policy denials say to ask the administrator, and `install` only asks for runtime variables its environment lacks, naming those only `updates.source` reads. `logout` and the launch retention sweep report what they actually removed, naming each purged class.
 - `piship test` and `install` before sign-in name the built command's `login`, and agent-setup names `IDENTITY_REQUIRED`; `doctor` shows a managed project without Claude Code configuration as info; the `doctor` row is `distribution config`.
 
+- `SECRET_STORE_UNAVAILABLE` names the setting that opts in to the file store (`credential.storage: { provider: file, acknowledgePlaintext: true }`, then lock and build again) instead of an unnamed "restricted file fallback", and [troubleshooting](docs/troubleshooting.md#locked-keychain-over-ssh-on-macos) covers a locked macOS Keychain over SSH.
 #### In the session
 
 - Refusals no longer show the user instructions meant for the model; a user's own `!` command gets its own wording, also in Plan mode, and its approval dialog says `your own ! command:`. Refusals name the distribution's own `<command> policy explain`, say `Reading <path>` or `This command`, add `Rule:` lines, and a default-only ask says so in one line.

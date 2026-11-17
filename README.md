@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  Pi is an open-source coding agent that runs in your terminal. PiShip packages it as your own distribution, for yourself or for your company.
+</p>
+
+<p align="center">
   English · <a href="README.zh-TW.md">繁體中文</a>
 </p>
 
@@ -54,9 +58,7 @@ PiShip does not replace your identity provider, gateway, or sandbox. It connects
 
 You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces; macOS has its sandbox built in.
 
-A distribution of your own bundles Pi's search tools, `fd` and `rg`, only for its `release.targets`: by default `linux-x64`, `darwin-arm64` and `win32-x64` (`linux-arm64` and `darwin-x64` can be added). On any other machine, such as Linux on ARM, install `fd` and `rg` on `PATH`; without them a start runs Pi offline rather than wait for Pi to download them.
-
-Building your own instead? [Your first distribution](docs/first-distribution.md) goes from `init` to an installed command in five steps, and a personal distribution needs no identity provider or gateway.
+Building your own instead? [Your first distribution](docs/first-distribution.md) goes from `init` to an installed command in six steps, and a personal distribution needs no identity provider or gateway.
 
 ```bash
 git clone https://github.com/tc3oliver/piship.git
@@ -71,7 +73,7 @@ It prints a few `ACMECODE_*` variables. Export them in a second terminal, then b
 ```bash
 node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
-~/.local/bin/acmecode login
+~/.local/bin/acmecode login    # opens your browser; the fixture approves at once (PISHIP_NO_BROWSER=1 only prints the URL)
 ~/.local/bin/acmecode
 ```
 
