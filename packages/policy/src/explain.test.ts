@@ -8,6 +8,7 @@ import {
   NO_CONTAINMENT,
   PolicyEngine,
   RUNTIME_SEAMS,
+  companionRequests,
   decisionToJSON,
   denialHint,
   formatDecision,
@@ -140,6 +141,94 @@ describe("formatDecision", () => {
     expect(text).toMatch(/^ALLOWED\n/);
     expect(text).toContain(
       "Rule:\n  builtin:default (no rule matched; policy.default decides)",
+    );
+  });
+});
+
+describe("a request the session also decides as another action", () => {
+  const engine = new PolicyEngine({
+    policy: makePolicy({
+      enforced: [
+        rule("no-delete", "mcp.tool.call", "docs:delete_*", "deny"),
+        rule("push", "git.push", "**", "ask"),
+        rule("no-rm", "shell.execute", "rm **", "deny"),
+      ],
+      defaults: [
+        rule("tools", "tool.execute", "*", "allow"),
+        rule("shell", "shell.execute", "**", "allow"),
+        rule("mcp", "mcp.tool.call", "**", "allow"),
+      ],
+    }),
+    context,
+  });
+  const explain = (
+    action: "tool.execute" | "shell.execute",
+    resource: string,
+  ) => {
+    const request = { action, resource } as const;
+    const also = companionRequests(engine, request).map((item) =>
+      engine.evaluate(item),
+    );
+    return { explanation: engine.explain(request), also };
+  };
+
+  it("maps an MCP tool's two names onto each other", () => {
+    expect(
+      companionRequests(engine, {
+        action: "tool.execute",
+        resource: "mcp__docs__delete_page",
+      }),
+    ).toEqual([{ action: "mcp.tool.call", resource: "docs:delete_page" }]);
+    expect(
+      companionRequests(engine, {
+        action: "mcp.tool.call",
+        resource: "docs:delete_page",
+      }),
+    ).toEqual([{ action: "tool.execute", resource: "mcp__docs__delete_page" }]);
+    expect(
+      companionRequests(engine, { action: "tool.execute", resource: "read" }),
+    ).toEqual([]);
+  });
+
+  it("reports a hidden MCP tool as denied under its model-facing name", () => {
+    const { explanation, also } = explain(
+      "tool.execute",
+      "mcp__docs__delete_page",
+    );
+    expect(explanation.decision.effect).toBe("allow");
+    const text = formatDecision(explanation, { also });
+    expect(text).toMatch(/^DENIED\n/);
+    expect(text).toContain(
+      "Also decided as:\n  mcp.tool.call docs:delete_page: DENIED (policy no-delete)",
+    );
+    expect(decisionToJSON(explanation, { also })).toMatchObject({
+      effect: "allow",
+      overallEffect: "deny",
+      also: [{ action: "mcp.tool.call", effect: "deny", ruleId: "no-delete" }],
+    });
+  });
+
+  it("adds the push prompt to a git push command, as the session does", () => {
+    const { explanation, also } = explain(
+      "shell.execute",
+      "git push --force origin main",
+    );
+    const text = formatDecision(explanation, { also });
+    expect(text).toMatch(/^APPROVAL REQUIRED\n/);
+    expect(text).toContain(
+      "Also decided as:\n  git.push origin/main: APPROVAL REQUIRED (policy push)",
+    );
+    // Auto mode then approves the combined ask.
+    expect(formatDecision(explanation, { also, autoApproved: true })).toMatch(
+      /^AUTO-APPROVED\n/,
+    );
+    // A command shell.execute denies is refused before any push prompt.
+    expect(explain("shell.execute", "rm -rf x; git push").also).toEqual([]);
+    // No push, no second decision, and the JSON form is unchanged.
+    const plain = explain("shell.execute", "git status");
+    expect(plain.also).toEqual([]);
+    expect(decisionToJSON(plain.explanation, { also: [] })).not.toHaveProperty(
+      "overallEffect",
     );
   });
 });

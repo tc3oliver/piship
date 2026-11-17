@@ -839,6 +839,22 @@ describe("policy explain and doctor with auto mode", () => {
     expect(out.at(-1)).not.toContain("Project trust:");
   });
 
+  it("policy explain expands a path's leading workspace, tmp, and ~ as a rule does", async () => {
+    const built = distribution();
+    const { ctx, out } = launchContext(built);
+    const shown = async (path: string) => {
+      await runPolicy(ctx, ["explain", "filesystem.write", path, "--json"]);
+      return JSON.parse(out.at(-1) as string);
+    };
+    // `workspace/kept/**` decides, not `workspace/**` on <cwd>/workspace/kept.
+    expect((await shown("workspace/kept/a.txt")).ruleId).toBe("keep-asking");
+    expect((await shown("kept/a.txt")).ruleId).toBe("keep-asking");
+    // `tmp/x` is the temporary directory's x, not <cwd>/tmp/x.
+    expect((await shown("tmp/x")).resource).not.toBe(
+      (await shown("./tmp/x")).resource,
+    );
+  });
+
   it("doctor shows the switch, and says when the release makes it inert", async () => {
     const lines = async (setup: Setup) => {
       const built = distribution(setup);

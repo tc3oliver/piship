@@ -3,14 +3,17 @@
 import {
   type PolicyDecision,
   type PolicyEffect,
+  type PolicyRequest,
   type ResolvedDecision,
   redact,
 } from "@piship/contracts";
 import {
   BUILTIN_DEFAULT_RULE,
   BUILTIN_UNKNOWN_ACTION_RULE,
+  type PolicyEngine,
   type PolicyExplanation,
 } from "./engine.js";
+import { gitPushResources } from "./git-push.js";
 import { grantShellPrograms, programRefusal } from "./grant.js";
 import { decisionStatus } from "./seams.js";
 
@@ -19,6 +22,74 @@ const HEADINGS: Readonly<Record<PolicyEffect, string>> = {
   ask: "APPROVAL REQUIRED",
   deny: "DENIED",
 };
+
+const STRICTNESS: Readonly<Record<PolicyEffect, number>> = {
+  allow: 0,
+  ask: 1,
+  deny: 2,
+};
+
+// shortcut: a name whose server id holds `__` reads as the first split, as
+// the governor's first-claim rule usually resolves it; use the lock's server
+// list if explain ever needs the exact owner.
+const MCP_TOOL_NAME = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/;
+
+/**
+ * The other requests a session decides along with `request`: an MCP tool
+ * call is decided as `tool.execute` on its model-facing name and as
+ * `mcp.tool.call` on `<server>:<tool>`; a command `shell.execute` does not
+ * deny is also decided as `git.push` for each push target a rule names.
+ */
+export function companionRequests(
+  engine: Pick<PolicyEngine, "evaluate">,
+  request: PolicyRequest,
+): PolicyRequest[] {
+  switch (request.action) {
+    case "tool.execute": {
+      const tool = MCP_TOOL_NAME.exec(request.resource);
+      return tool
+        ? [{ action: "mcp.tool.call", resource: `${tool[1]}:${tool[2]}` }]
+        : [];
+    }
+    case "mcp.tool.call": {
+      const colon = request.resource.indexOf(":");
+      return colon > 0
+        ? [
+            {
+              action: "tool.execute",
+              resource: `mcp__${request.resource.slice(0, colon)}__${request.resource.slice(colon + 1)}`,
+            },
+          ]
+        : [];
+    }
+    case "shell.execute": {
+      // A push no rule covers is left to shell.execute; a denied command is
+      // refused before any push prompt.
+      const pushes = gitPushResources(request.resource).filter(
+        (resource) =>
+          engine.evaluate({ action: "git.push", resource }).ruleId !==
+          BUILTIN_DEFAULT_RULE,
+      );
+      return pushes.length && engine.evaluate(request).effect !== "deny"
+        ? pushes.map((resource) => ({ action: "git.push", resource }))
+        : [];
+    }
+    default:
+      return [];
+  }
+}
+
+/** The strictest effect of a decision and its companions, as a session applies them. */
+function overallEffect(
+  decision: PolicyDecision,
+  also: readonly PolicyDecision[] = [],
+): PolicyEffect {
+  return [decision, ...also].reduce<PolicyEffect>(
+    (worst, item) =>
+      STRICTNESS[item.effect] > STRICTNESS[worst] ? item.effect : worst,
+    "allow",
+  );
+}
 
 /**
  * The rule behind a decision, for a one-line reason. A decision no rule made
@@ -59,6 +130,8 @@ export interface DecisionFormatOptions {
   readonly autoApproved?: boolean;
   /** The task grant that approves an `ask` without a prompt (in-session only). */
   readonly grantId?: string;
+  /** The companion decisions (`companionRequests`); the heading is the strictest. */
+  readonly also?: readonly PolicyDecision[];
 }
 
 const AUTO_APPROVED = "ask (auto-approved by user)";
@@ -68,15 +141,11 @@ export function formatDecision(
   options: DecisionFormatOptions = {},
 ): string {
   const { decision } = explanation;
-  const auto = !!options.autoApproved && decision.effect === "ask";
-  const grant =
-    !auto && decision.effect === "ask" ? options.grantId : undefined;
+  const effect = overallEffect(decision, options.also);
+  const auto = !!options.autoApproved && effect === "ask";
+  const grant = !auto && effect === "ask" ? options.grantId : undefined;
   const blocks = [
-    auto
-      ? "AUTO-APPROVED"
-      : grant
-        ? "GRANT-APPROVED"
-        : HEADINGS[decision.effect],
+    auto ? "AUTO-APPROVED" : grant ? "GRANT-APPROVED" : HEADINGS[effect],
     ...(auto ? [section("Effect", AUTO_APPROVED)] : []),
     ...(grant
       ? [section("Effect", `ask (approved by task grant ${grant})`)]
@@ -94,9 +163,19 @@ export function formatDecision(
     section("Layer", decision.layer),
   ];
   if (decision.reason) blocks.push(section("Reason", decision.reason));
+  if (options.also?.length)
+    blocks.push(
+      section(
+        "Also decided as",
+        ...options.also.map(
+          (item) =>
+            `${item.action} ${item.resource}: ${HEADINGS[item.effect]} (${decisionRule(item)})`,
+        ),
+      ),
+    );
   const tool =
     decision.action === "mcp.tool.call"
-      ? /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(decision.resource)
+      ? MCP_TOOL_NAME.exec(decision.resource)
       : null;
   if (tool)
     blocks.push(
@@ -147,12 +226,23 @@ export function decisionToJSON(
   options: DecisionFormatOptions = {},
 ): Record<string, unknown> {
   const { decision } = explanation;
+  const effect = overallEffect(decision, options.also);
   return {
     effect: decision.effect,
-    ...(options.autoApproved && decision.effect === "ask"
-      ? { autoApproved: true }
+    ...(options.also?.length
+      ? {
+          overallEffect: effect,
+          also: options.also.map((item) => ({
+            action: item.action,
+            resource: redact(item.resource),
+            effect: item.effect,
+            ruleId: item.ruleId,
+            layer: item.layer,
+          })),
+        }
       : {}),
-    ...(!options.autoApproved && options.grantId && decision.effect === "ask"
+    ...(options.autoApproved && effect === "ask" ? { autoApproved: true } : {}),
+    ...(!options.autoApproved && options.grantId && effect === "ask"
       ? { grantId: options.grantId }
       : {}),
     action: decision.action,
