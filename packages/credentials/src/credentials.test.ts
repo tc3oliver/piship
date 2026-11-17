@@ -1742,6 +1742,18 @@ describe("credential lifecycle", () => {
     expect(store.refs()).toEqual(["piship:acmecode:inference#2"]);
     expect(JSON.parse(metadataText()).generation).toBe(2);
   });
+  it("never renews, or calls the provider, when renewal is not allowed", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 120 });
+    const { manager: credentials, store } = manager(provider);
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    expect(credentials.status().state).toBe("expiring");
+    await expect(
+      credentials.ensure(null, ctx, { allowAcquire: false, renew: false }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_EXPIRED" });
+    expect(provider.acquired()).toBe(1);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    expect(JSON.parse(metadataText()).generation).toBe(1);
+  });
   it("keeps the previous complete credential when a crash interrupts replacement", async () => {
     const provider = fakeProvider({ expiresInSeconds: 120 });
     const store = new MemorySecretStore();

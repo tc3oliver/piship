@@ -1583,6 +1583,124 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       expect(await failure()).toMatchObject({ retryable: true });
     });
   });
+
+  describe("launch during an identity provider outage", () => {
+    let offset: number;
+    const launch = () =>
+      DistributionAccess.open({
+        ...options,
+        now: () => Date.now() + offset,
+      }).activate();
+    beforeEach(async () => {
+      // The identity token outlives nothing; the credential is valid for an hour.
+      services.knobs.accessTokenTtl = 30;
+      services.knobs.credentialTtl = 3600;
+      offset = 0;
+      await DistributionAccess.open(options).login({
+        openUrl: (url) => void services.approve(url),
+      });
+      offset = 31_000; // The identity token has expired; the credential has not.
+    });
+
+    it("continues with the valid credential and says until when", async () => {
+      const issued = services.state.credentialCount;
+      services.knobs.tokenStatus = 503;
+      const activated = await launch();
+      expect(activated.identity).toMatchObject({ subject: "demo-user-1" });
+      // The identity token that could not be refreshed is not carried along.
+      expect(activated.identity?.accessToken).toBeUndefined();
+      expect(activated.identity?.refreshToken).toBeUndefined();
+      expect(activated.notices.join("\n")).toMatch(
+        /Sign-in could not be refreshed \(.*HTTP 503.*\); continuing with the current credential until it expires at \d{4}-/,
+      );
+      expect(services.state.credentialCount).toBe(issued);
+      expect(names()).not.toContain("credential.refresh");
+      // Once the provider answers, the next launch refreshes the sign-in.
+      services.knobs.tokenStatus = undefined;
+      offset = 0; // Fresh 30-second tokens must not be expired by the launch clock.
+      const renewed = await launch();
+      expect(renewed.identity?.accessToken).toBeDefined();
+      expect(renewed.notices.join("\n")).not.toContain(
+        "could not be refreshed",
+      );
+    });
+
+    it("still fails when the sign-in was revoked (invalid_grant)", async () => {
+      services.state.refreshTokens.clear();
+      await expect(launch()).rejects.toMatchObject({
+        code: "IDENTITY_EXPIRED",
+      });
+    });
+
+    it("never falls back to the credential when the inline sign-in after a revoked refresh fails temporarily", async () => {
+      services.state.refreshTokens.clear();
+      let signIns = 0;
+      const activation = DistributionAccess.open({
+        ...options,
+        now: () => Date.now() + offset,
+        loginInline: async () => {
+          signIns++;
+          throw new PiShipError("GATEWAY_UNREACHABLE", "IdP down", {
+            component: "identity",
+            retryable: true,
+          });
+        },
+      }).activate();
+      await expect(activation).rejects.toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+      });
+      expect(signIns).toBe(1);
+    });
+
+    it("still fails when the refreshed identity is already expired", async () => {
+      offset = 62_000; // New 30-second tokens are expired by the launch clock.
+      await expect(launch()).rejects.toMatchObject({
+        code: "IDENTITY_EXPIRED",
+      });
+    });
+
+    it("still fails when the refresh names another principal", async () => {
+      services.knobs.refreshSubject = "demo-user-2";
+      await expect(launch()).rejects.toMatchObject({
+        code: "IDENTITY_INVALID",
+      });
+    });
+
+    it("fails on the outage when the credential is bound to another principal", async () => {
+      const path = join(
+        temp,
+        "state",
+        "credentials-metadata",
+        "inference.json",
+      );
+      const metadata = JSON.parse(readFileSync(path, "utf8"));
+      writeFileSync(
+        path,
+        JSON.stringify({
+          ...metadata,
+          principal: { ...metadata.principal, subject: "demo-user-2" },
+        }),
+      );
+      services.knobs.tokenStatus = 503;
+      await expect(launch()).rejects.toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: true,
+      });
+    });
+
+    it("fails on the outage once the credential needs renewal", async () => {
+      const issued = services.state.credentialCount;
+      services.knobs.tokenStatus = 503;
+      offset = 3_400_000; // Inside refresh.beforeExpiry (5 m).
+      await expect(launch()).rejects.toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: true,
+      });
+      offset = 3_700_000; // Expired.
+      await expect(launch()).rejects.toMatchObject({ retryable: true });
+      expect(services.state.credentialCount).toBe(issued);
+    });
+  });
 });
 
 describe("identity requirements of credential providers", () => {

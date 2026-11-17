@@ -1101,14 +1101,18 @@ export class DistributionAccess {
    * used, the user signs in once on the spot and the identity is read again;
    * the error of a failed or cancelled sign-in is the launch's error. Any
    * other failure, and every launch without the hook, keeps the original
-   * error and its "Run <command> login".
+   * error and its "Run <command> login". `fallback` sees only the stored
+   * sign-in's own failure, never one from the inline sign-in.
    */
-  async #launchIdentity(options: {
-    required: boolean;
-  }): Promise<IdentitySession | null> {
+  async #launchIdentity(
+    options: { required: boolean },
+    fallback?: (error: unknown) => Promise<IdentitySession | null>,
+  ): Promise<IdentitySession | null> {
     try {
       return await this.currentIdentity(options);
     } catch (error) {
+      const held = await fallback?.(error);
+      if (held) return held;
       const signIn = this.options.loginInline;
       if (
         !signIn ||
@@ -1337,6 +1341,48 @@ export class DistributionAccess {
       return this.#refreshShared(provider, session, "expiring");
     }
     return session;
+  }
+
+  /**
+   * The identity a launch continues with when the identity provider could not
+   * refresh the sign-in for a temporary reason (unavailable, rate limited),
+   * or null when continuing is not safe. Only while the stored runtime
+   * credential is valid by its own expiry, outside its renewal window, not
+   * rejected, and bound to the stored sign-in's principal. The returned
+   * session carries the principal and no token, so the expiring or expired
+   * identity token is never used: the credential is not renewed or acquired
+   * on it, and the exposure is bounded by the credential's remaining lifetime,
+   * as in a running session. A rejected refresh (invalid_grant), a refreshed
+   * session that is expired or names another principal, and a workload
+   * identity are not temporary and still fail.
+   */
+  async #outageIdentity(
+    manager: CredentialManager,
+    error: unknown,
+  ): Promise<{ identity: IdentitySession; expiresAt: string } | null> {
+    if (
+      !(error instanceof PiShipError) ||
+      !error.retryable ||
+      (error.code !== "GATEWAY_UNREACHABLE" &&
+        error.code !== "GATEWAY_RATE_LIMITED") ||
+      !manager.storesSecrets ||
+      (await this.usesWorkloadIdentity())
+    )
+      return null;
+    const { state, metadata } = manager.status();
+    if (state !== "valid" || !metadata?.expires_at || !metadata.principal)
+      return null;
+    const stored = await this.#storedIdentity();
+    if (!stored || !samePrincipal(metadata.principal, principalKey(stored)))
+      return null;
+    const {
+      accessToken: _accessToken,
+      idToken: _idToken,
+      refreshToken: _refreshToken,
+      expiresAt: _expiresAt,
+      ...principal
+    } = stored;
+    return { identity: principal, expiresAt: metadata.expires_at };
   }
 
   /** Reload the stored identity session, or null when there is none. */
@@ -1717,9 +1763,15 @@ export class DistributionAccess {
     let preferences = recovered.preferences;
     if (recovered.notice) notices.push(recovered.notice);
     const manager = await this.credentialManager();
-    const identity = await this.#launchIdentity({
-      required: this.#identityRequired(manager),
-    });
+    let outage: { error: unknown; expiresAt: string } | undefined;
+    const identity = await this.#launchIdentity(
+      { required: this.#identityRequired(manager) },
+      async (error) => {
+        const held = await this.#outageIdentity(manager, error);
+        if (held) outage = { error, expiresAt: held.expiresAt };
+        return held?.identity ?? null;
+      },
+    );
     this.#pin(identity);
     notices.push(...this.#identityNotices.splice(0));
     await this.options.onPhase?.("identity-resolved");
@@ -1734,16 +1786,45 @@ export class DistributionAccess {
         cleared = true;
     };
     if (!manager.storesSecrets) bind();
-    let credential = await this.#activeCredential(
-      manager,
-      identity,
-      {
-        allowAcquire:
-          this.credentialMode === "http-broker" ||
-          this.credentialMode === "adapter",
-      },
-      manager.storesSecrets ? bind : undefined,
-    );
+    let credential: ActiveCredential;
+    try {
+      credential = await this.#activeCredential(
+        manager,
+        identity,
+        {
+          // Nothing is acquired or renewed on an identity that could not be refreshed.
+          ...(outage ? { renew: false as const } : {}),
+          allowAcquire:
+            !outage &&
+            (this.credentialMode === "http-broker" ||
+              this.credentialMode === "adapter"),
+        },
+        manager.storesSecrets
+          ? () => {
+              // Checked again under the credential lock: still valid, same principal.
+              if (outage) {
+                const { state, metadata } = manager.status();
+                if (
+                  state !== "valid" ||
+                  !identity ||
+                  !samePrincipal(
+                    metadata?.principal ?? null,
+                    principalKey(identity),
+                  )
+                )
+                  throw outage.error;
+              }
+              bind();
+            }
+          : undefined,
+      );
+    } catch (error) {
+      throw outage ? outage.error : error;
+    }
+    if (outage)
+      notices.push(
+        `Sign-in could not be refreshed (${outage.error instanceof Error ? outage.error.message : String(outage.error)}); continuing with the current credential until it expires at ${outage.expiresAt}`,
+      );
     if (cleared) {
       preferences = recoverPreferences(this.paths.preferences).preferences;
       notices.push(
