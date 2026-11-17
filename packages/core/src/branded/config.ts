@@ -7,7 +7,7 @@ import {
   listRememberedProjects,
   setPreference,
 } from "../index.js";
-import type { BrandedContext } from "./context.js";
+import { type BrandedContext, openAccess } from "./context.js";
 
 export async function runConfig(
   ctx: BrandedContext,
@@ -87,6 +87,17 @@ export async function runConfig(
       !ctx.metadata.access?.models.allowed.includes(rest[0])
         ? rest[0].slice(prefix.length)
         : rest[0];
+    // Only a current credential's entitlement: an expired one is renewed,
+    // and its entitlement re-read, at the next launch.
+    let entitled: readonly string[] | undefined;
+    if (key === "model" && action === "set")
+      try {
+        const { credential } = await openAccess(ctx).status();
+        if (credential.state === "valid" || credential.state === "expiring")
+          entitled = credential.metadata?.models;
+      } catch {
+        // No readable sign-in: the launch decides.
+      }
     setPreference(
       paths.preferences,
       ctx.metadata.access,
@@ -96,6 +107,7 @@ export async function runConfig(
       (notice) => ctx.err(`Notice: ${notice}`),
       ctx.metadata.app.command,
       ctx.mode,
+      entitled,
     );
     ctx.out(
       action === "set"

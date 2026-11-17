@@ -444,7 +444,12 @@ export async function gatePath(
       } ${NO_RETRY}`,
     );
   }
-  if (gov.sandbox.report.level === "enforced") {
+  // A policy deny names its own rule and reason below; the sandbox
+  // refusal is only for a path no rule refuses.
+  const policyDenied = [lexical, real].some(
+    (resource) => gov.engine.evaluate({ action, resource }).effect === "deny",
+  );
+  if (gov.sandbox.report.level === "enforced" && !policyDenied) {
     const profile = gov.sandbox.profile;
     const hidden = profile.readDeny.some(
       (denied) => inside(denied, real) || inside(denied, lexical),

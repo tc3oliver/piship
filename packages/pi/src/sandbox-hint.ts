@@ -41,7 +41,7 @@ export interface SandboxHintContext {
     "readDeny" | "writeAllow" | "network" | "workspace"
   > &
     Partial<Pick<SandboxProfile, "writeProtect">>;
-  /** Who can change the manifest: `managed` names the distribution owner. */
+  /** Who can change the manifest: `managed` names the administrator. */
   readonly mode: "managed" | "personal";
   /** The command, to name the network denial when its output says nothing. */
   readonly command?: string;
@@ -55,7 +55,7 @@ export function manifestChange(
   key: string,
 ): string {
   return mode === "managed"
-    ? `Ask the distribution owner to change ${key}.`
+    ? `Ask your administrator to change ${key}.`
     : `Change ${key} in your piship.yaml.`;
 }
 

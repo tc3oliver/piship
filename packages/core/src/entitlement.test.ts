@@ -216,6 +216,47 @@ describe("effective model catalog (§10)", () => {
     });
   });
 
+  it("refuses to store a model the current sign-in is not entitled to, naming the entitled ones", async () => {
+    services.knobs.entitledModels = [CODER, GENERAL];
+    const distribution = DistributionAccess.open(options());
+    await login(distribution);
+    // What `config set model` reads: the stored credential's entitlement.
+    const { credential } = await distribution.status();
+    expect(credential.state).toBe("valid");
+    const entitled = credential.metadata?.models;
+    expect(entitled).toEqual([CODER, GENERAL]);
+    const preferences = accessStatePaths(join(temp, "state")).preferences;
+    const set = (model: string) =>
+      setPreference(
+        preferences,
+        access,
+        undefined,
+        "model",
+        model,
+        undefined,
+        "acmecode",
+        "managed",
+        entitled,
+      );
+    expect(() => set(REVIEW)).toThrow(
+      expect.objectContaining({
+        code: "MODEL_UNAVAILABLE",
+        message: `Model ${REVIEW} is not included in your sign-in's model entitlement`,
+        userAction: expect.stringMatching(
+          new RegExp(
+            `^Choose one of: ${CODER}, ${GENERAL}\\. .*run acmecode login, then set it again$`,
+          ),
+        ),
+      }),
+    );
+    expect(set(GENERAL).values.model).toBe(GENERAL);
+    // Without a known entitlement only the distribution allowlist applies.
+    expect(
+      setPreference(preferences, access, undefined, "model", REVIEW).values
+        .model,
+    ).toBe(REVIEW);
+  });
+
   it("names config unset model for a stale preference, which unsets and leaves the listing working", async () => {
     services.knobs.entitledModels = [CODER];
     const distribution = DistributionAccess.open(options());

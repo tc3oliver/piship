@@ -262,13 +262,13 @@ describe("denialHint", () => {
       /add a rule to config\/policy\.json/,
     );
     expect(denialHint(at("distribution-default"), "managed")).toMatch(
-      /contact the distribution owner/,
+      /ask your administrator/,
     );
     expect(denialHint(at("team-project"), "personal")).toMatch(
       /project or team policy; ask its owner/,
     );
     expect(denialHint(at("distribution-enforced"), "managed")).toMatch(
-      /distribution-owned.*contact the distribution owner/,
+      /distribution-owned.*ask your administrator/,
     );
   });
 
