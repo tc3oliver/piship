@@ -429,6 +429,21 @@ export async function installDistribution(
             throw new Error(
               `Install collision for ${id}/${command}; uninstall the existing distribution first`,
             );
+          // Only the artifact that was committed is finished; another one
+          // would be reported as installed while the committed one stays.
+          const done = committed.releases.find(
+            (release) => release.version === committed.active,
+          );
+          const incoming =
+            info?.lockSha256 ??
+            hash(readFileSync(join(payload, "piship.lock")));
+          if (
+            committed.active !== version ||
+            (done?.release?.lockSha256 ?? done?.lockSha256) !== incoming
+          )
+            throw new Error(
+              `The install of ${id}@${committed.active} was interrupted; this artifact is ${id}@${version}${committed.active === version ? " with different contents" : ""}. Install that same artifact again to finish it, or replace it with this one and keep its state: run the install again with --replace, or run ${pishipCommand()} uninstall ${id} and install again`,
+            );
           if (!ownsCommandShim(commandPath, launcher)) {
             if (existsSync(commandPath))
               throw new Error(
