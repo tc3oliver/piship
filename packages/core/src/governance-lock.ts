@@ -201,7 +201,7 @@ export function shellGlobWarnings(manifest: Manifest): ValidationDiagnostic[] {
       ? [
           {
             path: `policy.${layer}.${rule.id}`,
-            message: `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replace("*", "**")}")`,
+            message: `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replaceAll("*", "**")}")`,
           },
         ]
       : [],
