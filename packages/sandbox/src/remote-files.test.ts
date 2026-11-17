@@ -326,6 +326,37 @@ describe("remote workspace file access", () => {
     await sandbox.dispose();
   });
 
+  it("says the endpoint is unreachable when a renewal cannot connect", async () => {
+    const mock = await e2bServer();
+    const sandbox = await activate(backend(mock.url));
+    await new Promise((done) => {
+      mock.server.close(done);
+      mock.server.closeAllConnections();
+    });
+    await expect(
+      sandbox.exec("true", workspace, { onData: () => {} }),
+    ).rejects.toThrow(
+      /sandbox endpoint is unreachable, so changes made after the last checkpoint may be lost.*\(sandbox request to .* failed: ECONNREFUSED\)/,
+    );
+    await sandbox.dispose();
+  });
+
+  it("names network.allowHosts when the network policy blocks the endpoint", async () => {
+    const mock = await e2bServer();
+    const blocked = new E2bCompatibleBackend({
+      endpoint: mock.url,
+      fetch: createManagedFetch(
+        { ...DEFAULT_NETWORK_POLICY, privateOnly: true, allowHosts: [] },
+        "sandbox",
+      ),
+    });
+    expect(await blocked.available()).toEqual({
+      available: false,
+      reason:
+        "the network policy blocks the e2b-compatible endpoint: Private-only network policy denies undeclared host 127.0.0.1; add 127.0.0.1 to network.allowHosts",
+    });
+  });
+
   it("has no file access without remoteWorkspace", async () => {
     const mock = await e2bServer();
     const sandbox = await activate(backend(mock.url), {

@@ -526,14 +526,21 @@ export function seedDecision(
   };
 }
 
-export function sandboxGoneMessage(command: string): string {
-  return `The sandbox expired or was lost. Changes up to the last checkpoint are saved; changes made after it are gone. Exit, run ${command} sandbox pull to review them, then start a new session.`;
+export function sandboxGoneMessage(command: string, saved: boolean): string {
+  return saved
+    ? `The sandbox expired or was lost. Changes up to the last checkpoint are saved; changes made after it are gone. Exit, run ${command} sandbox pull to review them, then start a new session.`
+    : "The sandbox expired or was lost before any checkpoint saved its changes, so they are gone and there is nothing to pull. Exit and start a new session.";
 }
 
 function sandboxGone<T>(gov: GovernanceSession, work: Promise<T>): Promise<T> {
   return work.catch((error: unknown) => {
     throw (error as { code?: string })?.code === "SANDBOX_GONE"
-      ? new Error(sandboxGoneMessage(gov.options.lock.app.command))
+      ? new Error(
+          sandboxGoneMessage(
+            gov.options.lock.app.command,
+            gov.remote?.saved ?? false,
+          ),
+        )
       : error;
   });
 }

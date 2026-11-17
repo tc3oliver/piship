@@ -164,6 +164,10 @@ export class RemoteWorkspace {
   /** Set when something ran that may have changed the sandbox since the last checkpoint. */
   #dirty = false;
   #warned = false;
+  /** Why the latest checkpoint failed; cleared when one is taken. */
+  #failure: string | undefined;
+  /** Set by `finish`: its failure goes in the returned line, not a notice. */
+  #finishing = false;
   #refreshWarned = false;
   #told = false;
   #host: HostRefresh | undefined;
@@ -178,6 +182,11 @@ export class RemoteWorkspace {
 
   constructor(options: RemoteWorkspaceOptions) {
     this.#options = options;
+  }
+
+  /** Whether this session saved changes that `sandbox pull` can bring back. */
+  get saved(): boolean {
+    return this.#changed > 0;
   }
 
   /** What the finished seed left out and how to add one such file; undefined before the seed. */
@@ -493,14 +502,20 @@ export class RemoteWorkspace {
 
   /**
    * The final checkpoint. Returns the line to show when the sandbox changed
-   * files, naming where they were saved.
+   * files, naming where they were saved, or when the final checkpoint failed,
+   * naming what was lost.
    */
   async finish(): Promise<string | undefined> {
+    this.#finishing = true;
     await this.checkpoint(true);
     const changed = this.#changed;
-    if (changed === 0) return undefined;
     const files = `${changed} ${changed === 1 ? "file" : "files"}`;
     const { command } = this.#options;
+    if (this.#failure)
+      return changed === 0
+        ? `The sandbox's changes could not be saved (${this.#failure}). No earlier checkpoint holds any, so changes made in the sandbox this session are lost and there is nothing to pull.`
+        : `The sandbox's latest changes could not be saved (${this.#failure}); changes made after the last checkpoint are lost. Run ${command} sandbox pull to bring back the ${files} it saved.`;
+    if (changed === 0) return undefined;
     if (this.#parked)
       return `${files} changed in the sandbox. An earlier session's changes are waiting too; run ${command} sandbox pull once for each.`;
     return `${files} changed in the sandbox; run ${command} sandbox pull to bring them to this machine`;
@@ -527,6 +542,7 @@ export class RemoteWorkspace {
     const { sandbox, root, stateDir, session } = this.#options;
     this.#dirty = false;
     let release: (() => void) | undefined;
+    this.#failure = undefined;
     try {
       // A pull of this session's own patch leaves a marker naming a commit this
       // session made: from there on only later changes belong in a patch.
@@ -589,10 +605,13 @@ export class RemoteWorkspace {
       this.#warned = false;
     } catch (error) {
       this.#dirty = true; // the next turn tries again
+      this.#failure = printable(
+        String((error as Error)?.message ?? error).slice(0, 200),
+      );
       // Once: the earlier checkpoint is kept, and a failure that persists would repeat every turn.
-      if (!this.#warned)
+      if (!this.#warned && !this.#finishing)
         this.#options.warn(
-          `The sandbox's changes could not be saved this time (${printable(String((error as Error)?.message ?? error).slice(0, 200))}). The last saved copy is kept and the next turn tries again.`,
+          `The sandbox's changes could not be saved this time (${this.#failure}). The last saved copy is kept and the next turn tries again.`,
         );
       this.#warned = true;
     } finally {

@@ -108,6 +108,32 @@ describe("network.tls.additionalCA paths", () => {
   });
 });
 
+describe("a required sandbox's endpoint under a private-only network policy", () => {
+  const sandbox = (extra: Json = {}): Json =>
+    managed({
+      sandbox: {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://sandbox.acme.example",
+      },
+      ...extra,
+    });
+  it("warns that the policy refuses an undeclared endpoint host", () => {
+    expect(warnings(sandbox())).toContainEqual({
+      path: "sandbox.endpoint",
+      message:
+        "sandbox.acme.example is not in network.allowHosts, and the private-only network policy refuses it, so the required sandbox cannot start. Add sandbox.acme.example to network.allowHosts",
+    });
+  });
+  it("says nothing once the host is allowed", () => {
+    expect(
+      warnings(
+        sandbox({ network: { allowHosts: ["sandbox.acme.example"] } }),
+      ).filter((item) => item.path.startsWith("sandbox.")),
+    ).toEqual([]);
+  });
+});
+
 describe("HTTP audit sinks under a private-only network policy", () => {
   const sink = (url: string, required = true): Json => ({
     audit: {

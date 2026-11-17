@@ -131,6 +131,35 @@ function auditHosts(
 }
 
 /**
+ * A required sandbox's endpoint and router under a private-only network
+ * policy: never allowed implicitly, so an undeclared host stops the sandbox.
+ * A templated URL is judged by doctor once it resolves.
+ */
+function sandboxHosts(
+  mode: DeploymentMode,
+  access: AccessManifest,
+  governance: GovernanceManifest,
+): Finding[] {
+  const sandbox = governance.sandbox;
+  const hosts = sandbox.required ? privateOnlyHosts(mode, access) : undefined;
+  if (!hosts) return [];
+  const findings: Finding[] = [];
+  for (const [field, url] of [
+    ["endpoint", sandbox.endpoint],
+    ["router", sandbox.router],
+  ] as const) {
+    const host = plainHost(url);
+    if (host === undefined || hosts.allowed.has(host)) continue;
+    findings.push({
+      path: `sandbox.${field}`,
+      certain: false,
+      message: `${host} is not in network.allowHosts, and the private-only network policy refuses it${hosts.endpointsKnown ? "" : " unless a templated endpoint resolves to it"}, so the required sandbox cannot start. Add ${host} to network.allowHosts`,
+    });
+  }
+  return findings;
+}
+
+/**
  * `sandbox.credential: runtime` sends the runtime credential, which is
  * issued for the inference gateway, and only to the gateway's origin.
  */
@@ -421,6 +450,7 @@ function findings(sections: LaunchSections): Finding[] {
     ...(governance ? ignoredSandboxNetwork(governance) : []),
     ...(access ? caPaths(access) : []),
     ...(access && governance ? auditHosts(mode, access, governance) : []),
+    ...(access && governance ? sandboxHosts(mode, access, governance) : []),
     ...(governance ? sandboxCredential(access, governance) : []),
     ...(governance ? mcpServers(mode, access, governance) : []),
     ...plainHttpEndpoints(access, governance),

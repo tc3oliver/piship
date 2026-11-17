@@ -29,6 +29,7 @@ let diffs: number;
 let lastDiff: string;
 let patch: string;
 let failWrites: number;
+let patchFails: boolean;
 const warnings: string[] = [];
 const notices: string[] = [];
 
@@ -41,6 +42,7 @@ beforeEach(() => {
   diffs = 0;
   patch = "";
   failWrites = 0;
+  patchFails = false;
   warnings.length = 0;
   notices.length = 0;
 });
@@ -67,7 +69,9 @@ const sandbox: SeedSandbox = {
     stat: async () => undefined,
   },
   exec: (command, _cwd, options) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
+      if (command.includes("commit-tree") && patchFails)
+        return reject(new Error("the sandbox endpoint is unreachable"));
       if (command.includes("commit-tree")) {
         diffs++;
         lastDiff = command;
@@ -267,6 +271,33 @@ describe.skipIf(process.platform === "win32")("RemoteWorkspace", () => {
     failWrites = 1;
     await expect(other.ensureSeeded()).rejects.toThrow(/network down/);
     await expect(other.ensureSeeded()).resolves.toBeUndefined();
+  });
+
+  it("returns what was lost when the final checkpoint fails, without a notice", async () => {
+    initProject();
+    const ws = workspace("s9");
+    await ws.ensureSeeded();
+    patchFails = true;
+    expect(await ws.finish()).toBe(
+      "The sandbox's changes could not be saved (the sandbox endpoint is unreachable). No earlier checkpoint holds any, so changes made in the sandbox this session are lost and there is nothing to pull.",
+    );
+    expect(ws.saved).toBe(false);
+    expect(warnings).toEqual([]);
+  });
+
+  it("names the saved checkpoint when only the final one fails", async () => {
+    initProject();
+    const ws = workspace("s10");
+    await ws.ensureSeeded();
+    patch = diff("a.txt");
+    await ws.track(Promise.resolve());
+    await ws.checkpoint();
+    expect(ws.saved).toBe(true);
+    patchFails = true;
+    expect(await ws.finish()).toBe(
+      "The sandbox's latest changes could not be saved (the sandbox endpoint is unreachable); changes made after the last checkpoint are lost. Run piship sandbox pull to bring back the 1 file it saved.",
+    );
+    expect(readFileSync(slot().patch, "utf8")).toBe(patch);
   });
 
   it("refuses a checkpoint over the cap, warns once, and keeps the earlier one", async () => {

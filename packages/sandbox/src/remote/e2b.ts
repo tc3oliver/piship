@@ -163,6 +163,11 @@ export class E2bCompatibleBackend implements SandboxBackend {
         reason: `the e2b-compatible endpoint health check returned HTTP ${response.status}; check that sandbox.endpoint is the service's API URL`,
       };
     } catch (error) {
+      if (errorText(error).startsWith("Private-only network policy denies"))
+        return {
+          available: false,
+          reason: `the network policy blocks the e2b-compatible endpoint: ${errorText(error)}; add ${this.#endpoint.hostname} to network.allowHosts`,
+        };
       return {
         available: false,
         reason: `the e2b-compatible endpoint is unreachable: ${errorText(error)}; check sandbox.endpoint and that this machine can reach it`,
@@ -431,7 +436,15 @@ export class E2bCompatibleBackend implements SandboxBackend {
         signal,
       },
       true,
-    );
+    ).catch((error: unknown) => {
+      // A connection failure (refused, DNS, timeout) says nothing of the sandbox's work.
+      throw (error as { code?: unknown })?.code === "GATEWAY_UNREACHABLE"
+        ? new Error(
+            `the sandbox endpoint is unreachable, so changes made after the last checkpoint may be lost. Check that the sandbox service is running and this machine can reach it, then start a new session (${(error as Error).message})`,
+            { cause: error },
+          )
+        : error;
+    });
     if (!renewed.ok) {
       const gone = renewed.status === 404 || renewed.status === 410;
       throw Object.assign(

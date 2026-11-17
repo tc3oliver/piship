@@ -433,6 +433,15 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
     const { session, workspace, tool } = await open();
     await tool("read")({ path: "notes.txt" });
     log().gone = true;
+    // No checkpoint saved anything yet: there is nothing to pull.
+    await expect(tool("read")({ path: "notes.txt" })).rejects.toThrow(
+      /before any checkpoint saved its changes, so they are gone and there is nothing to pull\. Exit and start a new session\./,
+    );
+    log().gone = false;
+    await tool("write")({ path: "w.txt", content: "x" });
+    await session.remote?.checkpoint(true);
+    expect(session.remote?.saved).toBe(true);
+    log().gone = true;
     const message =
       /The sandbox expired or was lost\. Changes up to the last checkpoint are saved; changes made after it are gone\. Exit, run unit sandbox pull/;
     await expect(tool("read")({ path: "notes.txt" })).rejects.toThrow(message);
