@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DistributionLock } from "./lock-schema.js";
 import {
+  failedMcpServers,
   formatInspection,
   formatSmokeSummary,
   inspection,
@@ -83,6 +84,28 @@ describe("formatSmokeSummary", () => {
     expect(text).toContain("skills 7: a, b, c, d, e, +2 more");
     expect(text).toContain("extensions 2: clock/index.ts, bad.ts");
     expect(text).toMatch(/packages\s+pi-web@1\.2\.0, tools@abc1234/);
+  });
+
+  it("lists failed MCP servers but not denied or degraded ones", () => {
+    const out = JSON.stringify({
+      ...smoke,
+      governance: {
+        mcp: [
+          { id: "a", state: "failed" },
+          { id: "b", state: "denied" },
+          { id: "c", state: "degraded" },
+          { id: "d", state: "healthy" },
+        ],
+      },
+    });
+    expect(failedMcpServers(out)).toEqual(["a"]);
+    expect(failedMcpServers("not json")).toEqual([]);
+  });
+
+  it("shows a declared kind that loaded nothing", () => {
+    const out = JSON.stringify(smoke);
+    expect(formatSmokeSummary(out, ["prompts"])).toMatch(/prompts 0/);
+    expect(formatSmokeSummary(out)).not.toMatch(/prompts 0/);
   });
 
   it("says why an MCP server failed, on one line", () => {

@@ -203,11 +203,26 @@ interface Smoke {
   };
 }
 
+/** Ids of declared MCP servers the smoke JSON reports as failed. */
+export function failedMcpServers(output: string): string[] {
+  try {
+    const smoke = JSON.parse(output) as Smoke;
+    return (smoke.governance?.mcp ?? [])
+      .filter((server) => server.state === "failed")
+      .map((server) => server.id);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * A short report of the branded `--smoke` JSON summary. Output that is not
  * that JSON is returned unchanged.
  */
-export function formatSmokeSummary(output: string): string {
+export function formatSmokeSummary(
+  output: string,
+  declared: readonly string[] = [],
+): string {
   let smoke: Smoke;
   try {
     smoke = JSON.parse(output) as Smoke;
@@ -239,8 +254,9 @@ export function formatSmokeSummary(output: string): string {
     ["prompts", smoke.prompts ?? []],
     ["themes", smoke.themes ?? []],
   ] as const;
+  // A declared kind that loaded nothing still shows, as "prompts 0".
   const listed = loaded
-    .filter(([, items]) => items.length)
+    .filter(([kind, items]) => items.length || declared.includes(kind))
     .map(
       ([kind, items]) => `${kind} ${items.length}: ${names(items as string[])}`,
     );
