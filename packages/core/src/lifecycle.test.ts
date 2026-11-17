@@ -4512,6 +4512,25 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     );
 
     it.skipIf(process.platform === "win32")(
+      "names the runtime archive's piship.mjs for purge after a Company Pack install",
+      async () => {
+        const { ctx, out } = await installed();
+        // What a composed pack install records: a runtime, no release directory.
+        const recorded = JSON.parse(readFileSync(receiptFile(), "utf8"));
+        recorded.releases[0].release.runtime = {
+          archiveSha256: "e".repeat(64),
+          pishipVersion: "0.13.0",
+        };
+        writeFileSync(receiptFile(), JSON.stringify(recorded));
+        await runUninstall(ctx, []);
+        const runtime = `piship-runtime-0.13.0-${currentTarget()}`;
+        expect(out.join("\n")).toContain(
+          `To delete it, extract the runtime archive ${runtime}.tar.gz you installed the pack with and run: node <extracted folder>/${runtime}/payload/piship.mjs purge ${ID} --yes. Next time,`,
+        );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
       "refuses while a local-secret key is stored and says logout deletes it",
       async () => {
         const { receipt, ctx } = await installed();

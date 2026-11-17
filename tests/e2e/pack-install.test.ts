@@ -95,15 +95,23 @@ describe("install from a pack", () => {
   });
 
   it("refuses a pack that does not match the runtime it is given", () => {
-    copyFileSync(runtime, join(root, "copy.tar.gz"));
-    appendFileSync(join(root, "copy.tar.gz"), "x");
-    const refused = cli(
-      "install",
-      pack,
-      "--runtime",
-      join(root, "copy.tar.gz"),
-    );
+    // Named as the pack pins it, so the bytes are what is refused.
+    const copy = join(root, "altered", basename(runtime));
+    mkdirSync(join(root, "altered"));
+    copyFileSync(runtime, copy);
+    appendFileSync(copy, "x");
+    const refused = cli("install", pack, "--runtime", copy);
     expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("INTEGRITY_FAILED");
+    expect(existsSync(command)).toBe(false);
+  });
+
+  it("names the runtime archive the pack needs when given another file", () => {
+    const refused = cli("install", pack, "--runtime", `${runtime}.sha256`);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(
+      `needs ${basename(runtime)} for ${process.platform}-${process.arch}; you gave ${basename(runtime)}.sha256`,
+    );
     expect(existsSync(command)).toBe(false);
   });
 
@@ -118,6 +126,7 @@ describe("install from a pack", () => {
     );
     const { release } = receipt.releases[0];
     expect(release.pack.version).toBe("1.0.0");
+    expect(release.pack.digestOf).toBeUndefined();
     expect(release.runtime.pishipVersion).toBe(PISHIP_VERSION);
     expect(release.archiveSha256).toBeUndefined();
     expect(release.runtime.archiveSha256).toMatch(/^[0-9a-f]{64}$/);
@@ -147,7 +156,10 @@ describe("install from a pack", () => {
       const script = join(folder, "install.sh");
       const tampered = spawnSync("sh", [script, "--use-existing-state"], {
         encoding: "utf8",
-        env: { ...env, PISHIP_RUNTIME_ARCHIVE: join(root, "copy.tar.gz") },
+        env: {
+          ...env,
+          PISHIP_RUNTIME_ARCHIVE: join(root, "altered", basename(runtime)),
+        },
       });
       expect(tampered.status).not.toBe(0);
       expect(tampered.stderr).toContain("pins");
@@ -174,6 +186,29 @@ describe("install from a pack", () => {
       const version = await branded(command, ["version"], { cwd: root, env });
       expect(version.status, version.stderr).toBe(0);
       expect(version.stdout).toContain("MyPi 1.0.0");
+      // install.sh's piship.mjs is gone once it exits: the collision names
+      // the script and the installed release's piship.mjs instead.
+      const again = spawnSync("sh", [script], { encoding: "utf8", env });
+      expect(again.status).not.toBe(0);
+      expect(again.stderr).toContain(`run sh ${script} --replace`);
+      expect(again.stderr).toContain(
+        "repair mypi <pack archive or directory> --runtime <runtime archive>",
+      );
+      expect(again.stderr).toContain("or run mypi uninstall and install again");
+      expect(again.stderr).toContain(
+        `run node ${join(root, "install", "apps", "mypi", "1.0.0", "piship.mjs")} repair`,
+      );
+      // install.sh passes the pack folder, so the digest is pack.json's.
+      const receipt = JSON.parse(
+        readFileSync(join(root, "install", "receipts", "mypi.json"), "utf8"),
+      );
+      expect(receipt.releases[0].release.pack.digestOf).toBe("pack.json");
+      // A pack install's purge comes from the runtime archive.
+      const removed = await branded(command, ["uninstall"], { cwd: root, env });
+      expect(removed.status, removed.stderr).toBe(0);
+      expect(removed.stdout).toContain(
+        `extract the runtime archive ${basename(runtime)} you installed the pack with and run: node <extracted folder>/${basename(runtime, ".tar.gz")}/payload/piship.mjs purge mypi --yes.`,
+      );
     },
     300000,
   );
@@ -199,7 +234,10 @@ describe("install from a pack", () => {
         ],
         {
           encoding: "utf8",
-          env: { ...env, PISHIP_RUNTIME_ARCHIVE: join(root, "copy.tar.gz") },
+          env: {
+            ...env,
+            PISHIP_RUNTIME_ARCHIVE: join(root, "altered", basename(runtime)),
+          },
         },
       );
       expect(tampered.status).not.toBe(0);

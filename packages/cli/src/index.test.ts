@@ -861,6 +861,14 @@ describe("argument errors", () => {
     expect(result.stderr.startsWith(expected)).toBe(true);
   });
 
+  it("says pack needs --runtime and where runtime archives come from", async () => {
+    const result = await run(["pack", "piship.yaml"]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(
+      /^pack needs --runtime: .* built with piship runtime-release on that OS\.\nUsage: piship pack /,
+    );
+  });
+
   it("prints only the usage when nothing specific is wrong", async () => {
     expect((await run(["doctor"])).stderr).toMatch(/^Usage: piship doctor /);
   });
@@ -2172,7 +2180,20 @@ describe("what to do after an install", () => {
       }),
     );
     expect(next).toContain("set ACME_ISSUER, ACME_SHARED in the environment");
-    expect(next).not.toContain("ACME_SOURCE");
+    expect(next).not.toContain("ACME_SOURCE in the environment");
+    // Named apart: doctor flags it and update fails without it.
+    expect(next).toMatch(/ acme update also needs ACME_SOURCE\.$/);
+    expect(
+      installNext(
+        receipt({
+          deployment: { mode: "managed" },
+          access: { variables: ["ACME_SOURCE"] },
+          updates: { source: "${ACME_SOURCE}" },
+        }),
+        [],
+        { ACME_SOURCE: "https://updates" },
+      ),
+    ).not.toContain("update also needs");
   });
 
   it("skips the variables when a managed distribution has none", () => {

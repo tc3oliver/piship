@@ -416,6 +416,22 @@ describe("piship pack", () => {
     },
   );
 
+  it("names the runtime archive the pack needs when --runtime is another file", async () => {
+    const { path } = project();
+    const target = `${process.platform}-${process.arch}`;
+    const archive = await runtime(path, target);
+    const built = await pack(path, { runtimes: [archive], outputRoot: temp() });
+    const error = await rejection(
+      composePack(built.archive, temp(), { runtime: `${archive}.sha256` }),
+    );
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(
+      new RegExp(
+        `needs piship-runtime-.*-${target}\\.tar\\.gz for ${target}; you gave piship-runtime-.*\\.tar\\.gz\\.sha256$`,
+      ),
+    );
+  });
+
   it("refuses a runtime given as a folder", async () => {
     const error = await rejection(readRuntimeArchive(temp()));
     expect(error.code).toBe("CONFIG_INVALID");

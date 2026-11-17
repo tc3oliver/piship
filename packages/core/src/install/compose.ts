@@ -299,7 +299,20 @@ function runtimeArchive(
   name: string,
   explicit: string | undefined,
 ): string {
-  if (explicit) return resolve(explicit);
+  if (explicit) {
+    // A .sha256 file or another platform's archive would otherwise fail as
+    // a corrupt artifact; the name already says it is the wrong file.
+    if (basename(explicit) !== name)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `This pack needs ${name} for ${currentTarget()}; you gave ${basename(explicit)}`,
+        {
+          component: "install",
+          userAction: `Pass --runtime <path to ${name}>, or put ${name} next to the pack and omit --runtime`,
+        },
+      );
+    return resolve(explicit);
+  }
   const beside = [dirname(source), source, dirname(dirname(source))]
     .map((folder) => join(folder, name))
     .find((path) => existsSync(path));
@@ -540,7 +553,12 @@ export async function composePack(
       pi: composed.runtime.version,
       piship: composed.runtime.pishipVersion,
       lockSha256: metadata.lockSha256,
-      pack: { sha256: pack.sha256, version: composed.app.version },
+      pack: {
+        sha256: pack.sha256,
+        version: composed.app.version,
+        // A pack folder has no archive digest: its pack.json's is recorded.
+        ...(pack.directory === path ? { digestOf: "pack.json" as const } : {}),
+      },
       via: "file",
       runtime: {
         archiveSha256,

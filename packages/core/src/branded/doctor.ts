@@ -447,7 +447,7 @@ export function verificationStates(
   const config: DoctorVerificationState = release?.pack
     ? {
         state: "verified",
-        detail: `company pack ${release.pack.version} (sha256 ${short(release.pack.sha256)}), lock ${short(release.lockSha256)}; ${source}`,
+        detail: `company pack ${release.pack.version} (${release.pack.digestOf === "pack.json" ? "pack.json sha256" : "sha256"} ${short(release.pack.sha256)}), lock ${short(release.lockSha256)}; ${source}`,
       }
     : release
       ? {
