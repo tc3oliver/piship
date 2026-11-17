@@ -475,13 +475,24 @@ describe("policy containment from a sandbox report", () => {
 });
 
 describe("file-tool denial labels", () => {
-  const fakeSession = (planes: readonly string[]) => {
+  const fakeSession = (planes: readonly string[], policyDeny = false) => {
     const root = mkdtempSync(join(tmpdir(), "piship-gate-"));
     const workspace = join(root, "ws");
     const secret = join(workspace, ".secrets");
     mkdirSync(secret, { recursive: true });
     const events: { rule?: string; enforcement?: string }[] = [];
+    const denied = {
+      effect: "deny",
+      outcome: "deny",
+      policyId: "acme@1",
+      ruleId: "acme.secrets.read",
+      reason: "Credentials stay outside the agent",
+      layer: "distribution-enforced",
+    };
     const gov = {
+      decide: async () => denied,
+      currentChannel: () => "interactive",
+      denialHint: () => " DENIAL-HINT",
       workflowMode: "build",
       policyId: "acme@1",
       metrics: { recordPolicyDenial: () => {} },
@@ -489,6 +500,10 @@ describe("file-tool denial labels", () => {
         events.push(fields),
       engine: {
         context: { workspaceRoot: workspace, homeDir: root, tmpDir: root },
+        evaluate: ({ resource }: { resource: string }) =>
+          policyDeny && resource.startsWith(secret)
+            ? denied
+            : { effect: "allow" },
       },
       options: {
         stateDir: join(root, "state"),
@@ -529,6 +544,29 @@ describe("file-tool denial labels", () => {
       }
     },
   );
+
+  it("names the policy rule and its reason when one denies the path", async () => {
+    const { gov, events, secret, root } = fakeSession(
+      ["filesystem-read-deny", "filesystem-write-allowlist"],
+      true,
+    );
+    try {
+      const error = await gatePath(
+        gov,
+        "filesystem.read",
+        join(secret, "key"),
+        "read",
+      ).catch((caught: Error) => caught);
+      expect(String(error)).toMatch(
+        /is not allowed by acme@1 rule acme\.secrets\.read: Credentials stay outside the agent\. DENIAL-HINT/,
+      );
+      expect(String(error)).not.toMatch(/sandbox\.filesystem\.read\.deny/);
+      // The sandbox refusal and its audit event are not recorded as well.
+      expect(events).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("says which path, which manifest key, and who changes it", async () => {
     const { gov, root } = fakeSession(["filesystem-write-allowlist"]);
@@ -722,6 +760,7 @@ describe("the user's git config outside the project", () => {
           events.push(fields),
         engine: {
           context: { workspaceRoot: workspace, homeDir: home, tmpDir: root },
+          evaluate: () => ({ effect: "allow" }),
         },
         options: {
           stateDir: join(root, "state"),

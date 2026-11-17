@@ -38,7 +38,7 @@ function hintFor(
 describe("manifestChange", () => {
   it("names the owner of a managed distribution and the user of a personal one", () => {
     expect(manifestChange("managed", "sandbox.network.mode")).toBe(
-      "Ask the distribution owner to change sandbox.network.mode.",
+      "Ask your administrator to change sandbox.network.mode.",
     );
     expect(manifestChange("personal", "sandbox.network.mode")).toBe(
       "Change sandbox.network.mode in your piship.yaml.",
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
     );
     expect(hint).toContain("home/.npm/_cacache");
     expect(hint).toContain("sandbox.filesystem.write.allow");
-    expect(hint).toContain("distribution owner");
+    expect(hint).toContain("Ask your administrator");
   });
 
   it("names a protected git control path instead of suggesting a wider write allowlist", () => {

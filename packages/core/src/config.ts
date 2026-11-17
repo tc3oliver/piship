@@ -189,6 +189,8 @@ export function setPreference(
   command?: string,
   /** Who changes the distribution: its administrator, or the user's own piship.yaml. */
   mode: "managed" | "personal" = "managed",
+  /** The current sign-in's model entitlement, when it is known. */
+  entitledModels?: readonly string[],
 ): UserPreferences {
   const policy = policyView(access, appTheme);
   const explain = command ? `${command} config explain` : "config explain";
@@ -291,6 +293,21 @@ export function setPreference(
         {
           component: "config",
           userAction: `Choose one of: ${policy.allowed.join(", ")}`,
+        },
+      );
+    // Launch would refuse a model the sign-in is not entitled to; say so now.
+    const entitled =
+      configKey === "model" && entitledModels && policy.allowed.length
+        ? resolveEffectiveConfig(access, appTheme, EMPTY, entitledModels)
+            .allowedModels
+        : undefined;
+    if (entitled && !entitled.includes(value))
+      throw new PiShipError(
+        "MODEL_UNAVAILABLE",
+        `Model ${value} is not included in your sign-in's model entitlement`,
+        {
+          component: "config",
+          userAction: `${entitled.length ? `Choose one of: ${entitled.join(", ")}. ` : ""}If your access changed since you signed in, run ${command ? `${command} ` : ""}login, then set it again`,
         },
       );
     const narrowed = current.modelsAllowed;

@@ -250,7 +250,7 @@ export function denialHint(
   switch (decision.layer) {
     case "distribution-enforced":
       return deployment === "managed"
-        ? "This rule is distribution-owned and cannot be changed here; contact the distribution owner."
+        ? "This rule is distribution-owned and cannot be changed here; ask your administrator to change it."
         : `This rule is distribution-owned and cannot be changed here; it lives in the distribution's piship.yaml, which you own in personal mode (${explain}).`;
     case "team-project":
       return "This rule comes from the project or team policy; ask its owner to change it.";
@@ -268,7 +268,7 @@ export function denialHint(
           : "";
     default:
       return deployment === "managed"
-        ? "This is a distribution default; contact the distribution owner."
+        ? "This is a distribution default; ask your administrator to change it."
         : `This is a distribution default; add a rule to ${file} to change it (${explain}).${grant}`;
   }
 }
