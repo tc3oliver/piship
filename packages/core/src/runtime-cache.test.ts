@@ -358,6 +358,30 @@ describe("install tree entries", () => {
     expect(readdirSync(join(root, "cache"))).toEqual([]);
   });
 
+  it("keeps the tree, and says where, when it cannot be moved back into the stage", () => {
+    const root = temp();
+    const cache = cacheOf(root);
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    const files = stageTree(stage);
+    // The move in succeeds, publishing the entry fails, and so does the move back.
+    fixture.renameFailures.push("", "EIO", "EIO");
+    let thrown: Error | undefined;
+    try {
+      adoptInstallTree(cache, stage);
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown?.message).toContain("could not be moved back");
+    const [holding] = readdirSync(cache.root).filter((name) =>
+      name.startsWith(".t"),
+    );
+    const kept = join(cache.root, holding as string, "tree");
+    expect(thrown?.message).toContain(join(kept, "node_modules"));
+    for (const [path, body] of Object.entries(files))
+      expect(readFileSync(join(kept, path), "utf8")).toBe(body);
+  });
+
   it("copies the tree in, and leaves the stage whole, when the cache is on another volume", () => {
     const root = temp();
     const cache = cacheOf(root);
