@@ -81,6 +81,7 @@ import {
   verifyPayload,
   verifyRelease,
   verifyRuntimeRelease,
+  refuseUnsafeLockPaths,
   withTestState,
   writePrivateKey,
   type AbandonedStaging,
@@ -681,6 +682,21 @@ function parseLockText(text: string, file: string): DistributionLock {
           "Pass a lock that piship lock wrote, or a manifest, payload, release, or installed id",
       },
     );
+  // Same checks a pack's lock gets before install: a bad command or resource
+  // path is LOCK_INVALID here, not a surprise in the command that reads it.
+  try {
+    refuseUnsafeLockPaths(value as unknown as DistributionLock);
+  } catch (error) {
+    throw new PiShipError(
+      "LOCK_INVALID",
+      `${file} is not a piship.lock this PiShip can read: ${(error as Error).message.replace(/^The pack's piship\.lock has /, "it has ").replace(/; nothing was installed$/, "")}`,
+      {
+        component: "cli",
+        userAction:
+          "Pass a lock that piship lock wrote, or a manifest, payload, release, or installed id",
+      },
+    );
+  }
   return value as unknown as DistributionLock;
 }
 async function lockFor(target: string): Promise<DistributionLock> {

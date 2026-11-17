@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { COMMAND_NAME } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appsDir,
@@ -455,5 +456,14 @@ describe("the command shim", () => {
     if (process.platform !== "win32")
       expect(statSync(path).mode & 0o111).toBe(0o111);
     expect(() => writeShim(path, posixLauncher, "linux")).toThrow(/EEXIST/);
+  });
+});
+
+describe("command name rule", () => {
+  it("is the schema's rule in the generated launcher", () => {
+    const source = launcherSource("demo");
+    expect(source).toContain(`/${COMMAND_NAME.source}/.test(command)`);
+    for (const bad of ["a-", "a--b", "-a", "A", ""])
+      expect(COMMAND_NAME.test(bad), bad).toBe(false);
   });
 });

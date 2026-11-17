@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { COMMAND_NAME } from "@piship/schema";
 import {
   IMPORT_META_URL,
   LAUNCHER_BUILD_PLACEHOLDER,
@@ -202,7 +203,7 @@ try {
   if (
     release &&
     ${VERSION_NAME.toString()}.test(release.version) &&
-    /^[a-z][a-z0-9-]*$/.test(command)
+    /${COMMAND_NAME.source}/.test(command)
   ) {
     try {
       if (realpathSync(release.payload) === realpathSync(join(home, release.version)))
