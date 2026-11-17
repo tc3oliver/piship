@@ -1,12 +1,20 @@
 // Restore a damaged installed release from a trusted copy of the same release.
-import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { hash } from "../digest.js";
 import { type DistributionLock, verifyPayload } from "../index.js";
 import {
   acquireLock,
   appDirectory,
+  type InstallReceipt,
   readInstallReceipt,
   recoverInstallation,
   requireManaged,
@@ -14,6 +22,8 @@ import {
   syncTree,
 } from "../install/receipt.js";
 import { composePack, isPack } from "../install/compose.js";
+import { writeShim } from "../install/launcher.js";
+import { acquireLifecycleLock } from "../install/lifecycle-lock.js";
 import { acquireLaunchGate, runtimeLeases } from "../install/runtime-lease.js";
 import { verifyRelease } from "../release/index.js";
 import { createStagingDirectory } from "../temporary-directories.js";
@@ -118,7 +128,10 @@ export async function repairDistribution(
       let problem: string;
       try {
         verifyPayload(entry.payload);
-        return { status: "intact", id, version };
+        const shim = restoreShim(receipt);
+        return shim
+          ? { status: "repaired", id, version, problem: shim }
+          : { status: "intact", id, version };
       } catch (error) {
         problem = (error as Error).message;
       }
@@ -145,7 +158,13 @@ export async function repairDistribution(
         gate.release();
       }
       verifyPayload(entry.payload);
-      return { status: "repaired", id, version, problem };
+      const shim = restoreShim(receipt);
+      return {
+        status: "repaired",
+        id,
+        version,
+        problem: shim ? `${problem}; ${shim}` : problem,
+      };
     } finally {
       try {
         temporary.remove();
@@ -157,4 +176,31 @@ export async function repairDistribution(
   } finally {
     lifecycle.release();
   }
+}
+
+/**
+ * Write the command shim again when nothing is at its path (it was deleted),
+ * under the lock install and uninstall take for the command. Anything at the
+ * path is left alone. Returns what was missing, or undefined.
+ */
+function restoreShim(receipt: InstallReceipt): string | undefined {
+  const { commandPath, launcher } = receipt;
+  if (!launcher || lstatSync(commandPath, { throwIfNoEntry: false }))
+    return undefined;
+  mkdirSync(dirname(commandPath), { recursive: true });
+  const hold = acquireLifecycleLock(
+    `${commandPath}.piship.lock`,
+    () =>
+      new Error(
+        `Another operation owns command ${receipt.app.command}; retry when it completes`,
+      ),
+    () => new Error(`Could not lock command ${receipt.app.command}`),
+  );
+  try {
+    writeShim(commandPath, launcher);
+    syncDirectory(dirname(commandPath));
+  } finally {
+    hold.release();
+  }
+  return `command shim ${commandPath} missing`;
 }

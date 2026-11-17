@@ -62,6 +62,7 @@ import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree } from "./copy.js";
 import { renameWithRetry } from "./files.js";
 import {
+  inspectInstalledLauncher,
   launcherSource,
   ownsCommandShim,
   windowsShimPath,
@@ -479,16 +480,20 @@ export async function installDistribution(
           throw new Error(
             active
               ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run ${pishipCommand()} repair ${id} <release archive or directory>; or run ${pishipCommand()} uninstall ${id} and install again.${updatable ? ` ${command} update --from <signed update source> only upgrades to a newer version` : ""}`
-              : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
+              : `Install collision for ${id}/${command}: the install receipt ${receiptPath(id)} is damaged. To replace that install with this artifact and keep its state, run the install again with --replace; or run ${pishipCommand()} uninstall ${id} and install again`,
           );
         }
-        // No receipt and no marker: PiShip did not create it, so it is never
-        // removed here, and uninstall has nothing recorded to remove.
-        for (const path of [apps, commandPath])
-          if (existsSync(path))
-            throw new Error(
-              `Install collision for ${id}/${command}: ${path} exists but no PiShip installation of ${id} is recorded; move it aside if it is not in use, then install again`,
-            );
+        // No receipt and no marker. A launcher PiShip wrote for this id is
+        // an install whose receipt was deleted, which uninstall removes (with
+        // the shims that run it); anything else PiShip did not create, so it
+        // is never removed here.
+        const inTheWay = [apps, commandPath].filter((path) => existsSync(path));
+        if (inTheWay.length)
+          throw new Error(
+            inspectInstalledLauncher(id)
+              ? `Install collision for ${id}/${command}: ${inTheWay.join(" and ")} ${inTheWay.length > 1 ? "are" : "is"} left from an install of ${id} whose receipt is gone. Remove ${inTheWay.length > 1 ? "them" : "it"} (state is kept) with ${pishipCommand()} uninstall ${id}, then install again`
+              : `Install collision for ${id}/${command}: ${inTheWay.join(" and ")} ${inTheWay.length > 1 ? "exist" : "exists"} but no PiShip installation of ${id} is recorded; move ${inTheWay.length > 1 ? "them" : "it"} aside if not in use, then install again`,
+          );
         // The app directory appears with its marker in one rename, so an
         // interruption never leaves an unmarked apps/<id> that the next
         // install could not tell from someone else's directory.
@@ -586,6 +591,12 @@ export async function installDistribution(
           // activation wrote is kept: it records the release that last wrote
           // the state. Best effort, as after an update.
           if (!readStateMarker(state)) markActivated(state, lock);
+          // A failed update or check an earlier install recorded
+          // (branded/lifecycle.ts) is not this install's; doctor would show it
+          // until the next check.
+          try {
+            rmSync(join(state, "logs", "update-failure.json"), { force: true });
+          } catch {}
           return receipt;
         } catch (error) {
           if (!existsSync(receiptPath(id))) {

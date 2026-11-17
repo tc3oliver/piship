@@ -384,6 +384,26 @@ await new Promise((resolve) => {
     expect(launched.stderr).not.toMatch(/registering|retry/i);
   }, 120_000);
 
+  it("names the runtime lease directory when a file stands in its place", async () => {
+    await installed();
+    const leases = join(
+      dirname(readInstallReceipt(ID).launcher as string),
+      ".runtime-leases",
+    );
+    rmSync(leases, { recursive: true, force: true });
+    writeFileSync(leases, "not a directory");
+    const launched = runLauncher();
+    expect(launched.status).toBe(1);
+    expect(launched.stderr).toContain(
+      `Could not register a launch of ${ID}: E`,
+    );
+    expect(launched.stderr).toContain(
+      // The launcher names its real path (on macOS /var is a symlink).
+      `${join(ID, ".runtime-leases")} a directory you can write to (move aside any file in its place), then run the command again.`,
+    );
+    expect(launched.stderr).not.toContain("    at ");
+  }, 120_000);
+
   // Permissions do not stop file creation on Windows, and root ignores them.
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "reports a read-only receipts directory as the permission error it is",

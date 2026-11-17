@@ -1299,10 +1299,29 @@ await installDistribution(artifact);
     await expect(installDistribution(payload)).rejects.toThrow(
       `${appsDir()} exists but no PiShip installation of ${ID} is recorded; move it aside`,
     );
-    // Never removed: PiShip did not create it.
+    // Never removed: PiShip did not create it, and uninstall does not touch it.
+    expect(() => uninstallDistribution(ID)).toThrow(
+      /No PiShip installation recorded/,
+    );
     expect(readFileSync(join(appsDir(), "notes.txt"), "utf8")).toBe(
       "not PiShip's\n",
     );
+  });
+
+  it("names uninstall for an install whose receipt was deleted, which removes its directory and shim", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const receipt = await installDistribution(payload);
+    rmSync(receiptFile());
+    await expect(installDistribution(payload)).rejects.toThrow(
+      `${appsDir()} and ${receipt.commandPath} are left from an install of ${ID} whose receipt is gone. Remove them (state is kept) with piship uninstall ${ID}, then install again`,
+    );
+    expect(uninstallDistribution(ID)).toBe(stateDir());
+    expect(existsSync(appsDir())).toBe(false);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(existsSync(stateDir())).toBe(true);
+    await expect(installDistribution(payload, true)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
   });
 
   it("lets exactly one of two concurrent first installs of a distribution win", async () => {
@@ -3929,6 +3948,25 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(verifyPayload(join(appsDir(), "1.1.0")).app.version).toBe("1.1.0");
   });
 
+  it("writes a deleted command shim again from an intact release", async () => {
+    const f = await updated();
+    const { commandPath } = readInstallReceipt(ID);
+    const shim = readFileSync(commandPath, "utf8");
+    rmSync(commandPath);
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result).toMatchObject({
+      status: "repaired",
+      problem: `command shim ${commandPath} missing`,
+    });
+    expect(readFileSync(commandPath, "utf8")).toBe(shim);
+    // Something else at the path is left alone.
+    writeFileSync(commandPath, "someone else's\n");
+    expect(await repairDistribution(ID, f.b.archive)).toMatchObject({
+      status: "intact",
+    });
+    expect(readFileSync(commandPath, "utf8")).toBe("someone else's\n");
+  });
+
   it("reports an intact release and changes nothing", async () => {
     const f = await updated();
     const before = treeHash(appsDir());
@@ -4643,7 +4681,7 @@ describe.runIf(HOST_EVIDENCED)("a damaged install receipt", () => {
       );
       // Reinstalling still refuses while the receipt exists.
       await expect(installDistribution(a.archive)).rejects.toThrow(
-        /uninstall the existing distribution first/,
+        `the install receipt ${receiptFile()} is damaged. To replace that install with this artifact and keep its state, run the install again with --replace; or run piship uninstall ${ID} and install again`,
       );
       expect(uninstallDistribution(ID)).toBe(stateDir());
       expect(existsSync(appsDir())).toBe(false);
@@ -5171,7 +5209,12 @@ else {
     writeFileSync(path, JSON.stringify(moved));
     const escaped = launch(launcher);
     expect(escaped.status).toBe(1);
-    expect(escaped.stderr).toContain("install receipt is missing or damaged");
+    expect(escaped.stderr).toContain(
+      `install receipt ${realpathSync(path)} is missing or damaged, so ${ID} cannot start. Remove the broken install (its state is kept) with: `,
+    );
+    expect(escaped.stderr).toContain(
+      ` uninstall ${ID}, then install ${ID} again.`,
+    );
     expect(escaped.stdout).not.toContain("payload");
     // A missing payload fails closed too, and names the repair.
     writeFileSync(path, original);

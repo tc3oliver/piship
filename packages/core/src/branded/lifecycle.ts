@@ -8,6 +8,7 @@ import {
   type NetworkPolicy,
   PiShipError,
   type ResolvedEndpoints,
+  redact,
   type SecretStore,
   formatError,
 } from "@piship/contracts";
@@ -233,9 +234,10 @@ function recordFailedAttempt(
   error: unknown,
 ): void {
   try {
-    // A PiShipError message is already redacted.
+    // A filesystem error keeps its own message (it names the path and the
+    // cause), redacted like any other.
     const message =
-      error instanceof PiShipError ? error.message : "unexpected error";
+      error instanceof Error ? redact(error.message) : "unexpected error";
     writeJsonAtomic(failedAttemptPath(ctx.stateDir), {
       schema: FAILED_ATTEMPT_SCHEMA,
       kind,
