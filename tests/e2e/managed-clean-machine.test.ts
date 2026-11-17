@@ -212,8 +212,8 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     expect(login.stdout).toContain(`stored in ${STORE_LABEL}`);
     expect(login.stderr).toContain("code_challenge_method=S256");
     if (PRIMARY_STORAGE === "file")
-      expect(login.stderr).toContain("plaintext file fallback");
-    else expect(login.stderr).not.toContain("plaintext file fallback");
+      expect(login.stderr).toContain("owner-only plaintext file");
+    else expect(login.stderr).not.toContain("owner-only plaintext file");
     expect(services.state.authorizations).toHaveLength(1);
     expect(services.state.authorizations[0]).toMatchObject({
       client_id: "demo-company-cli",
