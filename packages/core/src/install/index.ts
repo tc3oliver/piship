@@ -4,6 +4,7 @@ export {
   installedRuntimeMatches,
   isPack,
   refuseUnsafeLockPaths,
+  verifyPack,
 } from "./compose.js";
 export { installDistribution, type InstallChecks } from "./install.js";
 export {

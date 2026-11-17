@@ -10,6 +10,7 @@ import {
   inspectInstalledLauncher,
   installedRuntimeMatches,
   lifecycleStatus,
+  packRepairAction,
   verifyPayloadContents,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
@@ -174,7 +175,7 @@ function updateDoctor(
     } catch (error) {
       warn(
         "rollback",
-        `${status.previous} is recorded as retained but does not verify (${(error as Error).message}); a rollback would fail. Download the ${status.previous} release archive from the update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${ctx.metadata.app.id} <extracted release>`,
+        `${status.previous} is recorded as retained but does not verify (${(error as Error).message}); a rollback would fail. ${retained?.release?.pack ? `Restore it from its Company Pack: ${packRepairAction(ctx.metadata.app.id, status.previous)}` : `Download the ${status.previous} release archive from the update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${ctx.metadata.app.id} <extracted release>`}`,
       );
     }
   }

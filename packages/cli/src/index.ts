@@ -81,6 +81,7 @@ import {
   unqualifiedBuildNotice,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
+  verifyPack,
   verifyPayload,
   verifyRelease,
   verifyRuntimeRelease,
@@ -705,6 +706,9 @@ function parseLockText(text: string, file: string): DistributionLock {
 }
 async function lockFor(target: string): Promise<DistributionLock> {
   const path = resolve(target);
+  // A pack is verified by its own rules, then its bound lock is read.
+  if (await isPack(path))
+    return parseLockText((await verifyPack(path)).lockText, target);
   if (existsSync(path) && statSync(path).isFile()) {
     if (path.endsWith(".tar.gz")) {
       const verified = await verifyRelease(path);
@@ -1909,6 +1913,19 @@ async function runLifecycle(
       `Built qualified runtime release ${built.name}\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the runtime test passed\nThe runtime release is not signed: publish it with verified provenance.\nNext: ${pishipCommand()} verify-release ${shellArg(built.archive)}, then ${pishipCommand()} pack <piship.yaml> --runtime ${shellArg(built.archive)} (one --runtime per target)`,
     );
     output.stderr(runtimeCacheLine(built.runtimeCache));
+  } else if (command === "verify-release" && (await isPack(first))) {
+    const { metadata, sha256 } = await verifyPack(first, options["--sha256"]);
+    output.stdout(
+      flags.has("--json")
+        ? JSON.stringify(metadata, null, 2)
+        : `Verified Company Pack ${metadata.distribution.name} ${metadata.distribution.version} (${metadata.distribution.id})\n  sha256 ${sha256}\n  checksums cover every file; pack.json binds pack/piship.lock ${metadata.lockSha256}\n  targets ${metadata.targets.join(", ")}\n  runtime PiShip ${metadata.runtime.pishipVersion}, Pi ${metadata.runtime.pi}: ${Object.values(
+            metadata.runtime.archives,
+          )
+            .map((archive) => archive.name)
+            .join(
+              ", ",
+            )}\nThe runtime archives and publisher identity are not checked here: sign-channel and install check the runtime, and the channel signature the publisher.`,
+    );
   } else if (
     command === "verify-release" &&
     (await releaseKind(first)) === "runtime"

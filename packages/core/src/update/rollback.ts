@@ -1,6 +1,7 @@
 // Rollback to the retained known-good release.
 import { PiShipError } from "@piship/contracts";
 import {
+  packRepairAction,
   runtimeStateDirectory,
   verifyPayloadContents,
   type DistributionLock,
@@ -97,7 +98,9 @@ async function performRollback(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} failed verification: ${(error as Error).message}`,
         {
-          userAction: `The damaged release is not activated. Download the ${receipt.previous} release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>; with the PiShip CLI: piship repair ${id} <release archive of ${receipt.previous}>. Then roll back again`,
+          userAction: previous.release?.pack
+            ? `The damaged release is not activated. Restore it from its Company Pack: ${packRepairAction(id, receipt.previous)}. Then roll back again`
+            : `The damaged release is not activated. Download the ${receipt.previous} release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>; with the PiShip CLI: piship repair ${id} <release archive of ${receipt.previous}>. Then roll back again`,
         },
       );
     }

@@ -740,7 +740,7 @@ async function performUpdate(
       (cacheable || offered)
     ) {
       notices.push(
-        "The migration check runs when you update; it stops for review before anything is switched",
+        "The migration check runs when you update; it stops for review before anything is switched.",
       );
       record(`available ${entry.version}`);
       return {

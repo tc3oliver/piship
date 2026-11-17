@@ -82,6 +82,7 @@ export {
 } from "./lock-schema.js";
 export * from "./migration.js";
 export {
+  packRepairAction,
   payloadApp,
   payloadInventory,
   verifyLaunchPayload,
