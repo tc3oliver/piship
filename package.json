@@ -23,7 +23,7 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:budgets": "node scripts/check-budgets.mjs",
     "relock:examples": "node scripts/relock-examples.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm run build && npm test"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm run build && npm run check:budgets && npm test"
   },
   "overrides": {
     "@earendil-works/pi-agent-core": "1.5.0",
