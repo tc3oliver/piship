@@ -40,6 +40,7 @@ import {
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import { forgetPiTrust } from "./launch/project-trust.js";
 import {
   deferredDownloadNotice,
   deferredToolDownloads,
@@ -346,6 +347,7 @@ export async function launchPiDistribution(
     stateDir,
     agentDir,
     mode: metadata.deployment.mode,
+    forgetPiTrust: (written) => forgetPiTrust(agentDir, written),
     // A child's stdout is the JSON event stream only.
     out: launchOutput(!!child),
     err: (message) => console.error(message),

@@ -5,7 +5,9 @@
 // changed file is a new question. A remembered answer only ever replaces the
 // prompt of a policy `ask`; it never decides for a `deny`, a rule, or a
 // managed distribution. The same file remembers which "left out" notice was
-// already shown, so a launch that leaves the same files out says so once.
+// already shown, so a launch that leaves the same files out says so once, and
+// which decision the distribution itself last wrote to Pi's trust store for a
+// directory, so that decision is told apart from one the person saved there.
 import {
   existsSync,
   lstatSync,
@@ -18,7 +20,7 @@ import {
   closeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { writeJsonAtomic } from "./access/state.js";
 
 export const PROJECT_TRUST_SCHEMA = "piship-project-trust/v1";
@@ -39,6 +41,8 @@ export interface RememberedProject {
 interface Stored {
   readonly schema: typeof PROJECT_TRUST_SCHEMA;
   readonly projects: Record<string, StoredProject>;
+  /** The decision this distribution last wrote to Pi's trust store, by directory. */
+  readonly piTrust?: Record<string, boolean>;
 }
 
 interface StoredProject {
@@ -101,7 +105,10 @@ function readStored(stateDir: string): Stored {
       if (typeof item?.noticed === "string") entry.noticed = item.noticed;
       if (entry.answer || entry.noticed) projects[root] = entry;
     }
-    return { schema: PROJECT_TRUST_SCHEMA, projects };
+    const piTrust: Record<string, boolean> = {};
+    for (const [dir, decision] of Object.entries(value.piTrust ?? {}))
+      if (typeof decision === "boolean") piTrust[dir] = decision;
+    return { schema: PROJECT_TRUST_SCHEMA, projects, piTrust };
   } catch {
     // An unreadable file is a question asked again, never an answer.
     return empty;
@@ -174,6 +181,27 @@ export function markProjectNotice(
   });
 }
 
+/** The decision this distribution last wrote to Pi's trust store for `dir`. */
+export function piTrustWritten(
+  stateDir: string,
+  dir: string,
+): boolean | undefined {
+  return readStored(stateDir).piTrust?.[projectTrustKey(dir)];
+}
+
+/** Record that this distribution wrote `decision` to Pi's trust store for `dir`. */
+export function recordPiTrustWrite(
+  stateDir: string,
+  dir: string,
+  decision: boolean,
+): void {
+  const stored = readStored(stateDir);
+  write(stateDir, {
+    ...stored,
+    piTrust: { ...stored.piTrust, [projectTrustKey(dir)]: decision },
+  });
+}
+
 /** Every project with a remembered answer. */
 export function listRememberedProjects(
   stateDir: string,
@@ -198,15 +226,21 @@ export function listRememberedProjects(
 /**
  * Forget what is remembered for a project (answer and notice), or for all of
  * them. A path inside a remembered project names that project. Returns how
- * many projects were forgotten.
+ * many projects were forgotten. The Pi trust store decisions this
+ * distribution wrote in the project's directories are forgotten too and
+ * handed to `onPiTrust`, which withdraws them from Pi's store.
  */
 export function forgetProjectTrust(
   stateDir: string,
   root: string | "all",
+  onPiTrust?: (written: Readonly<Record<string, boolean>>) => void,
 ): number {
   const stored = readStored(stateDir);
   const projects = { ...stored.projects };
+  const piTrust = { ...stored.piTrust };
+  const forgotten: Record<string, boolean> = {};
   let count = 0;
+  let scope: string | undefined;
   if (root === "all") {
     count = Object.keys(projects).length;
     for (const key of Object.keys(projects)) delete projects[key];
@@ -217,8 +251,20 @@ export function forgetProjectTrust(
       delete projects[key];
       count = 1;
     }
+    scope = key in stored.projects ? key : projectTrustKey(root);
   }
-  if (count) write(stateDir, { ...stored, projects });
+  for (const [dir, decision] of Object.entries(piTrust))
+    if (
+      scope === undefined ||
+      dir === scope ||
+      dir.startsWith(scope.endsWith(sep) ? scope : scope + sep)
+    ) {
+      forgotten[dir] = decision;
+      delete piTrust[dir];
+    }
+  const withdrawn = Object.keys(forgotten).length > 0;
+  if (count || withdrawn) write(stateDir, { ...stored, projects, piTrust });
+  if (withdrawn) onPiTrust?.(forgotten);
   return count;
 }
 

@@ -40,6 +40,12 @@ export interface BrandedContext {
    * prompt, which then keep the failure.
    */
   readonly loginInline?: (access: DistributionAccess) => Promise<void>;
+  /**
+   * Set by the Pi integration: withdraw from Pi's trust store the decisions
+   * this distribution wrote there, by directory, when `config trust forget`
+   * forgets them.
+   */
+  readonly forgetPiTrust?: (written: Readonly<Record<string, boolean>>) => void;
 }
 
 /** One doctor report line: a label and its value. */
