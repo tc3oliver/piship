@@ -9,8 +9,8 @@ app:
 
 runtime:
   pi: "1.5.0"
-  # fd and rg ship in the payload (pinned and digest-checked). Without them Pi
-  # downloads them from GitHub on the first prompt and waits for it.
+  # fd and rg ship in the payload (pinned and digest-checked). Without them a
+  # launch runs Pi offline, with no file-name completion or rg, and doctor warns.
   searchTools:
     mode: bundled
   # Pi's Codemode (the model can script several tool calls in one step) and
