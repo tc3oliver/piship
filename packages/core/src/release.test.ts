@@ -620,7 +620,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     const error = caught(() => checkReleaseInputs(path));
     expect(error.message).toMatch(/Release gate lock: Lockfile missing/);
     // A first release has no lock to review against.
-    expect(error.userAction).toMatch(/^Run .* lock .*piship\.yaml$/);
+    expect(error.userAction).toMatch(/^Run .* lock .*piship\.yaml"?$/);
   });
 
   it("schema: refuses a v1alpha3 manifest", () => {
