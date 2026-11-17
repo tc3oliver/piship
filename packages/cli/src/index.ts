@@ -1261,6 +1261,15 @@ export async function runCli(
       return 1;
     }
   }
+  return runSourceCommand(command, args, output);
+}
+
+/** The commands that take one manifest, artifact or id instead of lifecycle options. */
+async function runSourceCommand(
+  command: string,
+  args: readonly string[],
+  output: CliOutput,
+): Promise<number> {
   const [given, ...rest] =
     command === "config"
       ? [args[1], ...args.slice(2)]
@@ -1329,432 +1338,11 @@ export async function runCli(
   }
   if (!target) return 2;
   try {
-    if (command === "init") {
-      const { managed, id } = parseInitOptions(rest) ?? { managed: false };
-      // Probed before anything is written; a directory that init will refuse
-      // costs the probe at most its timeout.
-      const [bundleSearchTools, npm] = managed
-        ? [true, true]
-        : await Promise.all([
-            searchToolsDownloadable(),
-            searchToolsDownloadable("https://registry.npmjs.org/"),
-          ]);
-      const created = initDistribution(target, {
-        managed,
-        bundleSearchTools,
-        ...(id === undefined ? {} : { id }),
-      });
-      if (!bundleSearchTools) output.stderr(SEARCH_TOOLS_SKIPPED);
-      if (!npm) output.stderr(NPM_REGISTRY_UNREACHABLE);
-      const self = pishipCommand();
-      const at = shellArg(created);
-      output.stdout(
-        managed
-          ? `Created ${created}\nNext: ${self} validate ${at}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
-          : `Created ${created}\nNext: ${self} validate ${at}, then ${self} test ${at} (the first test writes piship.lock; build and release need that lock to be current).`,
-      );
-    } else if (command === "validate") {
-      const manifest = readManifest(target);
-      checkPiVersion(manifest);
-      // The same resource and governance checks as lock, without writing it.
-      checkGovernance(manifest, target, resolveResources(manifest, target));
-      const unenforced = checkEnforceability(manifest);
-      checkDataContract(manifest);
-      checkToolExposure(manifest);
-      const searchTools = checkSearchTools(manifest);
-      // updates.source is read only by update; launch never needs it.
-      const variables = runtimeVariableUse(manifest);
-      const unset = (names: readonly string[]) =>
-        names.filter((name) => !process.env[name]);
-      const missingLaunch = unset(variables.launch);
-      const missingUpdate = unset(variables.update);
-      output.stdout(
-        [
-          "Manifest is valid.",
-          `Schema ${manifest.schema}, mode ${manifest.deployment.mode}.`,
-          ...(manifest.governance?.policy.userAuto
-            ? [
-                manifest.governance.policy.userAuto === "allowed"
-                  ? "policy.userAuto: allowed (each user may switch on auto mode, which approves asks from the distribution defaults without a prompt; deny and enforced rules still apply)."
-                  : "policy.userAuto: off (users cannot switch on auto mode).",
-              ]
-            : []),
-          ...(variables.launch.length
-            ? [
-                `Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ${variables.launch.join(", ")}`,
-              ]
-            : []),
-          ...(variables.update.length
-            ? [
-                `Runtime variables needed only by update: ${variables.update.join(", ")}`,
-              ]
-            : []),
-          ...(searchTools.length
-            ? [
-                `Bundled search tools: ${searchTools.map((item) => `${item.tool} ${item.version}`).join(", ")} for ${searchTools[0]?.targets.join(", ")}; piship lock downloads the upstream archives.`,
-              ]
-            : []),
-          ...(manifest.lifecycle?.updates.transport
-            ? [
-                `Update transport ${manifest.lifecycle.updates.transport}${manifest.lifecycle.updates.transport === "http-allowed" ? ": the update channel may use plain HTTP to a private or internal host; integrity by signature only" : ""}.`,
-              ]
-            : []),
-          `Next: ${pishipCommand()} test ${shellArg(target)} writes piship.lock if needed, builds, and runs the acceptance smoke; ${pishipCommand()} lock ${shellArg(target)} only writes the lock.`,
-        ].join("\n"),
-      );
-      for (const warning of [
-        ...launchWarnings(manifest),
-        ...unapprovedLoadWarnings(manifest),
-        ...shellGlobWarnings(manifest),
-        ...inertRuleWarnings(manifest),
-        ...checkSkills(manifest, target),
-      ])
-        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
-      for (const item of unenforced)
-        output.stderr(
-          `${item.level === "info" ? "Note" : "Warning"}: ${item.message}`,
-        );
-      const theyAre = (names: readonly string[]) =>
-        names.length > 1 ? "they are" : "it is";
-      const them = (names: readonly string[]) =>
-        names.length > 1 ? "them" : "it";
-      if (missingLaunch.length)
-        output.stderr(
-          `Note: ${missingLaunch.join(", ")} not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until ${theyAre(missingLaunch)} set in the environment it is started from. An IDE or desktop launcher does not read your shell profile; a plain https URL in piship.yaml needs no variable.`,
-        );
-      if (missingUpdate.length)
-        output.stderr(
-          `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
-        );
-    } else if (command === "migrate") {
-      const list = (items: readonly string[]) =>
-        items.map((item) => `  - ${item}`).join("\n");
-      if (rest[0] === "--check") {
-        // Read-only: the manifest text is classified and nothing is written.
-        // Exit 0 migratable, 1 requires review, 3 cannot migrate.
-        const source = readManifestSource(target);
-        const check = checkManifestMigration(source);
-        if (check.verdict === "cannot migrate") {
-          output.stdout(
-            `Migration check -> ${check.to}\nResult: cannot migrate`,
-          );
-          output.stderr(`Cannot migrate ${target}: ${check.reason}`);
-          return 3;
-        }
-        // The lock refuses a Pi pin this PiShip does not carry, so a manifest
-        // that migrates cleanly can still need its pin reviewed.
-        const pin = readManifest(target).runtime.pi;
-        const review = [
-          ...check.review,
-          ...(pin === undefined || pin === PI_VERSION
-            ? []
-            : [piPinReview(pin)]),
-        ];
-        if (!check.changes.length && !review.length)
-          output.stdout(`Already ${check.to}; nothing to migrate.`);
-        else {
-          output.stdout(
-            `Migration check ${check.from} -> ${check.to}\nResult: ${review.length ? "requires review" : "migratable"}\n${list(check.changes)}`,
-          );
-          if (review.length) {
-            output.stderr(
-              `Review before migrating ${target} (${review.length} item(s)):\n${list(review)}`,
-            );
-            return 1;
-          }
-        }
-      } else {
-        const plan = migrateManifestSource(readManifestSource(target));
-        if (!plan.changes.length)
-          output.stdout(`Already ${plan.to}; nothing to migrate.`);
-        else if (rest[0] === "--write") {
-          writeFileSync(target, plan.source);
-          output.stdout(
-            `Migrated ${target} from ${plan.from} to ${plan.to}:\n${list(plan.changes)}`,
-          );
-          if (plan.effective.length || plan.review.length)
-            output.stderr(
-              `Review the result (${plan.effective.length + plan.review.length} item(s)):\n${list([...plan.effective, ...plan.review])}`,
-            );
-        } else
-          output.stdout(
-            `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${list(plan.changes)}\n\n${plan.source}`,
-          );
-        // A stale Pi pin is the usual reason to run this after a PiShip
-        // upgrade, so say how to fix it even when nothing else changes.
-        const pin = readManifest(target).runtime.pi;
-        if (pin !== undefined && pin !== PI_VERSION)
-          output.stderr(`Note: ${piPinReview(pin)}`);
-      }
-    } else if (command === "config") {
-      const configTarget = manifestPath(rest[0], true) ?? "";
-      const path = resolve(configTarget);
-      if (existsSync(path) && statSync(path).isFile()) {
-        // Explain straight from the manifest; no artifact is assembled.
-        const manifest = readManifest(configTarget);
-        checkPiVersion(manifest);
-        output.stdout(
-          formatExplanation(
-            manifest.app.name,
-            await explainConfiguration({
-              app: manifest.app,
-              mode: manifest.deployment.mode,
-              access: manifest.access,
-              stateDir: runtimeStateDirectory({ value: manifest.app.id }),
-              distributionDir: dirname(path),
-              schema: manifest.schema,
-              ...(manifest.governance
-                ? { governance: manifest.governance }
-                : {}),
-              ...(manifest.lifecycle
-                ? { updates: manifest.lifecycle.updates }
-                : {}),
-              ...(manifest.runtime.searchTools
-                ? {
-                    searchTools: {
-                      fd:
-                        manifest.runtime.searchTools.fd ??
-                        SEARCH_TOOL_SPECS.fd.defaultVersion,
-                      rg:
-                        manifest.runtime.searchTools.rg ??
-                        SEARCH_TOOL_SPECS.rg.defaultVersion,
-                    },
-                  }
-                : {}),
-            }),
-          ),
-        );
-      } else {
-        const artifact = artifactFor(configTarget, command, output.stderr);
-        const app = payloadApp(artifact);
-        const result = runLauncher(artifact, app.command, [
-          "config",
-          "explain",
-        ]);
-        if (result.status !== 0)
-          throw new Error(launcherFailure(result, `${command} config explain`));
-        output.stdout(result.stdout.trimEnd());
-      }
-    } else if (command === "lock") {
-      const progress = progressReporter(output.stderr);
-      await downloadSearchToolArchives(target, progress ? { progress } : {});
-      const first = !existsSync(join(dirname(target), "piship.lock"));
-      const written = lockManifest(target);
-      const locked = readManifest(target);
-      // The same warnings validate prints; dev and test lock without them.
-      for (const warning of [
-        ...launchWarnings(locked),
-        ...unapprovedLoadWarnings(locked),
-      ])
-        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
-      output.stdout(
-        first
-          ? `Wrote ${written}\nNext: ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke; ${pishipCommand()} build ${shellArg(target)} assembles the payload to install.`
-          : `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
-      );
-    } else if (command === "build") {
-      const progress = progressReporter(output.stderr);
-      await downloadLockedSearchTools(
-        requireCurrentLock(target),
-        undefined,
-        progress ? { progress } : {},
-      );
-      const built = buildDistribution(target, undefined, {
-        reclaimStaging: rest.includes("--reclaim-staging"),
-        cache: !rest.includes("--rebuild"),
-        ...(rest.includes("--rebuild") ? {} : { runtimeCache: true as const }),
-        abandonedStaging: (found) => output.stderr(stagingNotice(found)),
-        onPackageFootprint: (report) => {
-          for (const line of describeFootprint(report)) output.stderr(line);
-        },
-        ...(progress ? { progress } : {}),
-      });
-      markLocalBuild(built);
-      output.stderr(unqualifiedBuildNotice(target));
-      output.stdout(
-        `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
-      );
-    } else if (command === "purge") {
-      if (!rest.includes("--yes"))
-        throw new Error(
-          "Purge deletes this distribution's state; repeat with --yes after checking the id",
-        );
-      output.stdout(
-        purgeReport(
-          await purgeDistributionState(target, {
-            withoutLogout: rest.includes("--without-logout"),
-          }),
-          output,
-        ),
-      );
-      removeEmptyPiShipDirectories();
-    } else if (command === "inspect") {
-      const path = resolve(target);
-      const info =
-        existsSync(path) && statSync(path).isFile()
-          ? (() => {
-              const lock = requireCurrentLock(target);
-              return inspection(
-                lock,
-                runtimeStateDirectory({ value: lock.app.id }),
-              );
-            })()
-          : (() => {
-              const artifact = artifactFor(target, command, output.stderr);
-              const lock = verifyPayload(artifact);
-              return inspection(
-                lock,
-                runtimeStateDirectory({ value: lock.app.id }),
-                artifact,
-              );
-            })();
-      output.stdout(
-        rest.includes("--json")
-          ? JSON.stringify(info, null, 2)
-          : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${shellArg(target)} --json for the full locked configuration.`,
-      );
-    } else if (command === "dev" || command === "test") {
-      // Before any lock or build: the branded refusal would name a command
-      // that is not installed, followed by "Pi launch failed: 1".
-      if (
-        command === "dev" &&
-        rest[0] !== "--smoke" &&
-        !(process.stdin.isTTY && process.stdout.isTTY)
-      )
-        throw new Error(
-          `${pishipCommand()} dev starts the interactive session and needs a terminal. Without one, run ${pishipCommand()} dev ${shellArg(target)} --smoke (the headless launch, JSON) or ${pishipCommand()} test ${shellArg(target)} (the acceptance smoke).`,
-        );
-      const manifest = readManifest(target);
-      for (const warning of checkSkills(manifest, target))
-        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
-      await prepareLock(target, manifest, output);
-      const progress = progressReporter(output.stderr);
-      await downloadLockedSearchTools(
-        requireCurrentLock(target),
-        undefined,
-        progress ? { progress } : {},
-      );
-      // Local iteration: the supply-chain gates run on build and release.
-      const artifact = buildDistribution(target, undefined, {
-        supplyChainGates: false,
-        runtimeCache: true,
-        // dev and test take no --reclaim-staging; build does.
-        abandonedStaging: (found) =>
-          output.stderr(
-            stagingNotice(
-              found,
-              `run ${pishipCommand()} build ${shellArg(target)} --reclaim-staging`,
-            ),
-          ),
-        ...(progress ? { progress } : {}),
-      });
-      markLocalBuild(artifact);
-      const lock = requireCurrentLock(target);
-      // `dev --smoke` runs the same isolated launch headlessly, for scripts.
-      const interactive = command === "dev" && rest[0] !== "--smoke";
-      // State this launch creates is marked, so the first install adopts it.
-      const result = withTestState({ value: lock.app.id }, () =>
-        runLauncher(
-          artifact,
-          lock.app.command,
-          command === "test"
-            ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
-            : interactive
-              ? []
-              : ["--smoke"],
-          interactive,
-        ),
-      );
-      if (result.status !== 0) {
-        // The branded "Run <command> login" names a command not installed
-        // yet; the test state signs in through the built one.
-        const signIn = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
-          result.stderr,
-        );
-        // The hint replaces the branded action line, not adds to it.
-        const stderr = signIn
-          ? result.stderr
-              .split("\n")
-              .filter(
-                (line) => line !== `Action: Run ${lock.app.command} login`,
-              )
-              .join("\n")
-          : result.stderr;
-        const hint = signIn
-          ? `\nThis build is not installed: sign in to the test state with node ${shellArg(join(artifact, "bin", lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
-          : // The branded "Ask your administrator" speaks to users; whoever
-            // runs this test build is the one who chooses the values.
-            /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)
-            ? `\nFor this test build, set them in this shell (staging values will do), then run ${pishipCommand()} ${command} ${shellArg(target)} again. ${pishipCommand()} validate ${shellArg(target)} lists them.`
-            : "";
-        throw new Error(
-          `Pi launch failed: ${launcherFailure({ ...result, stderr }, "Pi")}${hint}`,
-        );
-      }
-      const declared = Object.entries(manifest.resources)
-        .filter(([, paths]) => paths.length)
-        .map(([kind]) => kind);
-      const failedMcp = failedMcpServers(result.stdout);
-      if (command === "test")
-        output.stdout(
-          rest.includes("--json")
-            ? result.stdout.trim()
-            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
-        );
-      else if (!interactive) output.stdout(result.stdout.trim());
-      // A declared server that did not start is a broken build, not a pass.
-      if (failedMcp.length && !interactive)
-        throw new Error(
-          `MCP server ${failedMcp.join(", ")} failed to start; see the mcp lines above.`,
-        );
-    } else if (command === "doctor") {
-      const artifact = artifactFor(target, command, output.stderr);
-      const app = payloadApp(artifact);
-      const lock = verifyPayload(artifact);
-      const json = rest[0] === "--json";
-      const distribution = { id: app.id, version: app.version };
-      let report: string[] | undefined;
-      if (lock.access || lock.governance) {
-        const result = runLauncher(artifact, app.command, ["doctor"]);
-        report = result.stdout.trimEnd().split("\n");
-        if (!json) output.stdout(result.stdout.trimEnd());
-        if (result.status !== 0) {
-          if (json)
-            output.stdout(
-              JSON.stringify({ distribution, healthy: false, report }, null, 2),
-            );
-          throw new Error(result.stderr.trim() || "doctor found problems");
-        }
-      }
-      const result = runLauncher(artifact, app.command, ["--smoke"]);
-      if (result.status !== 0)
-        throw new Error(`Pi launch failed: ${launcherFailure(result, "Pi")}`);
-      const smoke = result.stdout.trim();
-      if (json) {
-        let parsed: unknown = smoke;
-        try {
-          parsed = JSON.parse(smoke);
-        } catch {
-          // Kept as text.
-        }
-        output.stdout(
-          JSON.stringify(
-            {
-              distribution,
-              healthy: true,
-              ...(report ? { report } : {}),
-              smoke: parsed,
-            },
-            null,
-            2,
-          ),
-        );
-      } else
-        output.stdout(
-          `Healthy ${app.id}@${app.version}\n${formatSmokeSummary(smoke)}`,
-        );
-    }
-    return 0;
+    if (command === "dev" || command === "test")
+      return await runDevOrTest(command, target, rest, output);
+    if (["config", "purge", "inspect", "doctor"].includes(command))
+      return await runOperations(command, target, rest, output);
+    return await runAuthoring(command, target, rest, output);
   } catch (error) {
     output.stderr(
       error instanceof ManifestError
@@ -1763,6 +1351,450 @@ export async function runCli(
     );
     return 1;
   }
+}
+
+/** init, validate, migrate, lock and build: write or check the distribution source. */
+async function runAuthoring(
+  command: string,
+  target: string,
+  rest: string[],
+  output: CliOutput,
+): Promise<number> {
+  if (command === "init") {
+    const { managed, id } = parseInitOptions(rest) ?? { managed: false };
+    // Probed before anything is written; a directory that init will refuse
+    // costs the probe at most its timeout.
+    const [bundleSearchTools, npm] = managed
+      ? [true, true]
+      : await Promise.all([
+          searchToolsDownloadable(),
+          searchToolsDownloadable("https://registry.npmjs.org/"),
+        ]);
+    const created = initDistribution(target, {
+      managed,
+      bundleSearchTools,
+      ...(id === undefined ? {} : { id }),
+    });
+    if (!bundleSearchTools) output.stderr(SEARCH_TOOLS_SKIPPED);
+    if (!npm) output.stderr(NPM_REGISTRY_UNREACHABLE);
+    const self = pishipCommand();
+    const at = shellArg(created);
+    output.stdout(
+      managed
+        ? `Created ${created}\nNext: ${self} validate ${at}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
+        : `Created ${created}\nNext: ${self} validate ${at}, then ${self} test ${at} (the first test writes piship.lock; build and release need that lock to be current).`,
+    );
+  } else if (command === "validate") {
+    const manifest = readManifest(target);
+    checkPiVersion(manifest);
+    // The same resource and governance checks as lock, without writing it.
+    checkGovernance(manifest, target, resolveResources(manifest, target));
+    const unenforced = checkEnforceability(manifest);
+    checkDataContract(manifest);
+    checkToolExposure(manifest);
+    const searchTools = checkSearchTools(manifest);
+    // updates.source is read only by update; launch never needs it.
+    const variables = runtimeVariableUse(manifest);
+    const unset = (names: readonly string[]) =>
+      names.filter((name) => !process.env[name]);
+    const missingLaunch = unset(variables.launch);
+    const missingUpdate = unset(variables.update);
+    output.stdout(
+      [
+        "Manifest is valid.",
+        `Schema ${manifest.schema}, mode ${manifest.deployment.mode}.`,
+        ...(manifest.governance?.policy.userAuto
+          ? [
+              manifest.governance.policy.userAuto === "allowed"
+                ? "policy.userAuto: allowed (each user may switch on auto mode, which approves asks from the distribution defaults without a prompt; deny and enforced rules still apply)."
+                : "policy.userAuto: off (users cannot switch on auto mode).",
+            ]
+          : []),
+        ...(variables.launch.length
+          ? [
+              `Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ${variables.launch.join(", ")}`,
+            ]
+          : []),
+        ...(variables.update.length
+          ? [
+              `Runtime variables needed only by update: ${variables.update.join(", ")}`,
+            ]
+          : []),
+        ...(searchTools.length
+          ? [
+              `Bundled search tools: ${searchTools.map((item) => `${item.tool} ${item.version}`).join(", ")} for ${searchTools[0]?.targets.join(", ")}; piship lock downloads the upstream archives.`,
+            ]
+          : []),
+        ...(manifest.lifecycle?.updates.transport
+          ? [
+              `Update transport ${manifest.lifecycle.updates.transport}${manifest.lifecycle.updates.transport === "http-allowed" ? ": the update channel may use plain HTTP to a private or internal host; integrity by signature only" : ""}.`,
+            ]
+          : []),
+        `Next: ${pishipCommand()} test ${shellArg(target)} writes piship.lock if needed, builds, and runs the acceptance smoke; ${pishipCommand()} lock ${shellArg(target)} only writes the lock.`,
+      ].join("\n"),
+    );
+    for (const warning of [
+      ...launchWarnings(manifest),
+      ...unapprovedLoadWarnings(manifest),
+      ...shellGlobWarnings(manifest),
+      ...inertRuleWarnings(manifest),
+      ...checkSkills(manifest, target),
+    ])
+      output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+    for (const item of unenforced)
+      output.stderr(
+        `${item.level === "info" ? "Note" : "Warning"}: ${item.message}`,
+      );
+    const theyAre = (names: readonly string[]) =>
+      names.length > 1 ? "they are" : "it is";
+    const them = (names: readonly string[]) =>
+      names.length > 1 ? "them" : "it";
+    if (missingLaunch.length)
+      output.stderr(
+        `Note: ${missingLaunch.join(", ")} not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until ${theyAre(missingLaunch)} set in the environment it is started from. An IDE or desktop launcher does not read your shell profile; a plain https URL in piship.yaml needs no variable.`,
+      );
+    if (missingUpdate.length)
+      output.stderr(
+        `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
+      );
+  } else if (command === "migrate") {
+    const list = (items: readonly string[]) =>
+      items.map((item) => `  - ${item}`).join("\n");
+    if (rest[0] === "--check") {
+      // Read-only: the manifest text is classified and nothing is written.
+      // Exit 0 migratable, 1 requires review, 3 cannot migrate.
+      const source = readManifestSource(target);
+      const check = checkManifestMigration(source);
+      if (check.verdict === "cannot migrate") {
+        output.stdout(`Migration check -> ${check.to}\nResult: cannot migrate`);
+        output.stderr(`Cannot migrate ${target}: ${check.reason}`);
+        return 3;
+      }
+      // The lock refuses a Pi pin this PiShip does not carry, so a manifest
+      // that migrates cleanly can still need its pin reviewed.
+      const pin = readManifest(target).runtime.pi;
+      const review = [
+        ...check.review,
+        ...(pin === undefined || pin === PI_VERSION ? [] : [piPinReview(pin)]),
+      ];
+      if (!check.changes.length && !review.length)
+        output.stdout(`Already ${check.to}; nothing to migrate.`);
+      else {
+        output.stdout(
+          `Migration check ${check.from} -> ${check.to}\nResult: ${review.length ? "requires review" : "migratable"}\n${list(check.changes)}`,
+        );
+        if (review.length) {
+          output.stderr(
+            `Review before migrating ${target} (${review.length} item(s)):\n${list(review)}`,
+          );
+          return 1;
+        }
+      }
+    } else {
+      const plan = migrateManifestSource(readManifestSource(target));
+      if (!plan.changes.length)
+        output.stdout(`Already ${plan.to}; nothing to migrate.`);
+      else if (rest[0] === "--write") {
+        writeFileSync(target, plan.source);
+        output.stdout(
+          `Migrated ${target} from ${plan.from} to ${plan.to}:\n${list(plan.changes)}`,
+        );
+        if (plan.effective.length || plan.review.length)
+          output.stderr(
+            `Review the result (${plan.effective.length + plan.review.length} item(s)):\n${list([...plan.effective, ...plan.review])}`,
+          );
+      } else
+        output.stdout(
+          `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${list(plan.changes)}\n\n${plan.source}`,
+        );
+      // A stale Pi pin is the usual reason to run this after a PiShip
+      // upgrade, so say how to fix it even when nothing else changes.
+      const pin = readManifest(target).runtime.pi;
+      if (pin !== undefined && pin !== PI_VERSION)
+        output.stderr(`Note: ${piPinReview(pin)}`);
+    }
+  } else if (command === "lock") {
+    const progress = progressReporter(output.stderr);
+    await downloadSearchToolArchives(target, progress ? { progress } : {});
+    const first = !existsSync(join(dirname(target), "piship.lock"));
+    const written = lockManifest(target);
+    const locked = readManifest(target);
+    // The same warnings validate prints; dev and test lock without them.
+    for (const warning of [
+      ...launchWarnings(locked),
+      ...unapprovedLoadWarnings(locked),
+    ])
+      output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+    output.stdout(
+      first
+        ? `Wrote ${written}\nNext: ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke; ${pishipCommand()} build ${shellArg(target)} assembles the payload to install.`
+        : `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
+    );
+  } else if (command === "build") {
+    const progress = progressReporter(output.stderr);
+    await downloadLockedSearchTools(
+      requireCurrentLock(target),
+      undefined,
+      progress ? { progress } : {},
+    );
+    const built = buildDistribution(target, undefined, {
+      reclaimStaging: rest.includes("--reclaim-staging"),
+      cache: !rest.includes("--rebuild"),
+      ...(rest.includes("--rebuild") ? {} : { runtimeCache: true as const }),
+      abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+      onPackageFootprint: (report) => {
+        for (const line of describeFootprint(report)) output.stderr(line);
+      },
+      ...(progress ? { progress } : {}),
+    });
+    markLocalBuild(built);
+    output.stderr(unqualifiedBuildNotice(target));
+    output.stdout(
+      `Built ${built}\nNext: ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke, then node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user.`,
+    );
+  }
+  return 0;
+}
+
+/** dev and test: lock, build and launch the distribution locally. */
+async function runDevOrTest(
+  command: string,
+  target: string,
+  rest: string[],
+  output: CliOutput,
+): Promise<number> {
+  // Before any lock or build: the branded refusal would name a command
+  // that is not installed, followed by "Pi launch failed: 1".
+  if (
+    command === "dev" &&
+    rest[0] !== "--smoke" &&
+    !(process.stdin.isTTY && process.stdout.isTTY)
+  )
+    throw new Error(
+      `${pishipCommand()} dev starts the interactive session and needs a terminal. Without one, run ${pishipCommand()} dev ${shellArg(target)} --smoke (the headless launch, JSON) or ${pishipCommand()} test ${shellArg(target)} (the acceptance smoke).`,
+    );
+  const manifest = readManifest(target);
+  for (const warning of checkSkills(manifest, target))
+    output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+  await prepareLock(target, manifest, output);
+  const progress = progressReporter(output.stderr);
+  await downloadLockedSearchTools(
+    requireCurrentLock(target),
+    undefined,
+    progress ? { progress } : {},
+  );
+  // Local iteration: the supply-chain gates run on build and release.
+  const artifact = buildDistribution(target, undefined, {
+    supplyChainGates: false,
+    runtimeCache: true,
+    // dev and test take no --reclaim-staging; build does.
+    abandonedStaging: (found) =>
+      output.stderr(
+        stagingNotice(
+          found,
+          `run ${pishipCommand()} build ${shellArg(target)} --reclaim-staging`,
+        ),
+      ),
+    ...(progress ? { progress } : {}),
+  });
+  markLocalBuild(artifact);
+  const lock = requireCurrentLock(target);
+  // `dev --smoke` runs the same isolated launch headlessly, for scripts.
+  const interactive = command === "dev" && rest[0] !== "--smoke";
+  // State this launch creates is marked, so the first install adopts it.
+  const result = withTestState({ value: lock.app.id }, () =>
+    runLauncher(
+      artifact,
+      lock.app.command,
+      command === "test"
+        ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
+        : interactive
+          ? []
+          : ["--smoke"],
+      interactive,
+    ),
+  );
+  if (result.status !== 0) {
+    // The branded "Run <command> login" names a command not installed
+    // yet; the test state signs in through the built one.
+    const signIn = /\b(IDENTITY_REQUIRED|CREDENTIAL_REQUIRED)\b/.test(
+      result.stderr,
+    );
+    // The hint replaces the branded action line, not adds to it.
+    const stderr = signIn
+      ? result.stderr
+          .split("\n")
+          .filter((line) => line !== `Action: Run ${lock.app.command} login`)
+          .join("\n")
+      : result.stderr;
+    const hint = signIn
+      ? `\nThis build is not installed: sign in to the test state with node ${shellArg(join(artifact, "bin", lock.app.command))} login, then run ${pishipCommand()} ${command} ${shellArg(target)} again. The first install adopts that state.`
+      : // The branded "Ask your administrator" speaks to users; whoever
+        // runs this test build is the one who chooses the values.
+        /\bCONFIG_UNAVAILABLE: Runtime variables? /.test(result.stderr)
+        ? `\nFor this test build, set them in this shell (staging values will do), then run ${pishipCommand()} ${command} ${shellArg(target)} again. ${pishipCommand()} validate ${shellArg(target)} lists them.`
+        : "";
+    throw new Error(
+      `Pi launch failed: ${launcherFailure({ ...result, stderr }, "Pi")}${hint}`,
+    );
+  }
+  const declared = Object.entries(manifest.resources)
+    .filter(([, paths]) => paths.length)
+    .map(([kind]) => kind);
+  const failedMcp = failedMcpServers(result.stdout);
+  if (command === "test")
+    output.stdout(
+      rest.includes("--json")
+        ? result.stdout.trim()
+        : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: ${pishipCommand()} build ${shellArg(target)} assembles the payload with the supply-chain checks, then node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
+    );
+  else if (!interactive) output.stdout(result.stdout.trim());
+  // A declared server that did not start is a broken build, not a pass.
+  if (failedMcp.length && !interactive)
+    throw new Error(
+      `MCP server ${failedMcp.join(", ")} failed to start; see the mcp lines above.`,
+    );
+  return 0;
+}
+
+/** config, purge, inspect and doctor: read or remove a built or installed distribution. */
+async function runOperations(
+  command: string,
+  target: string,
+  rest: string[],
+  output: CliOutput,
+): Promise<number> {
+  if (command === "config") {
+    const configTarget = manifestPath(rest[0], true) ?? "";
+    const path = resolve(configTarget);
+    if (existsSync(path) && statSync(path).isFile()) {
+      // Explain straight from the manifest; no artifact is assembled.
+      const manifest = readManifest(configTarget);
+      checkPiVersion(manifest);
+      output.stdout(
+        formatExplanation(
+          manifest.app.name,
+          await explainConfiguration({
+            app: manifest.app,
+            mode: manifest.deployment.mode,
+            access: manifest.access,
+            stateDir: runtimeStateDirectory({ value: manifest.app.id }),
+            distributionDir: dirname(path),
+            schema: manifest.schema,
+            ...(manifest.governance ? { governance: manifest.governance } : {}),
+            ...(manifest.lifecycle
+              ? { updates: manifest.lifecycle.updates }
+              : {}),
+            ...(manifest.runtime.searchTools
+              ? {
+                  searchTools: {
+                    fd:
+                      manifest.runtime.searchTools.fd ??
+                      SEARCH_TOOL_SPECS.fd.defaultVersion,
+                    rg:
+                      manifest.runtime.searchTools.rg ??
+                      SEARCH_TOOL_SPECS.rg.defaultVersion,
+                  },
+                }
+              : {}),
+          }),
+        ),
+      );
+    } else {
+      const artifact = artifactFor(configTarget, command, output.stderr);
+      const app = payloadApp(artifact);
+      const result = runLauncher(artifact, app.command, ["config", "explain"]);
+      if (result.status !== 0)
+        throw new Error(launcherFailure(result, `${command} config explain`));
+      output.stdout(result.stdout.trimEnd());
+    }
+  } else if (command === "purge") {
+    if (!rest.includes("--yes"))
+      throw new Error(
+        "Purge deletes this distribution's state; repeat with --yes after checking the id",
+      );
+    output.stdout(
+      purgeReport(
+        await purgeDistributionState(target, {
+          withoutLogout: rest.includes("--without-logout"),
+        }),
+        output,
+      ),
+    );
+    removeEmptyPiShipDirectories();
+  } else if (command === "inspect") {
+    const path = resolve(target);
+    const info =
+      existsSync(path) && statSync(path).isFile()
+        ? (() => {
+            const lock = requireCurrentLock(target);
+            return inspection(
+              lock,
+              runtimeStateDirectory({ value: lock.app.id }),
+            );
+          })()
+        : (() => {
+            const artifact = artifactFor(target, command, output.stderr);
+            const lock = verifyPayload(artifact);
+            return inspection(
+              lock,
+              runtimeStateDirectory({ value: lock.app.id }),
+              artifact,
+            );
+          })();
+    output.stdout(
+      rest.includes("--json")
+        ? JSON.stringify(info, null, 2)
+        : `${formatInspection(info)}\nRun ${pishipCommand()} inspect ${shellArg(target)} --json for the full locked configuration.`,
+    );
+  } else if (command === "doctor") {
+    const artifact = artifactFor(target, command, output.stderr);
+    const app = payloadApp(artifact);
+    const lock = verifyPayload(artifact);
+    const json = rest[0] === "--json";
+    const distribution = { id: app.id, version: app.version };
+    let report: string[] | undefined;
+    if (lock.access || lock.governance) {
+      const result = runLauncher(artifact, app.command, ["doctor"]);
+      report = result.stdout.trimEnd().split("\n");
+      if (!json) output.stdout(result.stdout.trimEnd());
+      if (result.status !== 0) {
+        if (json)
+          output.stdout(
+            JSON.stringify({ distribution, healthy: false, report }, null, 2),
+          );
+        throw new Error(result.stderr.trim() || "doctor found problems");
+      }
+    }
+    const result = runLauncher(artifact, app.command, ["--smoke"]);
+    if (result.status !== 0)
+      throw new Error(`Pi launch failed: ${launcherFailure(result, "Pi")}`);
+    const smoke = result.stdout.trim();
+    if (json) {
+      let parsed: unknown = smoke;
+      try {
+        parsed = JSON.parse(smoke);
+      } catch {
+        // Kept as text.
+      }
+      output.stdout(
+        JSON.stringify(
+          {
+            distribution,
+            healthy: true,
+            ...(report ? { report } : {}),
+            smoke: parsed,
+          },
+          null,
+          2,
+        ),
+      );
+    } else
+      output.stdout(
+        `Healthy ${app.id}@${app.version}\n${formatSmokeSummary(smoke)}`,
+      );
+  }
+  return 0;
 }
 
 async function runLifecycle(
