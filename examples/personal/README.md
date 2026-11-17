@@ -105,13 +105,17 @@ In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` 
 
 ```bash
 node packages/cli/dist/bin.js validate examples/personal/local-model/piship.yaml
+node packages/cli/dist/bin.js test examples/personal/local-model/piship.yaml   # fails with CREDENTIAL_REQUIRED: no key yet
+dist/mypi-local/bin/mypi-local login    # paste the key; it is stored in the state test created
+node packages/cli/dist/bin.js test examples/personal/local-model/piship.yaml --model-request
 node packages/cli/dist/bin.js build examples/personal/local-model/piship.yaml
-node dist/mypi-local/piship.mjs install dist/mypi-local   # install before the first login, as for MyPi
-~/.local/bin/mypi-local login           # paste the key
+node dist/mypi-local/piship.mjs install dist/mypi-local   # adopts that state, key included
 ~/.local/bin/mypi-local --smoke-model   # one request to the local endpoint
 ~/.local/bin/mypi-local logout
 node dist/mypi-local/piship.mjs uninstall mypi-local
 ```
+
+Run the build folder's `login` only after `test`: `test` marks the state it creates as its own, so `install` adopts it. Without a `test` first, that `login` writes unmarked state, which `install` refuses without `--use-existing-state`; to skip `test`, install first and run the installed `~/.local/bin/mypi-local login`.
 
 The committed `local-model/piship.lock` is current; run `piship lock` only after editing the manifest. `login` uses the system secret store, as for the demo company: on Linux it needs an unlocked Secret Service and `secret-tool`, otherwise it fails with `SECRET_STORE_UNAVAILABLE`; set `storage: {provider: file}` in a copy to use owner-only files instead. On Windows the installed command is `$HOME\.local\bin\mypi-local.cmd`.
 

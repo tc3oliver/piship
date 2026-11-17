@@ -2026,7 +2026,7 @@ describe("what to do after an install", () => {
         deployment: { mode: "managed" },
         access: { variables: ["ACME_ISSUER"] },
       }),
-      true,
+      ["an identity session"],
     );
     expect(next).toBe(
       "Next: set ACME_ISSUER in the environment that starts acme, then run acme; it is already signed in. acme --help lists its commands.",
@@ -2039,14 +2039,14 @@ describe("what to do after an install", () => {
       access: { variables: ["ACME_ISSUER", "ACME_GATEWAY"] },
     });
     expect(
-      installNext(managed, true, {
+      installNext(managed, ["an identity session"], {
         ACME_ISSUER: "https://idp",
         ACME_GATEWAY: "https://gw",
       }),
     ).toBe(
       "Next: run acme; it is already signed in. acme --help lists its commands. An IDE or desktop launcher does not read your shell profile, so set ACME_ISSUER, ACME_GATEWAY there too.",
     );
-    const partly = installNext(managed, false, { ACME_ISSUER: "https://idp" });
+    const partly = installNext(managed, [], { ACME_ISSUER: "https://idp" });
     expect(partly).toContain(
       "Next: set ACME_GATEWAY in the environment that starts acme, then run acme login",
     );
@@ -2098,6 +2098,18 @@ describe("what to do after an install", () => {
         }),
       ),
     ).toMatch(/^Next: run acme login to store the API key, then acme\./);
+  });
+
+  it("does not ask a local-secret state that a test run stored a key in to log in again", () => {
+    const lock = receipt({
+      deployment: { mode: "personal" },
+      access: { credential: { provider: "local-secret" }, variables: [] },
+    });
+    expect(installNext(lock, ["a runtime credential"])).toBe(
+      "Next: run acme; its API key is already stored. acme --help lists its commands.",
+    );
+    // A managed sign-in check is not a stored key.
+    expect(installNext(lock, ["an identity session"])).toContain("acme login");
   });
 
   it("falls back to the generic next step when the lock cannot be read", () => {

@@ -11,7 +11,7 @@ import {
   DEFAULT_NETWORK_POLICY,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
-import { PI_VERSION } from "@piship/core";
+import { initDistribution, PI_VERSION } from "@piship/core";
 import {
   capabilityMismatch,
   KubernetesAgentSandboxBackend,
@@ -216,6 +216,25 @@ describe("documented examples", () => {
     );
     const manifest = readManifest(join(directory, "piship.yaml"));
     expect(manifest.access?.credential.provider).toBe("none");
+    expect(manifest.access?.models.default).toBe("local/coder");
+  });
+
+  it("the own-endpoint example in the first distribution guide replaces init's access entries", () => {
+    const snippet = block(
+      "docs/first-distribution.md",
+      "yaml",
+      "provider: openai-compatible",
+    );
+    const directory = join(temporary(), "my-agent");
+    initDistribution(directory, { bundleSearchTools: false });
+    const path = join(directory, "piship.yaml");
+    const template = readFileSync(path, "utf8");
+    const access =
+      "credential:\n  provider: pi-native\ninference:\n  provider: pi-native\n";
+    expect(template).toContain(access);
+    writeFileSync(path, template.replace(access, snippet));
+    const manifest = readManifest(path);
+    expect(manifest.access?.credential.provider).toBe("local-secret");
     expect(manifest.access?.models.default).toBe("local/coder");
   });
 
