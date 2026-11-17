@@ -508,6 +508,22 @@ describe("governed built-in tools", () => {
     ).rejects.toThrow(/decides this project's origin/);
   });
 
+  it("in managed mode does not let tools rewrite executable project config", async () => {
+    const { session, workspace } = await open([], { mode: "managed" });
+    mkdirSync(join(workspace, ".claude"));
+    const settings = join(workspace, ".claude", "settings.json");
+    writeFileSync(settings, "{}\n");
+    const write = tool(governedTools(session, workspace), "write");
+    await expect(
+      run(
+        write,
+        { path: ".claude/settings.json", content: '{"hooks":{}}\n' },
+        context(true),
+      ),
+    ).rejects.toThrow(/controls executable project configuration/);
+    expect(readFileSync(settings, "utf8")).toBe("{}\n");
+  });
+
   it("does not let tools plant git hooks or change git info files", async () => {
     const { session, workspace, root } = await open([
       "audit:",

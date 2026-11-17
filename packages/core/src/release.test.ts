@@ -2325,6 +2325,48 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         /vulnerability scan did not pass/,
       );
     });
+    async function rewriteMetadata(
+      directory: string,
+      change: (metadata: Record<string, unknown>) => void,
+    ) {
+      const path = join(directory, "release.json");
+      const metadata = JSON.parse(readFileSync(path, "utf8"));
+      change(metadata);
+      writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`);
+      writeFileSync(
+        join(directory, "checksums.txt"),
+        formatChecksums(directory, [...RELEASE_FILES]),
+      );
+    }
+    it("a failed registry signature verdict with recomputed checksums", async () => {
+      const built = await fresh();
+      await rewriteMetadata(built.directory, (metadata) => {
+        metadata.signatures = {
+          ...(metadata.signatures as object),
+          verdict: "failed",
+        };
+      });
+      await expect(verifyRelease(built.directory)).rejects.toThrow(
+        /registry signature check did not pass/,
+      );
+    });
+    it.each([
+      ["no recorded tests", (tests: { result: string }[]) => tests.splice(0)],
+      [
+        "a test that did not pass",
+        (tests: { result: string }[]) => {
+          (tests[0] as { result: string }).result = "failed";
+        },
+      ],
+    ])("%s with recomputed checksums", async (_name, change) => {
+      const built = await fresh();
+      await rewriteMetadata(built.directory, (metadata) =>
+        change(metadata.tests as { result: string }[]),
+      );
+      await expect(verifyRelease(built.directory)).rejects.toThrow(
+        /required release tests are not recorded as passed/,
+      );
+    });
     it("an archive byte flipped with its .sha256 sidecar", async () => {
       const built = await fresh();
       flipByte(built.archive);
