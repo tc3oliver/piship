@@ -362,6 +362,7 @@ describe("sandbox credential: use", () => {
       "principal-mismatch",
       "origin-mismatch",
     ]);
+    expect(statuses[2]?.notice).toMatch(/run \S+ sandbox login to store/);
     const text = JSON.stringify(statuses);
     for (const value of [SECRET, "sandbox#", "sandbox-api.test.invalid"])
       expect(text).not.toContain(value);

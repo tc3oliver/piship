@@ -8,6 +8,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  activateSandbox,
+  customBackend,
+  type SandboxExecIO,
+  type SandboxExecRequest,
+} from "@piship/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ARCHIVE, MARKER } from "../remote-workspace/seed.js";
 import {
@@ -96,6 +102,85 @@ describe.skipIf(process.platform === "win32")("probeRemoteWorkspace", () => {
     ).toMatchObject({ files: false });
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "probeRemoteWorkspace through the activated sandbox",
+  () => {
+    it("passes the file API check that the real wrapper serves", async () => {
+      const remote = join(dir, "remote");
+      const workspace = join(dir, "ws");
+      mkdirSync(remote);
+      mkdirSync(workspace);
+      const statted: string[] = [];
+      const backend = customBackend({
+        id: "acme-remote",
+        available: async () => ({ available: true }),
+        capabilities: () => ({
+          isolation: "remote",
+          planes: [
+            "host-filesystem-isolation",
+            "network-deny",
+            "environment-filter",
+          ],
+          network: ["deny"],
+          localProcesses: false,
+        }),
+        prepare: async () => ({
+          files: {
+            read: async () => Buffer.alloc(0),
+            write: async () => undefined,
+            stat: async (path: string) => {
+              statted.push(path);
+              return undefined;
+            },
+          },
+          exec: async (
+            { command, workspacePath }: SandboxExecRequest,
+            io: SandboxExecIO,
+          ) => {
+            io.onStdout(
+              execFileSync("/bin/sh", ["-c", command], {
+                cwd: join(remote, workspacePath ?? "."),
+                env: { PATH: process.env.PATH ?? "" },
+                stdio: ["ignore", "pipe", "ignore"],
+              }),
+            );
+            return { exitCode: 0 };
+          },
+          dispose: async () => {},
+        }),
+      });
+      const sandbox = await activateSandbox(
+        {
+          required: true,
+          filesystem: { read: { deny: [] }, write: { allow: ["workspace"] } },
+          network: { mode: "deny" },
+          environment: { allow: [] },
+          remoteWorkspace: true,
+        },
+        {
+          workspace,
+          homeDir: join(dir, "home"),
+          backend,
+          env: {},
+          settleMs: 2000,
+        },
+      );
+      try {
+        expect(await probeRemoteWorkspace(sandbox, workspace)).toEqual({
+          files: true,
+          tar: true,
+          gzip: true,
+          git: true,
+          directory: "empty",
+        });
+        expect(statted).toEqual([MARKER]);
+      } finally {
+        await sandbox.dispose();
+      }
+    });
+  },
+);
 
 function render(data: RemoteWorkspaceData): string[] {
   const lines: string[] = [];

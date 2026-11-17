@@ -261,7 +261,10 @@ describe("sandbox pull", () => {
       value: false,
       configurable: true,
     });
-    await expect(runSandbox(ctx, ["pull"])).rejects.toThrow(/no terminal/);
+    await expect(runSandbox(ctx, ["pull"])).rejects.toMatchObject({
+      message: expect.stringMatching(/no terminal/),
+      userAction: "Review the changes, then run demo sandbox pull --yes",
+    });
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\ntwo\n");
   });
 
