@@ -228,7 +228,17 @@ function networkLines(data: DoctorData, out: DoctorSection): void {
     );
   else out.ok("enterprise CA", "none declared; default trust roots");
   for (const path of paths)
-    if (path.error)
+    if (
+      path.code === "GATEWAY_UNREACHABLE" &&
+      access.activationError?.startsWith("GATEWAY_UNREACHABLE") &&
+      access.activationError.includes(path.host)
+    )
+      // The activation row already fails for this host; one cause, one failure.
+      out.info(
+        `path ${path.label}`,
+        `${path.host}: unreachable, as activation reports`,
+      );
+    else if (path.error)
       out.bad(`path ${path.label}`, `${path.host}: ${path.error}`);
     else
       out.ok(

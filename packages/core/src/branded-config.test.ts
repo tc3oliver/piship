@@ -133,3 +133,31 @@ describe("config explain header and schema", () => {
     );
   });
 });
+
+describe("config set model", () => {
+  it("accepts the provider-qualified id that --smoke reports and stores the catalog id", async () => {
+    const manifest = fileURLToPath(
+      new URL(
+        "../../../examples/personal/local-model/piship.yaml",
+        import.meta.url,
+      ),
+    );
+    const metadata = resolveLock(manifest);
+    const ctx: BrandedContext = {
+      metadata,
+      distributionDir: dirname(manifest),
+      stateDir: temp,
+      mode: "personal",
+      out: () => {},
+      err: () => {},
+    };
+    await runConfig(ctx, ["set", "model", "mypi-local/local/coder"]);
+    expect(
+      JSON.parse(readFileSync(join(temp, "config", "preferences.json"), "utf8"))
+        .values.model,
+    ).toBe("local/coder");
+    await expect(
+      runConfig(ctx, ["set", "model", "mypi-local/local/other"]),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+  });
+});

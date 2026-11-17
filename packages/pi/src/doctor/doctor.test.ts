@@ -1114,6 +1114,36 @@ describe("Network group", () => {
     expect(lines.join("\n")).not.toContain("proxyuser");
   });
 
+  it("does not fail a path a second time when activation already failed to reach that host", () => {
+    const base = accessData();
+    const lines = group(
+      renderDoctor(
+        doctorData("personal", {
+          access: accessData({
+            activationError:
+              "GATEWAY_UNREACHABLE: access request to 127.0.0.1:47811 failed: ECONNREFUSED",
+            network: {
+              ...base.network,
+              paths: [
+                {
+                  label: "gateway",
+                  host: "127.0.0.1:47811",
+                  code: "GATEWAY_UNREACHABLE",
+                  error:
+                    "GATEWAY_UNREACHABLE: doctor request to 127.0.0.1:47811 failed: ECONNREFUSED",
+                },
+              ],
+            },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(lines).toContain(
+      `  - ${"path gateway".padEnd(20)} 127.0.0.1:47811: unreachable, as activation reports`,
+    );
+  });
+
   it("says the proxy accepts connections and how many CA certificates loaded", () => {
     const approved = approvedNetworkEnvironment(policy, {
       HTTPS_PROXY: "http://proxy.acme.example:3128",

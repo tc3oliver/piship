@@ -69,12 +69,21 @@ export async function runConfig(
     (action === "set" && key && rest.length === 1) ||
     (action === "unset" && key && rest.length === 0)
   ) {
+    // --smoke and Pi name a model with its provider, `<app id>/<model id>`;
+    // the preference holds the catalog id that `models` lists.
+    const prefix = `${ctx.metadata.app.id}/`;
+    const value =
+      key === "model" &&
+      rest[0]?.startsWith(prefix) &&
+      !ctx.metadata.access?.models.allowed.includes(rest[0])
+        ? rest[0].slice(prefix.length)
+        : rest[0];
     setPreference(
       paths.preferences,
       ctx.metadata.access,
       ctx.metadata.app.theme,
       key,
-      action === "set" ? rest[0] : undefined,
+      action === "set" ? value : undefined,
       (notice) => ctx.err(`Notice: ${notice}`),
       ctx.metadata.app.command,
       ctx.mode,

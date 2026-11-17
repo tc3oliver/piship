@@ -106,12 +106,14 @@ In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` 
 ```bash
 node packages/cli/dist/bin.js validate examples/personal/local-model/piship.yaml
 node packages/cli/dist/bin.js build examples/personal/local-model/piship.yaml
-dist/mypi-local/bin/mypi-local login           # paste the key
-dist/mypi-local/bin/mypi-local --smoke-model   # one request to the local endpoint
-dist/mypi-local/bin/mypi-local logout
+node dist/mypi-local/piship.mjs install dist/mypi-local   # install before the first login, as for MyPi
+~/.local/bin/mypi-local login           # paste the key
+~/.local/bin/mypi-local --smoke-model   # one request to the local endpoint
+~/.local/bin/mypi-local logout
+node dist/mypi-local/piship.mjs uninstall mypi-local
 ```
 
-The committed `local-model/piship.lock` is current; run `piship lock` only after editing the manifest. `login` uses the system secret store, as for the demo company: on Linux it needs an unlocked Secret Service and `secret-tool`, otherwise it fails with `SECRET_STORE_UNAVAILABLE`; set `storage: {provider: file}` in a copy to use owner-only files instead. On Windows run `dist\mypi-local\bin\mypi-local.cmd`.
+The committed `local-model/piship.lock` is current; run `piship lock` only after editing the manifest. `login` uses the system secret store, as for the demo company: on Linux it needs an unlocked Secret Service and `secret-tool`, otherwise it fails with `SECRET_STORE_UNAVAILABLE`; set `storage: {provider: file}` in a copy to use owner-only files instead. On Windows the installed command is `$HOME\.local\bin\mypi-local.cmd`.
 
 These modes are verified against the stand-in server only; a request to a real local model server has not been recorded.
 

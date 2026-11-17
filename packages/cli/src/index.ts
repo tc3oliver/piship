@@ -1178,6 +1178,8 @@ export function installNext(
     (lock.access?.credential.provider === "pi-native" || !lock.access)
   )
     return `Next: run ${command}, then sign in inside Pi with /login. ${command} --help lists its commands.`;
+  if (lock?.access?.credential.provider === "local-secret")
+    return `Next: run ${command} login to store the API key, then ${command}. ${command} --help lists its commands.`;
   return `Next: run ${command} --help to see its commands, then ${command} to start.`;
 }
 /** What to do about a `runtime.pi` that is not the pinned Pi. */

@@ -270,6 +270,8 @@ export interface CredentialManagerOptions {
   readonly storeFor?: SecretStoreResolver;
   /** Default `inference`. Selects the reference prefix and metadata schema. */
   readonly slot?: CredentialSlot;
+  /** The branded command, named in the login and logout steps of errors. */
+  readonly command?: string;
   /** Sandbox slot: the origins recorded with a newly stored secret. */
   readonly origins?: readonly string[];
   /**
@@ -733,6 +735,12 @@ export class CredentialManager {
     return this.options.slot ?? "inference";
   }
 
+  #run(verb: "login" | "logout"): string {
+    return this.options.command
+      ? `${this.options.command} ${verb}`
+      : `the branded ${verb} command`;
+  }
+
   get #schema(): CredentialMetadata["schema"] {
     return this.slot === "sandbox"
       ? SANDBOX_CREDENTIAL_METADATA_SCHEMA
@@ -1156,8 +1164,7 @@ export class CredentialManager {
         `An unresolved credential request (idempotency key ${pending.idempotency_key}) may be older than broker idempotency retention, so no new credential was requested`,
         {
           component: "credential",
-          userAction:
-            "Run the branded logout command, then the branded login command; a credential the broker may have issued for that key stays unused until it expires",
+          userAction: `Run ${this.#run("logout")}, then ${this.#run("login")}; a credential the broker may have issued for that key stays unused until it expires`,
           sanitizedDetail: {
             operation: "acquire",
             outcome: "not-sent",
@@ -1743,7 +1750,7 @@ export class CredentialManager {
           "No runtime credential is available",
           {
             component: "credential",
-            userAction: "Run the branded login command",
+            userAction: `Run ${this.#run("login")}`,
           },
         );
       const issued = await this.#issue(
@@ -1870,7 +1877,7 @@ export class CredentialManager {
             `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed${error instanceof Error ? `: ${redact(error.message)}` : ""}`,
             {
               component: "credential",
-              userAction: "Run the branded login command",
+              userAction: `Run ${this.#run("login")}`,
               ...(failure?.sanitizedDetail
                 ? { sanitizedDetail: failure.sanitizedDetail }
                 : {}),

@@ -276,6 +276,7 @@ describe("personal distributions without identity", () => {
     expect(storedRefs()).toEqual([]);
     await expect(open("local-secret").activate()).rejects.toMatchObject({
       code: "CREDENTIAL_REQUIRED",
+      userAction: expect.stringMatching(/^Run \S+ login$/),
     });
   });
 
