@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { PiShipError } from "@piship/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CommandRunner, runCommand } from "./command.js";
 import {
@@ -658,6 +659,64 @@ describe("npm packages", () => {
       ).toContain("import pad");
       expect(vendor().installCache).toBe("hit");
       expect(npmCi()).toBe(4);
+    },
+    SLOW,
+  );
+
+  it(
+    "report the cached tree's failure, not the fresh install's, when both fail",
+    () => {
+      const declaration = npmPackage("@company/pi-platform", "1.4.2");
+      const { locked, lockfile } = resolvedPlatform();
+      const runtime = join(root, "package-cache-offline", "runtime");
+      let offline = false;
+      const ctx: PackageContext = {
+        ...context(),
+        installCacheRoot: runtime,
+        run: (command, args, options) =>
+          offline && command === "npm" && args[0] === "ci"
+            ? {
+                status: 1,
+                stdout: Buffer.from(""),
+                stderr: "npm ERR! ENOTFOUND registry",
+              }
+            : npmEleven(command, args, options),
+      };
+      let builds = 0;
+      const vendor = () =>
+        vendorPiPackage(
+          declaration,
+          { locked, lockfile },
+          ctx,
+          join(root, "vendor-offline", String(builds++)),
+        );
+      expect(vendor().installCache).toBe("miss");
+      // A same-size change passes placement and fails the tree digest.
+      for (const entry of readdirSync(runtime).filter(
+        (name) => name.startsWith("p-") && !name.endsWith(".d"),
+      )) {
+        const file = join(
+          runtime,
+          entry,
+          "tree",
+          "node_modules",
+          "@company",
+          "pi-platform",
+          "extensions",
+          "platform.ts",
+        );
+        writeFileSync(file, readFileSync(file, "utf8").replace("pad", "dap"));
+      }
+      offline = true;
+      let thrown: unknown;
+      try {
+        vendor();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(PiShipError);
+      expect((thrown as PiShipError).message).not.toMatch(/ENOTFOUND/);
+      expect(String((thrown as PiShipError).cause)).toMatch(/ENOTFOUND/);
     },
     SLOW,
   );

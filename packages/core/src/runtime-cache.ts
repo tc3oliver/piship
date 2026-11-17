@@ -71,8 +71,8 @@ export const ROOT_FILES = ["package.json", "package-lock.json"];
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
 const KEEP = { install: 3, framework: 3, bundle: 6, package: 12 } as const;
-/** Package entries this process used are never evicted, so one build of many packages keeps them all (a second's slack for coarse mtimes). */
-const STARTED = Date.now();
+/** Package entries this process looked up or published: never evicted, so one build of many packages keeps them all. */
+const usedPackages = new Set<string>();
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -350,7 +350,7 @@ function prune(cache: RuntimeCache, budget: number): void {
         }))
         .sort((a, b) => b.used - a.used)
         .slice(keep)
-        .filter((entry) => prefix !== "p-" || entry.used < STARTED - 1000)) {
+        .filter((entry) => !usedPackages.has(join(cache.root, entry.name)))) {
         const hidden = hide(join(cache.root, entry.name));
         if (hidden) names.push(basename(hidden));
       }
@@ -486,6 +486,7 @@ export function lookupTree(
   } catch {
     return undefined;
   }
+  if (layer === "package") usedPackages.add(path);
   touch(path);
   prune(cache, DISCARD_BUDGET_MS.hit);
   return {
@@ -524,6 +525,8 @@ export interface AdoptedTree {
    * holds the whole tree.
    */
   readonly moved: boolean;
+  /** True when another build published the entry first: its tree, not the stage's, is the entry's. */
+  readonly lostRace: boolean;
 }
 
 /** Create the files of a new entry in `tree`, a directory that does not exist yet. */
@@ -581,7 +584,7 @@ function publishTree(
     const tree = lookupTree(cache, layer);
     if (!tree) throw new Error("The runtime cache entry is not readable");
     prune(cache, DISCARD_BUDGET_MS.published);
-    return { tree, moved };
+    return { tree, moved, lostRace: outcome !== "published" };
   } catch (error) {
     // The tree was handed over and cannot be put back.
     if (given) throw error;
