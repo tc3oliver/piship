@@ -756,7 +756,7 @@ describe("doctor", () => {
       /pi-lens env\s+PI_LENS_HOME=<state>\/pi-lens/,
     );
     expect(result.stdout).toMatch(
-      /pi-permission-system seed file\s+extensions\/pi-permission-system\/config\.json is missing or differs; the next launch writes it/,
+      /pi-permission-system seed file\s+extensions\/pi-permission-system\/config\.json not written yet; the next launch writes it/,
     );
     expect(result.stdout).toMatch(
       /permissions\s+effective via certified\/pi-permission-system/,

@@ -1217,7 +1217,9 @@ export type AgentFileState =
   | "current"
   /** A seed the user edited; kept at launch. */
   | "edited"
-  /** Missing, or an enforced file that differs: a launch rewrites it. */
+  /** Not written yet (before the first launch): a launch writes it. */
+  | "missing"
+  /** An enforced file, or an unedited seed, that differs: a launch rewrites it. */
   | "pending";
 
 export interface AgentFileStatus {
@@ -1239,13 +1241,13 @@ export function inspectAgentFiles(
       ? agentFileDigest(readFileSync(path, "utf8"))
       : undefined;
     const state: AgentFileState =
-      found === file.sha256
-        ? "current"
-        : found !== undefined &&
-            file.mode === "seed" &&
-            found !== seeds.files[file.path]
-          ? "edited"
-          : "pending";
+      found === undefined
+        ? "missing"
+        : found === file.sha256
+          ? "current"
+          : file.mode === "seed" && found !== seeds.files[file.path]
+            ? "edited"
+            : "pending";
     return { package: owner, path: file.path, mode: file.mode, state };
   });
 }

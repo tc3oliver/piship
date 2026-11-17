@@ -130,8 +130,9 @@ function enabledAxis(
   config: CapabilityConfig | undefined,
   input: CapabilityStateInput,
 ): AxisState {
-  if (!config) return no("Not declared in the manifest");
-  if (!config.enabled) return no("Disabled in the manifest");
+  // The schema writes an undeclared capability as enabled: false, so the
+  // two cases cannot be told apart here and share one reason.
+  if (!config?.enabled) return no("Not enabled in the manifest");
   const denied = input.policyDenied?.[name];
   return denied === undefined
     ? yes
@@ -246,10 +247,12 @@ function healthyAxis(
 function effectiveAxis(
   axes: Omit<Record<CapabilityAxis, AxisState>, "effective">,
 ): AxisState {
+  // Enabled before resolved: a capability nobody enabled has no provider
+  // either, and "not enabled" is the reason that matters.
   for (const axis of [
     "supported",
-    "resolved",
     "enabled",
+    "resolved",
     "compatible",
   ] as const)
     if (axes[axis].value !== "yes")
@@ -318,5 +321,9 @@ export function formatCapabilities(states: readonly CapabilityState[]): string {
         );
     }
   if (reasons.length > 0) out.push("", "Reasons:", ...reasons);
+  out.push(
+    "",
+    "These are PiShip capability contracts a provider implements for governance, not package features: a package's own tools (a subagent or checkpoint tool, for example) work without them.",
+  );
   return out.join("\n");
 }

@@ -396,7 +396,8 @@ async function checkSearchTools(
  * What the loaded extensions registered: every tool Pi knows with its
  * exposure and source, the tools declared to the model, the commands, and
  * the tool names more than one extension registered (Pi keeps the first and
- * drops the rest silently, so a duplicate is only visible here).
+ * drops the rest silently, so a duplicate is only visible here). Tools an
+ * extension registers later, at session_start, are in neither list.
  */
 function registryInventory(
   session: {

@@ -2581,7 +2581,7 @@ describe("Governance group", () => {
     );
   });
 
-  it("reports what the build did with the Pi package closures and dependencies", () => {
+  it("leaves the build's Pi package footprint to piship build", () => {
     mkdirSync(join(temp, "metadata"), { recursive: true });
     writeFileSync(
       join(temp, "metadata", "pi-package-footprint.json"),
@@ -2633,12 +2633,11 @@ describe("Governance group", () => {
         ],
       },
     );
-    expect(group(renderDoctor(data).render(), "Governance")).toEqual(
-      expect.arrayContaining([
-        `  - ${"Pi package closures".padEnd(20)} 1 of 2 bundled; vendored: pi-native (native-addon)`,
-        `  - ${"Pi package dependencies".padEnd(20)} 1 shared (40 fewer files); copies kept: has-dependencies 4`,
-      ]),
+    const rendered = group(renderDoctor(data).render(), "Governance").join(
+      "\n",
     );
+    expect(rendered).toContain("package pi-platform");
+    expect(rendered).not.toMatch(/Pi package (closures|dependencies)/);
   });
 
   it("reports the data lifecycle, and a retained release that stops sweeping", () => {
