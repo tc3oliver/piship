@@ -99,7 +99,12 @@ import {
   type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
-import { formatError, PiShipError, redact } from "@piship/contracts";
+import {
+  formatError,
+  PiShipError,
+  redact,
+  systemError,
+} from "@piship/contracts";
 import {
   launchWarnings,
   runtimeVariableUse,
@@ -317,10 +322,15 @@ function argumentProblem(
     if (valued.includes(arg)) {
       if (args[index + 1] === undefined) return `${arg} needs a value.`;
       index += 1;
-    } else if (arg.startsWith("-") && !known.includes(arg))
+    } else if (arg.startsWith("-") && !known.includes(arg)) {
       // Only the name: `--passphrase=<secret>` must not reach the terminal.
-      return `Unknown option ${arg.split("=")[0]} for ${command}.`;
-    else if (!arg.startsWith("-") && positional >= maxPositional)
+      const name = arg.split("=")[0] ?? arg;
+      if (valued.includes(name))
+        return `Write ${name} <value> with a space, not ${name}=<value>.`;
+      if (known.includes(name)) return `${name} takes no value.`;
+      const near = nearestField(name, known);
+      return `Unknown option ${name} for ${command}.${near ? ` Did you mean ${near}?` : ""}`;
+    } else if (!arg.startsWith("-") && positional >= maxPositional)
       // Not echoed either: a stray word may be a secret typed in the wrong place.
       return `${command} takes ${maxPositional === 0 ? "no" : `at most ${maxPositional}`} argument${maxPositional === 1 ? "" : "s"}.`;
     else if (!arg.startsWith("-")) positional += 1;
@@ -1275,8 +1285,8 @@ export async function runCli(
     output.stdout(commandHelp(command));
     return 0;
   }
+  const parsed = lifecycle && parseArguments(lifecycle, args.slice(1));
   if (lifecycle) {
-    const parsed = parseArguments(lifecycle, args.slice(1));
     if (!parsed) {
       output.stderr(
         usageError(
@@ -1297,18 +1307,49 @@ export async function runCli(
       );
       return 2;
     }
-    try {
-      return await runLifecycle(command, parsed, output);
-    } catch (error) {
-      output.stderr(
-        error instanceof ManifestError
-          ? redact(error.message)
-          : formatError(error),
-      );
-      return 1;
-    }
   }
-  return runSourceCommand(command, args, output);
+  // A report printed before the failure (doctor's unhealthy JSON) is the answer.
+  let printed = false;
+  const tracked: CliOutput = {
+    stdout: (message) => {
+      printed = true;
+      output.stdout(message);
+    },
+    stderr: output.stderr,
+  };
+  try {
+    return await (parsed
+      ? runLifecycle(command, parsed, tracked)
+      : runSourceCommand(command, args, tracked));
+  } catch (error) {
+    output.stderr(
+      error instanceof ManifestError
+        ? redact(error.message)
+        : formatError(error),
+    );
+    if (args.includes("--json") && !printed)
+      output.stdout(JSON.stringify({ error: errorJson(error) }, null, 2));
+    return 1;
+  }
+}
+/** A failure as `--json` prints it: code and action when PiShip knows them. */
+function errorJson(error: unknown): {
+  code: string | null;
+  message: string;
+  action: string | null;
+} {
+  const known = systemError(error) ?? error;
+  if (known instanceof PiShipError)
+    return {
+      code: known.code,
+      message: known.message,
+      action: known.userAction ?? null,
+    };
+  return {
+    code: known instanceof ManifestError ? "CONFIG_INVALID" : null,
+    message: redact(known instanceof Error ? known.message : String(known)),
+    action: null,
+  };
 }
 
 /** The commands that take one manifest, artifact or id instead of lifecycle options. */
@@ -1390,20 +1431,11 @@ async function runSourceCommand(
     return 2;
   }
   if (!target) return 2;
-  try {
-    if (command === "dev" || command === "test")
-      return await runDevOrTest(command, target, rest, output);
-    if (["config", "purge", "inspect", "doctor"].includes(command))
-      return await runOperations(command, target, rest, output);
-    return await runAuthoring(command, target, rest, output);
-  } catch (error) {
-    output.stderr(
-      error instanceof ManifestError
-        ? redact(error.message)
-        : formatError(error),
-    );
-    return 1;
-  }
+  if (command === "dev" || command === "test")
+    return runDevOrTest(command, target, rest, output);
+  if (["config", "purge", "inspect", "doctor"].includes(command))
+    return runOperations(command, target, rest, output);
+  return runAuthoring(command, target, rest, output);
 }
 
 /** init, validate, migrate, lock and build: write or check the distribution source. */
@@ -1775,10 +1807,12 @@ async function runOperations(
       output.stdout(result.stdout.trimEnd());
     }
   } else if (command === "purge") {
-    if (!rest.includes("--yes"))
-      throw new Error(
-        "Purge deletes this distribution's state; repeat with --yes after checking the id",
+    if (!rest.includes("--yes")) {
+      output.stderr(
+        `Purge deletes this distribution's state; repeat with --yes after checking the id\nUsage: piship ${simpleUsage.purge}`,
       );
+      return 2;
+    }
     output.stdout(
       purgeReport(
         await purgeDistributionState(target, {
@@ -1817,11 +1851,22 @@ async function runOperations(
     const lock = verifyPayload(artifact);
     const json = rest[0] === "--json";
     const distribution = { id: app.id, version: app.version };
-    let report: string[] | undefined;
+    let report: unknown;
     if (lock.access || lock.governance) {
-      const result = runLauncher(artifact, app.command, ["doctor"]);
-      report = result.stdout.trimEnd().split("\n");
-      if (!json) output.stdout(result.stdout.trimEnd());
+      const result = runLauncher(
+        artifact,
+        app.command,
+        json ? ["doctor", "--json"] : ["doctor"],
+      );
+      const text = result.stdout.trimEnd();
+      if (json)
+        try {
+          // The shape `<command> doctor --json` prints.
+          report = JSON.parse(text);
+        } catch {
+          report = text.split("\n");
+        }
+      else output.stdout(text);
       if (result.status !== 0) {
         if (json)
           output.stdout(
@@ -1839,7 +1884,7 @@ async function runOperations(
             {
               distribution,
               healthy: false,
-              ...(report ? { report } : {}),
+              ...(report !== undefined ? { report } : {}),
               error,
             },
             null,
@@ -1861,7 +1906,7 @@ async function runOperations(
           {
             distribution,
             healthy: true,
-            ...(report ? { report } : {}),
+            ...(report !== undefined ? { report } : {}),
             smoke: parsed,
           },
           null,
@@ -2076,10 +2121,12 @@ async function runLifecycle(
           `Warning: ${first} is still signed in (${live.join(", ")}); ${live.length > 1 ? "they stay" : "it stays"} live until ${live.length > 1 ? "they expire" : "it expires"}. Sign out with ${releaseLogout(first) ?? "the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs)"} before purge.`,
         );
     } else {
-      if (!flags.has("--yes"))
-        throw new Error(
-          "Uninstall with --purge also deletes this distribution's state; repeat with --yes after checking the id",
+      if (!flags.has("--yes")) {
+        output.stderr(
+          `Uninstall with --purge also deletes this distribution's state; repeat with --yes after checking the id\nUsage: piship ${lifecycleCommands.uninstall?.usage}`,
         );
+        return 2;
+      }
       // The installed release is often the only PiShip the user has, so the
       // purge happens here rather than after it is gone.
       output.stdout(
