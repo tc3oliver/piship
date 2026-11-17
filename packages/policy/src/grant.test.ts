@@ -345,19 +345,19 @@ describe("validateGrant", () => {
   });
 
   it.each([
-    ["/"],
-    ["/home/u"],
-    ["/home"],
-    ["/home/u/.state"],
-    ["/home/u/.state/sub"],
-    ["rel/dir"],
-    ["/a/../b"],
-    ["/a/*"],
-    ["/a/b?"],
-    ["/a/[x]"],
-    ["/a/{b,c}"],
-  ])("refuses path root %s", (root) => {
-    expect(errs({ paths: [root] })).not.toEqual([]);
+    ["/", "is a filesystem root"],
+    ["/home/u", "overlaps a forbidden directory"],
+    ["/home", "overlaps a forbidden directory"],
+    ["/home/u/.state", "overlaps a forbidden directory"],
+    ["/home/u/.state/sub", "overlaps a forbidden directory"],
+    ["rel/dir", "is not absolute"],
+    ["/a/../b", 'contains ".."'],
+    ["/a/*", "contains a glob character"],
+    ["/a/b?", "contains a glob character"],
+    ["/a/[x]", "contains a glob character"],
+    ["/a/{b,c}", "contains a glob character"],
+  ])("refuses path root %s", (root, reason) => {
+    expect(errs({ paths: [root] })).toEqual([`path root ${reason}: ${root}`]);
   });
 
   it("allows a project below home but not below the state dir", () => {
@@ -368,74 +368,104 @@ describe("validateGrant", () => {
   it("refuses a windows drive root", () => {
     expect(
       errs({ paths: ["C:\\"] }, FUTURE, { ...limits, platform: "win32" }),
-    ).not.toEqual([]);
+    ).toEqual(["path root is a filesystem root: C:\\"]);
   });
 
   it("refuses a windows share root, short names and trailing dots", () => {
     const w = { ...limits, platform: "win32" as const };
-    expect(errs({ paths: ["\\\\srv\\share"] }, FUTURE, w)).not.toEqual([]);
+    expect(errs({ paths: ["\\\\srv\\share"] }, FUTURE, w)).toEqual([
+      "path root is a filesystem root: \\\\srv\\share",
+    ]);
     expect(errs({ paths: ["\\\\srv\\share\\proj"] }, FUTURE, w)).toEqual([]);
-    expect(errs({ paths: ["C:\\Users\\OLIVER~1"] }, FUTURE, w)).not.toEqual([]);
+    expect(errs({ paths: ["C:\\Users\\OLIVER~1"] }, FUTURE, w)).toEqual([
+      "path root contains an 8.3 short name: C:\\Users\\OLIVER~1",
+    ]);
     const home = {
       ...w,
       forbiddenRoots: [
         { path: "C:\\Users\\oliver", mode: "self-and-above" as const },
       ],
     };
-    expect(errs({ paths: ["C:\\Users\\oliver."] }, FUTURE, home)).not.toEqual(
-      [],
-    );
-    expect(errs({ paths: ["C:\\Users"] }, FUTURE, home)).not.toEqual([]);
+    for (const r of ["C:\\Users\\oliver.", "C:\\Users"])
+      expect(errs({ paths: [r] }, FUTURE, home)).toEqual([
+        `path root overlaps a forbidden directory: ${r}`,
+      ]);
     for (const r of [
       "\\\\?\\C:\\Users\\x",
       "\\\\.\\C:\\Users\\x",
       "\\Users\\x",
     ])
-      expect(errs({ paths: [r] }, FUTURE, home)).not.toEqual([]);
+      expect(errs({ paths: [r] }, FUTURE, home)).toEqual([
+        `path root needs a drive letter or UNC share: ${r}`,
+      ]);
   });
 
   it("refuses missing, past and over-cap expiry", () => {
-    expect(errs({}, "")).not.toEqual([]);
-    expect(errs({}, "2026-10-26T11:00:00Z")).not.toEqual([]);
-    expect(errs({}, "2026-10-26T15:00:00Z")).not.toEqual([]);
+    expect(errs({}, "")).toEqual(["expiry is missing or invalid"]);
+    expect(errs({}, "2026-10-26T11:00:00Z")).toEqual(["expiry is in the past"]);
+    expect(errs({}, "2026-10-26T15:00:00Z")).toEqual([
+      "expiry exceeds the maximum lifetime",
+    ]);
   });
 
   it("refuses wildcard hosts unless allowed", () => {
-    expect(errs({ hosts: ["*.x.com"] })).not.toEqual([]);
+    expect(errs({ hosts: ["*.x.com"] })).toEqual([
+      "wildcard host not allowed: *.x.com",
+    ]);
     expect(
       errs({ hosts: ["*.x.com"] }, FUTURE, { ...limits, wildcardHosts: true }),
     ).toEqual([]);
     const wild = { ...limits, wildcardHosts: true };
     for (const h of ["*.0.0.1", "*.com", "*.", "*..com", "*.x.com:8080x"])
-      expect(errs({ hosts: [h] }, FUTURE, wild)).not.toEqual([]);
+      expect(errs({ hosts: [h] }, FUTURE, wild)).toEqual([
+        `wildcard host needs two labels after "*." and a lettered last label: ${h}`,
+      ]);
     expect(errs({ hosts: ["*.x.com:8080"] }, FUTURE, wild)).toEqual([]);
     expect(
       errs({ hosts: ["x.*"] }, FUTURE, { ...limits, wildcardHosts: true }),
-    ).not.toEqual([]);
+    ).toEqual(["invalid host: x.*"]);
   });
 
   it("refuses default branches", () => {
     const git = (b: string) => ({ git: [{ remote: "origin", branches: [b] }] });
-    expect(errs(git("main"))).not.toEqual([]);
-    expect(errs(git("master"))).not.toEqual([]);
+    expect(errs(git("main"))).toEqual([
+      "default branch is not grantable: main",
+    ]);
+    expect(errs(git("master"))).toEqual([
+      "default branch is not grantable: master",
+    ]);
     expect(
       errs(git("trunk"), FUTURE, { ...limits, defaultBranch: "trunk" }),
-    ).not.toEqual([]);
+    ).toEqual(["default branch is not grantable: trunk"]);
     expect(errs(git("feat/x"))).toEqual([]);
   });
 
   it("refuses globs in tool names and server ids", () => {
-    expect(errs({ tools: ["ed*"] })).not.toEqual([]);
-    expect(errs({ mcp: [{ server: "a:b" }] })).not.toEqual([]);
+    expect(errs({ tools: ["ed*"] })).toEqual([
+      "tool name contains a glob: ed*",
+    ]);
+    expect(errs({ mcp: [{ server: "a:b" }] })).toEqual([
+      "invalid MCP server id: a:b",
+    ]);
   });
 
   it("refuses a scope whose shape is not the declared one", () => {
     const loose = (scope: unknown) => errs(scope as TaskGrant["scope"]);
-    expect(loose({ tools: "bashread" })).not.toEqual([]);
-    expect(loose({ paths: "/work/proj" })).not.toEqual([]);
-    expect(loose({ hosts: [1] })).not.toEqual([]);
-    expect(loose({ mcp: [{ server: "s", tools: "t" }] })).not.toEqual([]);
-    expect(loose({ git: [{ remote: "o", branches: "feat" }] })).not.toEqual([]);
+    expect(loose({ tools: "bashread" })).toEqual([
+      "scope tools is not a list of strings",
+    ]);
+    expect(loose({ paths: "/work/proj" })).toEqual([
+      "scope paths is not a list of strings",
+    ]);
+    expect(loose({ hosts: [1] })).toEqual([
+      "scope hosts is not a list of strings",
+    ]);
+    expect(loose({ mcp: [{ server: "s", tools: "t" }] })).toEqual([
+      "scope mcp is not a list of servers",
+    ]);
+    expect(loose({ git: [{ remote: "o", branches: "feat" }] })).toEqual([
+      "scope git is not a list of remotes",
+    ]);
     expect(loose({ shell: ["rm"] })).toEqual(["unknown scope kind: shell"]);
     expect(loose(null)).toEqual(["scope is not an object"]);
     expect(
@@ -449,7 +479,7 @@ describe("validateGrant", () => {
         { ...grant({ paths: ["/work/proj"] }), pathAliases: ["/home/u"] },
         limits,
       ),
-    ).not.toEqual([]);
+    ).toEqual(["path root overlaps a forbidden directory: /home/u"]);
     expect(
       validateGrant(
         {
@@ -458,7 +488,7 @@ describe("validateGrant", () => {
         } as unknown as TaskGrant,
         limits,
       ),
-    ).not.toEqual([]);
+    ).toEqual(["path aliases are not a list of strings"]);
   });
 });
 
@@ -588,11 +618,14 @@ describe("a command scope", () => {
       "nu",
       "yash",
       "mksh",
-      "/usr/bin/npm",
-      "np*",
-      "npm test",
     ])
-      expect(errs({ commands: [program] })).not.toEqual([]);
+      expect(errs({ commands: [program] })).toEqual([
+        `command runs other commands, so it cannot be granted: ${program}`,
+      ]);
+    for (const program of ["/usr/bin/npm", "np*", "npm test"])
+      expect(errs({ commands: [program] })).toEqual([
+        `command is not a plain program name: ${program}`,
+      ]);
     expect(errs({ commands: ["npm", "cargo", "go", "make"] })).toEqual([]);
   });
 });

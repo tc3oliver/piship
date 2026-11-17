@@ -119,6 +119,13 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     await expect(identity.refresh(refreshed)).rejects.toMatchObject({
       code: "IDENTITY_EXPIRED",
     });
+    // A session without a refresh token never reaches the token endpoint.
+    const { refreshToken: _, ...noRefresh } = refreshed;
+    await expect(identity.refresh(noRefresh)).rejects.toMatchObject({
+      code: "IDENTITY_EXPIRED",
+      message: "Identity session has no refresh token",
+      userAction: expect.stringMatching(/login/),
+    });
   });
 
   it("rejects a refresh whose ID token names another subject or issuer", async () => {

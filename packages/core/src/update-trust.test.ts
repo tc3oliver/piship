@@ -247,6 +247,28 @@ describe("threshold signatures", () => {
     ).toThrow(/meet 1 of the 2 required/);
   });
 
+  it("refuses a malformed envelope before counting signatures", async () => {
+    const a = await entry(CHANNEL_A, bytes);
+    const envelope = buildSignatureEnvelope([a]);
+    const cases: [unknown, RegExp][] = [
+      [null, /envelope is not an object/],
+      [[envelope], /envelope is not an object/],
+      [{ ...envelope, schema: "x" }, /envelope schema must be/],
+      [{ ...envelope, keyId: 1 }, /envelope has no key id/],
+      [{ ...envelope, algorithm: "rsa" }, /algorithm must be ed25519/],
+      [{ ...envelope, signature: 1 }, /envelope has no signature/],
+      [{ ...envelope, signatures: "x" }, /signatures is not a list/],
+      [
+        { ...envelope, signatures: Array(65).fill(a) },
+        /lists more than 64 signatures/,
+      ],
+    ];
+    for (const [value, message] of cases)
+      expect(() => verifyThreshold(bytes, value, [pub(CHANNEL_A)], 1)).toThrow(
+        message,
+      );
+  });
+
   // Bytes and envelope exactly as PiShip v0.7 published them: a legacy
   // top-level signature, no signatures[]. The key is fixed, not secret.
   it("verifies a legacy v0.7 channel fixture", () => {
@@ -417,6 +439,21 @@ describe("root refresh", () => {
     );
     writeFileSync(join(dir, "root", "2.json"), "{");
     await expect(refresh(dir, one)).rejects.toThrow(/is not valid JSON/);
+    // parseUpdateRoot skips schema, so this is the only schema check.
+    const old = Buffer.from(
+      hostedRootText(ID, root(2, [ROOT_A], [CHANNEL_A])).replace(
+        '"piship-update-root/v1"',
+        '"piship-update-root/v0"',
+      ),
+    );
+    writeFileSync(join(dir, "root", "2.json"), old);
+    writeFileSync(
+      join(dir, "root", "2.json.sig"),
+      JSON.stringify(buildSignatureEnvelope([await entry(ROOT_A, old)])),
+    );
+    await expect(refresh(dir, one)).rejects.toThrow(
+      /has schema piship-update-root\/v0, not/,
+    );
     await publishRoot(
       dir,
       {
