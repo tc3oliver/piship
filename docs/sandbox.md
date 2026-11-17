@@ -189,6 +189,14 @@ When a command in an enforced local sandbox fails on a denied path or host, PiSh
 
 MCP stdio servers need a local process with pipes. A backend that cannot contain local processes refuses them with `SANDBOX_UNAVAILABLE`, so such servers do not start; use Streamable HTTP servers with remote backends.
 
+### Package caches, Go modules, and git over SSH
+
+Recipes for three things that fail inside an enforced local sandbox. They follow from the code; the SSH one was not run end to end.
+
+- **Package caches are per session.** `npm_config_cache`, `PIP_CACHE_DIR`, `GOCACHE`, and `CARGO_HOME` point into the session's temp directory, so every session starts with empty caches and the first install downloads again. This keeps `npm install`, `pip install`, and `cargo build` working without a writable `~/.npm` or `~/.cargo`. `CARGO_HOME` being redirected also means the command does not read `~/.cargo/config.toml` (mirrors, source replacement). A profile that makes `~/.cargo` writable keeps it.
+- **Go modules.** `GOMODCACHE` is deliberately not redirected: Go makes its module cache read-only, which would stop the session temp directory from being removed. A `go build` with dependencies therefore needs `~/go/pkg/mod` in `sandbox.filesystem.write.allow`. The trade-off is that the module cache is then shared with your normal Go use and persists across sessions.
+- **Git over SSH** does not work by default, for separate reasons: `~/.ssh` is in the default `sandbox.filesystem.read.deny`, `SSH_AUTH_SOCK` is not in the default `sandbox.environment.allow`, `deny` network mode blocks Unix sockets on macOS (see [egress coverage](#egress-coverage)), and on Linux bubblewrap mounts a private `/tmp` and hides `/run/user/<uid>`, where an agent socket usually lives. What works today: HTTPS remotes (with a token or credential helper whose files the sandbox may read), or running `git push` outside the sandbox. To use SSH inside it, set `sandbox.network.mode: allow`, add `SSH_AUTH_SOCK` to `sandbox.environment.allow`, and on Linux put the socket's directory in `sandbox.filesystem.write.allow` (a `/tmp` path there also turns the private `/tmp` off); to use a key file instead of an agent, remove `~/.ssh` from `sandbox.filesystem.read.deny`. Each of these widens what a contained command can reach: an agent socket lets it authenticate as you with every key the agent holds, a readable `~/.ssh` exposes the keys, and `allow` removes the network denial for everything else. None of this combination was tested.
+
 ## The contract
 
 ```ts

@@ -62,7 +62,7 @@ This is the work that closed signed channel hardening ([#181](https://github.com
 
 The first production consumer validates the managed path of a real company distribution on a pinned baseline: v0.13.0, which replaced v0.12.0. The steps to run, and the only facts a report may carry, are in the [production validation protocol](production-validation.md). That evidence is collected downstream, with the owner's approval, and summarized on the status page without identifiers ([distribution qualification](status.md#distribution-qualification)).
 
-So far the project has manual real-provider evidence for the reference stack only ([Live provider runs](status.md#after-v071-on-main)). Validation against a real company identity provider and company gateway in production does not exist yet; it is what this stage is for. Fixes that production validation needs go to `main` and reach the consumer in a later qualified release, never by tracking `main`.
+So far the project has manual real-provider evidence for the reference stack only ([Live provider runs](status.md#on-main-after-v071)). Validation against a real company identity provider and company gateway in production does not exist yet; it is what this stage is for. Fixes that production validation needs go to `main` and reach the consumer in a later qualified release, never by tracking `main`.
 
 ## Before broad rollout
 
