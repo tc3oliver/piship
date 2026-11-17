@@ -373,7 +373,9 @@ export async function runUpdate(
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "UPDATE_FAILED";
     recordLifecycleMetric(ctx, check ? "check" : "update", code);
-    recordFailedAttempt(ctx, check ? "check" : "update", code, error);
+    // A one-off --from check says nothing about the configured channel.
+    if (!(check && options.source))
+      recordFailedAttempt(ctx, check ? "check" : "update", code, error);
     if (!check || http)
       await auditRefusal(ctx, "runtime.update", {
         from: app.version,
