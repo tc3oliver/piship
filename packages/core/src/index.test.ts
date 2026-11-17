@@ -540,7 +540,7 @@ describe("the command PiShip prints for its next step", () => {
     // backslashes on Windows).
     const script = resolve("/opt/piship/packages/cli/dist/bin.js");
     expect(pishipCommand("/opt/piship/packages/cli/dist/bin.js")).toBe(
-      `node ${script}`,
+      `node ${shellArg(script)}`,
     );
     const spaced = resolve("/opt/my tools/piship.mjs");
     expect(pishipCommand("/opt/my tools/piship.mjs")).toBe(
