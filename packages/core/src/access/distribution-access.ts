@@ -1026,7 +1026,10 @@ export class DistributionAccess {
         throw new PiShipError(
           "IDENTITY_INVALID",
           "Another identity is still stored; it must be cleared first",
-          { component: "identity" },
+          {
+            component: "identity",
+            userAction: `Run ${this.options.app.command} logout, then ${this.options.app.command} login`,
+          },
         );
       const generation = previous
         ? Number(previous.secretRef.split("#")[1] ?? 0) + 1

@@ -128,6 +128,7 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     await expect(identity.refresh(session)).rejects.toMatchObject({
       code: "IDENTITY_INVALID",
       message: expect.stringContaining("does not match the signed-in subject"),
+      userAction: "Run login again",
     });
     services.knobs.refreshSubject = undefined;
     // The same subject under another issuer is another principal.
@@ -137,6 +138,29 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     ).rejects.toMatchObject({
       code: "IDENTITY_INVALID",
       message: expect.stringContaining("does not match the signed-in subject"),
+    });
+  });
+
+  it("refuses a provider without PKCE S256 and says who can enable it", async () => {
+    const managed = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    const fetch: ManagedFetch = async (url, init) => {
+      const response = await managed(url, init);
+      if (!url.toString().endsWith("/.well-known/openid-configuration"))
+        return response;
+      const body = {
+        ...((await response.json()) as Record<string, unknown>),
+        code_challenge_methods_supported: ["plain"],
+      };
+      return new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+    await expect(
+      provider({ fetch }).login({ openUrl: approve }),
+    ).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+      message: expect.stringContaining("does not support PKCE S256"),
+      userAction: expect.stringContaining("administrator to enable PKCE S256"),
     });
   });
 

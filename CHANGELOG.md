@@ -46,6 +46,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- Six refusals now say what to do next: an unreadable `network.tls.additionalCA` bundle (check that it names a PEM file this user can read), a plain-HTTP endpoint (use an `https://` URL), a refresh that returns another subject (run login again), an identity provider without PKCE S256 (ask the administrator to enable it for the client), another identity still stored (`<command> logout`, then `<command> login`), and an MCP server that needs the runtime credential while signed out (the MCP failure now carries `Run <command> login, then start <command> again` instead of only the generic MCP action).
 - `piship dev` and `piship test` now name the local Pi package whose files changed when they stop on a stale lock, instead of listing every possible cause.
 - `piship validate` warns when a `shell.execute` deny or ask rule uses `*` without `**`, since `*` does not match arguments containing `/` (`rm -rf *` lets `rm -rf /` through).
 - `piship install` and `verify-release` on an archive whose file name no longer matches its contents (a browser's `name (1).tar.gz`) say to rename it back to `<root>.tar.gz` instead of reporting a tampered artifact.

@@ -190,7 +190,7 @@ function session(
     throw new PiShipError(
       "IDENTITY_INVALID",
       "Refreshed identity does not match the signed-in subject",
-      { component: "identity" },
+      { component: "identity", userAction: "Run login again" },
     );
   const retained = retainClaims(claims);
   const expiresIn = tokens.expiresIn();
@@ -383,7 +383,11 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
           throw new PiShipError(
             "IDENTITY_INVALID",
             "The identity provider does not support PKCE S256",
-            { component: "identity" },
+            {
+              component: "identity",
+              userAction:
+                "Ask your administrator to enable PKCE S256 for this client at the identity provider",
+            },
           );
         return config;
       } catch (error) {

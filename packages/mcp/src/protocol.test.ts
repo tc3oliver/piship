@@ -381,6 +381,26 @@ describe("runtime credential origin binding", () => {
       transport("https://gw.acme.example/mcp", ["not a url"]),
     ).toThrow(/inference gateway origin, which is not configured/);
   });
+  it("names the credential provider's next step when none is available", async () => {
+    const signedOut = new StreamableHttpTransport({
+      serverId: "tickets",
+      url: "https://gw.acme.example/mcp",
+      fetch: async () => {
+        throw new Error("not called");
+      },
+      credential: async () => {
+        throw new PiShipError("CREDENTIAL_REQUIRED", "No runtime credential", {
+          userAction: "Run acme login, then start acme again",
+        });
+      },
+      credentialOrigins: ["https://gw.acme.example/v1"],
+    });
+    await expect(
+      signedOut.send({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    ).rejects.toThrow(
+      "MCP server tickets runtime credential is unavailable: Run acme login, then start acme again",
+    );
+  });
 });
 
 describe("Streamable HTTP transport limits", () => {
