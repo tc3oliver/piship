@@ -312,6 +312,16 @@ describe("branded command audit with a required sink", () => {
     ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
   });
 
+  it("says at launch how many sessions the retention removed", async () => {
+    const { ctx, errors } = context(sinks(collector.url, false));
+    const stale = withStaleSession(ctx);
+    await sweepDistributionData(stale.ctx, "launch");
+    expect(existsSync(stale.session)).toBe(false);
+    expect(errors).toEqual([
+      "Removed 1 session older than 30d (data.sessions.retention)",
+    ]);
+  });
+
   it("keeps data past its retention when the required sink does not take data.swept", async () => {
     await collector.close();
     const { ctx, errors } = context(sinks(collector.url, true));

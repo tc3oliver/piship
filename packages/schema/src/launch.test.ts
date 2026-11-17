@@ -786,6 +786,18 @@ describe("purge settings nothing acts on", () => {
   it("is quiet when the branded logout runs the purge", () => {
     expect(inertDataPurge(manifest("http-broker", "none"))).toEqual([]);
   });
+  it("warns that a logout purge of temp is not acted on", () => {
+    const temp = {
+      access: { credential: { provider: "http-broker" } },
+      data: { purge: { onLogout: ["cache", "temp"], onUninstall: "none" } },
+    } as unknown as Parameters<typeof inertDataPurge>[0];
+    expect(inertDataPurge(temp)).toEqual([
+      expect.objectContaining({
+        path: "data.purge.onLogout",
+        message: expect.stringMatching(/^temp is not acted on/),
+      }),
+    ]);
+  });
 });
 
 describe("temp retention nothing applies", () => {

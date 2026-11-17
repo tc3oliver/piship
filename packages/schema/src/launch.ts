@@ -803,6 +803,7 @@ export function inertCaptureClasses(
 /**
  * Purge settings no command acts on: `onLogout` runs only in the branded
  * `logout`, which a distribution that leaves sign-in to Pi does not have, and
+ * never purges `temp` (a live temporary belongs to a running process), and
  * `uninstall` does not read `onUninstall` yet.
  */
 export function inertDataPurge(manifest: Manifest): ValidationDiagnostic[] {
@@ -819,7 +820,15 @@ export function inertDataPurge(manifest: Manifest): ValidationDiagnostic[] {
               "nothing runs it: sign-in is left to Pi (credential.provider: pi-native), so there is no branded logout, and Pi's /logout purges nothing; the retention sweep still applies",
           },
         ]
-      : []),
+      : !piSignIn && purge.onLogout.includes("temp")
+        ? [
+            {
+              path: "data.purge.onLogout",
+              message:
+                "temp is not acted on: logout purges sessions and cache only, and PiShip removes its temporaries once the process that owns them is gone; remove temp from onLogout",
+            },
+          ]
+        : []),
     ...(purge.onUninstall === "all"
       ? [
           {

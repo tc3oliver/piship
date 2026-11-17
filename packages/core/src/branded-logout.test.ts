@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -232,7 +233,37 @@ describe("branded logout", () => {
     await signIn(purging);
     await runLogout(purging);
     expect(out).toEqual([
-      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; cache files and temp files were removed; sessions were preserved.",
+      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; cache files were removed; sessions were preserved.",
+    ]);
+  });
+
+  it("says which sessions the retention removed at logout", async () => {
+    const { ctx, out } = context();
+    const sessions = join(ctx.stateDir, "sessions", "user");
+    mkdirSync(sessions, { recursive: true });
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+    for (const name of ["a.jsonl", "b.jsonl"]) {
+      writeFileSync(join(sessions, name), "{}\n");
+      utimesSync(join(sessions, name), old, old);
+    }
+    writeFileSync(join(sessions, "new.jsonl"), "{}\n");
+    const data = {
+      contract: "piship-data/v1",
+      declared: {
+        retention: { sessions: { retentionSeconds: 30 * 86_400 } },
+        purge: { onLogout: ["cache"], onUninstall: "none" },
+        export: {},
+      },
+    };
+    const purging = {
+      ...ctx,
+      metadata: { ...ctx.metadata, data },
+    } as unknown as BrandedContext;
+    await signIn(purging);
+    await runLogout(purging);
+    expect(readdirSync(sessions)).toEqual(["new.jsonl"]);
+    expect(out).toEqual([
+      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; cache files were removed; 2 sessions past the retention were removed and the others were preserved.",
     ]);
   });
 

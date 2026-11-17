@@ -24,6 +24,8 @@ import {
   type NetworkPolicy,
   PiShipError,
   plainHttpOrigins,
+  principalDigest,
+  principalKey,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import {
@@ -89,6 +91,8 @@ export interface AccessData {
   readonly workload?: boolean;
   /** Why the activation could not obtain the identity, when it could not. */
   readonly identityError?: string;
+  /** The session directory's per-principal subdirectory, when signed in. */
+  readonly sessionPrincipal?: string;
   /**
    * Remote revocations that failed at a sign-in or user switch: counts and
    * ages only, never a credential identifier or secret.
@@ -585,6 +589,11 @@ async function collectAccess(
     signedIn: !!status?.identity,
     ...(workload ? { workload } : {}),
     ...(identityError ? { identityError } : {}),
+    ...(activated?.identity
+      ? {
+          sessionPrincipal: principalDigest(principalKey(activated.identity)),
+        }
+      : {}),
     ...(pendingRevocations ? { pendingRevocations } : {}),
     ...(pending
       ? {

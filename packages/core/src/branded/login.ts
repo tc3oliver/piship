@@ -627,14 +627,26 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   await auditEvents();
   // Retention, and the classes the distribution purges at logout. Sessions a
   // running launch holds are kept.
-  await sweepDistributionData(ctx, "logout");
+  const swept = await sweepDistributionData(ctx, "logout");
+  // Said from what the sweep did, not what the manifest asks: a class whose
+  // data.swept event was not recorded was kept (a class with nothing to
+  // remove has no entry), and `temp` is never swept.
   const onLogout = ctx.metadata.data?.declared?.purge.onLogout ?? [];
-  const purged = onLogout.map((dataClass) =>
-    dataClass === "sessions" ? "sessions not in use" : `${dataClass} files`,
-  );
+  const entry = (dataClass: string) =>
+    swept?.classes.find((item) => item.class === dataClass);
+  const done = (dataClass: string) =>
+    swept !== undefined && !entry(dataClass)?.unrecorded;
+  const purgedSessions = onLogout.includes("sessions") && done("sessions");
+  const expired = purgedSessions ? 0 : (entry("sessions")?.removed ?? 0);
   const sessions = [
-    ...(purged.length ? [`${purged.join(" and ")} were removed`] : []),
-    ...(onLogout.includes("sessions") ? [] : ["sessions were preserved"]),
+    ...(onLogout.includes("cache") && done("cache")
+      ? ["cache files were removed"]
+      : []),
+    purgedSessions
+      ? "sessions not in use were removed"
+      : expired
+        ? `${expired} session${expired > 1 ? "s" : ""} past the retention ${expired > 1 ? "were" : "was"} removed and the others were preserved`
+        : "sessions were preserved",
   ].join("; ");
   // Whatever metadata is left names a secret that could not be deleted. A
   // distribution without a stored runtime credential never clears one.
