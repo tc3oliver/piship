@@ -98,7 +98,7 @@ Pi's message keeps only the SDK's text for a request that got no answer ("Connec
 | Undeclared host under `privateOnly` | `NETWORK_DENIED` |
 | Non-loopback plain HTTP endpoint | Admitted when the host is private or internal, unless `inference.httpTransport: https` (piship/v1alpha6) forces HTTPS-only, which gives `NETWORK_DENIED`; then only the gateway's own origin is admitted over plain HTTP, and the credential and prompts travel unencrypted ([manifest](manifest.md#plain-http-to-internal-endpoints-v1alpha6)) |
 | Plain HTTP to a public host | Refused by `validate`; a `${NAME}` that resolves to one fails the launch with `CONFIG_INVALID` |
-| `NODE_TLS_REJECT_UNAUTHORIZED=0` | `TLS_POLICY_VIOLATION` |
+| `NODE_TLS_REJECT_UNAUTHORIZED=0` | Managed: `TLS_POLICY_VIOLATION`. Personal: removed for the launch with a notice, which then starts with verification on |
 | Platform secret store unavailable | `SECRET_STORE_UNAVAILABLE` |
 
 Managed mode never falls back to a personal or public provider. Errors carry a code, a redacted message, a retryable flag, and a user action where one applies.
