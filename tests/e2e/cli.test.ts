@@ -233,7 +233,7 @@ describe("CLI", () => {
     // The branded "Run acmecode login" names a command not installed yet.
     expect(tested.stderr).not.toContain("Action: Run acmecode login");
     expect(tested.stderr).toMatch(
-      /dist[\\/]acmecode[\\/]bin[\\/]acmecode(\.cmd)?'? login, then run .* test /,
+      /node '?"?[^\n]*dist[\\/]acmecode[\\/]bin[\\/]acmecode'?"? login, then run .* test /,
     );
   }, 180000);
   it("dev validates, builds from source, and launches the isolated command headlessly", () => {

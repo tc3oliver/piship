@@ -553,9 +553,11 @@ describe("the command PiShip prints for its next step", () => {
     );
     expect(shellArg("/opt/my tools", "darwin")).toBe("'/opt/my tools'");
     expect(shellArg("it's", "linux")).toBe("'it'\\''s'");
+    // Git Bash eats bare backslashes, so a Windows path is always quoted.
     expect(shellArg("C:\\Users\\RUNNER~1\\a.yaml", "win32")).toBe(
-      "C:\\Users\\RUNNER~1\\a.yaml",
+      '"C:\\Users\\RUNNER~1\\a.yaml"',
     );
+    expect(shellArg("C:/Users/a.yaml", "win32")).toBe("C:/Users/a.yaml");
     // cmd.exe has no single quotes; double quotes work there and in PowerShell.
     expect(shellArg("C:\\my tools\\x", "win32")).toBe('"C:\\my tools\\x"');
     expect(shellArg("it's", "win32")).toBe('"it\'s"');

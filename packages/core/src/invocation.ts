@@ -42,6 +42,7 @@ function windowsQuoted(value: string): string {
  * One argument of a command PiShip prints for the user to paste, quoted only
  * when it has to be. On Windows it is double-quoted, which both cmd.exe and
  * PowerShell read as one argument; single quotes mean nothing to cmd.exe.
+ * A value with a backslash is quoted too, because Git Bash eats bare ones.
  * shortcut: a Windows value with `%`, `$` or a backtick may still expand in
  * cmd.exe or PowerShell (no quoting stops both); such paths are rare.
  */
@@ -50,7 +51,7 @@ export function shellArg(
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform === "win32")
-    return /^[\w+=:./\\~-]+$/.test(value) ? value : windowsQuoted(value);
+    return /^[\w+=:./~-]+$/.test(value) ? value : windowsQuoted(value);
   return /^[\w@%+=:,./-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", "'\\''")}'`;
