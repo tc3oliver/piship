@@ -164,7 +164,7 @@ export async function runUninstall(
     );
   if (live.length && !withoutLogout && !purge)
     throw new PiShipError(
-      "CONFIG_INVALID",
+      "CONFIG_UNAVAILABLE",
       `${app.name} is still signed in (${live.join(", ")}). Once it is uninstalled there is no ${app.command} left to sign out with, and the sign-in would stay live until it expires`,
       {
         userAction: `Run ${app.command} logout, then ${app.command} uninstall again; or add --without-logout to uninstall and leave the sign-in`,
@@ -218,7 +218,7 @@ export async function runUninstall(
       `  removed  ${app.command} (${shim}) and the installed releases (${size(installed)})`,
       `  kept     ${state}: sessions and settings, ${held}`,
       live.length
-        ? `  signed in: ${live.join(", ")} stays until it expires (uninstalled without logout)`
+        ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
         : "  signed out: no sign-in is stored",
       `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
     ].join("\n"),

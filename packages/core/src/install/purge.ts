@@ -7,7 +7,7 @@ import {
   rmdirSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   createSecretStore,
@@ -24,7 +24,9 @@ import {
   assertDisjointRoots,
   distributionStateDirectory,
   installHome,
+  payloadApp,
   runtimeStateDirectory,
+  shellArg,
   stateHome,
 } from "../index.js";
 import { readInstallReceipt, receiptPath } from "./receipt.js";
@@ -77,6 +79,8 @@ export interface PurgeOptions {
    * revoked.
    */
   readonly withoutLogout?: boolean;
+  /** The running script, `process.argv[1]` by default, to name its release's logout. */
+  readonly script?: string;
 }
 
 /**
@@ -118,6 +122,7 @@ export function assertSignedOut(
   state: string,
   logout: string,
   options: PurgeOptions,
+  uninstalling = false,
 ): string[] {
   const live = signedInClasses(state);
   // A stored sandbox credential alone is cleared by `sandbox logout`, which
@@ -128,7 +133,7 @@ export function assertSignedOut(
       : logout;
   if (live.length && !options.withoutLogout)
     throw new Error(
-      `${id} is still signed in (${live.join(", ")}). Purge deletes local state but revokes nothing, so the credential would stay live at the broker until it expires. Run ${step} first, then purge again; with no release left to run logout, add --without-logout to purge anyway`,
+      `${id} is still signed in (${live.join(", ")}). Purge deletes local state but revokes nothing, so the credential would stay live at the broker until it expires. Run ${step} first, then ${uninstalling ? "uninstall again; or add --without-logout to purge without signing out" : "purge again; with no release left to run logout, add --without-logout to purge anyway"}`,
     );
   return live;
 }
@@ -170,7 +175,8 @@ export async function purgeDistributionState(
   const live = assertSignedOut(
     id,
     state,
-    "logout with the release's own command (node <release-dir>/payload/bin/<command> logout)",
+    releaseLogout(id, options.script) ??
+      "logout with the release's own command (node bin/<command> logout, in the directory that holds the release's piship.mjs)",
     options,
   );
   const secrets = await deleteReferencedSecrets(id, state, options);
@@ -181,6 +187,28 @@ export async function purgeDistributionState(
     ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
     ...(live.length ? { notRevoked: live } : {}),
   };
+}
+
+/**
+ * `node <dir>/bin/<command> logout` when this purge runs from the piship.mjs
+ * of a release of `id`: once the receipt is gone, that release's own command
+ * is the one left that can sign out.
+ */
+export function releaseLogout(
+  id: string,
+  script: string | undefined = process.argv[1],
+): string | undefined {
+  if (!script || basename(script) !== "piship.mjs") return undefined;
+  const directory = dirname(resolve(script));
+  try {
+    const app = payloadApp(directory);
+    const command = join(directory, "bin", app.command);
+    if (app.id === id && existsSync(command))
+      return `node ${shellArg(command)} logout`;
+  } catch {
+    // Not a release payload: the generic instruction stands.
+  }
+  return undefined;
 }
 
 /**

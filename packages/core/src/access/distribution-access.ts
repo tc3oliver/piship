@@ -651,6 +651,7 @@ export class DistributionAccess {
       );
     else
       this.#identity = new OidcPkceIdentityProvider({
+        command: this.options.app.command,
         issuer: this.endpoints.issuer ?? "",
         clientId: this.endpoints.clientId ?? "",
         scopes: identity.oidc.scopes,

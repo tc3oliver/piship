@@ -38,9 +38,15 @@ export interface OidcIdentityOptions {
   readonly onDiscoveredEndpoints?: (urls: readonly string[]) => void;
   readonly timeoutSeconds?: number;
   readonly clockToleranceSeconds?: number;
+  /** The branded command, so a next step names `<command> login`. */
+  readonly command?: string;
 }
 
-function mapError(error: unknown, action: string): PiShipError {
+function mapError(
+  error: unknown,
+  action: string,
+  login = "login",
+): PiShipError {
   for (
     let current: unknown = error;
     current;
@@ -142,8 +148,8 @@ function mapError(error: unknown, action: string): PiShipError {
       {
         component: "identity",
         userAction: registration
-          ? "Ask your administrator to check the configured client ID, its registered redirect URI, and the requested scopes, then run login again"
-          : "Run login again or contact your administrator",
+          ? `Ask your administrator to check the configured client ID, its registered redirect URI, and the requested scopes, then run ${login} again`
+          : `Run ${login} again or contact your administrator`,
       },
     );
   }
@@ -154,14 +160,16 @@ function mapError(error: unknown, action: string): PiShipError {
       `${action}: token endpoint returned ${error.error}`,
       {
         component: "identity",
-        userAction: expired ? "Run login again" : "Contact your administrator",
+        userAction: expired
+          ? `Run ${login} again`
+          : "Contact your administrator",
       },
     );
   }
   if (code === "OAUTH_JWT_TIMESTAMP_CHECK_FAILED")
     return new PiShipError("IDENTITY_EXPIRED", `${action}: ${detail}`, {
       component: "identity",
-      userAction: "Check the system clock, then run login again",
+      userAction: `Check the system clock, then run ${login} again`,
     });
   return new PiShipError("IDENTITY_INVALID", `${action}: ${detail}`, {
     component: "identity",
@@ -172,6 +180,7 @@ function mapError(error: unknown, action: string): PiShipError {
 function session(
   tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
   previous?: IdentitySession,
+  login = "login",
 ): IdentitySession {
   const claims = tokens.claims();
   if (!claims) {
@@ -190,7 +199,7 @@ function session(
     throw new PiShipError(
       "IDENTITY_INVALID",
       "Refreshed identity does not match the signed-in subject",
-      { component: "identity", userAction: "Run login again" },
+      { component: "identity", userAction: `Run ${login} again` },
     );
   const retained = retainClaims(claims);
   const expiresIn = tokens.expiresIn();
@@ -335,6 +344,10 @@ async function pasteCallback(
 export class OidcPkceIdentityProvider implements IdentityProvider {
   readonly kind = "oidc";
   #config: Promise<client.Configuration> | undefined;
+  get #login(): string {
+    return this.options.command ? `${this.options.command} login` : "login";
+  }
+
   constructor(readonly options: OidcIdentityOptions) {
     if (options.scopes.indexOf("openid") < 0)
       throw new PiShipError(
@@ -392,7 +405,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         return config;
       } catch (error) {
         this.#config = undefined;
-        throw mapError(error, "OIDC discovery failed");
+        throw mapError(error, "OIDC discovery failed", this.#login);
       }
     })();
     return this.#config;
@@ -454,7 +467,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         });
         return session(tokens);
       } catch (error) {
-        throw mapError(error, "Sign-in failed");
+        throw mapError(error, "Sign-in failed", this.#login);
       }
     } finally {
       await receiver.close();
@@ -468,7 +481,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         "Identity session has no refresh token",
         {
           component: "identity",
-          userAction: "Run login again",
+          userAction: `Run ${this.#login} again`,
         },
       );
     const config = await this.configuration();
@@ -476,9 +489,10 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
       return session(
         await client.refreshTokenGrant(config, current.refreshToken.reveal()),
         current,
+        this.#login,
       );
     } catch (error) {
-      throw mapError(error, "Identity refresh failed");
+      throw mapError(error, "Identity refresh failed", this.#login);
     }
   }
 

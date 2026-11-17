@@ -172,7 +172,7 @@ export function eventDetail(
 export async function auditAccess(
   ctx: BrandedContext,
   access: DistributionAccess,
-  user: string | null,
+  user: string | null | ((event: AccessEvent) => string | null),
   events: readonly AccessEvent[],
 ): Promise<void> {
   await recordAudit(
@@ -180,7 +180,7 @@ export async function auditAccess(
     access.network,
     events.map((event) => ({
       event: event.event,
-      user,
+      user: typeof user === "function" ? user(event) : user,
       session: null,
       detail: eventDetail(access.credentialMode, event.detail),
     })),

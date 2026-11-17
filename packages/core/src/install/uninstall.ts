@@ -323,6 +323,7 @@ export async function uninstallAndPurgeDistribution(
       state,
       `${readInstallReceipt(id).app.command} logout`,
       options,
+      true,
     );
     const secrets = await deleteReferencedSecrets(id, state, options);
     // The state goes first: a failure here leaves the install in place, so the

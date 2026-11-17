@@ -296,11 +296,10 @@ describe("uninstall --purge", () => {
     };
     expect(await runCli(["uninstall", ID, "--purge", "--yes"], output)).toBe(1);
     expect(lines.join("\n")).toContain(
-      `Run ${ID} logout first, then purge again`,
+      `Run ${ID} logout first, then uninstall again; or add --without-logout to purge without signing out`,
     );
     expect(existsSync(payload)).toBe(true);
     expect(existsSync(state)).toBe(true);
-    expect(await runCli(["uninstall", ID, "--without-logout"], output)).toBe(2);
     lines.length = 0;
     expect(
       await runCli(
@@ -314,6 +313,40 @@ describe("uninstall --purge", () => {
     );
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(state)).toBe(false);
+  });
+  it("uninstalls while signed in, warning that the sign-in stays live, and without the warning under --without-logout", async () => {
+    const identity = (state: string) => {
+      mkdirSync(join(state, "identity"), { recursive: true });
+      writeFileSync(
+        join(state, "identity", "session.json"),
+        JSON.stringify({ schema: "piship-identity-metadata/v1" }),
+      );
+    };
+    const run = async (args: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const status = await runCli(["uninstall", ID, ...args], {
+        stdout: (message) => out.push(message),
+        stderr: (message) => err.push(message),
+      });
+      return { status, out: out.join("\n"), err: err.join("\n") };
+    };
+    let { payload } = installRecorder();
+    const state = seedState();
+    identity(state);
+    const warned = await run([]);
+    expect(warned.status, warned.err).toBe(0);
+    expect(warned.out).toContain(`Uninstalled ${ID}.`);
+    expect(warned.err).toBe(
+      `Warning: ${ID} is still signed in (an identity session); it stays live until it expires. Sign out with the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs) before purge.`,
+    );
+    expect(existsSync(payload)).toBe(false);
+    expect(existsSync(state)).toBe(true);
+    rmSync(join(temp, "bin"), { recursive: true, force: true });
+    ({ payload } = installRecorder());
+    const quiet = await run(["--without-logout"]);
+    expect(quiet).toMatchObject({ status: 0, err: "" });
+    expect(existsSync(payload)).toBe(false);
   });
 });
 

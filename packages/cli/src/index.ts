@@ -68,6 +68,7 @@ import {
   progressReporter,
   purgeDistributionState,
   raiseThreadpool,
+  releaseLogout,
   relockKeepingPackages,
   removeEmptyPiShipDirectories,
   readInstallReceipt,
@@ -183,7 +184,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
   purge: {
     "--yes": "Confirm that the state is deleted",
     "--without-logout":
-      "Purge without signing out; the credential stays live until it expires",
+      "Uninstall or purge while signed in without the sign-in warning; the sign-in stays live until it expires",
   },
   migrate: {
     "--write": "Apply the migration to the file (the default is a dry run)",
@@ -235,7 +236,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
     "--purge": "Also delete the state (needs --yes)",
     "--yes": "Confirm the purge",
     "--without-logout":
-      "Purge without signing out; the credential stays live until it expires",
+      "Uninstall or purge while signed in without the sign-in warning; the sign-in stays live until it expires",
     "--remove-edited-shim":
       "Remove the command file even though it was edited after install",
   },
@@ -393,7 +394,7 @@ export const lifecycleCommands: Record<
   },
   uninstall: {
     usage:
-      "uninstall <id> [--purge --yes [--without-logout]] [--remove-edited-shim]",
+      "uninstall <id> [--purge --yes] [--without-logout] [--remove-edited-shim]",
     positional: [1, 1],
     values: [],
     flags: ["--purge", "--yes", "--without-logout", "--remove-edited-shim"],
@@ -2011,19 +2012,24 @@ async function runLifecycle(
         : formatDiff(report).trimEnd(),
     );
   } else if (command === "uninstall") {
-    if (
-      (flags.has("--yes") || flags.has("--without-logout")) &&
-      !flags.has("--purge")
-    ) {
+    if (flags.has("--yes") && !flags.has("--purge")) {
       output.stderr(`Usage: piship ${lifecycleCommands.uninstall?.usage}`);
       return 2;
     }
     const removeEditedShim = flags.has("--remove-edited-shim");
-    if (!flags.has("--purge"))
+    if (!flags.has("--purge")) {
+      // Read before the uninstall: the sign-in outlives the installed command.
+      const live = flags.has("--without-logout")
+        ? []
+        : signedInClasses(runtimeStateDirectory({ value: first }));
       output.stdout(
         `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}\nTo delete it: ${pishipCommand()} purge ${shellArg(first)} --yes`,
       );
-    else {
+      if (live.length)
+        output.stderr(
+          `Warning: ${first} is still signed in (${live.join(", ")}); ${live.length > 1 ? "they stay" : "it stays"} live until ${live.length > 1 ? "they expire" : "it expires"}. Sign out with ${releaseLogout(first) ?? "the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs)"} before purge.`,
+        );
+    } else {
       if (!flags.has("--yes"))
         throw new Error(
           "Uninstall with --purge also deletes this distribution's state; repeat with --yes after checking the id",

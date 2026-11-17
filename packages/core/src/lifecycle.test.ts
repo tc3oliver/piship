@@ -4036,6 +4036,13 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     await expect(purgeDistributionState(ID)).rejects.toThrow(
       /acmepi is still signed in \(an identity session, a runtime credential\)\. .* Run logout with the release's own command .* first, then purge again; .* add --without-logout/,
     );
+    // Run from the release's own piship.mjs, the refusal names its logout.
+    const payload = join(a.directory, "payload");
+    await expect(
+      purgeDistributionState(ID, { script: join(payload, "piship.mjs") }),
+    ).rejects.toThrow(
+      `Run node ${shellArg(join(payload, "bin", "acmepi"))} logout first, then purge again`,
+    );
     expect(treeHash(stateDir())).toEqual(state);
     // What logout leaves: no identity session and no credential.
     rmSync(join(stateDir(), "identity", "session.json"));
@@ -4308,7 +4315,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     await expect(
       uninstallAndPurgeDistribution(ID, { secretStore: store }),
     ).rejects.toThrow(
-      /acmepi is still signed in \(a runtime credential\)\. .* Run acmepi logout first, then purge again/,
+      /acmepi is still signed in \(a runtime credential\)\. .* Run acmepi logout first, then uninstall again; or add --without-logout to purge without signing out$/,
     );
     expect(readInstallReceipt(ID)).toEqual(receipt);
     expect(existsSync(receipt.payload)).toBe(true);
@@ -4472,9 +4479,14 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
             credential_ref: `piship:${ID}:inference#1`,
           }),
         );
+        write(
+          join(stateDir(), "identity", "session.json"),
+          JSON.stringify({ schema: "piship-identity-metadata/v1" }),
+        );
         const error = await rejection(runUninstall(ctx, []));
+        expect(error.code).toBe("CONFIG_UNAVAILABLE");
         expect(error.message).toMatch(
-          /still signed in \(a runtime credential\)/,
+          /still signed in \(an identity session, a runtime credential\)/,
         );
         expect(error.userAction).toMatch(
           /Run acmepi logout, then acmepi uninstall again/,
@@ -4482,7 +4494,9 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         expect(existsSync(receipt.commandPath)).toBe(true);
         await runUninstall(ctx, ["--without-logout"]);
         expect(existsSync(receipt.commandPath)).toBe(false);
-        expect(out.join("\n")).toMatch(/signed in: a runtime credential stays/);
+        expect(out.join("\n")).toContain(
+          "signed in: an identity session, a runtime credential stay until they expire",
+        );
       },
     );
 
@@ -4642,7 +4656,7 @@ describe.runIf(HOST_EVIDENCED)("a damaged install receipt", () => {
       // Still signed in: purge refuses until the release's own logout ran,
       // which removes what this does.
       await expect(purgeDistributionState(ID)).rejects.toThrow(
-        /still signed in .*payload\/bin\/<command> logout/,
+        /still signed in .*node bin\/<command> logout, in the directory that holds the release's piship\.mjs/,
       );
       rmSync(join(stateDir(), "identity"), { recursive: true, force: true });
       rmSync(join(stateDir(), "credentials-metadata"), {

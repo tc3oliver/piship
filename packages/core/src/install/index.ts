@@ -15,6 +15,7 @@ export {
 } from "./launcher.js";
 export {
   purgeDistributionState,
+  releaseLogout,
   removeEmptyPiShipDirectories,
   signedInClasses,
   type PurgeResult,

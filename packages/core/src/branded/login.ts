@@ -344,6 +344,19 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
+  // The credentials this login replaces belonged to whoever was signed in
+  // before it: their revocation is recorded under that user, not the new one.
+  const before =
+    access.identityMode === "none" ? null : access.readIdentityMetadata();
+  const previous = before ? principalId(before) : null;
+  const userOf =
+    (user: string | null) =>
+    (event: AccessEvent): string | null =>
+      event.event === "credential.revoke" &&
+      (event.detail.reason === "replace" ||
+        event.detail.reason === "principal-change")
+        ? previous
+        : user;
   let result: LoginResult;
   try {
     result = await interactiveLogin(ctx, access, metrics);
@@ -360,7 +373,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
     await auditAccess(
       ctx,
       access,
-      stored ? principalId(stored) : null,
+      userOf(stored ? principalId(stored) : null),
       events,
     ).catch((auditError) => ctx.err(`Error: ${formatError(auditError)}`));
     throw error;
@@ -368,7 +381,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
   await auditAccess(
     ctx,
     access,
-    result.identity ? principalId(result.identity) : null,
+    userOf(result.identity ? principalId(result.identity) : null),
     events,
   );
   reportLogin(ctx, access, result);
