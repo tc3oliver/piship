@@ -90,7 +90,7 @@ function run(operation: Operation, opts: Awaited<ReturnType<typeof ready>>) {
   const secretStore = new MemorySecretStore();
   return operation === "update"
     ? updateDistribution(ID, { ...opts, secretStore })
-    : rollbackDistribution(ID, { runCheck: fakeRun, secretStore });
+    : rollbackDistribution(ID, { secretStore });
 }
 const TARGET = { update: "1.1.0", rollback: "1.0.0" };
 
@@ -101,9 +101,7 @@ describe.runIf(HOST_EVIDENCED)("a damaged versioned state file", () => {
       await installed();
       write(absolute("state.json"), content);
       // No retained release: rollback stops after repairing the marker.
-      const error = await rejection(
-        rollbackDistribution(ID, { runCheck: fakeRun }),
-      );
+      const error = await rejection(rollbackDistribution(ID, {}));
       expect(error.message).toMatch(/has no retained release/);
       expect(readStateMarker(stateDir())).toMatchObject({
         schema: "piship-state/v1",

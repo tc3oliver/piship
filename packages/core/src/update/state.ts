@@ -44,7 +44,6 @@ import {
   readStateMarker,
   type MigrationReport,
 } from "../migration.js";
-import type { ReleaseTestRunner } from "../release/index.js";
 import { storageTransitionNotice } from "../storage-transition.js";
 import { reclaimOsTemporaries } from "../temporary-directories.js";
 import { renameWithRetry } from "../rename-retry.js";
@@ -522,34 +521,4 @@ function metadataOnly(path: string): boolean {
     STATE_DATA_CLASSES.find((entry) => entry.path === path)?.sensitivity ===
     "metadata"
   );
-}
-
-export function checkPayload(
-  payload: string,
-  lock: DistributionLock,
-  runCheck: ReleaseTestRunner,
-  env: NodeJS.ProcessEnv,
-  code: "UPDATE_FAILED" | "ROLLBACK_FAILED",
-): void {
-  // The candidate is not active yet: it runs against throwaway state, never
-  // the user's.
-  reclaimOsTemporaries();
-  const state = createTemporaryDirectory(tmpdir(), "launch-check");
-  let result: ReturnType<ReleaseTestRunner>;
-  try {
-    result = runCheck(payload, lock.app.command, ["version"], {
-      ...env,
-      PISHIP_STATE_HOME: state.path,
-    });
-  } finally {
-    state.remove();
-  }
-  if (
-    result.status !== 0 ||
-    !result.stdout.includes(`Pi ${lock.runtime.version}`)
-  )
-    throw new PiShipError(
-      code,
-      `The ${lock.app.version} release failed its launch check: ${(result.stderr || result.stdout).trim().slice(0, 300)}`,
-    );
 }

@@ -454,7 +454,7 @@ describe.runIf(HOST_EVIDENCED)(
       await updateDistribution(ID, opts);
       gate({ pid: holder, identity: processIdentity(holder) ?? null });
       const rollback = await rejection(
-        rollbackDistribution(ID, { runCheck: fakeRun, launchGateWaitMs: 100 }),
+        rollbackDistribution(ID, { launchGateWaitMs: 100 }),
       );
       expect(rollback).toMatchObject({
         code: "ROLLBACK_FAILED",

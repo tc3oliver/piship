@@ -93,14 +93,14 @@ describe.runIf(HOST_EVIDENCED)(
         await updateDistribution(ID, opts);
         const before = readFileSync(receiptFile());
         injectFault(RECEIPT, fault);
-        await rejection(rollbackDistribution(ID, { runCheck: fakeRun }));
+        await rejection(rollbackDistribution(ID, {}));
         expect(readFileSync(receiptFile())).toEqual(before);
         expect(launch()).toBe("payload 1.1.0");
         expect(temporaries()).toEqual([]);
         clearFaults();
-        await expect(
-          rollbackDistribution(ID, { runCheck: fakeRun }),
-        ).resolves.toMatchObject({ to: "1.0.0" });
+        await expect(rollbackDistribution(ID, {})).resolves.toMatchObject({
+          to: "1.0.0",
+        });
         expect(launch()).toBe("payload 1.0.0");
       },
     );

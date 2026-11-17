@@ -358,7 +358,6 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
     }) as typeof fetch;
     const error = await refused(
       updateDistribution(ID, {
-        runCheck: fakeRun,
         fetcher,
         env: { ACMEPI_UPDATE_SOURCE: "https://updates.corp.internal/acmepi" },
       }),

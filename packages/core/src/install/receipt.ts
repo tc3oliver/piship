@@ -27,7 +27,7 @@ import {
   verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
-import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
+import type { ReleaseMetadata } from "../release/index.js";
 import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
 import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
@@ -142,8 +142,6 @@ export interface LifecycleOptions {
   readonly faults?: (phase: LifecyclePhase) => void;
   /** Test seam: how long to wait for a held launch gate (default 3 s). */
   readonly launchGateWaitMs?: number;
-  /** @deprecated Client activation no longer boots a candidate; qualification runs in CI. */
-  readonly runCheck?: ReleaseTestRunner;
   /**
    * The secret store of this distribution's credentials, used when a
    * credential class the target cannot read must be cleared. Every deletion

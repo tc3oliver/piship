@@ -44,7 +44,6 @@ import {
   verifyPayload,
   verifyRelease,
 } from "./index.js";
-import { checkPayload } from "./update/state.js";
 
 const posix = process.platform !== "win32";
 const notRoot = posix && process.getuid?.() !== 0;
@@ -219,105 +218,6 @@ describe("where each start reclaims", () => {
     reclaimInstallTemporaries(ID);
     expect(abandonedTemporaryCount(ID)).toBe(0);
   });
-});
-
-describe("a launch check killed in the middle", () => {
-  const stateModule = pathToFileURL(
-    fileURLToPath(new URL("../dist/update/state.js", import.meta.url)),
-  ).href;
-  /** Runs the launch check, whose runner reports it started and never returns. */
-  const script = `
-    const { checkPayload } = await import(process.env.STATE);
-    const { writeSync } = await import("node:fs");
-    const lock = { app: { command: "acmepi", version: "1.0.0" }, runtime: { version: "1.5.0" } };
-    checkPayload(
-      "/unused",
-      lock,
-      () => {
-        writeSync(1, "started\\n");
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600000);
-        return { status: 0, stdout: "", stderr: "" };
-      },
-      {},
-      "UPDATE_FAILED",
-    );
-  `;
-
-  async function killMidCheck(): Promise<void> {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", script],
-      {
-        env: { ...process.env, STATE: stateModule },
-        stdio: ["ignore", "pipe", "inherit"],
-      },
-    );
-    const exited = new Promise((resolve) => child.on("exit", resolve));
-    await new Promise<void>((resolve, reject) => {
-      child.stdout.on("data", () => resolve());
-      child.on("error", reject);
-      child.on("exit", () => reject(new Error("exited before it started")));
-    });
-    child.kill("SIGKILL");
-    await exited;
-  }
-
-  const lock = {
-    app: { command: "acmepi", version: "1.0.0" },
-    runtime: { version: "1.5.0" },
-  } as Parameters<typeof checkPayload>[1];
-  const passing = () => ({ status: 0, stdout: "Pi 1.5.0", stderr: "" });
-
-  it("leaves its throwaway state until the next launch check removes it", async () => {
-    await killMidCheck();
-    expect(leftovers()).toHaveLength(1);
-    const [name] = leftovers();
-    expect(readTemporaryOwner(join(osTemp, name as string))?.owner.kind).toBe(
-      "launch-check",
-    );
-    checkPayload("/unused", lock, passing, {}, "UPDATE_FAILED");
-    expect(leftovers()).toEqual([]);
-  }, 30_000);
-
-  it("does not accumulate across repeated interrupted launch checks", async () => {
-    const counts: number[] = [];
-    for (let run = 0; run < 3; run += 1) {
-      await killMidCheck();
-      counts.push(leftovers().length);
-      // The next operation, which is also interrupted, starts by reclaiming.
-    }
-    // Each killed check found the one before it removed by its own start.
-    expect(counts).toEqual([1, 1, 1]);
-    checkPayload("/unused", lock, passing, {}, "UPDATE_FAILED");
-    expect(leftovers()).toEqual([]);
-  }, 30_000);
-
-  it("keeps the state of a launch check that is still running", async () => {
-    const child = spawn(
-      process.execPath,
-      ["--input-type=module", "-e", script],
-      {
-        env: { ...process.env, STATE: stateModule },
-        stdio: ["ignore", "pipe", "inherit"],
-      },
-    );
-    try {
-      await new Promise<void>((resolve, reject) => {
-        child.stdout.on("data", () => resolve());
-        child.on("error", reject);
-      });
-      checkPayload("/unused", lock, passing, {}, "UPDATE_FAILED");
-      // Its own directory is gone, the concurrent process's is not.
-      expect(leftovers()).toHaveLength(1);
-      expect(
-        readTemporaryOwner(join(osTemp, leftovers()[0] as string))?.owner.pid,
-      ).toBe(child.pid);
-    } finally {
-      const exited = new Promise((resolve) => child.on("exit", resolve));
-      child.kill("SIGKILL");
-      await exited;
-    }
-  }, 30_000);
 });
 
 describe.runIf(HOST_EVIDENCED)("lifecycle operations", () => {
