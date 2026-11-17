@@ -591,7 +591,7 @@ describe("the launch", () => {
     delete process.env.PI_CODE_SUBAGENT;
     const error = await failure(["polcy", "explain", "zQ9fSentinelWord"]);
     expect(error?.message).toBe(
-      "Unknown command: polcy. Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
+      "Unknown command: polcy. Did you mean policy? Run acmecode --help for its commands; acmecode has no non-interactive prompt mode.",
     );
   });
 

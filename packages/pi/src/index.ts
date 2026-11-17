@@ -109,6 +109,23 @@ const SIMPLE_COMMAND_USAGE: Readonly<Record<string, string>> = {
   version: "Print the distribution, PiShip, and Pi versions.",
 };
 
+/** The subcommands, for naming a mistyped one and a known one misused. */
+const BRANDED_COMMANDS = [
+  "login",
+  "logout",
+  "doctor",
+  "models",
+  "version",
+  "update",
+  "rollback",
+  "uninstall",
+  "config",
+  "sandbox",
+  "policy",
+  "auto",
+  "capabilities",
+];
+
 /** `help` after a command means its `--help`. */
 const helpArgs = (rest: readonly string[]): readonly string[] =>
   rest.length === 1 && rest[0] === "help" ? ["--help"] : rest;
@@ -381,7 +398,11 @@ export async function launchPiDistribution(
     );
     return;
   }
-  if (!sessionOption && args.length === 1 && command === "--help") {
+  if (
+    !sessionOption &&
+    args.length === 1 &&
+    (command === "--help" || command === "-h" || command === "help")
+  ) {
     const governanceHelp = metadata.governance
       ? `\n  policy explain <action> <resource> [--json] | capabilities [--json]${
           metadata.governance.manifest.sandbox.credential === "stored"
@@ -507,7 +528,13 @@ export async function launchPiDistribution(
   const smoke =
     args.length === 1 && (command === "--smoke" || command === "--smoke-model");
   if (args.length > 0 && !smoke)
-    throw new UsageError(unknownOptionMessage(args, metadata.app.command));
+    throw new UsageError(
+      unknownOptionMessage(
+        args,
+        metadata.app.command,
+        sessionOption ? [] : BRANDED_COMMANDS,
+      ),
+    );
   // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(

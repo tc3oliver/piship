@@ -775,6 +775,9 @@ describe("policy explain and doctor with auto mode", () => {
     // Deny is unchanged, and an explicit ask keeps its prompt.
     await runPolicy(ctx, ["explain", "shell.execute", "rm -rf /"]);
     expect(out.at(-1)).toMatch(/^DENIED/);
+    // An unquoted resource with spaces is explained as one, as if quoted.
+    await runPolicy(ctx, ["explain", "shell.execute", "rm", "-rf", "/"]);
+    expect(out.at(-1)).toBe(out.at(-2));
     await runPolicy(ctx, [
       "explain",
       "shell.execute",

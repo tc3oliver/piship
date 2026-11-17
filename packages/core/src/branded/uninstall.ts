@@ -14,7 +14,7 @@ import {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "../install/uninstall.js";
-import type { BrandedContext } from "./context.js";
+import { type BrandedContext, usageRefusal } from "./context.js";
 import { requireInstalled } from "./lifecycle.js";
 
 const FLAGS = ["--purge", "--yes", "--without-logout", "--remove-edited-shim"];
@@ -115,12 +115,18 @@ export async function runUninstall(
   const flags = new Set(args);
   const purge = flags.has("--purge");
   const usage = `Usage: ${app.command} uninstall ${UNINSTALL_OPTIONS}`;
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    ctx.out(
+      `${usage}\n\nUninstall ${app.name} for this user. Sessions and settings stay unless --purge --yes also deletes them; a distribution still signed in is refused until ${app.command} logout, or --without-logout leaves the sign-in.`,
+    );
+    return;
+  }
   if (
     flags.size !== args.length ||
     args.some((arg) => !FLAGS.includes(arg)) ||
     (flags.has("--yes") && !purge)
   )
-    throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
+    throw usageRefusal("uninstall", usage, args, FLAGS);
   requireInstalled(ctx, `${app.command} uninstall`);
   const id = app.id;
   const receipt = readInstallReceipt(id);
@@ -143,6 +149,7 @@ export async function runUninstall(
       `${app.command} uninstall --purge also deletes this distribution's data in ${state}`,
       {
         userAction: `Repeat it with --yes: ${app.command} uninstall --purge --yes`,
+        usage: true,
       },
     );
   const live = signedInClasses(state);

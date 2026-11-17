@@ -8,6 +8,7 @@ import {
   reclaimObsoleteVersions,
   refreshInstalledLauncher,
   sweepStateTemporaries,
+  usageRefusal,
 } from "@piship/core";
 import { auditGroup } from "../doctor/audit.js";
 import { capabilitiesGroup } from "../doctor/capabilities.js";
@@ -71,11 +72,9 @@ export async function runDoctor(
     return;
   }
   if (args.length && !(args.length === 1 && args[0] === "--json"))
-    throw new PiShipError(
-      "CONFIG_INVALID",
-      `Usage: ${command} doctor [--json]`,
-      { usage: true },
-    );
+    throw usageRefusal("doctor", `Usage: ${command} doctor [--json]`, args, [
+      "--json",
+    ]);
   // Full payload verification is a requested diagnostic, never a prerequisite
   // for entering Pi. It runs first and ends the command when it fails: the
   // rest of the report loads payload code (the policy adapter, the MCP

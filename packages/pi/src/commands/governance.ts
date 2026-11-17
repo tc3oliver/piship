@@ -8,7 +8,7 @@ import {
   type PolicyAction,
   redact,
 } from "@piship/contracts";
-import { type GovernedLock, governedLock } from "@piship/core";
+import { type GovernedLock, governedLock, usageRefusal } from "@piship/core";
 import {
   decisionToJSON,
   formatCapabilities,
@@ -17,6 +17,7 @@ import {
   projectEffectReason,
   projectPathDimension,
 } from "@piship/policy";
+import { nearestField } from "@piship/schema";
 import { GovernanceSession, inspectGovernance } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import { governanceOptions } from "../launch/governance.js";
@@ -51,15 +52,19 @@ export async function runPolicy(
     );
     return;
   }
-  if (words[0] !== "explain" || words.length !== 3)
+  if (words[0] !== "explain" || words.length < 3)
     throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
-  const [, named, target] = words as [string, string, string];
+  // An unquoted resource with spaces (`shell.execute npm install x`) is one.
+  const [, named] = words as [string, string];
+  const target = words.slice(2).join(" ");
   // A former action name (`model.use`) explains its current action.
   const requested = normalizePolicyAction(named);
+  const near = nearestField(requested, POLICY_ACTIONS);
   if (!(POLICY_ACTIONS as readonly string[]).includes(requested))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `Unknown policy action ${named}. Actions: ${POLICY_ACTIONS.join(", ")}`,
+      `Unknown policy action ${named}.${near ? ` Did you mean ${near}?` : ""} Actions: ${POLICY_ACTIONS.join(", ")}`,
+      { usage: true },
     );
   const lock = requireGovernedLock(ctx, "policy explain");
   const inspection = await inspectGovernance(
@@ -130,12 +135,18 @@ export async function runCapabilities(
   ctx: LaunchContext,
   args: readonly string[],
 ): Promise<void> {
-  if (args.some((arg) => arg !== "--json"))
-    throw new PiShipError(
-      "CONFIG_INVALID",
-      `Usage: ${ctx.metadata.app.command} capabilities [--json]`,
-      { usage: true },
+  const usage = `Usage: ${ctx.metadata.app.command} capabilities [--json]`;
+  if (
+    args.length === 1 &&
+    (args[0] === "--help" || args[0] === "-h" || args[0] === "help")
+  ) {
+    ctx.out(
+      `${usage}\n\nShow each capability this distribution declares: whether it is supported, resolved, enabled, compatible with the selected model, healthy, and effective, with a reason for every no. --json prints the same as JSON.`,
     );
+    return;
+  }
+  if (args.some((arg) => arg !== "--json"))
+    throw usageRefusal("capabilities", usage, args, ["--json"]);
   const lock = requireGovernedLock(ctx, "capabilities");
   const inspection = await inspectGovernance(
     governanceOptions(ctx, lock, null, false),

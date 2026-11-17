@@ -7,6 +7,7 @@ export {
   type GovernedLock,
   governedLock,
   openAccess,
+  usageRefusal,
 } from "./context.js";
 export {
   personalAutoStatus,

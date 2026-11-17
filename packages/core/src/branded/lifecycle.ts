@@ -43,6 +43,7 @@ import {
   governedLock,
   openAccess,
   recordAudit,
+  usageRefusal,
 } from "./context.js";
 
 /** The installed receipt when this payload is the active installed release. */
@@ -332,7 +333,13 @@ export async function runUpdate(
       else options.source = value;
       index += 1;
     } else if (arg === "--check" || arg === "--accept-review") flags.add(arg);
-    else throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
+    else
+      throw usageRefusal("update", usage, args, [
+        "--channel",
+        "--from",
+        "--check",
+        "--accept-review",
+      ]);
   }
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");

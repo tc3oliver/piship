@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { formatError } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preparePiEnvironment } from "./environment.js";
@@ -77,7 +78,62 @@ describe("--help for config and policy subcommands", () => {
   });
 });
 
+describe("--help for uninstall, capabilities, auto, and the command itself", () => {
+  it.each([
+    [["uninstall", "--help"], "^Usage: acmecode uninstall "],
+    [["uninstall", "help"], "^Usage: acmecode uninstall "],
+    [["capabilities", "-h"], "^Usage: acmecode capabilities "],
+    [["auto", "--help"], "^Usage: acmecode auto "],
+    [["-h"], "^AcmeCode\\n"],
+    [["help"], "^AcmeCode\\n"],
+  ])("prints usage for %j", async (args, pattern) => {
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => {
+      lines.push(String(line));
+    });
+    preparePiEnvironment("acmecode");
+    await launchPiDistribution({ distributionDir: temp, metadata, args });
+    expect(lines.join("\n")).toMatch(new RegExp(pattern));
+  });
+});
+
 describe("a refused command line", () => {
+  it.each([
+    [
+      ["doctor", "--josn"],
+      "Unknown option --josn for doctor. Did you mean --json?\nUsage: acmecode doctor [--json]",
+    ],
+    [
+      ["update", "--form", "x"],
+      "Unknown option --form for update. Did you mean --from?\nUsage: acmecode update ",
+    ],
+    [
+      ["doctr"],
+      "Unknown command: doctr. Did you mean doctor? Run acmecode --help",
+    ],
+    [
+      ["version", "--json"],
+      "Unknown option --json for version. Run acmecode version --help for its usage.",
+    ],
+    [
+      ["rollback", "x"],
+      "rollback takes no further arguments. Run acmecode rollback --help",
+    ],
+    [
+      ["policy", "explain", "shel.execute", "ls"],
+      "Unknown policy action shel.execute. Did you mean shell.execute?",
+    ],
+  ])("names what %j got wrong, exiting 2", async (args, expected) => {
+    preparePiEnvironment("acmecode");
+    const error = (await launchPiDistribution({
+      distributionDir: temp,
+      metadata,
+      args,
+    }).catch((caught: unknown) => caught)) as Error & { usage?: boolean };
+    expect(error.usage).toBe(true);
+    expect(formatError(error).startsWith(expected)).toBe(true);
+  });
+
   it.each([
     [["--frobnicate"]],
     [["models", "--yaml"]],

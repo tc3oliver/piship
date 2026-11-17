@@ -97,6 +97,15 @@ export async function runAuto(
   const command = ctx.metadata.app.command;
   const [action] = args;
   if (
+    args.length === 1 &&
+    (action === "--help" || action === "-h" || action === "help")
+  ) {
+    ctx.out(
+      `Usage: ${command} auto on | auto off | auto status\n\nSwitch auto mode, where the distribution allows it: from the next start, asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply. auto status shows whether it is on.`,
+    );
+    return;
+  }
+  if (
     args.length !== 1 ||
     (action !== "on" && action !== "off" && action !== "status")
   )
