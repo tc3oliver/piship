@@ -1101,14 +1101,18 @@ export class DistributionAccess {
    * used, the user signs in once on the spot and the identity is read again;
    * the error of a failed or cancelled sign-in is the launch's error. Any
    * other failure, and every launch without the hook, keeps the original
-   * error and its "Run <command> login".
+   * error and its "Run <command> login". `fallback` sees only the stored
+   * sign-in's own failure, never one from the inline sign-in.
    */
-  async #launchIdentity(options: {
-    required: boolean;
-  }): Promise<IdentitySession | null> {
+  async #launchIdentity(
+    options: { required: boolean },
+    fallback?: (error: unknown) => Promise<IdentitySession | null>,
+  ): Promise<IdentitySession | null> {
     try {
       return await this.currentIdentity(options);
     } catch (error) {
+      const held = await fallback?.(error);
+      if (held) return held;
       const signIn = this.options.loginInline;
       if (
         !signIn ||
@@ -1759,18 +1763,15 @@ export class DistributionAccess {
     let preferences = recovered.preferences;
     if (recovered.notice) notices.push(recovered.notice);
     const manager = await this.credentialManager();
-    let identity: IdentitySession | null;
     let outage: { error: unknown; expiresAt: string } | undefined;
-    try {
-      identity = await this.#launchIdentity({
-        required: this.#identityRequired(manager),
-      });
-    } catch (error) {
-      const held = await this.#outageIdentity(manager, error);
-      if (!held) throw error;
-      identity = held.identity;
-      outage = { error, expiresAt: held.expiresAt };
-    }
+    const identity = await this.#launchIdentity(
+      { required: this.#identityRequired(manager) },
+      async (error) => {
+        const held = await this.#outageIdentity(manager, error);
+        if (held) outage = { error, expiresAt: held.expiresAt };
+        return held?.identity ?? null;
+      },
+    );
     this.#pin(identity);
     notices.push(...this.#identityNotices.splice(0));
     await this.options.onPhase?.("identity-resolved");
@@ -1792,6 +1793,7 @@ export class DistributionAccess {
         identity,
         {
           // Nothing is acquired or renewed on an identity that could not be refreshed.
+          ...(outage ? { renew: false as const } : {}),
           allowAcquire:
             !outage &&
             (this.credentialMode === "http-broker" ||

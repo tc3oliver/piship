@@ -1632,6 +1632,26 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
       });
     });
 
+    it("never falls back to the credential when the inline sign-in after a revoked refresh fails temporarily", async () => {
+      services.state.refreshTokens.clear();
+      let signIns = 0;
+      const activation = DistributionAccess.open({
+        ...options,
+        now: () => Date.now() + offset,
+        loginInline: async () => {
+          signIns++;
+          throw new PiShipError("GATEWAY_UNREACHABLE", "IdP down", {
+            component: "identity",
+            retryable: true,
+          });
+        },
+      }).activate();
+      await expect(activation).rejects.toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+      });
+      expect(signIns).toBe(1);
+    });
+
     it("still fails when the refreshed identity is already expired", async () => {
       offset = 62_000; // New 30-second tokens are expired by the launch clock.
       await expect(launch()).rejects.toMatchObject({

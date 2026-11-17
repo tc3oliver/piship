@@ -1594,6 +1594,11 @@ export class CredentialManager {
        */
       observed?: string;
       /**
+       * `false`: use the stored credential only while it is valid; never
+       * renew it (and so never call the provider), whatever its state.
+       */
+      renew?: false;
+      /**
        * Runs under the credential lock before anything is read, used, or
        * acquired: the caller re-checks there that `identity` is still the
        * signed-in principal, and throws to stop.
@@ -1656,7 +1661,11 @@ export class CredentialManager {
   async #ensure(
     identity: IdentitySession | null,
     ctx: CredentialContext,
-    options: { allowAcquire: boolean; forceRefresh?: boolean | "entitlement" },
+    options: {
+      allowAcquire: boolean;
+      forceRefresh?: boolean | "entitlement";
+      renew?: false;
+    },
   ): Promise<ActiveCredential> {
     if (!this.storesSecrets) {
       await this.options.provider.acquire(identity, ctx);
@@ -1784,6 +1793,12 @@ export class CredentialManager {
       status.state !== "expired";
     const force = rejected || entitlement;
     if (force || status.state === "expiring" || status.state === "expired") {
+      if (options.renew === false)
+        throw new PiShipError(
+          "CREDENTIAL_EXPIRED",
+          "The runtime credential needs renewal, which this call does not allow",
+          { component: "credential", userAction: `Run ${this.#run("login")}` },
+        );
       const current: RuntimeCredential = {
         kind: metadata.kind,
         secret,
