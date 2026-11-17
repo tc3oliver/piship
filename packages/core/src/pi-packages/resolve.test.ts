@@ -571,8 +571,7 @@ describe("npm packages", () => {
       const calls: string[][] = [];
       const ctx: PackageContext = {
         ...context(),
-        env: { ...env, PISHIP_CACHE_HOME: cacheHome },
-        installCache: true,
+        installCacheRoot: join(cacheHome, "runtime"),
         run: (command, args, options) => {
           calls.push([command, ...args]);
           return npmEleven(command, args, options);
@@ -594,11 +593,12 @@ describe("npm packages", () => {
           "utf8",
         );
 
-      vendor();
+      expect(vendor().installCache).toBe("miss");
       expect(npmCi()).toBe(1);
       // The second build places the cached tree: no npm ci, same checks.
       const second = vendor();
       expect(npmCi()).toBe(1);
+      expect(second.installCache).toBe("hit");
       expect(second.locked).toEqual(locked);
       expect(leftPad(second)).toBe("module.exports = (s) => s;\n");
 
@@ -630,6 +630,34 @@ describe("npm packages", () => {
       expect(leftPad(fresh)).toBe("module.exports = (s) => s;\n");
       vendor();
       expect(npmCi()).toBe(3);
+
+      // A same-size change passes placement but fails the tree digest: the
+      // entry is discarded and one fresh install replaces it.
+      const extension = [
+        "node_modules",
+        "@company",
+        "pi-platform",
+        "extensions",
+        "platform.ts",
+      ];
+      const entries = () =>
+        readdirSync(runtime).filter(
+          (name) => name.startsWith("p-") && !name.endsWith(".d"),
+        );
+      for (const entry of entries()) {
+        const file = join(runtime, entry, "tree", ...extension);
+        const text = readFileSync(file, "utf8");
+        writeFileSync(file, text.replace("pad", "dap"));
+      }
+      const healed = vendor();
+      expect(npmCi()).toBe(4);
+      expect(healed.locked).toEqual(locked);
+      expect(healed.installCache).toBe("miss");
+      expect(
+        readFileSync(join(healed.directory, ...extension), "utf8"),
+      ).toContain("import pad");
+      expect(vendor().installCache).toBe("hit");
+      expect(npmCi()).toBe(4);
     },
     SLOW,
   );

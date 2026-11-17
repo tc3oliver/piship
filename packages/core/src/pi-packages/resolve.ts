@@ -26,6 +26,7 @@ import {
   lookupTree,
   materializeInstallTree,
   piPackageCacheFor,
+  type RuntimeCache,
 } from "../runtime-cache.js";
 import { type CommandRunner, mustRun, runCommand } from "./command.js";
 import { expandPackageResources } from "./expand.js";
@@ -65,11 +66,12 @@ export interface PackageContext {
   /** Parent for working directories; defaults to the OS temporary directory. */
   readonly workDir?: string;
   /**
-   * `piship build`: take a package's installed dependencies from the runtime
-   * cache (`piPackageCacheFor`) instead of running `npm ci`, and publish them
-   * there after one. Every check of the installed tree runs either way.
+   * `piship build`: the runtime cache directory to take a package's installed
+   * dependencies from (`piPackageCacheFor`) instead of running `npm ci`, and
+   * to publish them in after one. Every check of the installed tree runs
+   * either way.
    */
-  readonly installCache?: boolean;
+  readonly installCacheRoot?: string;
 }
 
 /** A locked package plus the per-package npm lockfile stored beside the lock. */
@@ -93,6 +95,8 @@ export interface VendoredPiPackage extends ResolvedPiPackage {
   readonly directory: string;
   /** Root the resource inventory paths are relative to. */
   readonly packageRoot: string;
+  /** The dependencies were placed from the runtime cache, or installed and published there. */
+  readonly installCache?: "hit" | "miss";
 }
 
 const NPM_FLAGS = [
@@ -170,7 +174,9 @@ function readJson<T>(id: string, file: string, what: string): T {
 /**
  * sha256 over `<sha256>  <path>` lines of the package's own files, sorted,
  * and their count. The root `node_modules` (its installed dependencies) is
- * left out: the lockfile integrity covers it. Symlinks are refused.
+ * left out: `npm ci` checks it against the lockfile integrity, or, placed from
+ * the runtime cache, it is checked as that cache checks a tree (file set and
+ * sizes). Symlinks are refused.
  */
 export function packageTreeDigest(
   id: string,
@@ -669,6 +675,8 @@ function materialize(
   work: string,
   pin?: Pin,
   previousLockfile?: string,
+  /** Set to the cache a hit was placed from, so a failed check can discard it. */
+  used: { hit?: RuntimeCache; reuse?: boolean } = {},
 ): VendoredPiPackage {
   const run = context.run ?? runCommand;
   const { id } = declaration;
@@ -794,7 +802,7 @@ function materialize(
     );
   // Everything that decides what `npm ci` installs here; the host is added by the cache.
   const cache =
-    pin && context.installCache
+    pin && context.installCacheRoot
       ? piPackageCacheFor(
           {
             lockfileSha256: sha256(lockfile),
@@ -802,28 +810,39 @@ function materialize(
             flags: NPM_FLAGS,
             registry: npmArgs(declaration, "").slice(1),
           },
-          context.env ?? process.env,
+          context.installCacheRoot,
         )
       : undefined;
-  const hit = cache && lookupTree(cache, "package");
-  let placed = false;
+  const hit =
+    cache && used.reuse !== false ? lookupTree(cache, "package") : undefined;
+  let installCache: "hit" | "miss" | undefined;
   if (cache && hit)
     try {
       // Copied, never linked: pretranspile and strip change the vendored tree.
       materializeInstallTree(hit, directory, { strip: false, link: false });
-      placed = true;
+      installCache = "hit";
+      used.hit = cache;
     } catch {
       discardTree(cache, "package");
       rmSync(join(directory, "node_modules"), { recursive: true, force: true });
     }
-  if (!placed) {
+  if (!installCache) {
     install();
     const adopted = cache && adoptInstallTree(cache, directory, "package");
-    if (adopted?.moved)
-      materializeInstallTree(adopted.tree, directory, {
-        strip: false,
-        link: false,
-      });
+    if (cache && adopted) {
+      try {
+        if (adopted.moved)
+          materializeInstallTree(adopted.tree, directory, {
+            strip: false,
+            link: false,
+          });
+      } catch (error) {
+        // What is left of the install is in the entry: never reuse it.
+        discardTree(cache, "package");
+        throw error;
+      }
+      installCache = "miss";
+    }
   }
   checkInstalledModules(id, directory, parsed);
   if (declaration.source === "npm") {
@@ -884,6 +903,7 @@ function materialize(
       : {}),
     directory,
     packageRoot,
+    ...(installCache ? { installCache } : {}),
   };
 }
 
@@ -951,9 +971,42 @@ export function vendorPiPackage(
       declaration.id,
       "the vendor directory is not empty",
     );
+  const used: { hit?: RuntimeCache; reuse?: boolean } = {};
+  try {
+    return vendorOnce(declaration, pin, context, directory, used);
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    if (!used.hit) throw error;
+    // A check failed on a tree placed from the cache: the entry is to blame
+    // until a fresh install fails the same way.
+    discardTree(used.hit, "package");
+    try {
+      return vendorOnce(declaration, pin, context, directory, { reuse: false });
+    } catch (retried) {
+      rmSync(directory, { recursive: true, force: true });
+      throw retried;
+    }
+  }
+}
+
+function vendorOnce(
+  declaration: DeclaredPackage,
+  pin: Pin,
+  context: PackageContext,
+  directory: string,
+  used: { hit?: RuntimeCache; reuse?: boolean },
+): VendoredPiPackage {
   const work = workDirectory(context);
   try {
-    const vendored = materialize(declaration, context, directory, work, pin);
+    const vendored = materialize(
+      declaration,
+      context,
+      directory,
+      work,
+      pin,
+      undefined,
+      used,
+    );
     const expected = pin.locked;
     const actual = vendored.locked;
     for (const [field, same] of [
@@ -980,9 +1033,6 @@ export function vendorPiPackage(
           `Run ${pishipCommand()} lock again and review the package changes`,
         );
     return vendored;
-  } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
-    throw error;
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

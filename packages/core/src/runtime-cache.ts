@@ -71,6 +71,8 @@ export const ROOT_FILES = ["package.json", "package-lock.json"];
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
 const KEEP = { install: 3, framework: 3, bundle: 6, package: 12 } as const;
+/** Package entries this process used are never evicted, so one build of many packages keeps them all (a second's slack for coarse mtimes). */
+const STARTED = Date.now();
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -148,9 +150,6 @@ export interface HostFacts {
   readonly npm?: string;
 }
 
-const cacheRoot = (env: NodeJS.ProcessEnv) =>
-  join(dirname(searchToolCacheDirectory(env)), "runtime");
-
 /** What of this machine decides an npm-installed tree's bytes. */
 function hostKey(host: HostFacts) {
   const [major, minor] = process.versions.node.split(".");
@@ -174,11 +173,11 @@ function hostKey(host: HostFacts) {
  */
 export function piPackageCacheFor(
   install: unknown,
-  env: NodeJS.ProcessEnv = process.env,
+  root: string,
   host: HostFacts = {},
 ): RuntimeCache {
   return {
-    root: cacheRoot(env),
+    root,
     key: hash(
       canonicalJson({ schema: SCHEMA, piPackage: install, ...hostKey(host) }),
     ),
@@ -197,7 +196,7 @@ export function runtimeCacheFor(
 ): RuntimeCache {
   const { package: pi, version, npmLockSha256, packages } = lock.runtime;
   return {
-    root: cacheRoot(env),
+    root: join(dirname(searchToolCacheDirectory(env)), "runtime"),
     key: hash(
       canonicalJson({
         schema: SCHEMA,
@@ -350,7 +349,8 @@ function prune(cache: RuntimeCache, budget: number): void {
           used: modified(join(cache.root, name, RECORD)),
         }))
         .sort((a, b) => b.used - a.used)
-        .slice(keep)) {
+        .slice(keep)
+        .filter((entry) => prefix !== "p-" || entry.used < STARTED - 1000)) {
         const hidden = hide(join(cache.root, entry.name));
         if (hidden) names.push(basename(hidden));
       }

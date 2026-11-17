@@ -49,6 +49,12 @@ export interface RuntimeCacheProvenance {
   readonly copied?: number;
   /** The cache is on another volume than the build. */
   readonly crossVolume?: true;
+  /**
+   * Vendored Pi packages whose installed dependencies were placed from the
+   * cache (`hit`) or installed and published there (`miss`), whatever `status`
+   * says of the runtime tree.
+   */
+  readonly piPackages?: { readonly hit: number; readonly miss: number };
 }
 
 /** The unsigned record `<out>/releases/<name>.build-info.json` beside a release. */

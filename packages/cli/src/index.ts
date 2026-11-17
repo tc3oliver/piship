@@ -785,8 +785,11 @@ export interface CliOutput {
  */
 /** One line saying whether a release's runtime came from the runtime cache. */
 export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
+  const packages = cache.piPackages
+    ? `; Pi package dependencies: ${cache.piPackages.hit} from the cache, ${cache.piPackages.miss} installed into it`
+    : "";
   if (cache.status === "disabled" || cache.entry === undefined)
-    return `runtime cache: ${cache.status}`;
+    return `runtime cache: ${cache.status}${packages}`;
   const placed = [
     `entry ${cache.entry}`,
     `linked ${cache.linked ?? 0}`,
@@ -795,7 +798,7 @@ export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
     ...(cache.bundle ? [`bundle ${cache.bundle}`] : []),
     ...(cache.crossVolume ? ["cache on another volume, entry copied in"] : []),
   ];
-  return `runtime cache: ${cache.status} (${placed.join(", ")})`;
+  return `runtime cache: ${cache.status} (${placed.join(", ")})${packages}`;
 }
 
 /** `reclaim`: the command that removes them, for one without --reclaim-staging. */

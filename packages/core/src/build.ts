@@ -246,6 +246,12 @@ export interface RuntimeCacheReport {
   readonly crossVolume?: true;
 }
 
+/** Vendored Pi packages whose dependencies were placed from the runtime cache, or installed and published there. */
+export interface PiPackageCacheReport {
+  readonly hit: number;
+  readonly miss: number;
+}
+
 /** Files placed so far, and the cache layers they came from. */
 interface Placed {
   linked: number;
@@ -442,6 +448,8 @@ export function buildDistribution(
     readonly runtimeCache?: RuntimeCache | true;
     /** Told whether the runtime came from the cache, was installed into it, or could not use it. */
     readonly onRuntimeCache?: (report: RuntimeCacheReport) => void;
+    /** Told how many vendored Pi packages' dependencies came from the runtime cache (`hit`) or were installed into it (`miss`). */
+    readonly onPiPackageCache?: (counts: PiPackageCacheReport) => void;
     /** Told what became of the vendored Pi packages' closures and shared dependencies. */
     readonly onPackageFootprint?: (report: PackageFootprint) => void;
     /** Receives a short line as each long step starts. */
@@ -539,10 +547,14 @@ export function buildDistribution(
           stage,
           {
             supplyChainGates: options.supplyChainGates !== false,
-            installCache: wanted !== undefined,
+            ...(wanted ? { installCacheRoot: wanted.root } : {}),
           },
         );
         debugTiming("pi package vendoring", vendoring);
+        const hit = vendored.filter((item) => item.installCache === "hit");
+        const miss = vendored.filter((item) => item.installCache === "miss");
+        if (hit.length || miss.length)
+          options.onPiPackageCache?.({ hit: hit.length, miss: miss.length });
         // The runtime was stripped before the packages were vendored, so the
         // maps and declarations they ship are removed here.
         if (strip)
