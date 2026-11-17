@@ -347,7 +347,11 @@ function loadCertificates(paths: readonly string[]): string[] {
       throw new PiShipError(
         "CONFIG_UNAVAILABLE",
         `Enterprise CA bundle is unreadable: ${path}`,
-        { component: "network" },
+        {
+          userAction:
+            "Check that network.tls.additionalCA names a PEM file this user can read",
+          component: "network",
+        },
       );
     }
     const certificates = pem.match(
@@ -946,7 +950,7 @@ export function checkDestination(
     throw new PiShipError(
       "NETWORK_DENIED",
       `Refusing non-HTTPS endpoint ${target.protocol}//${target.host}; plain HTTP is only allowed for loopback test fixtures`,
-      { component },
+      { userAction: "Use an https:// URL for this endpoint", component },
     );
   if (optedIn) refusePublicProxy(target, policy, component);
   if (

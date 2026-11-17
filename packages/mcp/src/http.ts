@@ -259,9 +259,15 @@ export class StreamableHttpTransport implements McpTransport {
       try {
         const value = await this.#options.credential(this.#options.serverId);
         secret = value instanceof SecretValue ? value : new SecretValue(value);
-      } catch {
+      } catch (error) {
+        // The provider's own next step (such as signing in) is the fix; the
+        // generic MCP action would point at the server instead.
+        const action =
+          error instanceof PiShipError && error.userAction
+            ? `: ${error.userAction}`
+            : "";
         throw mcpUnhealthy(
-          `MCP server ${this.#options.serverId} runtime credential is unavailable`,
+          `MCP server ${this.#options.serverId} runtime credential is unavailable${action}`,
         );
       }
       headers.set("authorization", `Bearer ${secret.reveal()}`);

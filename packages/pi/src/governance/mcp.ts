@@ -91,6 +91,9 @@ export async function startMcp(
               throw new PiShipError(
                 "CREDENTIAL_REQUIRED",
                 "No runtime credential is available for the MCP server",
+                {
+                  userAction: `Run ${session.options.lock.app.command} login, then start ${session.options.lock.app.command} again`,
+                },
               );
             return value;
           },

@@ -217,7 +217,12 @@ describe("network policy", () => {
         new URL("http://gateway.example/v1"),
         DEFAULT_NETWORK_POLICY,
       ),
-    ).toThrow("Refusing non-HTTPS");
+    ).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining("Refusing non-HTTPS"),
+        userAction: "Use an https:// URL for this endpoint",
+      }),
+    );
     expect(() =>
       checkDestination(
         new URL("http://127.0.0.1:9/v1"),
@@ -325,6 +330,17 @@ describe("network policy", () => {
       expect.objectContaining({
         message: expect.stringContaining("contains no PEM certificate"),
         userAction: expect.stringContaining("network.tls.additionalCA"),
+      }),
+    );
+    expect(() =>
+      createManagedFetch({
+        ...DEFAULT_NETWORK_POLICY,
+        additionalCA: [join(directory, "missing.pem")],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_UNAVAILABLE",
+        userAction: expect.stringContaining("PEM file this user can read"),
       }),
     );
     // Refusal of a disabled-TLS environment is covered by the
