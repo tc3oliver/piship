@@ -151,7 +151,7 @@ export const simpleUsage: Record<string, string> = {
   doctor: "doctor <artifact|id> [--json]",
   purge: "purge <id> --yes [--without-logout]",
   migrate: "migrate [<manifest>] [--write | --check]",
-  config: "config explain <manifest|artifact|id>",
+  config: "config explain <manifest|artifact|id> [--json]",
 };
 /**
  * One line per option, shown by `piship <command> --help` under the usage.
@@ -177,6 +177,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
   },
   inspect: { "--json": "Print the full locked configuration as JSON" },
   doctor: { "--json": "Print the report as JSON" },
+  config: { "--json": "Print the explanation as JSON" },
   purge: {
     "--yes": "Confirm that the state is deleted",
     "--without-logout":
@@ -1278,12 +1279,18 @@ async function runSourceCommand(
     ? manifestPath(given, command === "inspect")
     : given;
   if (command === "config") {
-    if (target !== "explain" || rest.length !== 1) {
+    const words = rest.filter((arg) => arg !== "--json");
+    if (
+      target !== "explain" ||
+      words.length !== 1 ||
+      words[0]?.startsWith("-") ||
+      rest.length > 2
+    ) {
       output.stderr(
         usageError(
           command,
           simpleUsage.config,
-          argumentProblem(command, [], [], 2, args.slice(1)),
+          argumentProblem(command, ["--json"], [], 2, args.slice(1)),
         ),
       );
       return 2;
@@ -1665,45 +1672,52 @@ async function runOperations(
   output: CliOutput,
 ): Promise<number> {
   if (command === "config") {
-    const configTarget = manifestPath(rest[0], true) ?? "";
+    const json = rest.includes("--json");
+    const configTarget =
+      manifestPath(
+        rest.find((arg) => arg !== "--json"),
+        true,
+      ) ?? "";
     const path = resolve(configTarget);
     if (existsSync(path) && statSync(path).isFile()) {
       // Explain straight from the manifest; no artifact is assembled.
       const manifest = readManifest(configTarget);
       checkPiVersion(manifest);
+      const rows = await explainConfiguration({
+        app: manifest.app,
+        mode: manifest.deployment.mode,
+        access: manifest.access,
+        stateDir: runtimeStateDirectory({ value: manifest.app.id }),
+        distributionDir: dirname(path),
+        schema: manifest.schema,
+        ...(manifest.governance ? { governance: manifest.governance } : {}),
+        ...(manifest.lifecycle ? { updates: manifest.lifecycle.updates } : {}),
+        ...(manifest.runtime.searchTools
+          ? {
+              searchTools: {
+                fd:
+                  manifest.runtime.searchTools.fd ??
+                  SEARCH_TOOL_SPECS.fd.defaultVersion,
+                rg:
+                  manifest.runtime.searchTools.rg ??
+                  SEARCH_TOOL_SPECS.rg.defaultVersion,
+              },
+            }
+          : {}),
+      });
       output.stdout(
-        formatExplanation(
-          manifest.app.name,
-          await explainConfiguration({
-            app: manifest.app,
-            mode: manifest.deployment.mode,
-            access: manifest.access,
-            stateDir: runtimeStateDirectory({ value: manifest.app.id }),
-            distributionDir: dirname(path),
-            schema: manifest.schema,
-            ...(manifest.governance ? { governance: manifest.governance } : {}),
-            ...(manifest.lifecycle
-              ? { updates: manifest.lifecycle.updates }
-              : {}),
-            ...(manifest.runtime.searchTools
-              ? {
-                  searchTools: {
-                    fd:
-                      manifest.runtime.searchTools.fd ??
-                      SEARCH_TOOL_SPECS.fd.defaultVersion,
-                    rg:
-                      manifest.runtime.searchTools.rg ??
-                      SEARCH_TOOL_SPECS.rg.defaultVersion,
-                  },
-                }
-              : {}),
-          }),
-        ),
+        json
+          ? redact(JSON.stringify(rows, null, 2))
+          : formatExplanation(manifest.app.name, rows),
       );
     } else {
       const artifact = artifactFor(configTarget, command, output.stderr);
       const app = payloadApp(artifact);
-      const result = runLauncher(artifact, app.command, ["config", "explain"]);
+      const result = runLauncher(artifact, app.command, [
+        "config",
+        "explain",
+        ...(json ? ["--json"] : []),
+      ]);
       if (result.status !== 0)
         throw new Error(launcherFailure(result, `${command} config explain`));
       output.stdout(result.stdout.trimEnd());
@@ -1767,8 +1781,23 @@ async function runOperations(
       }
     }
     const result = runLauncher(artifact, app.command, ["--smoke"]);
-    if (result.status !== 0)
-      throw new Error(`Pi launch failed: ${launcherFailure(result, "Pi")}`);
+    if (result.status !== 0) {
+      const error = `Pi launch failed: ${launcherFailure(result, "Pi")}`;
+      if (json)
+        output.stdout(
+          JSON.stringify(
+            {
+              distribution,
+              healthy: false,
+              ...(report ? { report } : {}),
+              error,
+            },
+            null,
+            2,
+          ),
+        );
+      throw new Error(error);
+    }
     const smoke = result.stdout.trim();
     if (json) {
       let parsed: unknown = smoke;

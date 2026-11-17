@@ -195,7 +195,7 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     // contacts a service or writes a secret.
     const help = await run(["--help"]);
     expect(help.stdout).toContain(
-      "login | logout | doctor [--json] | models | version",
+      "login | logout | doctor [--json] | models [--json] | version",
     );
     const unsigned = await run(["--smoke"], 1);
     expect(unsigned.stderr).toContain("IDENTITY_REQUIRED");

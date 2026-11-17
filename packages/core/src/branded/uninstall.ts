@@ -120,7 +120,7 @@ export async function runUninstall(
     args.some((arg) => !FLAGS.includes(arg)) ||
     (flags.has("--yes") && !purge)
   )
-    throw new PiShipError("CONFIG_INVALID", usage);
+    throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
   requireInstalled(ctx, `${app.command} uninstall`);
   const id = app.id;
   const receipt = readInstallReceipt(id);

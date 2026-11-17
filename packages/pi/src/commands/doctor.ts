@@ -74,6 +74,7 @@ export async function runDoctor(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Usage: ${command} doctor [--json]`,
+      { usage: true },
     );
   // Full payload verification is a requested diagnostic, never a prerequisite
   // for entering Pi. It runs first and ends the command when it fails: the

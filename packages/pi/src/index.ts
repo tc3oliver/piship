@@ -2,7 +2,12 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { VERSION } from "@earendil-works/pi-coding-agent";
-import { PiShipError, startupMark, startupNote } from "@piship/contracts";
+import {
+  PiShipError,
+  startupMark,
+  startupNote,
+  UsageError,
+} from "@piship/contracts";
 import {
   applyAgentFiles,
   applyPackageEnvironment,
@@ -97,7 +102,8 @@ const SIMPLE_COMMAND_USAGE: Readonly<Record<string, string>> = {
   login:
     "Sign in; run bare at a terminal in a managed distribution, it then starts the session.",
   logout: "Sign out and remove the stored sign-in.",
-  models: "List the models this distribution offers.",
+  models:
+    "List the models this distribution offers; --json prints them as JSON.",
   rollback: "Return to the previously installed release.",
   version: "Print the distribution, PiShip, and Pi versions.",
 };
@@ -167,7 +173,9 @@ export async function launchPiDistribution(
     if (args[0] === "--model" && requestedModel === undefined) {
       requestedModel = args[1];
       if (!requestedModel)
-        throw new PiShipError("CONFIG_INVALID", "--model needs a model id");
+        throw new PiShipError("CONFIG_INVALID", "--model needs a model id", {
+          usage: true,
+        });
       args = args.slice(2);
     } else if (args[0] === "--new-session" && !newSession) {
       newSession = true;
@@ -180,6 +188,7 @@ export async function launchPiDistribution(
           "--task-grant needs a declared grant ID",
           {
             userAction: `Name one of the distribution's declared task grants: ${metadata.app.command} --task-grant <id>`,
+            usage: true,
           },
         );
       args = args.slice(2);
@@ -194,6 +203,7 @@ export async function launchPiDistribution(
           "--session needs a session ID",
           {
             userAction: `Run ${metadata.app.command} --session <id> with the ID the last session printed when it ended`,
+            usage: true,
           },
         );
       resume = { ...resume, id };
@@ -204,6 +214,7 @@ export async function launchPiDistribution(
         throw new PiShipError(
           "CONFIG_INVALID",
           "--session-dir needs a directory",
+          { usage: true },
         );
       resume = { id: resume?.id ?? "", dir };
       args = args.slice(2);
@@ -215,6 +226,7 @@ export async function launchPiDistribution(
       "--session resumes one session: it needs a session ID and cannot be combined with --new-session or a subcommand",
       {
         userAction: `Run ${metadata.app.command} --session <id> on its own or with --model`,
+        usage: true,
       },
     );
   const sessionOption =
@@ -237,6 +249,7 @@ export async function launchPiDistribution(
       "--task-grant applies only to a session",
       {
         userAction: `Start a session with ${metadata.app.command} --task-grant <id>, without a subcommand`,
+        usage: true,
       },
     );
   if (yolo) {
@@ -255,6 +268,7 @@ export async function launchPiDistribution(
         "--yolo applies only when a session starts: it cannot be combined with a subcommand, --help, or --version",
         {
           userAction: `Run ${command} --yolo on its own or with --model, --new-session, --smoke, or --smoke-model`,
+          usage: true,
         },
       );
     const refusal = yoloRefusal(metadata);
@@ -390,8 +404,8 @@ export async function launchPiDistribution(
     // logout refuse it, so they are not advertised.
     const piNative = metadata.access?.credential.provider === "pi-native";
     const accessCommands = piNative
-      ? "doctor [--json] | models | version"
-      : "login | logout | doctor [--json] | models | version";
+      ? "doctor [--json] | models [--json] | version"
+      : "login | logout | doctor [--json] | models [--json] | version";
     // Only where it can work: a policy to relax, and in a managed
     // distribution the administrator's allowance.
     const yoloOffered = !!metadata.governance && !yoloRefusal(metadata);
@@ -410,8 +424,8 @@ export async function launchPiDistribution(
     const managedHelp = metadata.access
       ? `\n\nCommands:\n  ${accessCommands}\n  update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${loginHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | models | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}`
-        : `\n\nCommands:\n  doctor [--json] | models | version | uninstall ${UNINSTALL_OPTIONS}`;
+        ? `\n\nCommands:\n  doctor [--json] | models [--json] | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${yoloHelp}`
+        : `\n\nCommands:\n  doctor [--json] | models [--json] | version | uninstall ${UNINSTALL_OPTIONS}`;
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
@@ -467,7 +481,11 @@ export async function launchPiDistribution(
     }
     if (args.length === 1 && command === "logout") return runLogout(ctx);
     if (command === "doctor") return runDoctor(ctx, helpArgs(rest));
-    if (args.length === 1 && command === "models") return runModels(ctx);
+    if (
+      command === "models" &&
+      (args.length === 1 || (args.length === 2 && args[1] === "--json"))
+    )
+      return runModels(ctx, args.length === 2);
     if (command === "update") return runUpdate(ctx, helpArgs(rest));
     if (args.length === 1 && command === "rollback") return runRollback(ctx);
     if (command === "uninstall") return runUninstall(ctx, helpArgs(rest));
@@ -484,7 +502,7 @@ export async function launchPiDistribution(
   const smoke =
     args.length === 1 && (command === "--smoke" || command === "--smoke-model");
   if (args.length > 0 && !smoke)
-    throw new Error(unknownOptionMessage(args, metadata.app.command));
+    throw new UsageError(unknownOptionMessage(args, metadata.app.command));
   // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(

@@ -84,6 +84,7 @@ export async function runAuto(
     throw new PiShipError(
       "CONFIG_INVALID",
       `Usage: ${command} auto on | auto off | auto status`,
+      { usage: true },
     );
   const lock = governedLock(ctx);
   const policy = lock?.governance.manifest.policy;

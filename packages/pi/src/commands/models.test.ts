@@ -82,3 +82,80 @@ describe("models for a Pi-native distribution", () => {
     );
   });
 });
+
+describe("models --json", () => {
+  it("prints the Pi-native list with the same fields as the text", async () => {
+    prepared.value = { activated: null };
+    const { ctx, out } = context(
+      {
+        models: {
+          default: "acme/coder",
+          allowed: ["acme/coder", "other/model"],
+          catalog: [{ id: "acme/coder", name: "Acme Coder" }],
+        },
+      },
+      PROVIDERS,
+    );
+    await runModels(ctx, true);
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      inference: "pi-native",
+      source: "allowlist",
+      models: [
+        { id: "acme/coder", name: "Acme Coder", selected: true, ready: true },
+        { id: "other/model", selected: false, ready: false },
+      ],
+    });
+  });
+
+  it("prints the gateway models with availability and capabilities", async () => {
+    prepared.value = {
+      activated: {
+        runtime: { kind: "openai-compatible" },
+        config: { allowedModels: ["coder"] },
+        selectedModel: "coder",
+        models: [
+          {
+            id: "coder",
+            name: "Coder",
+            availability: { available: true },
+            capabilities: { contextWindow: 128000, tools: true },
+            policyTags: ["internal"],
+          },
+          {
+            id: "big",
+            name: "Big",
+            availability: { available: true },
+            capabilities: { tools: false },
+            policyTags: [],
+          },
+        ],
+      },
+    };
+    const { ctx, out } = context(undefined);
+    await runModels(ctx, true);
+    expect(JSON.parse(out.join("\n"))).toEqual({
+      inference: "openai-compatible",
+      models: [
+        {
+          id: "coder",
+          name: "Coder",
+          selected: true,
+          available: true,
+          contextWindow: 128000,
+          tools: true,
+          policyTags: ["internal"],
+        },
+        {
+          id: "big",
+          name: "Big",
+          selected: false,
+          available: false,
+          reason: "excluded",
+          contextWindow: null,
+          tools: false,
+          policyTags: [],
+        },
+      ],
+    });
+  });
+});

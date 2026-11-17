@@ -119,7 +119,8 @@ describe("real bundled Pi runtime", () => {
   });
   it("preserves structured runtime errors across the boot bundle boundary", () => {
     const result = run([join(payload, "bin", "mypi"), "--model"]);
-    expect(result.status).toBe(1);
+    // A usage error: the launcher exits 2 for it.
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("CONFIG_INVALID");
     expect(result.stderr).toContain("--model needs a model id");
   });

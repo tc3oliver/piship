@@ -43,6 +43,8 @@ export interface PiShipErrorOptions {
   readonly component?: string;
   readonly sanitizedDetail?: Record<string, unknown>;
   readonly cause?: unknown;
+  /** A refused command line: the launcher exits 2 for it, as piship does. */
+  readonly usage?: boolean;
 }
 
 /** The public error contract. Message and detail are sanitized on construction. */
@@ -53,6 +55,7 @@ export class PiShipError extends Error {
   readonly userAction: string | undefined;
   readonly component: string | undefined;
   readonly sanitizedDetail: Record<string, unknown> | undefined;
+  readonly usage: boolean;
   constructor(
     code: PiShipErrorCode,
     message: string,
@@ -65,6 +68,7 @@ export class PiShipError extends Error {
     this.retryAfterMs = options.retryAfterMs;
     this.userAction = options.userAction && redact(options.userAction);
     this.component = options.component;
+    this.usage = options.usage ?? false;
     this.sanitizedDetail =
       options.sanitizedDetail &&
       (redactValue(options.sanitizedDetail) as Record<string, unknown>);
@@ -81,6 +85,18 @@ export class PiShipError extends Error {
       ...(this.component ? { component: this.component } : {}),
       ...(this.sanitizedDetail ? { detail: this.sanitizedDetail } : {}),
     };
+  }
+}
+
+/**
+ * A refused command line without an error code. The launcher exits 2 for
+ * any error whose `usage` is true (this, or a PiShipError made with usage).
+ */
+export class UsageError extends Error {
+  readonly usage = true;
+  constructor(message: string) {
+    super(redact(message));
+    this.name = "UsageError";
   }
 }
 
