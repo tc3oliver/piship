@@ -164,6 +164,7 @@ describe("configuration precedence", () => {
     expect(narrowed).toMatchObject({
       allowedModels: [],
       modelsRestricted: true,
+      userNarrowedFrom: ["openai/gpt-x"],
     });
     const kept = resolveEffectiveConfig(open, undefined, {
       schema: "piship-preferences/v1",
@@ -190,6 +191,7 @@ describe("configuration precedence", () => {
     ).toMatchObject({
       allowedModels: ["anthropic/other"],
       modelsRestricted: true,
+      userNarrowedFrom: "any",
     });
   });
 

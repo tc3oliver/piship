@@ -820,6 +820,28 @@ export function inertTempRetention(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * An openai-compatible endpoint without `models.default` (managed mode
+ * already refuses it): every launch fails until the user passes `--model` or
+ * sets one. A warning, not an error, because a user `model` preference makes
+ * such a manifest work.
+ */
+export function missingDefaultModel(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const access = manifest.access;
+  return access?.inference.provider === "openai-compatible" &&
+    access.models.default === undefined &&
+    access.config.enforced.model === undefined
+    ? [
+        {
+          path: "models.default",
+          message: `no default model is set, so ${manifest.app.command} fails to start until the user passes --model or sets one with config set model; set models.default to one of models.allowed`,
+        },
+      ]
+    : [];
+}
+
+/**
  * An optional HTTP audit sink in a managed distribution drops what it cannot
  * deliver, and nothing says so until `doctor`.
  */
@@ -849,6 +871,7 @@ export function optionalHttpAuditSinks(
 export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
     ...unusedVariables(manifest),
+    ...missingDefaultModel(manifest),
     ...unknownToolDenials(manifest),
     ...unknownMcpServerRules(manifest),
     ...unmatchablePathRules(manifest),

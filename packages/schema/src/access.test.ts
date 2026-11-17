@@ -374,6 +374,34 @@ describe("piship/v1alpha2 personal modes", () => {
   ])("rejects invalid personal combination %#", (extra, message) => {
     expect(() => parseManifest(personal(extra as Json))).toThrow(message);
   });
+  it("names provider: none when an endpoint has no credential", () => {
+    expect(() => parseManifest(personal(gateway))).toThrow(
+      /needs a credential: set credential\.provider to none for a local server without authentication/,
+    );
+    expect(() =>
+      parseManifest(patch(managed, "credential", undefined)),
+    ).toThrow(/needs a credential: set credential\.provider to http-broker/);
+  });
+  it("warns when an endpoint has no default model", () => {
+    const warning = (extra: Json) =>
+      launchWarnings(
+        parseManifest(
+          personal({ credential: { provider: "none" }, ...gateway, ...extra }),
+        ),
+      ).filter((item) => item.path === "models.default");
+    expect(warning({})).toEqual([
+      {
+        path: "models.default",
+        message: expect.stringContaining("mypi fails to start"),
+      },
+    ]);
+    expect(
+      warning({ models: { ...gateway.models, default: "local/coder" } }),
+    ).toEqual([]);
+    expect(warning({ config: { enforced: { model: "local/coder" } } })).toEqual(
+      [],
+    );
+  });
 });
 
 describe("alpha migration", () => {

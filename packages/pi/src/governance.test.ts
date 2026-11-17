@@ -420,6 +420,35 @@ describe("personal Pi-native governance", () => {
       runtime.streamSimple(other, { messages: [] } as never),
     ).toThrow("not allowed");
   });
+  it("reports a model the user narrowed away as unavailable, not refused by the distribution", async () => {
+    const runtime = await ModelRuntime.create({
+      authPath: join(temp, "auth.json"),
+      modelsPath: join(temp, "models.json"),
+      refreshOnCreate: false,
+    });
+    const kept = runtime.getModels("openai")[0];
+    const narrowed = runtime.getModels("anthropic")[0];
+    const outside = runtime.getModels("openai")[1];
+    expect(kept && narrowed && outside).toBeDefined();
+    if (!kept || !narrowed || !outside) return;
+    governModelRuntime(runtime, {
+      kind: "pi-native",
+      allowedModelKeys: [`openai/${kept.id}`],
+      restricted: true,
+      userNarrowedFrom: [`openai/${kept.id}`, `anthropic/${narrowed.id}`],
+    });
+    expect(() =>
+      runtime.streamSimple(narrowed, { messages: [] } as never),
+    ).toThrow(
+      expect.objectContaining({
+        code: "MODEL_UNAVAILABLE",
+        message: expect.stringContaining("excluded by user preference"),
+      }),
+    );
+    expect(() =>
+      runtime.streamSimple(outside, { messages: [] } as never),
+    ).toThrow(expect.objectContaining({ code: "MODEL_DENIED" }));
+  });
   it("allows no model when a restricting policy leaves an empty allowlist", async () => {
     const runtime = await ModelRuntime.create({
       authPath: join(temp, "auth.json"),

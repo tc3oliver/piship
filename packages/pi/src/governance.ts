@@ -35,6 +35,11 @@ export interface PiNativeGovernance {
    * virtual model stay here.
    */
   readonly dispatchModelKeys?: readonly string[];
+  /**
+   * The allowlist before the user's own `models.allowed` narrowing, or
+   * `"any"`: a model in it is refused as unavailable by preference.
+   */
+  readonly userNarrowedFrom?: readonly string[] | "any";
 }
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
@@ -306,6 +311,23 @@ export function governModelRuntime(
     detail?: Readonly<Record<string, string>>,
   ): never => {
     policy?.denied?.(action, model.provider, model.id, detail);
+    const from =
+      governance.kind === "pi-native" ? governance.userNarrowedFrom : undefined;
+    if (
+      !detail &&
+      from &&
+      !listed(model.provider, model.id) &&
+      (from === "any" || from.includes(key(model)))
+    )
+      throw new PiShipError(
+        "MODEL_UNAVAILABLE",
+        `Model ${key(model)} is not available (excluded by user preference)`,
+        {
+          component: "inference",
+          userAction:
+            "Choose another model with /model, or add it back to your models.allowed preference with config set models.allowed",
+        },
+      );
     throw denied(model.provider, model.id, detail?.reason, managed?.command);
   };
   const guard = (model: ModelRef & { api?: string; baseUrl?: string }) => {

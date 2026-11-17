@@ -29,9 +29,13 @@ credential:
   storage:
     provider: system
 
+# liveCatalog: `mypi-local models` and launch check which allowed models the
+# server lists at GET /models. Each id is sent to the server unchanged, so it
+# must be a name the server serves (such as an Ollama tag).
 inference:
   provider: openai-compatible
   baseUrl: ${MYPI_MODEL_URL}
+  liveCatalog: true
 
 models:
   default: local/coder
