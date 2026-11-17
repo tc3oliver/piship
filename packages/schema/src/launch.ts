@@ -803,6 +803,45 @@ export function inertDataPurge(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * `data.temp.retention`, which no sweep applies: PiShip's temporaries are
+ * removed by the abandoned-temporaries sweep once their process is gone, and
+ * deleting a live one by age would break the run that owns it.
+ */
+export function inertTempRetention(manifest: Manifest): ValidationDiagnostic[] {
+  return manifest.data?.retention.temp
+    ? [
+        {
+          path: "data.temp.retention",
+          message:
+            "nothing applies it: PiShip removes a temporary when its process ends, or at a later start once the process is gone, whatever its age; remove data.temp.retention",
+        },
+      ]
+    : [];
+}
+
+/**
+ * An optional HTTP audit sink in a managed distribution drops what it cannot
+ * deliver, and nothing says so until `doctor`.
+ */
+export function optionalHttpAuditSinks(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const audit = manifest.governance?.audit;
+  if (manifest.deployment.mode !== "managed" || !audit?.enabled) return [];
+  return audit.sinks.flatMap((sink, index) =>
+    sink.type === "http" && !sink.required
+      ? [
+          {
+            path: `audit.sinks[${index}].required`,
+            message:
+              "this optional HTTP sink drops events while its collector is unreachable, and only doctor shows the count afterwards; set required: true if events must not be lost",
+          },
+        ]
+      : [],
+  );
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -817,6 +856,8 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...inactivePackRules(manifest),
     ...inertCaptureClasses(manifest),
     ...inertDataPurge(manifest),
+    ...inertTempRetention(manifest),
+    ...optionalHttpAuditSinks(manifest),
     ...findings({
       mode: manifest.deployment.mode,
       access: manifest.access,

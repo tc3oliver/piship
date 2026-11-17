@@ -317,7 +317,7 @@ Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or
 | Field | Default | Values |
 | --- | --- | --- |
 | `audit.enabled` | `true` (managed), `false` (personal) | Enabled audit needs at least one sink |
-| `audit.sinks` | one optional `file` sink named `local` when enabled | `id`, `type` (`file`, written to `<state>/logs/audit.jsonl`, or `http`, which POSTs event batches to `url`), `url` (`http` only; may be a `${NAME}` runtime reference), and `required` (default `false`) |
+| `audit.sinks` | one optional `file` sink named `local` when enabled | `id`, `type` (`file`, written to `<state>/logs/audit.jsonl`, or `http`, which POSTs event batches to `url`), `url` (`http` only; may be a `${NAME}` runtime reference), and `required` (default `false`). An optional `http` sink drops the events it cannot deliver, and only `doctor` shows the count afterwards; in a managed distribution `validate` warns about it, and `required: true` keeps them in a spool instead ([audit](security.md#audit)) |
 | `audit.buffer` | `maxEvents: 1000`, `flushInterval: 2s` | Bounded in-memory buffer per sink |
 | `audit.capture` | all `false` | `promptContent`, `responseContent`, `commandText`, `sourceContent`: opt-in content classes. Events are metadata only otherwise. Only `commandText` is recorded today (`bash`, `!`, and background task commands); the other three are accepted but no event carries them yet, and `validate` warns when one is set |
 
@@ -560,7 +560,7 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `mcp.servers.<id>.headers` | none | `streamable-http` only: request headers whose value is a claim (`sub`, `preferred_username`, or a verified `email`) of the signed-in OIDC identity, as `<Header-Name>: { identityClaim: <claim> }` ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
 | `models.catalog.<id>.type` | `chat` | `chat`, `classifier`, or `image`. A non-chat model names its `api`; an `image` model lists its `output` (`text`, `image`) |
 | `models.catalog.<id>.virtual` | none | `router` (the declared extension that registers the virtual model: its `./` path, a certified extension ID, or `package:<id>`) and `routes`, the closed set of physical catalog entries it may route to |
-| `data.<class>.retention` | none (not swept) | For `sessions`, `audit`, `cache`, and `temp`: a duration such as `30d` or `12h`. Audit retention is a minimum, the others maximums; there is no user retention preference yet, so the declared value applies ([limits](security.md#audit)) |
+| `data.<class>.retention` | none (not swept) | For `sessions`, `audit`, `cache`, and `temp`: a duration such as `30d` or `12h`. Audit retention is a minimum, the others maximums; there is no user retention preference yet, so the declared value applies ([limits](security.md#audit)). `temp` is parsed and locked but nothing applies it: PiShip's temporaries are removed once their process is gone, whatever their age, so `validate` warns and `doctor` shows it as not acted on |
 | `data.purge.onLogout` | `[]` | Data classes `logout` deletes, and its output names them; may not name `audit`. Only the branded `logout` runs it, so with `credential.provider: pi-native` (sign-in inside Pi) nothing does: `validate` warns and `doctor` marks the row |
 | `data.purge.onUninstall` | `none` | `none` or `all`: recorded in the lock and shown by `doctor`, not yet acted on (`uninstall` keeps state either way; `purge` deletes it); `validate` warns about `all` and `doctor` says it is not acted on |
 | `data.export.<resource>` | none | `allow`, `ask`, or `deny` for `public`, `local`, or `support`: sugar for a distribution-enforced `session.export` rule |
@@ -575,6 +575,15 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 v0.9.0 added the policy actions `model.select` (formerly `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` together with v1alpha6. Like every policy action they are not tied to a schema version: one action vocabulary serves manifests, rule files, and locks, so a v1alpha3 to v1alpha5 manifest accepts them too ([Policy](#policy)).
 
 Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), bundled search tools ([below](#bundled-search-tools-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
+
+### Where sessions and logs live
+
+A distribution keeps its data in its state directory, `~/.piship/<id>` (or `$PISHIP_STATE_HOME/<id>`); the full list is in [architecture](architecture.md#state).
+
+- Sessions: `<state>/sessions/user/` (with a signed-in identity, `sessions/user/<principal digest>/`), one Pi `*.jsonl` file per session, plus `<state>/sessions/acceptance/` for `--smoke`. They may hold private project content.
+- Logs: `<state>/logs/`: the audit file sink `audit.jsonl` and its rotated `audit.jsonl.1` to `.5`, the local counters `metrics.json`, and `audit-spool/`, the undelivered events of a required HTTP sink.
+
+`purge <id> --yes` deletes the whole state directory and refuses while the distribution is signed in. To delete only your sessions, quit every running session of the distribution and delete the `*.jsonl` files under `<state>/sessions/` (or the whole `sessions` directory); the next launch starts a new session. To delete only local audit logs, delete `audit.jsonl` and `audit.jsonl.N` under `<state>/logs/` with no session running. In a managed distribution the audit log is the company's record and its retention is a minimum, so ask the administrator first, and never delete `audit-spool/`: it holds events not yet delivered to the collector. A `data` section's retention sweep deletes old sessions, rotated audit files, and cache files on its own.
 
 ### MCP plain HTTP and identity headers (v1alpha6)
 
