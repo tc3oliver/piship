@@ -22,6 +22,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, posix, win32 } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { nearestField } from "@piship/schema";
 import { CODEMODE_TOOL, TOOL_SEARCH_TOOL } from "../governance/exposure.js";
 
 export const SUBAGENT_ENV = "PI_CODE_SUBAGENT";
@@ -113,15 +114,26 @@ const COMMAND_WORD = /^[a-z][a-z0-9-]{0,31}$/;
 export function unknownOptionMessage(
   args: readonly string[],
   command: string,
+  commands: readonly string[] = [],
 ): string {
   // A leading word is a mistyped command, not an option. It is repeated only
   // when it looks like a command word (lowercase letters, hyphens, at most two
   // digits), so a mistyped `polcy` is named but a token, URL or path is not;
   // what follows it is never repeated.
   const [first] = args;
+  // A known command with arguments it does not take: name the first option.
+  if (first !== undefined && commands.includes(first)) {
+    const option = args
+      .slice(1)
+      .find((arg) => arg.startsWith("-"))
+      ?.split("=")[0]
+      ?.slice(0, 40);
+    return `${option ? `Unknown option ${option} for ${first}.` : `${first} takes no further arguments.`} Run ${command} ${first} --help for its usage.`;
+  }
+  const near = first && nearestField(first, commands);
   if (first !== undefined && !first.startsWith("-"))
     return COMMAND_WORD.test(first) && (first.match(/\d/g)?.length ?? 0) <= 2
-      ? `Unknown command: ${first}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`
+      ? `Unknown command: ${first}.${near ? ` Did you mean ${near}?` : ""} Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`
       : `Unknown command: its first word is not a command of ${command}. Run ${command} --help for its commands; ${command} has no non-interactive prompt mode.`;
   const shown =
     args[0] === "--mode" && args[1] === "json" && args[2] === "-p"

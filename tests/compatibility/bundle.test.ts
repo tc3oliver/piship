@@ -119,10 +119,10 @@ describe("real bundled Pi runtime", () => {
   });
   it("preserves structured runtime errors across the boot bundle boundary", () => {
     const result = run([join(payload, "bin", "mypi"), "--model"]);
-    // A usage error: the launcher exits 2 for it.
+    // A usage error: the launcher exits 2 for it (the error's usage flag
+    // crossed the boundary) and prints it without the code, as piship does.
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("CONFIG_INVALID");
-    expect(result.stderr).toContain("--model needs a model id");
+    expect(result.stderr).toMatch(/^--model needs a model id/);
   });
   it("runs governance inspection and portable management CLI", () => {
     const result = run([

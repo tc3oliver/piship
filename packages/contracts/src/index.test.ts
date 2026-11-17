@@ -207,6 +207,15 @@ describe("SecretValue", () => {
         new PiShipError("GATEWAY_RATE_LIMITED", "x", { retryAfterMs: 0 }),
       ),
     ).toBe("GATEWAY_RATE_LIMITED: x");
+    // A refused command line reads like piship's own, without the code.
+    expect(
+      formatError(
+        new PiShipError("CONFIG_INVALID", "Usage: x", {
+          usage: true,
+          userAction: "Do y",
+        }),
+      ),
+    ).toBe("Usage: x\nAction: Do y");
   });
 });
 

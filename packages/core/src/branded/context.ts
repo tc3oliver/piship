@@ -15,7 +15,7 @@ import {
   PiShipError,
   plainHttpOrigins,
 } from "@piship/contracts";
-import { resolveTemplate } from "@piship/schema";
+import { nearestField, resolveTemplate } from "@piship/schema";
 import { auditRotation } from "../data/lifecycle.js";
 import {
   type AccessEvent,
@@ -46,6 +46,28 @@ export interface BrandedContext {
    * forgets them.
    */
   readonly forgetPiTrust?: (written: Readonly<Record<string, boolean>>) => void;
+}
+
+/**
+ * A refused branded command line, led (as piship's refusals are) by the first
+ * option `known` does not hold. Only its name is shown, cut at `=`: a value
+ * may be a secret.
+ */
+export function usageRefusal(
+  subcommand: string,
+  usage: string,
+  args: readonly string[],
+  known: readonly string[],
+): PiShipError {
+  const name = args
+    .find((arg) => arg.startsWith("-") && !known.includes(arg))
+    ?.split("=")[0];
+  const near = name && nearestField(name, known);
+  return new PiShipError(
+    "CONFIG_INVALID",
+    `${name ? `Unknown option ${name} for ${subcommand}.${near ? ` Did you mean ${near}?` : ""}\n` : ""}${usage}`,
+    { usage: true },
+  );
 }
 
 /** One doctor report line: a label and its value. */

@@ -188,9 +188,10 @@ export function systemError(
 export function formatError(error: unknown): string {
   const system = systemError(error);
   if (system) return formatError(system);
+  // A refused command line reads like piship's own: no error code.
   if (error instanceof PiShipError)
     return redact(
-      `${error.code}: ${error.message}${error.retryAfterMs !== undefined && error.retryAfterMs > 0 ? `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s` : ""}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
+      `${error.usage ? "" : `${error.code}: `}${error.message}${error.retryAfterMs !== undefined && error.retryAfterMs > 0 ? `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s` : ""}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
     );
   if (error instanceof Error) return redact(error.message);
   return redact(String(error));
