@@ -1884,24 +1884,49 @@ export class DistributionAccess {
           allowed.filter((id) => !incompatible[id]),
         );
     } else if (requested) {
-      if (config.modelsRestricted && !config.allowedModels.includes(requested))
-        throw new PiShipError(
-          "MODEL_DENIED",
-          `Model ${requested} is not allowed by this distribution`,
-          {
-            component: "inference",
-            userAction: config.allowedModels.length
-              ? `Choose one of: ${config.allowedModels.join(", ")}`
-              : `Ask the distribution owner to allow a model; ${this.options.app.command} models lists what is configured`,
-          },
-        );
-      const resolved = await inference.resolveModel(requested, {
-        models: [],
-        allowed: config.allowedModels,
-      });
-      selectedModel = requested;
-      const gaps = incompatibleCapabilities(resolved.model, capabilities);
-      if (gaps.length) throw modelIncompatible(requested, gaps, []);
+      if (
+        config.modelsRestricted &&
+        !config.allowedModels.includes(requested)
+      ) {
+        const command = this.options.app.command;
+        const from = config.userNarrowedFrom;
+        const byPreference =
+          from !== undefined && (from === "any" || from.includes(requested));
+        const choose = config.allowedModels.length
+          ? `Choose one of: ${config.allowedModels.join(", ")}`
+          : `Ask the distribution owner to allow a model; ${command} models lists what is configured`;
+        const refusal = byPreference
+          ? new PiShipError(
+              "MODEL_UNAVAILABLE",
+              `Model ${requested} is not available (excluded by your models.allowed preference)`,
+              {
+                component: "inference",
+                userAction: `${choose}, or add it to your preference with ${command} config set models.allowed`,
+              },
+            )
+          : new PiShipError(
+              "MODEL_DENIED",
+              `Model ${requested} is not allowed by this distribution`,
+              { component: "inference", userAction: choose },
+            );
+        // Listing never uses the selection, so a stale one does not block it.
+        if (!options.listOnly)
+          throw withModelRecovery(
+            refusal,
+            command,
+            options.requestedModel
+              ? "flag"
+              : config.entries.find((entry) => entry.key === "model")?.source,
+          );
+      } else {
+        const resolved = await inference.resolveModel(requested, {
+          models: [],
+          allowed: config.allowedModels,
+        });
+        selectedModel = requested;
+        const gaps = incompatibleCapabilities(resolved.model, capabilities);
+        if (gaps.length) throw modelIncompatible(requested, gaps, []);
+      }
     } else {
       // Pi chooses the model and PiShip has no verified metadata for it.
       const gaps = incompatibleCapabilities(undefined, capabilities);

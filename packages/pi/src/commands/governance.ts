@@ -13,6 +13,9 @@ import {
   decisionToJSON,
   formatCapabilities,
   formatDecision,
+  projectDimensionEffect,
+  projectEffectReason,
+  projectPathDimension,
 } from "@piship/policy";
 import { GovernanceSession, inspectGovernance } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
@@ -41,12 +44,15 @@ export async function runPolicy(
 ): Promise<void> {
   const json = args.includes("--json");
   const words = args.filter((arg) => arg !== "--json");
-  if (words[0] !== "explain" || words.length !== 3)
-    throw new PiShipError(
-      "CONFIG_INVALID",
-      `Usage: ${ctx.metadata.app.command} policy explain <action> <resource> [--json]`,
-      { usage: true },
+  const usage = `Usage: ${ctx.metadata.app.command} policy explain <action> <resource> [--json]`;
+  if (args.includes("--help") || args.includes("-h") || args[0] === "help") {
+    ctx.out(
+      `${usage}\n\nShow how policy decides <action> on <resource>, and which rules matched. Actions: ${POLICY_ACTIONS.join(", ")}`,
     );
+    return;
+  }
+  if (words[0] !== "explain" || words.length !== 3)
+    throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
   const [, named, target] = words as [string, string, string];
   // A former action name (`model.use`) explains its current action.
   const requested = normalizePolicyAction(named);
@@ -82,10 +88,41 @@ export async function runPolicy(
         resource,
       }),
   };
+  // Project trust decides whether a project item is offered at all, before
+  // these rules; show it so the answer matches doctor.
+  const dimension = resource.startsWith("project:")
+    ? projectPathDimension(resource.slice("project:".length))
+    : undefined;
+  const trust = dimension
+    ? {
+        dimension,
+        origin: inspection.project.origin,
+        effect: projectDimensionEffect(
+          lock.governance.manifest.policy,
+          inspection.project,
+          dimension,
+          lock.deployment.mode,
+        ),
+      }
+    : undefined;
   ctx.out(
     json
-      ? redact(JSON.stringify(decisionToJSON(explanation, format), null, 2))
-      : redact(formatDecision(explanation, format)),
+      ? redact(
+          JSON.stringify(
+            {
+              ...decisionToJSON(explanation, format),
+              ...(trust ? { projectTrust: trust } : {}),
+            },
+            null,
+            2,
+          ),
+        )
+      : redact(
+          formatDecision(explanation, format) +
+            (trust
+              ? `\n\nProject trust:\n  ${trust.effect}: ${projectEffectReason(trust.origin, trust.dimension, trust.effect)} (policy.projectTrust.${trust.origin}.${trust.dimension})`
+              : ""),
+        ),
   );
 }
 

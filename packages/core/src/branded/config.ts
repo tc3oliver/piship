@@ -15,6 +15,13 @@ export async function runConfig(
 ): Promise<void> {
   const [action, key, ...rest] = args;
   const paths = accessStatePaths(ctx.stateDir);
+  const usage = `Usage: ${ctx.metadata.app.command} config explain [--json] | config set <key> <value> | config unset <key> | config trust list | config trust forget [<path>|--all]`;
+  if (args.includes("--help") || args.includes("-h")) {
+    ctx.out(
+      `${usage}\n\nexplain shows every effective setting and where it comes from; set and unset change your own preferences; trust lists or forgets your remembered project answers.`,
+    );
+    return;
+  }
   if (action === "explain") {
     const governance = ctx.metadata.governance?.manifest;
     const rows = await explainConfiguration({
@@ -95,9 +102,5 @@ export async function runConfig(
     );
     return;
   }
-  throw new PiShipError(
-    "CONFIG_INVALID",
-    `Usage: ${ctx.metadata.app.command} config explain [--json] | config set <key> <value> | config unset <key> | config trust list | config trust forget [<path>|--all]`,
-    { usage: true },
-  );
+  throw new PiShipError("CONFIG_INVALID", usage, { usage: true });
 }

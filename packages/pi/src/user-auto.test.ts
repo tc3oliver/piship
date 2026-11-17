@@ -800,6 +800,42 @@ describe("policy explain and doctor with auto mode", () => {
     expect(JSON.parse(out.at(-1) as string)).not.toHaveProperty("autoApproved");
   });
 
+  it("policy explain adds the project trust decision for a project: resource", async () => {
+    const built = distribution();
+    const trust = built.lock.governance.manifest.policy.projectTrust;
+    (trust as { unknown: unknown }).unknown = {
+      dimensions: { ...trust.unknown.dimensions, hooks: "deny", mcp: "ask" },
+    };
+    const { ctx, out } = launchContext(built);
+    await runPolicy(ctx, ["explain", "resource.load", "project:.mcp.json"]);
+    expect(out.at(-1)).toContain(
+      "Project trust:\n  ask: Project trust for unknown projects requires approval for mcp (policy.projectTrust.unknown.mcp)",
+    );
+    await runPolicy(ctx, [
+      "explain",
+      "resource.load",
+      "project:.pi/settings.json",
+      "--json",
+    ]);
+    expect(JSON.parse(out.at(-1) as string).projectTrust).toEqual({
+      dimension: "hooks",
+      origin: "unknown",
+      effect: "deny",
+    });
+    await runPolicy(ctx, [
+      "explain",
+      "resource.load",
+      "project:sub/.claude/hooks/pre.sh",
+      "--json",
+    ]);
+    expect(JSON.parse(out.at(-1) as string).projectTrust.dimension).toBe(
+      "claudeHooks",
+    );
+    // Not a project resource: no trust line.
+    await runPolicy(ctx, ["explain", "shell.execute", "ls"]);
+    expect(out.at(-1)).not.toContain("Project trust:");
+  });
+
   it("doctor shows the switch, and says when the release makes it inert", async () => {
     const lines = async (setup: Setup) => {
       const built = distribution(setup);

@@ -325,6 +325,24 @@ describe("configuration precedence", () => {
       expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
+  it("refuses a model preference outside the user's own models.allowed", () => {
+    const path = join(temp, "config", "preferences.json");
+    setPreference(path, access, undefined, "models.allowed", "acme/general");
+    expect(() =>
+      setPreference(path, access, undefined, "model", "acme/coder"),
+    ).toThrow(
+      expect.objectContaining({
+        code: "MODEL_UNAVAILABLE",
+        message: expect.stringContaining(
+          "excluded by your models.allowed preference",
+        ),
+        userAction: expect.stringContaining("Choose one of: acme/general"),
+      }),
+    );
+    setPreference(path, access, undefined, "model", "acme/general");
+    expect(readPreferences(path).values.model).toBe("acme/general");
+  });
+
   it("sets and unsets a preference over a damaged file by moving it aside, never deleting it", () => {
     const path = join(temp, "config", "preferences.json");
     mkdirSync(join(temp, "config"), { recursive: true });

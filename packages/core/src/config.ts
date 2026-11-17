@@ -293,6 +293,20 @@ export function setPreference(
           userAction: `Choose one of: ${policy.allowed.join(", ")}`,
         },
       );
+    const narrowed = current.modelsAllowed;
+    if (configKey === "model" && narrowed && !narrowed.includes(value)) {
+      const kept = policy.allowed.length
+        ? narrowed.filter((item) => policy.allowed.includes(item))
+        : narrowed;
+      throw new PiShipError(
+        "MODEL_UNAVAILABLE",
+        `Model ${value} is excluded by your models.allowed preference`,
+        {
+          component: "config",
+          userAction: `${kept.length ? `Choose one of: ${kept.join(", ")}, or a` : "A"}dd it with ${command ? `${command} ` : ""}config set models.allowed`,
+        },
+      );
+    }
   }
   const values = { ...current.values };
   if (value === undefined) delete values[configKey];
@@ -399,6 +413,15 @@ export function resolveEffectiveConfig(
       ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
       : [...preferences.modelsAllowed];
     sources.push("user narrowing");
+    const model = values.model;
+    if (
+      model !== undefined &&
+      !allowed.includes(model) &&
+      (userNarrowedFrom === "any" || userNarrowedFrom.includes(model))
+    )
+      notices.push(
+        `Model ${model} is excluded by your models.allowed preference; unset the model preference or add it to models.allowed`,
+      );
   }
   const modelsRestricted = policy.allowed.length > 0 || sources.length > 1;
   entries.push({

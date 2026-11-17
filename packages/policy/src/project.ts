@@ -1182,6 +1182,26 @@ const PROJECT_CONFIG_SURFACES: readonly (readonly string[])[] = [
 ].map((relative) => relative.split("/"));
 
 /**
+ * The project trust dimension of a project-relative path (`.claude/hooks/x`,
+ * `sub/.mcp.json`): the longest known surface it is, or lies inside, in any
+ * directory. Undefined for a path no dimension governs.
+ */
+export function projectPathDimension(
+  relative: string,
+): AnyProjectDimension | undefined {
+  const path = `/${relative.split("\\").join("/")}/`;
+  let best: Pick<CandidateSpec, "relative" | "dimension"> | undefined;
+  for (const spec of [...CANDIDATES, ...CLAUDE_SURFACES, ...EXTENSION_FILES])
+    if (
+      path.includes(`/${spec.relative}/`) &&
+      spec.relative.length > (best?.relative.length ?? -1)
+    )
+      best = spec;
+  // The restriction file narrows policy; no trust dimension governs it.
+  return best?.dimension === "restrictions" ? undefined : best?.dimension;
+}
+
+/**
  * Whether `path` is, or lies inside, a project configuration surface PiShip
  * or an extension loads (`.pi`, `.piship`, `.claude`, `.mcp.json`, and the
  * other candidate directories above) in any directory: what a later start
