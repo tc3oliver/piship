@@ -184,6 +184,31 @@ export function unapprovedLoadWarnings(
 }
 
 /**
+ * A shell.execute deny or ask rule whose resource uses `*` but no `**`: `*`
+ * stops at `/`, so `rm -rf *` lets `rm -rf /` and `rm -rf ./x` through.
+ */
+export function shellGlobWarnings(manifest: Manifest): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  return [
+    ...policy.enforced.map((rule) => ["enforced", rule] as const),
+    ...policy.defaults.map((rule) => ["defaults", rule] as const),
+  ].flatMap(([layer, rule]) =>
+    rule.action === "shell.execute" &&
+    rule.effect !== "allow" &&
+    rule.resource.includes("*") &&
+    !rule.resource.includes("**")
+      ? [
+          {
+            path: `policy.${layer}.${rule.id}`,
+            message: `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replace("*", "**")}")`,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
  * Rules that deny or ask for an action no runtime seam enforces. A managed
  * finding that is neither acknowledged nor audit-only throws
  * POLICY_UNENFORCEABLE; the rest are returned for display.

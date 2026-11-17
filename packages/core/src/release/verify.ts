@@ -1,5 +1,11 @@
 // Consumer verification of a release directory or archive.
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
@@ -108,6 +114,26 @@ export async function verifyRelease(
       `${path} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, recorded tests, or checksums`,
       `Run ${pishipCommand()} release <manifest> to build the qualified release`,
     );
+  if (!statSync(path).isFile() && !existsSync(join(path, "release.json"))) {
+    // A build's output directory or its `releases/` folder holds archives, not
+    // one release: say which to pass instead of calling the build tampered.
+    const archives = [path, join(path, "releases")].flatMap((folder) =>
+      existsSync(folder) && statSync(folder).isDirectory()
+        ? readdirSync(folder)
+            .filter((name) => name.endsWith(".tar.gz"))
+            .map((name) => join(folder, name))
+        : [],
+    );
+    if (archives.length)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${path} is a build output folder, not a release`,
+        {
+          component: "release",
+          userAction: `Pass the archive or a release directory instead: ${archives.join(", ")}`,
+        },
+      );
+  }
   if (statSync(path).isFile()) {
     const checkDigest = (actual: string): void =>
       checkArchiveDigest(path, actual, options.expectedSha256);

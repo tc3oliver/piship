@@ -28,6 +28,7 @@ export { canonicalJson } from "./digest.js";
 export {
   checkEnforceability,
   checkGovernance,
+  shellGlobWarnings,
   unapprovedLoadWarnings,
 } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
@@ -38,6 +39,7 @@ export { raiseThreadpool } from "./threadpool.js";
 export { pishipCommand, shellArg } from "./invocation.js";
 export * from "./update/index.js";
 export {
+  changedLocalPackages,
   channelTrustFromLock,
   checkPiVersion,
   lockManifest,

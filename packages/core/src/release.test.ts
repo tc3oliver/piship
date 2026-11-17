@@ -3419,6 +3419,18 @@ describe("release stages", () => {
     expect(isUnqualifiedPayload(join(built.directory, "payload"))).toBe(true);
   });
 
+  it("tells an author who passes a build output folder which archive to verify", async () => {
+    const { path } = project();
+    const built = await build(path);
+    const releases = dirname(built.archive);
+    for (const folder of [releases, dirname(releases)]) {
+      const error = await rejection(verifyRelease(folder));
+      expect(error.code).toBe("CONFIG_INVALID");
+      expect(error.userAction).toContain(built.archive);
+      expect(error.message).not.toMatch(/checksums/);
+    }
+  });
+
   it("runs a command without blocking and reports every way it can end", async () => {
     const cwd = temp();
     const node = process.execPath;
