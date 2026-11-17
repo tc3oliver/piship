@@ -459,20 +459,24 @@ export function buildDistribution(
   const deferred = wantsBundle && options.deferBundle === true;
   const bundling = wantsBundle && options.bundle !== false && !deferred;
   const cacheStarted = process.hrtime.bigint();
-  const keys =
-    options.cache === false || deferred
-      ? undefined
-      : buildCacheKeys(buildInput, manifestPath, lock, {
-          bundle: bundling,
-          strip,
-          // The gates change no byte; only vendoring Pi packages runs them
-          // after this lookup (checkPackageSources ran above). Without Pi
-          // packages, test and build share one output instead of each
-          // reassembling the other's.
-          supplyChainGates:
-            options.supplyChainGates !== false || !lock.packages?.length,
-        });
+  // The gates change no byte; only vendoring Pi packages runs them after this
+  // lookup (checkPackageSources ran above). Without Pi packages, test and
+  // build share one output instead of each reassembling the other's.
+  const gated = options.supplyChainGates !== false || !lock.packages?.length;
+  const keysFor = (supplyChainGates: boolean) =>
+    buildCacheKeys(buildInput, manifestPath, lock, {
+      bundle: bundling,
+      strip,
+      supplyChainGates,
+    });
+  let keys = options.cache === false || deferred ? undefined : keysFor(gated);
   const cached = keys ? readBuildCache(output) : undefined;
+  // An ungated build also takes a gated output, keeping its gated stamp; a
+  // gated build never takes an ungated one, which skipped the vendor gates.
+  if (cached && keys && cached.runtimeKey !== keys.runtimeKey && !gated) {
+    const strict = keysFor(true);
+    if (cached.runtimeKey === strict.runtimeKey) keys = strict;
+  }
   if (cached && keys && cached.runtimeKey === keys.runtimeKey) {
     if (cached.key !== keys.key) {
       options.progress?.(
