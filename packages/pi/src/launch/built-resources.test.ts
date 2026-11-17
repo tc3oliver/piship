@@ -6,7 +6,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { verifyBuiltResources } from "./runtime.js";
+import { formatError } from "@piship/contracts";
+import {
+  extensionLoadErrors,
+  resourceLoadAction,
+  verifyBuiltResources,
+} from "./runtime.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -34,11 +39,21 @@ function distribution(verifyAtLaunch?: boolean) {
   const ctx = {
     distributionDir: dir,
     metadata: {
+      app: { id: "acmepi" },
       resources,
       ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
     },
   } as unknown as Parameters<typeof verifyBuiltResources>[0];
   return { dir, ctx };
+}
+
+function failure(ctx: Parameters<typeof verifyBuiltResources>[0]): string {
+  try {
+    verifyBuiltResources(ctx);
+  } catch (error) {
+    return formatError(error);
+  }
+  throw new Error("expected a failure");
 }
 
 describe.each([
@@ -58,12 +73,19 @@ describe.each([
   it("still refuses a resource that is gone, or no longer a regular file", () => {
     const { dir, ctx } = distribution(setting);
     rmSync(join(dir, "resources", "skills", "a.md"));
-    expect(() => verifyBuiltResources(ctx)).toThrow();
+    expect(() => verifyBuiltResources(ctx)).toThrow(
+      expect.objectContaining({ code: "INTEGRITY_FAILED" }),
+    );
+    // A damaged install, not a path the user typed: name the install and the repair.
+    const text = failure(ctx);
+    expect(text).toContain(`skills/a.md in ${dir} is missing`);
+    expect(text).toContain("piship repair acmepi");
+    expect(text).not.toMatch(/ENOENT|absolute path/);
     const linked = distribution(setting);
     rmSync(join(linked.dir, "resources", "AGENTS.md"));
     mkdirSync(join(linked.dir, "resources", "AGENTS.md"));
     expect(() => verifyBuiltResources(linked.ctx)).toThrow(
-      /not a regular file: AGENTS\.md/,
+      /AGENTS\.md in .* is not a regular file/,
     );
     const outside = distribution(setting);
     const escaping = {
@@ -90,7 +112,51 @@ describe("verifyAtLaunch true", () => {
     const { dir, ctx } = distribution(true);
     writeFileSync(join(dir, "resources", "skills", "a.md"), "skill A edited\n");
     expect(() => verifyBuiltResources(ctx)).toThrow(
-      /Built resource integrity mismatch: skills\/a\.md/,
+      expect.objectContaining({ code: "INTEGRITY_FAILED" }),
+    );
+    const text = failure(ctx);
+    expect(text).toContain(`skills/a.md in ${dir} does not match the lock`);
+    expect(text).toContain("piship repair acmepi");
+  });
+});
+
+describe("resourceLoadAction", () => {
+  it("sends the author back to the source and a managed user to the administrator", () => {
+    expect(resourceLoadAction("personal")).toMatch(/piship build/);
+    expect(resourceLoadAction("managed")).toMatch(/administrator/);
+    expect(resourceLoadAction("managed")).not.toMatch(/piship build/);
+  });
+});
+
+describe("extensionLoadErrors", () => {
+  it("names the extension whose factory threw, as the author wrote it", () => {
+    const dir = join(tmpdir(), "dist");
+    const built = join(dir, "resources", "extensions", "hello.ts");
+    expect(
+      extensionLoadErrors(
+        [{ path: built, error: "Failed to load extension: boom from hello" }],
+        dir,
+      ),
+    ).toBe(
+      `Failed to load extension "./${join("extensions", "hello.ts")}": Failed to load extension: boom from hello`,
+    );
+  });
+
+  it("does not repeat a path the error already names", () => {
+    const dir = join(tmpdir(), "dist");
+    const built = join(dir, "resources", "extensions", "bad.ts");
+    expect(
+      extensionLoadErrors(
+        [
+          {
+            path: built,
+            error: `Failed to load extension: ${built}:2:2: oops`,
+          },
+        ],
+        dir,
+      ),
+    ).toBe(
+      `Failed to load extension: ./${join("extensions", "bad.ts")}:2:2: oops`,
     );
   });
 });
