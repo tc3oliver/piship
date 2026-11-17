@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { processHostToken } from "@piship/contracts";
 import type { PackageAgentFile } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentFileContent,
   agentFileDigest,
@@ -973,16 +973,28 @@ describe("parallel session launches", () => {
 
   it("keeps its wait inside the budget, even for a budget shorter than one pause", async () => {
     const { released } = await holder(1500);
-    for (const lockWaitMs of [0, 15, 60]) {
-      const started = Date.now();
-      expect(() =>
-        applyAgentFiles(lock({ autoApprove: true }), agentDir, {
-          session: true,
-          lockWaitMs,
-        }),
-      ).toThrow("being changed by another launch");
-      // One attempt after the last pause, and not a pause past the budget.
-      expect(Date.now() - started).toBeLessThan(lockWaitMs + 250);
+    // Sum the pauses the wait asks for, not the wall clock: a loaded runner
+    // stretches every attempt (309 and 400 ms against a 265 ms bound on macOS
+    // CI), but no pause may reach past the budget.
+    const wait = vi.spyOn(Atomics, "wait");
+    try {
+      for (const lockWaitMs of [0, 15, 60]) {
+        wait.mockClear();
+        expect(() =>
+          applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+            session: true,
+            lockWaitMs,
+          }),
+        ).toThrow("being changed by another launch");
+        const paused = wait.mock.calls.reduce(
+          (sum, call) => sum + (call[3] ?? 0),
+          0,
+        );
+        expect(paused).toBeLessThanOrEqual(lockWaitMs);
+        if (lockWaitMs > 0) expect(wait).toHaveBeenCalled();
+      }
+    } finally {
+      wait.mockRestore();
     }
     await released;
   });
