@@ -278,8 +278,8 @@ function plainHttpSource(ctx: BrandedContext, template: string): boolean {
 }
 
 /**
- * Streamable HTTP MCP servers and HTTP audit sinks whose resolved host a
- * private-only network policy would refuse. A warning only: hosts are never
+ * Streamable HTTP MCP servers, HTTP audit sinks and the sandbox endpoint and
+ * router whose resolved host a private-only network policy would refuse. A warning only: hosts are never
  * allowed implicitly. URLs that do not resolve are reported elsewhere.
  */
 export function undeclaredGovernanceHosts(
@@ -303,6 +303,14 @@ export function undeclaredGovernanceHosts(
         key: "audit.sinks.url",
         url: sink.url,
       })),
+    // Only a required sandbox is activated.
+    ...(manifest.sandbox.required ? (["endpoint", "router"] as const) : []).map(
+      (field) => ({
+        label: `sandbox ${field}`,
+        key: `sandbox.${field}`,
+        url: manifest.sandbox[field],
+      }),
+    ),
   ];
   const found: { label: string; host: string }[] = [];
   for (const target of targets) {
