@@ -302,6 +302,25 @@ describe("sandbox pull --branch", () => {
     expect(stored()).toBe(true);
   });
 
+  it("says a repository with no commit has nothing to branch from, and no moved branch", async () => {
+    checkpoint();
+    // The same project, re-initialised: HEAD names no commit.
+    rmSync(join(repo, ".git"), { recursive: true, force: true });
+    git(repo, "init", "-q");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+    vi.stubEnv("GIT_CONFIG_SYSTEM", "/dev/null");
+    const failed = await runSandbox(ctx, ["pull", "--branch", "--yes"]).then(
+      () => undefined,
+      (error: Error & { userAction?: string }) => error,
+    );
+    expect(failed?.message).toMatch(/has no commit yet/);
+    expect(failed?.userAction).toMatch(/Make a first commit/);
+    expect(stored()).toBe(true);
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(out.join("\n")).not.toMatch(/has moved/);
+    expect(readFileSync(join(repo, "b.txt"), "utf8")).toBe("new\n");
+  });
+
   it("leaves the changes staged when git has no identity to commit with", async () => {
     checkpoint();
     git(repo, "config", "--unset", "user.name");
