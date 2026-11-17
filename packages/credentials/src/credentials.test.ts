@@ -247,6 +247,26 @@ describe("platform secret stores", () => {
       code: "CONFIG_INVALID",
     });
   });
+  it("refuses a file entry whose recorded ref is another secret's", async () => {
+    const directory = join(temp, "secrets");
+    const store = new RestrictedFileSecretStore(directory);
+    await store.put("piship:x:inference#1", secret);
+    await store.put("piship:y:inference#1", secret);
+    const [a, b] = readdirSync(directory).map((f) => join(directory, f));
+    writeFileSync(a ?? "", readFileSync(b ?? ""), { mode: 0o600 });
+    const results = await Promise.all(
+      ["piship:x:inference#1", "piship:y:inference#1"].map((ref) =>
+        store.get(ref).then(
+          () => null,
+          (caught: unknown) => caught as PiShipError,
+        ),
+      ),
+    );
+    const failed = results.filter((r) => r);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(failed[0]?.message).toContain("does not match its reference");
+  });
   it("tells a Windows user how to fix an unreadable entry without chmod", async () => {
     const directory = join(temp, "win-secrets");
     const store = new RestrictedFileSecretStore(directory, {

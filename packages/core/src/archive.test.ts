@@ -4,8 +4,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -16,7 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { createArchive, extractArchive, sha256File } from "./archive.js";
+import {
+  createArchive,
+  entrySegments,
+  extractArchive,
+  sha256File,
+} from "./archive.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -379,6 +384,24 @@ describe("createArchive / extractArchive", () => {
       expect(existsSync(dest)).toBe(false);
       expect(existsSync(join(work, "evil"))).toBe(false);
     });
+
+  it.each([
+    "a/con",
+    "a/NUL.txt",
+    "a/com1",
+    "a/lpt¹.log",
+    "a/dir.",
+    "a/name ",
+    "a/x<y",
+    'a/x"y',
+    "a/x|y",
+    "a/x?y",
+    "a/x*y",
+  ])("refuses Windows-unsafe entry %s when the platform is Windows", (path) => {
+    expect(() => entrySegments(path, false, true)).toThrow(/Unsafe/);
+    if (path !== "a/dir.")
+      expect(entrySegments(path, false, false)).toBeTruthy();
+  });
 
   it("reads PAX paths from hand-built archives", async () => {
     const work = tempDir();
