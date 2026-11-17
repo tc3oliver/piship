@@ -497,7 +497,8 @@ function stringField(block: Buffer, offset: number, width: number): string {
   }
 }
 
-function parsePax(data: Buffer): Map<string, string> {
+/** The records of a PAX extended header; throws on any malformed record. */
+export function parsePax(data: Buffer): Map<string, string> {
   const records = new Map<string, string>();
   let offset = 0;
   while (offset < data.length) {
@@ -521,6 +522,16 @@ function parsePax(data: Buffer): Map<string, string> {
     offset = end;
   }
   return records;
+}
+
+/** The entry size a PAX header overrides, if any; throws on a malformed one. */
+export function paxEntrySize(
+  pax: ReadonlyMap<string, string> | undefined,
+): number | undefined {
+  const size = pax?.get("size");
+  if (size !== undefined && !/^[0-9]{1,16}$/.test(size))
+    throw new Error("Corrupt archive: invalid PAX size");
+  return size === undefined ? undefined : Number(size);
 }
 
 /**
@@ -722,11 +733,7 @@ export async function extractArchive(
     if (block.toString("latin1", 257, 262) !== "ustar")
       throw new Error("Corrupt archive: not a ustar header");
     const type = String.fromCharCode(block[156] as number);
-    const paxSize = pax?.get("size");
-    if (paxSize !== undefined && !/^[0-9]{1,16}$/.test(paxSize))
-      throw new Error("Corrupt archive: invalid PAX size");
-    const size =
-      paxSize !== undefined ? Number(paxSize) : octalField(block, 124, 12);
+    const size = paxEntrySize(pax) ?? octalField(block, 124, 12);
     if (!Number.isSafeInteger(size))
       throw new Error("Corrupt archive: invalid entry size");
 
