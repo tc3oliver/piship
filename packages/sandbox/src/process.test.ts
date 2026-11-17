@@ -546,9 +546,11 @@ describe.skipIf(process.platform !== "darwin")(
       '{ stdio: "ignore" }',
       '{ stdio: "ignore", detached: true }',
     );
+    // Long enough for the 250 ms poll to record the escaped process even when
+    // a snapshot over a second is skipped on a loaded host.
     const EXITING = ESCAPING.replace(
       "setInterval(() => {}, 1000);",
-      "setTimeout(() => process.exit(0), 2000);",
+      "setTimeout(() => process.exit(0), 4000);",
     );
     const appeared = async (check: () => boolean) => {
       for (let waited = 0; !check() && waited < 10_000; waited += 100)

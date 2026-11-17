@@ -315,15 +315,17 @@ export async function launchPiDistribution(
         session: true,
       })
     : { restore: () => {}, endAutoApprove: undefined };
-  process.once("exit", () => {
-    try {
-      agentFiles.restore();
-    } catch {
-      console.error(
-        "The provider session settings could not be restored; the next launch will recover the abandoned override.",
-      );
-    }
-  });
+  // Only a session has files to put back; a listener per call would pile up.
+  if (startsSession)
+    process.once("exit", () => {
+      try {
+        agentFiles.restore();
+      } catch {
+        console.error(
+          "The provider session settings could not be restored; the next launch will recover the abandoned override.",
+        );
+      }
+    });
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),

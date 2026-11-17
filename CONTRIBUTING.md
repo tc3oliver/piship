@@ -11,7 +11,7 @@ npm ci
 npm run check
 ```
 
-`npm run check` covers formatting, lint, types, package boundaries, build, and the unit tests; it takes about four minutes on a recent laptop, nearly all of it the unit tests. With an older Node.js, `npm ci` stops with `EBADENGINE` (`engine-strict` is on). For CLI changes, run `npm run test:e2e`; for Pi integration changes, `npm run test:compatibility`. Both run the built packages (`packages/*/dist`, which `npm run check` and `npm run build` write), so run `npm run build` again after every source change before either.
+`npm run check` covers formatting, lint, types, package boundaries, build, the footprint budgets, and the unit tests; it takes about four minutes on a recent laptop, nearly all of it the unit tests. With an older Node.js, `npm ci` stops with `EBADENGINE` (`engine-strict` is on). For CLI changes, run `npm run test:e2e`; for Pi integration changes, `npm run test:compatibility`. Both run the built packages (`packages/*/dist`, which `npm run check` and `npm run build` write), so run `npm run build` again after every source change before either.
 
 Run one test file with the config of its tier:
 

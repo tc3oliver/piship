@@ -85,6 +85,13 @@ async function heartbeatStopped(file: string): Promise<boolean> {
   return size(file) === before;
 }
 
+// A killed tree may take a moment to leave the process table.
+async function gone(token: string): Promise<boolean> {
+  for (let waited = 0; running(token) && waited < 5_000; waited += 100)
+    await sleep(100);
+  return !running(token);
+}
+
 function listen(): Promise<{
   server: Server;
   port: number;
@@ -834,7 +841,7 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       ).rejects.toThrow("timeout:1");
       expect(await heartbeatStopped(heartbeat)).toBe(true);
       expect(size(heartbeat)).toBeGreaterThan(0);
-      expect(running(token)).toBe(false);
+      expect(await gone(token)).toBe(true);
     });
 
     it("cancels the sandboxed process tree through an AbortSignal", async () => {
@@ -862,7 +869,7 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       await expect(exec).rejects.toThrow("aborted");
       expect(beforeAbort).toBeGreaterThan(0);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
-      expect(running(token)).toBe(false);
+      expect(await gone(token)).toBe(true);
     });
 
     it("reports signal exits as 128 + signal number", async () => {
