@@ -10,15 +10,17 @@ The flow for a distribution owner:
 2. Build a release on each target with `piship release`, or, for a distribution with no per-target bytes, build the PiShip runtime of each target with `piship runtime-release` and one cross-platform [Company Pack](#building-a-company-pack) with `piship pack`.
 3. Verify it with `piship verify-release` and, in CI, check reproducibility and build provenance.
 4. Add the archives (or the pack, with `--runtime` naming its runtime archives) to a channel with `piship sign-channel`, publish any new `root/<N>.json` first, and serve the channel directory over HTTPS, or over plain HTTP from an internal host unless the manifest sets `updates.transport: https` ([channel hosting](trust-root.md#channel-hosting)).
-5. Users install the release, then run `<command> update` and `<command> rollback`.
+5. For the first install, publish each archive's SHA-256 and the channel-key fingerprints out of band, so users can check the archive with `piship install --sha256 <archive-sha256> --expect-key sha256:<fingerprint>` ([distribution bootstrap](trust-root.md#distribution-bootstrap)). Users install the release, then run `<command> update` and `<command> rollback`.
 6. Change trust later only by publishing the next root with `piship trust-root next`, never by editing a release's bootstrap.
 
 ```bash
 node packages/cli/dist/bin.js migrate ./acmecode/piship.yaml --write
-node packages/cli/dist/bin.js keygen /media/offline/acme-root.pem --id acme-root-2026 --encrypt
+node packages/cli/dist/bin.js keygen /media/offline-a/acme-root-a.pem --id acme-root-2026a --encrypt   # two root keys, two holders
+node packages/cli/dist/bin.js keygen /media/offline-b/acme-root-b.pem --id acme-root-2026b --encrypt
 node packages/cli/dist/bin.js keygen ~/keys/acme-release.pem --id acme-release-2026 --encrypt
-node packages/cli/dist/bin.js trust-root init --key acme-root-2026=<public-key> --key acme-release-2026=<public-key> \
-  --root-keys acme-root-2026 --channel-keys acme-release-2026 --expires-days 365
+node packages/cli/dist/bin.js trust-root init --key acme-root-2026a=<public-key> --key acme-root-2026b=<public-key> \
+  --key acme-release-2026=<public-key> --root-keys acme-root-2026a,acme-root-2026b --root-threshold 1 \
+  --channel-keys acme-release-2026 --expires-days 365
 node packages/cli/dist/bin.js lock ./acmecode/piship.yaml
 node packages/cli/dist/bin.js release ./acmecode/piship.yaml [--out <dir>] [--channel <name>] [--rebuild] [--reclaim-staging]
 node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.1.0-linux-x64.tar.gz [--sha256 <hex>] [--json]
@@ -31,7 +33,7 @@ node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.
 node packages/cli/dist/bin.js keygen ~/keys/acme-release.pem --id acme-release-2026 --show-public   # the public key of an existing key, for --add-key
 node packages/cli/dist/bin.js trust-root next ./channel --manifest ./acmecode/piship.yaml \
   [--add-key <id>=<public-key>]... [--remove-key <id>]... [--channel-keys <ids>] [--root-keys <ids>] \
-  --expires-days 365 --sign acme-root-2026=/media/offline/acme-root.pem
+  --expires-days 365 --sign acme-root-2026a=/media/offline-a/acme-root-a.pem
 ```
 
 ## Building a release
@@ -117,7 +119,7 @@ Before anything is signed into a channel employees read:
 4. **Vulnerabilities.** Review `vulnerabilities.json` (including each Pi package's entry under `packages`), and every `release.vulnerabilities.allow` exception and `release.installScripts` entry: its reason still holds and its expiry is in the future.
 5. **Against your services.** Install the release on a test machine and run it against staging: `login`, `doctor`, `--smoke`, `logout`, with your broker and audit collector checked as in [testing your own broker and audit collector](../enterprise-integration.md#testing-your-own-broker-and-audit-collector). A managed release that requires sign-in is not smoke-tested by `piship release` itself.
 6. **Trust keys.** The bootstrap pins exactly the root and channel keys you intend (distinct for a managed distribution) and their fingerprints match your key record; the newest published root has not expired and expires well after this release. A key change follows the [release key runbook](key-runbook.md).
-7. **Record** the commit, version, archive SHA-256 values, the bootstrap root version, and the approver.
+7. **Record** the commit, version, archive SHA-256 values, the bootstrap root version, and the approver. Publish the archive SHA-256 values and the channel-key fingerprints (`piship inspect`) out of band, where operators doing a first install compare them ([distribution bootstrap](trust-root.md#distribution-bootstrap)).
 8. **Approval** by the named release owner for this commit and these archives.
 9. **Stage it.** Sign the release into `candidate` first and let a pilot group update; then sign the same archives into `stable` (`sign-channel --channel stable`; the archive is not rebuilt), with a higher sequence. Publish the channel files in the order the [trust root page](trust-root.md#channel-hosting) gives, and re-sign each channel before its metadata expires (30 days by default).
 10. **Know the way back** before you need it: [company-wide rollback](key-runbook.md#company-wide-rollback).

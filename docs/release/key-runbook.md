@@ -53,8 +53,9 @@ Do these once, before the first release that employees install.
 
    Upload `root/<N+1>.json.sig`, then `root/<N+1>.json`.
 3. Sign channels with the new key. While some clients may not have fetched the new root yet, sign with both: `sign-channel <channel-dir> --channel <name> --key <old.pem> --key-id <old> --key <new.pem> --key-id <new>` (with no archive it re-signs what the channel already lists; the old key signed the published metadata, so it must be among the signing keys or passed as `--previous-key <old>=<old-public-key>`). Every client fetches roots before it reads the channel, so in practice a client that can reach the source already has the new root.
-4. Publish the next root without the old key: `trust-root next <source> --manifest piship.yaml --remove-key acmecode-channel-2026 --expires-days 365 --sign ...`. Clients refuse it from then on, even after a rollback.
-5. Destroy the old key when no channel you publish uses it, and note the date.
+4. **Gate: every channel carries the new key.** Before the next step, confirm that every channel you publish (each `<channel>.json` under `<source>`, including `candidate` and any channel you rarely update) was re-signed in step 3 with the new key and uploaded. A client that has a root without the old key refuses a channel signed only by the old key (`Signature key <old> is not trusted`), so a channel you missed strands every client that reads it.
+5. Publish the next root without the old key: `trust-root next <source> --manifest piship.yaml --remove-key acmecode-channel-2026 --expires-days 365 --sign ...`. Clients refuse the old key from then on, even after a rollback.
+6. Destroy the old key when no channel you publish uses it, and note the date.
 
 ## Root-key rotation
 
@@ -83,9 +84,9 @@ piship trust-root next <source> --manifest piship.yaml \
      --sign acmecode-root-2026a=/media/offline-a/acmecode-root-2026a.pem
    ```
 
-3. **Re-sign every channel** with the replacement key at a sequence above every sequence ever published, including any the attacker may have published (`sign-channel ... --sequence <far above>`).
+3. **Remove what you did not release, then sign every channel.** A re-sign with no archive keeps every entry `<channel>.json` already lists, including any the compromised key added, so never re-sign the published file as it is. For each channel, first compare every archive and pack it lists with your release record. Then move `<channel>.json` and `<channel>.json.sig` aside (keep them as evidence) and sign a fresh channel from only the archives in your record, each checked against its recorded SHA-256, with the replacement key, at a sequence above every sequence ever published, including any the attacker may have published: `sign-channel <channel-dir> <recorded archives>... --channel <name> --key <replacement.pem> --key-id acmecode-channel-2026b --sequence <far above>` (a pack also takes its `--runtime` archives).
 4. **Upload** the root pair, then the channels. A client that fetches the root refuses the compromised key before it reads the channel, so nothing it signed is downloaded or activated. `rollback` does not restore the key.
-5. **Find what was signed.** Compare every archive the key may have signed with your release record; reinstall machines that activated one you did not build ([stranded clients](#stranded-clients)). The emergency root cannot fix those machines: a channel signature also authorizes code, and an activated malicious release ships the CLI that manages the installation, which can rewrite its trust state. Root rotation recovers only installations that have not yet activated a release signed with the compromised key; the others need the out-of-band reinstall.
+5. **Find what was activated.** Compare every archive the key may have signed, including any served earlier and since replaced, with your release record; reinstall machines that activated one you did not build ([stranded clients](#stranded-clients)). The emergency root cannot fix those machines: a channel signature also authorizes code, and an activated malicious release ships the CLI that manages the installation, which can rewrite its trust state. Root rotation recovers only installations that have not yet activated a release signed with the compromised key; the others need the out-of-band reinstall.
 6. **Know the limit.** This works for a client that obtains the new root. An attacker who controls what a client receives from the update source can withhold the root (answer 404) and keep serving channels signed with the compromised key; that client stays exposed until it reaches the authentic source, or until its current root or the attacker's channel metadata expires and it fails closed ([security boundary](trust-root.md#security-boundary)). Short root and channel expiries bound that window. Where you can reach machines out of band, tell users to update from the authentic source now.
 
 ## Compromised legacy key
@@ -111,7 +112,7 @@ A client is stranded when it cannot verify the current channel: its root's chann
 **Recovery, in order of preference:**
 
 1. **Publish what it is missing.** A newer root before the expiry, or a channel also signed with a key its root still trusts.
-2. **Re-bootstrap** from an archive delivered outside the update channel (device management, an internal catalog, an internal HTTPS host). State, preferences, and sessions are kept:
+2. **Re-bootstrap** from an archive delivered outside the update channel (device management, an internal catalog, an internal HTTPS host). The archive must be a release whose bootstrap pins the **newest root** you published (its version, keys, and roles; [distribution bootstrap](trust-root.md#distribution-bootstrap)). After a root compromise or a root-key loss, that is the new root that no earlier root chains to; an archive that pins an older root starts the machine from the trust that stranded it. State, preferences, and sessions are kept:
 
    ```bash
    sha256sum <id>-<version>-<target>.tar.gz           # compare with the published value
