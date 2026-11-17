@@ -1634,7 +1634,7 @@ describe("init", () => {
       );
       const text = readFileSync(join(directory, "piship.yaml"), "utf8");
       expect(text).not.toContain("searchTools");
-      expect(text).not.toContain("github.com");
+      expect(text).toContain("sources: [https://registry.npmjs.org]\n");
       const validated = await run(["validate", join(directory, "piship.yaml")]);
       expect(validated.status).toBe(0);
       expect(validated.stdout).not.toContain("Bundled search tools");
