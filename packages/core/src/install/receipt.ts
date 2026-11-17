@@ -265,18 +265,28 @@ function installedSummary(): string {
   }
 }
 
+/** Whether `error` is readInstallReceipt's "no installation recorded". */
+export function notInstalled(error: unknown): error is PiShipError {
+  return (
+    error instanceof PiShipError && error.sanitizedDetail?.notInstalled === true
+  );
+}
+
 /**
  * Read and validate an install receipt; paths must be the owned ones. A
  * receipt that cannot be read, or fails a check, is a CONFIG_INVALID error
  * naming the file and the check (`sanitizedDetail.check`); a path recorded
  * under another home also names the variable to restore
- * (`sanitizedDetail.variable`).
+ * (`sanitizedDetail.variable`). No receipt at all is CONFIG_UNAVAILABLE
+ * marked `sanitizedDetail.notInstalled` (see `notInstalled`).
  */
 export function readInstallReceipt(id: string): InstallReceipt {
   const path = receiptPath(id);
   if (!existsSync(path))
-    throw new Error(
+    throw new PiShipError(
+      "CONFIG_UNAVAILABLE",
       `No PiShip installation recorded for ${id}. ${installedSummary()}`,
+      { component: "install", sanitizedDetail: { id, notInstalled: true } },
     );
   const fail = (check: string, mismatch?: [string, string]) =>
     new PiShipError(

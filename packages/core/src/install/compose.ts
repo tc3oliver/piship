@@ -338,6 +338,7 @@ export function refuseUnsafeLockPaths(lock: DistributionLock): void {
       {
         component: "install",
         userAction: "Ask the publisher for a new pack",
+        sanitizedDetail: { field: bad },
       },
     );
 }
