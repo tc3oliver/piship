@@ -86,6 +86,8 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    ~/.local/bin/mypi rollback    # back to 1.0.0
    ```
 
+On Windows, set the variable with `$env:MYPI_UPDATE_SOURCE = "$env:TEMP\mypi-channel"` in PowerShell or `set MYPI_UPDATE_SOURCE=%TEMP%\mypi-channel` in cmd.exe, and read `~/.local/bin/mypi` as `$HOME\.local\bin\mypi.cmd`.
+
 `<target>` is `linux-x64`, `darwin-arm64`, or `win32-x64`. `MYPI_UPDATE_SOURCE` may also be an HTTPS URL, or `http` on loopback, serving the channel directory.
 
 ## Local model variant
@@ -101,7 +103,7 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
 node examples/personal/local-model/model-server.mjs    # keeps running; prints MYPI_MODEL_URL and the key it accepts
 ```
 
-In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` on Windows), then:
+In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (on Windows it prints a `$env:MYPI_MODEL_URL="..."` line for PowerShell and a `set MYPI_MODEL_URL=...` line for cmd.exe; paste the one for your shell), then:
 
 ```bash
 node packages/cli/dist/bin.js validate examples/personal/local-model/piship.yaml

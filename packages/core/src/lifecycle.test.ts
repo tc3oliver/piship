@@ -4597,10 +4597,35 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         runUninstall(ctx, ["--purge", "--yes"], { platform: "win32" }),
       );
       expect(error.userAction).toBe(
-        `Open a new terminal and run: node "${join(ctx.distributionDir, "piship.mjs")}" uninstall ${ID} --purge --yes`,
+        `Open a new terminal and run: node ${shellArg(join(ctx.distributionDir, "piship.mjs"), "win32")} uninstall ${ID} --purge --yes`,
       );
       expect(existsSync(receipt.commandPath)).toBe(true);
       expect(existsSync(stateDir())).toBe(true);
+    });
+
+    it("on Windows still asks for logout and the --purge confirmation before handing over the command", async () => {
+      const { receipt, ctx } = await installed();
+      const win32 = { platform: "win32" as const };
+      const confirm = await rejection(runUninstall(ctx, ["--purge"], win32));
+      expect(confirm.message).toContain(
+        "also deletes this distribution's data",
+      );
+      write(
+        join(stateDir(), "credentials-metadata", "inference.json"),
+        JSON.stringify({
+          schema: "piship-credential-metadata/v1",
+          credential_ref: `piship:${ID}:inference#1`,
+        }),
+      );
+      const signedIn = await rejection(runUninstall(ctx, [], win32));
+      expect(signedIn.userAction).toMatch(/^Run acmepi logout, then/);
+      const handed = await rejection(
+        runUninstall(ctx, ["--without-logout"], win32),
+      );
+      expect(handed.userAction).toMatch(
+        /^Open a new terminal and run: node .*piship\.mjs.* uninstall acmepi --without-logout$/,
+      );
+      expect(existsSync(receipt.commandPath)).toBe(true);
     });
   });
 

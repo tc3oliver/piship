@@ -14,6 +14,7 @@ import {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "../install/uninstall.js";
+import { shellArg } from "../invocation.js";
 import { type BrandedContext, usageRefusal } from "./context.js";
 import { requireInstalled } from "./lifecycle.js";
 
@@ -133,16 +134,6 @@ export async function runUninstall(
   const state = runtimeStateDirectory({ value: id });
   const withoutLogout = flags.has("--without-logout");
   const removeEditedShim = flags.has("--remove-edited-shim");
-  if ((options.platform ?? process.platform) === "win32") {
-    const mjs = join(ctx.distributionDir, "piship.mjs");
-    throw new PiShipError(
-      "CONFIG_UNAVAILABLE",
-      `Windows keeps the files of a running ${app.command} open, so it cannot remove itself. Nothing was changed`,
-      {
-        userAction: `Open a new terminal and run: node "${mjs}" uninstall ${id}${purge ? " --purge --yes" : ""}${withoutLogout ? " --without-logout" : ""}${removeEditedShim ? " --remove-edited-shim" : ""}`,
-      },
-    );
-  }
   if (purge && !flags.has("--yes"))
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -177,6 +168,19 @@ export async function runUninstall(
         userAction: `Run ${app.command} logout, then ${app.command} uninstall again; or add --without-logout to uninstall and leave the sign-in`,
       },
     );
+  // After the refusals above, so a Windows user still signs out first and
+  // confirms --purge before being handed a command that removes the payload.
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    const mjs = join(ctx.distributionDir, "piship.mjs");
+    throw new PiShipError(
+      "CONFIG_UNAVAILABLE",
+      `Windows keeps the files of a running ${app.command} open, so it cannot remove itself. Nothing was changed`,
+      {
+        userAction: `Open a new terminal and run: node ${shellArg(mjs, platform)} uninstall ${id}${purge ? " --purge --yes" : ""}${withoutLogout ? " --without-logout" : ""}${removeEditedShim ? " --remove-edited-shim" : ""}`,
+      },
+    );
+  }
   const installed = measure(appDirectory(id));
   const held = stateSummary(state);
   const shim = receipt.commandPath;
