@@ -320,7 +320,9 @@ describe("CLI", () => {
     );
     // A local build says it is not the qualified artifact, beside its output.
     expect(built.stderr).toContain("unqualified local build");
-    expect(built.stderr).toContain(`Run node ${bin} release ${manifest} `);
+    expect(built.stderr).toContain(
+      `Run node ${shellArg(bin)} release ${shellArg(manifest)} `,
+    );
     expect(
       JSON.parse(
         readFileSync(
