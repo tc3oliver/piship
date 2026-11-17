@@ -3606,6 +3606,18 @@ describe("a secret store that cannot be reached (#196)", () => {
       .catch((caught: unknown) => caught);
     expect(failed).toBeInstanceOf(PiShipError);
     expect(secretStoreUnreachable(failed)).toBe(false);
+    // A keyring without a session bus (SSH) names how to start one.
+    const noBus = new SecretServiceSecretStore(() => ({
+      status: 1,
+      stdout: "",
+      stderr: "Cannot autolaunch D-Bus without X11 $DISPLAY",
+    }));
+    const busError = (await noBus
+      .delete("piship:acmecode:inference#1")
+      .catch((caught: unknown) => caught)) as PiShipError;
+    expect(busError.userAction).toMatch(
+      /^No D-Bus session bus .*dbus-run-session -- bash.*gnome-keyring-daemon --unlock/,
+    );
   });
 
   it("runCommand reports a command that is not installed as missing", () => {

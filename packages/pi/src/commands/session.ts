@@ -35,6 +35,7 @@ import {
 import { openGovernance } from "../launch/governance.js";
 import { samePath } from "../launch/project-trust.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
+import { searchToolsBundledFor } from "../launch/search-tools.js";
 import {
   brandedResumeLine,
   liveOwner,
@@ -357,7 +358,7 @@ export async function runSmoke(
 }
 
 /**
- * With bundled search tools, Pi's own find and grep tools must find the
+ * With search tools bundled for this target, Pi's own find and grep tools must find the
  * packaged manifest: they run fd and rg the way a session does, so a tool
  * Pi cannot locate (and, offline, would not download) fails the smoke.
  */
@@ -366,6 +367,15 @@ async function checkSearchTools(
 ): Promise<Record<string, string> | undefined> {
   const locked = ctx.metadata.searchTools;
   if (!locked) return undefined;
+  // As at launch: a lock that pins the tools for other targets only bundles
+  // nothing here, so Pi uses fd and rg from PATH or runs without them.
+  const target = `${process.platform}-${process.arch}`;
+  if (!searchToolsBundledFor(ctx.metadata, target)) {
+    ctx.err(
+      `Notice: no bundled fd or rg for ${target}, so this check skips Pi's find and grep. List the target in release.targets and run piship lock to bundle them.`,
+    );
+    return undefined;
+  }
   const text = (result: { content: { type: string; text?: string }[] }) =>
     result.content.map((item) => item.text ?? "").join("");
   const found = text(

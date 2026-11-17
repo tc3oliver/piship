@@ -1635,6 +1635,10 @@ export class DistributionAccess {
       this.#principal = principal;
       await this.options.onPhase?.("identity-stored");
       if (manager.storesSecrets) {
+        // Reach the store before any prompt: a key typed into a store that
+        // cannot keep it is lost (a keyring without a D-Bus session, say).
+        if (ctx.readSecret)
+          await this.store?.get(`piship:${this.providerId}:probe`);
         const active = await this.#ensureCredential(
           manager,
           identity,

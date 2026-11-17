@@ -259,7 +259,7 @@ describe("uninstall --purge", () => {
     expect(existsSync(state)).toBe(false);
   });
 
-  it("purge accepts --yes and --without-logout in either order", async () => {
+  it("purge accepts --yes and --without-logout in either order, and a second uninstall names it", async () => {
     installRecorder();
     const state = seedState();
     const lines: string[] = [];
@@ -268,6 +268,13 @@ describe("uninstall --purge", () => {
       stderr: (message: string) => lines.push(message),
     };
     expect(await runCli(["uninstall", ID], output)).toBe(0);
+    // A second uninstall finds only the state, and names purge.
+    lines.length = 0;
+    expect(await runCli(["uninstall", ID, "--purge", "--yes"], output)).toBe(1);
+    expect(lines.join("\n")).toContain(
+      `Its state remains in ${state}; to delete it: `,
+    );
+    expect(lines.join("\n")).toContain(`purge ${ID} --yes`);
     expect(
       await runCli(["purge", ID, "--without-logout", "--yes"], output),
       lines.join("\n"),

@@ -127,6 +127,32 @@ describe("an unreachable system secret store (#196)", () => {
     expect(formatError(second)).not.toMatch(/previous credential|REDACTED/);
   });
 
+  it("reports a store without a D-Bus session before it prompts for the key", async () => {
+    const access = open("system", {
+      system: new SecretServiceSecretStore(() => ({
+        status: 1,
+        stdout: "",
+        stderr: "Cannot autolaunch D-Bus without X11 $DISPLAY",
+      })),
+    });
+    const prompts: string[] = [];
+    const error = await failure(
+      access.login({
+        openUrl: () => {
+          throw new Error("a personal distribution never opens a sign-in URL");
+        },
+        readSecret: async (prompt) => {
+          prompts.push(prompt);
+          return KEY;
+        },
+      }),
+    );
+    expect(error.message).toMatch(/Cannot autolaunch D-Bus/);
+    expect(error.userAction).toMatch(/dbus-run-session/);
+    expect(prompts).toEqual([]);
+    expect(existsSync(access.paths.credential)).toBe(false);
+  });
+
   it("then switching to the file store signs in", async () => {
     await failure(login(open("system", { system: system() })));
     const file = new MemorySecretStore();
@@ -138,11 +164,15 @@ describe("an unreachable system secret store (#196)", () => {
   });
 
   it("a write that fails while the store is reachable keeps its reference tracked", async () => {
-    // A locked keyring answers, so the write's outcome is unknown.
-    const locked: CommandRunner = () => ({
+    // A locked keyring answers, so the write's outcome is unknown. A lookup
+    // there finds nothing, silently (libsecret 0.21.4).
+    const locked: CommandRunner = (_command, args) => ({
       status: 1,
       stdout: "",
-      stderr: "Cannot create an item in a locked collection",
+      stderr:
+        args[0] === "store"
+          ? "Cannot create an item in a locked collection"
+          : "",
     });
     const access = open("system", {
       system: new SecretServiceSecretStore(locked),
