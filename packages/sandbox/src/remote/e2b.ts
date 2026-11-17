@@ -2,7 +2,7 @@
 // envd process service (data plane). Any service that implements that API,
 // such as E2B or CubeSandbox, works through this one compatibility layer.
 import { randomBytes } from "node:crypto";
-import { redact } from "@piship/contracts";
+import { redact, SecretValue } from "@piship/contracts";
 import type { AdapterAvailability } from "../adapter.js";
 import {
   HOST_FILESYSTEM_ISOLATION,
@@ -132,6 +132,8 @@ function createHint(status: number, template: string): string {
     return "; the service refused the sandbox key: store the right one with sandbox login";
   if (status === 400 || status === 404)
     return `; check that sandbox.template (${template}) names a template this service has`;
+  if (status === 429)
+    return "; the service refused a new sandbox, often for a concurrency limit: wait or delete idle sandboxes, then start again";
   return "";
 }
 
@@ -350,6 +352,8 @@ export class E2bCompatibleBackend implements SandboxBackend {
       typeof body.envdAccessToken === "string" && body.envdAccessToken
         ? body.envdAccessToken
         : undefined;
+    // Redacted like the API key: a failure body may echo it.
+    if (accessToken) new SecretValue(accessToken);
     const envd =
       this.#options.envdUrl?.({ sandboxId, domain }) ??
       `${this.#endpoint.protocol}//${ENVD_PORT}-${sandboxId}.${domain}`;

@@ -37,6 +37,8 @@ export interface E2bScript {
    * with a body that echoes what it was sent, as some services do.
    */
   apiKey?: string;
+  /** The per-sandbox envd access token. Default `envd-token-1`. */
+  accessToken?: string;
   /** The sandbox's files by absolute path; served and updated over envd. */
   files?: Map<string, Buffer>;
   /** Control paths answered 401 once before the key is accepted. */
@@ -150,7 +152,7 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
               sandboxID: "sbx1",
               templateID: "piship-workspace",
               envdVersion: "0.4.0",
-              envdAccessToken: "envd-token-1",
+              envdAccessToken: script.accessToken ?? "envd-token-1",
               domain: null,
             }),
       );
@@ -170,7 +172,8 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
       const expected = `Basic ${Buffer.from(`${user}:`).toString("base64")}`;
       const query = new URLSearchParams(request.path.split("?")[1] ?? "");
       if (
-        request.headers["x-access-token"] !== "envd-token-1" ||
+        request.headers["x-access-token"] !==
+          (script.accessToken ?? "envd-token-1") ||
         request.headers.authorization !== expected ||
         (path === "/files" && query.get("username") !== user)
       ) {

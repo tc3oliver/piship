@@ -143,6 +143,18 @@ function elapsedSince(
   return Math.max(monotonic - monotonicAt, wall - wallAt, 0);
 }
 
+/** The next step for a refused SandboxClaims request, from its status. */
+function claimsHint(status: number, namespace: string): string {
+  // 403 is RBAC for a valid bearer, not a wrong one (see credentialedFetch).
+  if (status === 401)
+    return "; the Kubernetes API refused the token: store the right one with sandbox login";
+  if (status === 403)
+    return `; grant this identity permission on sandboxclaims in namespace ${namespace}`;
+  if (status === 404)
+    return `; check that the Agent Sandbox CRDs are installed and namespace ${namespace} exists`;
+  return "";
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -243,9 +255,14 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       if (response.ok) return { available: true };
       return {
         available: false,
-        reason: `listing SandboxClaims returned HTTP ${response.status}`,
+        reason: `listing SandboxClaims returned HTTP ${response.status}${claimsHint(response.status, this.#namespace)}`,
       };
     } catch (error) {
+      if (errorText(error).startsWith("Private-only network policy denies"))
+        return {
+          available: false,
+          reason: `the network policy blocks the Kubernetes API: ${errorText(error)}; add ${new URL(this.#api).hostname} to network.allowHosts`,
+        };
       return {
         available: false,
         reason: `the Kubernetes API is unreachable: ${errorText(error)}`,
@@ -529,7 +546,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     });
     if (!created.ok)
       throw new Error(
-        `creating the SandboxClaim failed: ${await describeFailure(created)}`,
+        `creating the SandboxClaim failed: ${await describeFailure(created)}${claimsHint(created.status, this.#namespace)}`,
       );
     await created.body?.cancel().catch(() => undefined);
     try {
@@ -549,8 +566,8 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     name: string,
     signal: AbortSignal | undefined,
   ): Promise<Pick<Claim, "claim" | "sandbox">> {
-    const deadline =
-      this.#monotonic() + (this.#options.readyTimeoutMs ?? 120_000);
+    const timeoutMs = this.#options.readyTimeoutMs ?? 120_000;
+    const deadline = this.#monotonic() + timeoutMs;
     for (;;) {
       const response = await this.#request(`${this.#claims()}/${name}`, {
         method: "GET",
@@ -579,7 +596,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       )
         throw new Error(`the SandboxClaim failed: ${ready.reason}`);
       if (this.#monotonic() >= deadline)
-        throw new Error("the SandboxClaim did not become ready in time");
+        throw new Error(
+          `the SandboxClaim from warm pool ${this.#options.template} in namespace ${this.#namespace} did not become ready in time (${Math.round(timeoutMs / 1000)} s); check that the SandboxWarmPool has ready replicas`,
+        );
       await wait(this.#options.pollMs ?? 1000, signal);
     }
   }
