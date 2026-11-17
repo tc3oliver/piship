@@ -1,5 +1,6 @@
 // MCP: server admission, transports, child environment, and tool filters.
 import {
+  isCredentialName,
   MCP_IDENTITY_HEADER_CLAIMS,
   mcpIdentityHeaderProblem,
 } from "@piship/contracts";
@@ -309,6 +310,12 @@ function parseServerEnv(value: unknown, path: string): McpServerConfig["env"] {
     for (const [name, entry] of Object.entries(env.set)) {
       const at = `${path}.set.${name}`;
       envName(name, at);
+      // The runtime refuses to start a server with a credential-named variable.
+      if (isCredentialName(name))
+        fail(
+          at,
+          `${name} is treated as a credential, and the server would fail to start: a governed child process never receives a credential through its environment; remove it or rename it`,
+        );
       if (allow.includes(name))
         conflict(
           at,

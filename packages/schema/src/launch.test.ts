@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  droppedCredentialNames,
   inertDataPurge,
   inertTempRetention,
   launchWarnings,
@@ -841,5 +842,30 @@ describe("optional HTTP audit sinks in a managed distribution", () => {
   it("is quiet in personal mode and with audit off", () => {
     expect(optionalHttpAuditSinks(manifest("personal"))).toEqual([]);
     expect(optionalHttpAuditSinks(manifest("managed", false))).toEqual([]);
+  });
+});
+
+describe("allow-listed names the runtime drops as credentials", () => {
+  it("warns with the field path, and leaves other names alone", () => {
+    const manifest = {
+      governance: {
+        sandbox: { environment: { allow: ["PATH", "AWS_REGION"] } },
+        mcp: {
+          servers: [
+            { id: "docs", env: { allow: ["LANG", "HF_HOME", "PI_DEBUG"] } },
+          ],
+        },
+      },
+    } as unknown as Parameters<typeof droppedCredentialNames>[0];
+    expect(
+      droppedCredentialNames(manifest).map(({ path, message }) => [
+        path,
+        message.split(" ")[0],
+      ]),
+    ).toEqual([
+      ["sandbox.environment.allow", "AWS_REGION"],
+      ["mcp.servers.docs.env.allow", "HF_HOME"],
+      ["mcp.servers.docs.env.allow", "PI_DEBUG"],
+    ]);
   });
 });
