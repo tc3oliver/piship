@@ -47,6 +47,27 @@ export interface VerifiedRelease {
   readonly cleanup: () => void;
 }
 
+/**
+ * An archive whose file name differs from its root (a browser's
+ * `name (1).tar.gz`) is not tampered with: the root check stays, and the
+ * message says to restore the name.
+ */
+function extractionFailure(error: Error, path: string): PiShipError {
+  const root = /^Archive entry outside root "[^"]*": ([^/]+)\//.exec(
+    error.message,
+  )?.[1];
+  return root
+    ? new PiShipError(
+        "CONFIG_INVALID",
+        `The archive file name ${basename(path)} does not match its contents, which are in ${root}/`,
+        {
+          component: "release",
+          userAction: `If the file was renamed, for example by a browser download, rename it to ${root}.tar.gz and run the command again`,
+        },
+      )
+    : fail(error.message);
+}
+
 function fail(message: string, userAction?: string): PiShipError {
   return new PiShipError(
     "INTEGRITY_FAILED",
@@ -196,7 +217,7 @@ export async function verifyRelease(
           : {}),
     }).catch((error: Error) => {
       own?.remove();
-      throw fail(error.message);
+      throw extractionFailure(error, path);
     });
     directory = join(parent, "x", extracted.root);
     writtenFiles = extracted.files;
@@ -301,7 +322,7 @@ async function extractVerifiedPayload(
     mapEntry: (name) =>
       name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
   }).catch((error: Error) => {
-    throw fail(error.message);
+    throw extractionFailure(error, path);
   });
   try {
     const archiveSha256 = extracted.sha256 as string;
