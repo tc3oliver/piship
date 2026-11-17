@@ -145,5 +145,8 @@ describe("config trust", () => {
     rememberProjectTrust(state, project, "deny", "d", []);
     expect(await run("trust", "list")).toMatch(/^not trusted /);
     expect(await run("trust", "forget", "--all")).toMatch(/1 project;/);
+    expect(await run("trust", "forget", "--all")).toBe(
+      "No project answers are remembered.",
+    );
   });
 });

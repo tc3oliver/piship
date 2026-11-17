@@ -237,9 +237,12 @@ describe("computeCapabilityStates", () => {
       "permissions",
     );
     expect(values(item)).toBe("yes yes no yes n/a no");
-    expect(item.axes.enabled.reason).toBe("Disabled in the manifest");
+    expect(item.axes.enabled.reason).toBe("Not enabled in the manifest");
     const undeclared = state(computeCapabilityStates(input()), "workflow");
-    expect(undeclared.axes.enabled.reason).toBe("Not declared in the manifest");
+    expect(undeclared.axes.enabled.reason).toBe("Not enabled in the manifest");
+    expect(undeclared.axes.effective.reason).toBe(
+      "enabled: Not enabled in the manifest",
+    );
     expect(undeclared.axes.resolved.value).toBe("n/a");
   });
   it("reports incompatible Pi version, platform, and contract major", () => {
@@ -455,7 +458,8 @@ describe("formatCapabilities", () => {
       /^workflow\s+-\s+yes\s+n\/a\s+no\s+n\/a\s+n\/a\s+no$/,
     );
     expect(text).toContain("Reasons:");
-    expect(text).toContain("  workflow enabled: Not declared in the manifest");
+    expect(text).toContain("  workflow enabled: Not enabled in the manifest");
+    expect(lines.at(-1)).toMatch(/^These are PiShip capability contracts/);
     expect(text).not.toContain("abcdef123456");
   });
 });

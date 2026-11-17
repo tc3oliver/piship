@@ -227,6 +227,9 @@ describe("a seed file", () => {
 describe("an enforced file", () => {
   it("is rewritten whenever it differs, so a user's edit does not outlive a launch", () => {
     expect(
+      inspectAgentFiles(lock({ mode: "enforce" }), agentDir)[0]?.state,
+    ).toBe("missing");
+    expect(
       applyAgentFiles(lock({ mode: "enforce" }), agentDir).reports[0]?.outcome,
     ).toBe("seeded");
     writeFileSync(target(), '{"permission":{"*":"allow"}}\n');

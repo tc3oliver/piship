@@ -68,7 +68,9 @@ export async function runConfig(
     ctx.out(
       count
         ? `Forgot the remembered answer for ${count} project${count === 1 ? "" : "s"}; ${ctx.metadata.app.command} asks again at the next launch there.`
-        : "No remembered answer for that project.",
+        : target === "all"
+          ? "No project answers are remembered."
+          : "No remembered answer for that project.",
     );
     return;
   }

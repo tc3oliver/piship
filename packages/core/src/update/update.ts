@@ -284,7 +284,7 @@ export interface UpdateOptions extends LifecycleOptions {
  * v0.7 retired keys excluded) and recorded. Once recorded, a missing or
  * damaged state fails closed and is never rebuilt from a release lock.
  */
-function installationTrust(
+export function installationTrust(
   id: string,
   receipt: InstallReceipt,
   lock: DistributionLock,
@@ -304,8 +304,11 @@ function installationTrust(
       "UPDATE_FAILED",
       `${lock.app.name} trusts no release keys (updates.trust), so no update can be verified`,
       {
+        // A personal owner has no one to ask; their updates are rebuilds.
         userAction:
-          "Ask the distribution owner for a release that declares updates.trust.bootstrap, and install it",
+          lock.deployment.mode === "personal"
+            ? `${lock.app.name} has no update keys, so update it by rebuilding and reinstalling it from your piship.yaml; to publish signed updates, set updates.trust.bootstrap and updates.source there, run piship lock, and reinstall`
+            : "Ask the distribution owner for a release that declares updates.trust.bootstrap, and install it",
       },
     );
   return { state, migrated: true };
@@ -546,6 +549,8 @@ async function performUpdate(
     const selection = selectChannel(updates, options.channel, receipt.channel);
     const { channel } = selection;
     const notices = [...selection.notices];
+    // Trust first: without release keys no source helps.
+    const trust = installationTrust(id, receipt, lock, updateTime);
     const source = resolveSource(lock, options.source, env);
     const transport = updates.transport;
     const persist = (state: UpdateTrustState) => {
@@ -557,7 +562,6 @@ async function performUpdate(
         );
       writeTrustState(state);
     };
-    const trust = installationTrust(id, receipt, lock, updateTime);
     let state = trust.state;
     if (trust.migrated) {
       persist(state);

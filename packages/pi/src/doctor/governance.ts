@@ -4,10 +4,8 @@
 // lifecycle, and whether the manifest schema predates the current one.
 import { POLICY_ACTIONS } from "@piship/contracts";
 import {
-  describeFootprint,
   inspectAgentFiles,
   packageEnvironment,
-  readFootprint,
   releasesWithoutDataSweep,
 } from "@piship/core";
 import {
@@ -126,15 +124,6 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
         `package ${item.id}`,
         `${item.source}${item.version ? ` ${item.version}` : ""}${item.commit ? ` ${item.commit.slice(0, 12)}` : ""} (${item.class}), ${item.files} files`,
       );
-    // What the build did with the vendored closures and dependencies: shared,
-    // bundled, or kept as vendored, with the reason.
-    const footprint = readFootprint(data.ctx.distributionDir);
-    if (footprint)
-      for (const line of describeFootprint(footprint))
-        out.info(
-          line.slice(0, line.indexOf(":")),
-          line.slice(line.indexOf(":") + 2),
-        );
     // What the launch sets for the packages: values are manifest content, never
     // secrets, so they are shown as declared (a state path stays relative).
     for (const entry of packageEnvironment(lock, data.ctx.stateDir))
@@ -151,10 +140,15 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
           `${mode} file`,
           `${file.path} edited by the user and kept; delete it to restore the declared default`,
         );
+      else if (file.state === "missing")
+        out.info(
+          `${mode} file`,
+          `${file.path} not written yet; the next launch writes it`,
+        );
       else
         out.warn(
           `${mode} file`,
-          `${file.path} is missing or differs; the next launch writes it`,
+          `${file.path} differs from the declared file; the next launch rewrites it`,
         );
     }
   }
