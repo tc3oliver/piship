@@ -875,7 +875,7 @@ describe("CLI", () => {
           ],
           { cwd: temp, env: movedEnv, encoding: "utf8" },
         );
-      expect(movedManager("uninstall", "mypi", "--purge").status).toBe(1);
+      expect(movedManager("uninstall", "mypi", "--purge").status).toBe(2);
       expect(existsSync(movedLauncher)).toBe(true);
       const removed = movedManager("uninstall", "mypi", "--purge", "--yes");
       expect(removed.status, removed.stderr).toBe(0);
@@ -884,7 +884,7 @@ describe("CLI", () => {
         false,
       );
     } else {
-      expect(localCli("purge", "mypi").status).toBe(1);
+      expect(localCli("purge", "mypi").status).toBe(2);
       expect(localCli("purge", "mypi", "--yes").status).toBe(0);
     }
     expect(existsSync(join(temp, "state", "mypi"))).toBe(false);

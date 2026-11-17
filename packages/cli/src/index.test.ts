@@ -203,8 +203,10 @@ describe("uninstall --purge", () => {
       stdout: () => {},
       stderr: (message: string) => errors.push(message),
     };
-    expect(await runCli(["uninstall", ID, "--purge"], output)).toBe(1);
+    expect(await runCli(["uninstall", ID, "--purge"], output)).toBe(2);
     expect(errors.join("\n")).toContain("repeat with --yes");
+    expect(await runCli(["purge", ID], output)).toBe(2);
+    expect(errors.at(-1)).toMatch(/repeat with --yes .*\nUsage: piship purge /);
     expect(await runCli(["uninstall", ID, "--yes"], output)).toBe(2);
     expect(existsSync(payload)).toBe(true);
     expect(existsSync(state)).toBe(true);
@@ -867,6 +869,49 @@ describe("argument errors", () => {
     expect(result.stderr).toMatch(
       /^pack needs --runtime: .* built with piship runtime-release on that OS\.\nUsage: piship pack /,
     );
+  });
+
+  it("suggests the option a typo meant, and never echoes a glued value", async () => {
+    const typo = await run(["install", "a", "--replce"]);
+    expect(typo.stderr).toMatch(
+      /^Unknown option --replce for install\. Did you mean --replace\?\n/,
+    );
+    const glued = await run(["release", "m.yaml", "--out=secret-dir"]);
+    expect(glued.status).toBe(2);
+    expect(glued.stderr).toMatch(
+      /^Write --out <value> with a space, not --out=<value>\.\n/,
+    );
+    expect(glued.stderr).not.toContain("secret-dir");
+    expect((await run(["install", "a", "--replace=yes"])).stderr).toMatch(
+      /^--replace takes no value\./,
+    );
+  });
+
+  it("prints one error object on stdout for a --json failure", async () => {
+    for (const args of [
+      ["doctor", "nosuch-id", "--json"],
+      ["inspect", "nosuch-id", "--json"],
+      ["config", "explain", "nosuch-id", "--json"],
+      ["diff", "nosuch-a", "nosuch-b", "--json"],
+      ["verify-release", "nosuch.tar.gz", "--json"],
+    ]) {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const status = await runCli(args, {
+        stdout: (m) => stdout.push(m),
+        stderr: (m) => stderr.push(m),
+      });
+      expect(status, args.join(" ")).toBe(1);
+      expect(stderr.join("\n")).not.toBe("");
+      expect(stdout).toHaveLength(1);
+      const { error } = JSON.parse(stdout[0] ?? "");
+      expect(Object.keys(error), args.join(" ")).toEqual([
+        "code",
+        "message",
+        "action",
+      ]);
+      expect(typeof error.message).toBe("string");
+    }
   });
 
   it("prints only the usage when nothing specific is wrong", async () => {
