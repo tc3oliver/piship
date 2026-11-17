@@ -78,13 +78,22 @@ import {
  */
 export function verifyBuiltResources(
   ctx: Pick<LaunchContext, "distributionDir"> & {
-    readonly metadata: Pick<LaunchContext["metadata"], "resources"> & {
+    readonly metadata: Pick<LaunchContext["metadata"], "resources" | "app"> & {
       readonly verifyAtLaunch?: boolean;
     };
   },
 ): void {
   const resourceDir = join(ctx.distributionDir, "resources");
   const hash = ctx.metadata.verifyAtLaunch === true;
+  const damaged = (path: string, reason: string) =>
+    new PiShipError(
+      "INTEGRITY_FAILED",
+      `Built resource ${path} in ${ctx.distributionDir} ${reason}`,
+      {
+        component: "payload",
+        userAction: builtResourceRepair(ctx.metadata.app.id),
+      },
+    );
   for (const resource of ctx.metadata.resources) {
     if (
       resource.path.startsWith("/") ||
@@ -92,15 +101,59 @@ export function verifyBuiltResources(
     )
       throw new Error("Unsafe built resource path");
     const path = join(resourceDir, resource.path);
-    if (!lstatSync(path).isFile())
-      throw new Error(`Built resource is not a regular file: ${resource.path}`);
+    let file: boolean;
+    try {
+      file = lstatSync(path).isFile();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      throw damaged(
+        resource.path,
+        code === "ENOENT" ? "is missing" : `cannot be read (${code})`,
+      );
+    }
+    if (!file) throw damaged(resource.path, "is not a regular file");
     if (!hash) continue;
     const digest = createHash("sha256")
       .update(readFileSync(path))
       .digest("hex");
     if (digest !== resource.sha256)
-      throw new Error(`Built resource integrity mismatch: ${resource.path}`);
+      throw damaged(resource.path, "does not match the lock (modified)");
   }
+}
+
+/** The same recovery core's payload checks name: restore from a trusted release, never edit in place. */
+function builtResourceRepair(id: string): string {
+  return `Do not run it. Restore it from a trusted release of the same version: piship repair ${id} <release archive> (without the PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>), or reinstall the distribution. A distribution that is not installed must be rebuilt with piship build`;
+}
+
+/**
+ * Pi's load errors, each naming its extension: a factory that throws reports
+ * only its message, so the path is added the way Pi's own CLI does.
+ */
+export function extensionLoadErrors(
+  errors: readonly { readonly path: string; readonly error: string }[],
+  distributionDir: string,
+): string {
+  return sourcePaths(
+    errors
+      .map((item) =>
+        item.error.includes(item.path)
+          ? item.error
+          : `Failed to load extension "${item.path}": ${item.error}`,
+      )
+      .join("; "),
+    distributionDir,
+  );
+}
+
+/**
+ * What to do about an extension or theme Pi could not load: its author fixes
+ * the source and rebuilds; a managed user cannot, so the administrator does.
+ */
+export function resourceLoadAction(mode: LaunchContext["mode"]): string {
+  return mode === "managed"
+    ? "Contact your administrator: the distribution ships a resource that does not load"
+    : "Fix the source file named above, run piship build, then install the rebuilt distribution again";
 }
 
 function resourcePaths(
@@ -445,15 +498,19 @@ async function startRuntime(
     for (let index = 0; index < loadFailures; index += 1)
       prepared.metrics?.recordLoadFailure("resource", "UNKNOWN");
     if (extensionErrors.length)
-      throw new Error(
-        `Pi extension load failed: ${sourcePaths(
-          extensionErrors.map((item) => item.error).join("; "),
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `Pi extension load failed: ${extensionLoadErrors(
+          extensionErrors,
           ctx.distributionDir,
         )}`,
+        { component: "extensions", userAction: resourceLoadAction(ctx.mode) },
       );
     if (themeDiagnostics.length)
-      throw new Error(
+      throw new PiShipError(
+        "CONFIG_INVALID",
         `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
+        { component: "themes", userAction: resourceLoadAction(ctx.mode) },
       );
     // Virtual models are registered here, before the launch model and a
     // resumed session's model are looked up, and again after each /reload;
