@@ -193,7 +193,11 @@ function noSecretEntered(): PiShipError {
   return new PiShipError(
     "CREDENTIAL_REQUIRED",
     "No secret was entered: the prompt was cancelled or input ended",
-    { component: "credential" },
+    {
+      component: "credential",
+      userAction:
+        "Run the command in a terminal and type the secret at the prompt, or pipe it on the first line of stdin",
+    },
   );
 }
 
