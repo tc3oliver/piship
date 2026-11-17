@@ -175,7 +175,7 @@ export async function purgeDistributionState(
   const live = assertSignedOut(
     id,
     state,
-    releaseLogout(id, options.script ?? process.argv[1]) ??
+    releaseLogout(id, options.script) ??
       "logout with the release's own command (node bin/<command> logout, in the directory that holds the release's piship.mjs)",
     options,
   );
@@ -194,9 +194,9 @@ export async function purgeDistributionState(
  * of a release of `id`: once the receipt is gone, that release's own command
  * is the one left that can sign out.
  */
-function releaseLogout(
+export function releaseLogout(
   id: string,
-  script: string | undefined,
+  script: string | undefined = process.argv[1],
 ): string | undefined {
   if (!script || basename(script) !== "piship.mjs") return undefined;
   const directory = dirname(resolve(script));

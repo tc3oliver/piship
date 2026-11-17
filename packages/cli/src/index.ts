@@ -68,6 +68,7 @@ import {
   progressReporter,
   purgeDistributionState,
   raiseThreadpool,
+  releaseLogout,
   relockKeepingPackages,
   removeEmptyPiShipDirectories,
   readInstallReceipt,
@@ -183,7 +184,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
   purge: {
     "--yes": "Confirm that the state is deleted",
     "--without-logout":
-      "Uninstall or purge while signed in; the sign-in stays live until it expires",
+      "Uninstall or purge while signed in without the sign-in warning; the sign-in stays live until it expires",
   },
   migrate: {
     "--write": "Apply the migration to the file (the default is a dry run)",
@@ -235,7 +236,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
     "--purge": "Also delete the state (needs --yes)",
     "--yes": "Confirm the purge",
     "--without-logout":
-      "Uninstall or purge while signed in; the sign-in stays live until it expires",
+      "Uninstall or purge while signed in without the sign-in warning; the sign-in stays live until it expires",
     "--remove-edited-shim":
       "Remove the command file even though it was edited after install",
   },
@@ -2016,27 +2017,17 @@ async function runLifecycle(
     }
     const removeEditedShim = flags.has("--remove-edited-shim");
     if (!flags.has("--purge")) {
-      // As the branded uninstall refuses: once the command is gone, nothing
-      // installed is left to sign out with.
-      const live = signedInClasses(runtimeStateDirectory({ value: first }));
-      if (live.length && !flags.has("--without-logout")) {
-        let command = first;
-        try {
-          command = readInstallReceipt(first).app.command;
-        } catch {
-          // The uninstall below reports a missing or damaged receipt.
-        }
-        throw new PiShipError(
-          "CONFIG_UNAVAILABLE",
-          `${first} is still signed in (${live.join(", ")}). Once it is uninstalled there is no ${command} left to sign out with, and the sign-in would stay live until it expires`,
-          {
-            userAction: `Run ${command} logout, then uninstall again; or add --without-logout to uninstall and leave the sign-in`,
-          },
-        );
-      }
+      // Read before the uninstall: the sign-in outlives the installed command.
+      const live = flags.has("--without-logout")
+        ? []
+        : signedInClasses(runtimeStateDirectory({ value: first }));
       output.stdout(
         `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}\nTo delete it: ${pishipCommand()} purge ${shellArg(first)} --yes`,
       );
+      if (live.length)
+        output.stderr(
+          `Warning: ${first} is still signed in (${live.join(", ")}); ${live.length > 1 ? "they stay" : "it stays"} live until ${live.length > 1 ? "they expire" : "it expires"}. Sign out with ${releaseLogout(first) ?? "the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs)"} before purge.`,
+        );
     } else {
       if (!flags.has("--yes"))
         throw new Error(

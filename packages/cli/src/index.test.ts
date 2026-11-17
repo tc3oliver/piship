@@ -314,27 +314,39 @@ describe("uninstall --purge", () => {
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(state)).toBe(false);
   });
-  it("refuses a plain uninstall while signed in, as the branded uninstall does, unless --without-logout", async () => {
-    const { payload } = installRecorder();
-    const state = seedState();
-    mkdirSync(join(state, "identity"));
-    writeFileSync(
-      join(state, "identity", "session.json"),
-      JSON.stringify({ schema: "piship-identity-metadata/v1" }),
-    );
-    const lines: string[] = [];
-    const output = {
-      stdout: (message: string) => lines.push(message),
-      stderr: (message: string) => lines.push(message),
+  it("uninstalls while signed in, warning that the sign-in stays live, and without the warning under --without-logout", async () => {
+    const identity = (state: string) => {
+      mkdirSync(join(state, "identity"), { recursive: true });
+      writeFileSync(
+        join(state, "identity", "session.json"),
+        JSON.stringify({ schema: "piship-identity-metadata/v1" }),
+      );
     };
-    expect(await runCli(["uninstall", ID], output)).toBe(1);
-    expect(lines.join("\n")).toBe(
-      `CONFIG_UNAVAILABLE: ${ID} is still signed in (an identity session). Once it is uninstalled there is no ${ID} left to sign out with, and the sign-in would stay live until it expires\nAction: Run ${ID} logout, then uninstall again; or add --without-logout to uninstall and leave the sign-in`,
+    const run = async (args: string[]) => {
+      const out: string[] = [];
+      const err: string[] = [];
+      const status = await runCli(["uninstall", ID, ...args], {
+        stdout: (message) => out.push(message),
+        stderr: (message) => err.push(message),
+      });
+      return { status, out: out.join("\n"), err: err.join("\n") };
+    };
+    let { payload } = installRecorder();
+    const state = seedState();
+    identity(state);
+    const warned = await run([]);
+    expect(warned.status, warned.err).toBe(0);
+    expect(warned.out).toContain(`Uninstalled ${ID}.`);
+    expect(warned.err).toBe(
+      `Warning: ${ID} is still signed in (an identity session); it stays live until it expires. Sign out with the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs) before purge.`,
     );
-    expect(existsSync(payload)).toBe(true);
-    expect(await runCli(["uninstall", ID, "--without-logout"], output)).toBe(0);
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(state)).toBe(true);
+    rmSync(join(temp, "bin"), { recursive: true, force: true });
+    ({ payload } = installRecorder());
+    const quiet = await run(["--without-logout"]);
+    expect(quiet).toMatchObject({ status: 0, err: "" });
+    expect(existsSync(payload)).toBe(false);
   });
 });
 
