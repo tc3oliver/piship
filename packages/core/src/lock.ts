@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { manifestContainment, seamEvidence } from "@piship/policy";
 import {
   channelTrustKeys,
@@ -225,6 +225,9 @@ export function resolveLock(
  * manifest there would silently replace the first's lock.
  */
 export function lockOwnedByOther(manifestPath: string): string | undefined {
+  // piship.yaml owns the directory's lock, so its relock always proceeds,
+  // even after an app.id rename.
+  if (basename(manifestPath) === "piship.yaml") return undefined;
   let recorded: string | undefined;
   try {
     recorded = (
@@ -249,7 +252,7 @@ function checkLockOwner(manifestPath: string): void {
   if (other === undefined) return;
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   throw new Error(
-    `${path} is the lock of app ${other}, not of ${readManifest(manifestPath).app.id} (${manifestPath}); locking here would replace it. Copy this manifest into its own directory as piship.yaml and lock it there. If you renamed app.id, delete ${path} and lock again.`,
+    `${path} is the lock of app ${other}, not of ${readManifest(manifestPath).app.id} (${manifestPath}); locking here would replace it. Copy this manifest into its own directory as piship.yaml and lock it there.`,
   );
 }
 

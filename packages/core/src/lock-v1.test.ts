@@ -187,5 +187,13 @@ describe("a second manifest in a locked directory", () => {
     writeFileSync(own, readFileSync(own, "utf8").replace("1.0.0", "1.0.1"));
     lockManifest(own);
     expect(readFileSync(lockPath, "utf8")).toContain('"version": "1.0.1"');
+    // piship.yaml owns the lock: an app.id rename relocks without a delete.
+    writeFileSync(
+      own,
+      readFileSync(own, "utf8").replace("id: acmepi", "id: acmepi2"),
+    );
+    expect(lockOwnedByOther(own)).toBeUndefined();
+    lockManifest(own);
+    expect(readFileSync(lockPath, "utf8")).toContain('"id": "acmepi2"');
   });
 });
