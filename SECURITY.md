@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-PiShip is in early development. Security fixes currently target the main branch; there is no supported release series yet.
+PiShip is pre-release. Security fixes go to `main` and, as a new release, to the latest release (currently v0.13.0, the [production-validation baseline](docs/status.md#v0130-production-validation-baseline)). Earlier releases get no fixes; update to the latest.
 
 ## Reporting a vulnerability
 

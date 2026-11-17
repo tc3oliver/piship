@@ -120,7 +120,7 @@ https://github.com/tc3oliver/piship/blob/main/docs/agent-setup.md 並照著做�
 停下來告訴我，不要去改政策。最後回報你檢查了什麼、哪些沒辦法檢查。
 ```
 
-目前的支援程度：runtime 封存檔和 `piship pack` 已經在 `main` 上，CI 也有跑（[status](docs/status.md#company-packs-on-main-unreleased)），但**還沒有任何 PiShip release 發佈過 runtime 封存檔**。在那之前，每個目標平台的 runtime 都要在該作業系統上用 `piship runtime-release` 建置。限制完整列在 [status](docs/status.md#company-packs-on-main-unreleased)：pack 不能帶有 `os`/`cpu`/`libc` 欄位、安裝腳本或依平台而異的 optional dependency 的 Pi 套件，也不能帶原生資源檔（這些請在各作業系統上用 `piship release`）；`sandbox.required: true` 時不含 Windows；runtime 缺少 lock 裡指定的搜尋工具的目標平台也會被排除。
+目前的支援程度：runtime 封存檔和 `piship pack` 已經在 `main` 上，CI 也有跑，但**還沒有任何 PiShip release 發佈過 runtime 封存檔**，所以每個目標平台的 runtime 都要在該作業系統上用 `piship runtime-release` 建置。限制（帶原生或依平台而異檔案的套件、要求沙箱時的 Windows）見 [status](docs/status.md#company-packs-on-main-unreleased)。
 
 ## 一份檔案就夠
 
@@ -240,10 +240,8 @@ agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。
 
 PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還沒：
 
-- 更早的基準版本（v0.7.1 到 v0.9.1，用 Pi 0.87.1 到 1.0.2，各自有 GitHub pre-release）：見 [docs/status.md](docs/status.md)。
-- **v0.11.0** 是[較早的基準版本](docs/status.md#v0110-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：穩定的 `piship/v1` 與 `piship-lock/v1` 契約、developer 發行版與 `--yolo`、打包並精簡的 payload（相依套件共用），以及共用的檔案儲存區。v0.10.0 從未發佈，它的內容包含在 v0.11.0 裡（[changelog](CHANGELOG.md)）。
-- **v0.12.0** 是[前一個基準版本](docs/status.md#v0120-previous-production-validation-baseline)，用 Pi 1.0.3，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.12.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：修正從安裝到日常使用會遇到的當機、死路與重複提示，預設允許以純 HTTP 連到私有主機，記住專案信任的回答，以及 `<command> uninstall`。manifest 可以省略 `runtime.pi`，在 v0.12.0 之前建置的已安裝 runtime 需要先經過一次 bridge release（[changelog](CHANGELOG.md)）。
-- **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）：pi-code 的 `subagent` 工具透過受管控的 launcher 運作，在建置時轉譯 TypeScript Pi 套件（`pretranspile`），以及 Pi 1.1.0 的版本鎖定。啟用 `pretranspile` 的 release 不會被 v0.13.0 之前建置的 runtime 接受（[changelog](CHANGELOG.md)）。
+- **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）。更早的基準版本（各有 GitHub pre-release）和各版變更見 [docs/status.md](docs/status.md) 與 [changelog](CHANGELOG.md)。
+- `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
 - `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
