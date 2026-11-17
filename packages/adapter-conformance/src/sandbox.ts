@@ -219,6 +219,13 @@ const RELEASE_POLLS = Math.ceil(LATE_MS / 50);
 const MARGIN_MS = 800;
 /** How long a command runs before the kit's timeout aborts it. */
 const RUNNING_MS = 200;
+/**
+ * The fixed marker delay of the timed-out command where the host cannot see
+ * its workspace. The kit aborts RUNNING_MS after it sees the command's
+ * first line, so a one-second delay left only 800 ms for output delivery,
+ * event-loop lag and the backend's kill, which a loaded host overran.
+ */
+const TIMEOUT_LATE_MS = 2_000;
 const WS = "piship-ws";
 const READY = "piship-sandbox-ready";
 const UNLISTED = "PISHIP_PROBE_UNLISTED";
@@ -596,8 +603,9 @@ function markerWaitScript(
   release: string,
   observable: boolean,
   polls: number,
+  lateMs = LATE_MS,
 ): string {
-  if (!observable) return "sleep 1";
+  if (!observable) return `sleep ${lateMs / 1000}`;
   return `i=0; until [ -e ${quote(release)} ] || [ "$i" -ge ${polls} ]; do if sleep 0.05 2>/dev/null; then i=$((i+1)); else sleep 1; i=$((i+20)); fi; done`;
 }
 
@@ -1205,8 +1213,9 @@ class Harness {
     execution: Execution,
     from: number,
     silentMs = 0,
+    lateMs = LATE_MS,
   ): Promise<boolean | undefined> {
-    const delay = this.observable ? 0 : LATE_MS;
+    const delay = this.observable ? 0 : lateMs;
     for (;;) {
       const present = await this.marker(instance, marker);
       if (present !== false) return present;
@@ -1797,7 +1806,12 @@ const checks: Record<SandboxBehavior, Check> = {
     // A buffered backend may not report "started" until the command exits.
     // Keep it alive past whileRunning's fallback even on a busy runner;
     // releasing after abort still detects commands that fail to stop.
-    const wait = markerWaitScript(release, h.observable, RELEASE_POLLS * 3);
+    const wait = markerWaitScript(
+      release,
+      h.observable,
+      RELEASE_POLLS * 3,
+      TIMEOUT_LATE_MS,
+    );
     const execution = h.start(
       instance,
       `echo started; ( ${wait}; printf late > ${quote(marker)} ) & wait`,
@@ -1814,7 +1828,14 @@ const checks: Record<SandboxBehavior, Check> = {
       settled.kind === "resolved",
       `exec() did not settle within ${h.settleMs} ms after io.signal aborted for a timeout, so PiShip would retire the instance and end the session`,
     );
-    const present = await h.markerAfter(instance, marker, execution, released);
+    const present = await h.markerAfter(
+      instance,
+      marker,
+      execution,
+      released,
+      0,
+      TIMEOUT_LATE_MS,
+    );
     check(
       present === false,
       "the timed-out command kept running and wrote its marker after the timeout",
