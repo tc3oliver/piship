@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-PiShip is pre-release. Security fixes go to `main` and, as a new release, to the latest release (currently v0.13.0, the [production-validation baseline](docs/status.md#v0130-production-validation-baseline)). Earlier releases get no fixes; update to the latest.
+PiShip is pre-release. Security fixes land on `main` and ship in the next release; the latest release is v0.13.0 (the [production-validation baseline](docs/status.md#v0130-production-validation-baseline)). Earlier releases get no backported fixes; update to the latest.
 
 ## Reporting a vulnerability
 
