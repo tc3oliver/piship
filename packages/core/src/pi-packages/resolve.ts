@@ -841,6 +841,8 @@ function materialize(
         discardTree(cache, "package");
         throw error;
       }
+      // Another build's tree was placed: a failed check discards it like a hit.
+      if (adopted.moved && adopted.lostRace) used.hit = cache;
       installCache = "miss";
     }
   }
@@ -984,7 +986,10 @@ export function vendorPiPackage(
       return vendorOnce(declaration, pin, context, directory, { reuse: false });
     } catch (retried) {
       rmSync(directory, { recursive: true, force: true });
-      throw retried;
+      // The first failure names the action (such as relocking); the retry's
+      // may only be npm being offline.
+      if (error instanceof Error) error.cause ??= retried;
+      throw error;
     }
   }
 }

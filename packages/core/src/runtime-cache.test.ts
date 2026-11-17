@@ -450,9 +450,12 @@ describe("install tree entries", () => {
       mkdirSync(stage);
       stageTree(stage);
     }
-    const winner = adopt(cache, first);
+    const won = adoptInstallTree(cache, first);
+    const winner = won?.tree;
     // The loser's own moved tree is discarded; its stage is emptied the same way.
-    const loser = adopt(cache, second);
+    const lost = adoptInstallTree(cache, second);
+    const loser = lost?.tree;
+    expect([won?.lostRace, lost?.lostRace]).toEqual([false, true]);
     expect(loser?.path).toBe(winner?.path);
     expect(readdirSync(second)).toEqual([]);
     expect(
@@ -538,6 +541,28 @@ describe("install tree entries", () => {
     }
     for (const key of keys)
       expect(lookupTree(cacheOf(root, key), "package")).toBeDefined();
+  });
+
+  it("evicts Pi package entries another process used, however recently", async () => {
+    const root = temp();
+    const publishWith = (adoptTree: typeof adoptInstallTree, key: string) => {
+      const stage = join(root, `stage-${key.slice(0, 2)}`);
+      mkdirSync(stage);
+      stageTree(stage);
+      adoptTree(cacheOf(root, key), stage, "package");
+    };
+    // A fresh module instance stands in for another build process.
+    vi.resetModules();
+    const other = await import("./runtime-cache.js");
+    for (let index = 0; index < 13; index += 1)
+      publishWith(other.adoptInstallTree, `e${index.toString(16)}`.repeat(32));
+    const own = "f0".repeat(32);
+    publishWith(adoptInstallTree, own);
+    const entries = readdirSync(join(root, "cache")).filter(
+      (name) => name.startsWith("p-") && !name.endsWith(".d"),
+    );
+    expect(entries).toHaveLength(12);
+    expect(lookupTree(cacheOf(root, own), "package")).toBeDefined();
   });
 });
 
