@@ -217,7 +217,7 @@ export const optionHelp: Record<string, Record<string, string>> = {
   },
   pack: {
     "--runtime <runtime-archive>":
-      "An official runtime archive to bind; repeat once per platform",
+      "An official runtime archive to bind, built with piship runtime-release on that OS; repeat once per platform",
     "--out <dir>": "Directory for the Company Pack",
     "--reclaim-staging": "Remove staging directories left by a killed run",
   },
@@ -1196,10 +1196,17 @@ export function installNext(
       unset.length < variables.length
         ? ` An IDE or desktop launcher does not read your shell profile, so set ${variables.join(", ")} there too.`
         : "";
+    // Not needed to start, but doctor flags it and update fails without it.
+    const forUpdate = [...new Set(referencedVariables(source))].filter(
+      (name) => !variables.includes(name) && !env[name],
+    );
+    const updates = forUpdate.length
+      ? ` ${command} update also needs ${forUpdate.join(", ")}.`
+      : "";
     // An adopted (test or earlier) state may already hold a session.
     return signedIn.includes("an identity session")
-      ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.${launcher}`
-      : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.${launcher}`;
+      ? `Next: ${set}run ${command}; it is already signed in. ${command} --help lists its commands.${launcher}${updates}`
+      : `Next: ${set}run ${command} login, then ${command}. ${command} --help lists its commands.${launcher}${updates}`;
   }
   if (
     lock &&
@@ -1980,7 +1987,9 @@ async function runLifecycle(
     }
   } else if (command === "pack") {
     if (!repeated["--runtime"]?.length) {
-      output.stderr(`Usage: piship ${lifecycleCommands.pack?.usage}`);
+      output.stderr(
+        `pack needs --runtime: one official runtime archive per platform the pack serves, each built with ${pishipCommand()} runtime-release on that OS.\nUsage: piship ${lifecycleCommands.pack?.usage}`,
+      );
       return 2;
     }
     const built = await buildPack(first, {

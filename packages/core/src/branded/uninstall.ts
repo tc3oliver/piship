@@ -3,6 +3,7 @@
 import { type Dirent, existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { currentTarget } from "../compatibility.js";
 import { readInstallReceipt, runtimeStateDirectory } from "../index.js";
 import {
   purgeManager,
@@ -211,6 +212,15 @@ export async function runUninstall(
   )?.release;
   const fromRelease = Boolean(release);
   const manager = purgeManager(id);
+  // A Company Pack install has no release directory: its piship.mjs comes
+  // with the runtime archive the pack was installed with.
+  const runtime =
+    release?.runtime && manager === "<release>/payload/piship.mjs"
+      ? `piship-runtime-${release.runtime.pishipVersion}-${currentTarget()}`
+      : undefined;
+  const purgeHint = runtime
+    ? `extract the runtime archive ${runtime}.tar.gz you installed the pack with and run: node <extracted folder>/${runtime}/payload/piship.mjs purge ${id} --yes.`
+    : `run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}.`;
   uninstallDistribution(id, { removeEditedShim, ownSession: true });
   removeEmptyPiShipDirectories();
   ctx.out(
@@ -221,7 +231,7 @@ export async function runUninstall(
       live.length
         ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
         : "  signed out: no sign-in is stored",
-      `A later install of ${app.name} picks the kept data up again. To delete it, run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}. Next time, ${app.command} uninstall --purge --yes does both.`,
+      `A later install of ${app.name} picks the kept data up again. To delete it, ${purgeHint} Next time, ${app.command} uninstall --purge --yes does both.`,
     ].join("\n"),
   );
 }

@@ -69,7 +69,12 @@ export interface InstalledRelease {
      */
     readonly directory?: string;
     /** A release composed from a Company Pack and a runtime archive has no archive digest of its own. */
-    readonly pack?: { readonly sha256: string; readonly version: string };
+    readonly pack?: {
+      readonly sha256: string;
+      readonly version: string;
+      /** `pack.json` when installed from a pack folder, whose `sha256` is that file's (absent: the pack archive's). */
+      readonly digestOf?: "pack.json";
+    };
     readonly runtime?: {
       readonly archiveSha256: string;
       readonly pishipVersion: string;

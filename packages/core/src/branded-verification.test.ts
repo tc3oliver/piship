@@ -124,8 +124,21 @@ describe("doctor verification states", () => {
     expect(states.runtime).toMatchObject({ state: "verified" });
     expect(states.runtime.detail).toContain("pack pins");
     expect(states.runtime.detail).not.toContain("artifact");
-    expect(states.config.detail).toContain("company pack 1.0.0");
+    expect(states.config.detail).toContain("company pack 1.0.0 (sha256 dddd");
     expect(states.config.detail).toContain("channel signature was not checked");
+    // From a pack folder the digest is pack.json's, not the archive's.
+    const folder = composed(pinned);
+    const fromFolder = verificationStates(
+      installed(
+        { ...folder, pack: { ...folder.pack, digestOf: "pack.json" } },
+        company,
+        composedInventory,
+      ),
+      none,
+    );
+    expect(fromFolder.config.detail).toContain(
+      "company pack 1.0.0 (pack.json sha256 dddd",
+    );
   });
 
   it("fails a composed runtime that is not the pinned one, and does not guess without a pin", () => {

@@ -69,7 +69,7 @@ import {
   writeShim,
 } from "./launcher.js";
 import { uninstallDistribution } from "./uninstall.js";
-import { pishipCommand } from "../invocation.js";
+import { pishipCommand, shellArg } from "../invocation.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -492,9 +492,24 @@ export async function installDistribution(
             active = installed.active;
             updatable = installed.trustState === true;
           } catch {}
+          // install.sh / install.ps1 set PISHIP_RUNTIME_ARCHIVE and run a
+          // piship.mjs from a temporary directory they delete on exit, so
+          // name the script and the installed release's piship.mjs instead.
+          const script =
+            pack && process.env.PISHIP_RUNTIME_ARCHIVE
+              ? join(
+                  source,
+                  process.platform === "win32" ? "install.ps1" : "install.sh",
+                )
+              : undefined;
+          const installed = active && join(apps, active, "piship.mjs");
+          const manager =
+            script && installed && existsSync(installed)
+              ? `node ${shellArg(installed)}`
+              : pishipCommand();
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this artifact and keep its state, run the install again with --replace. To restore it from a release you trust, run ${pishipCommand()} repair ${id} <release archive or directory>; or run ${pishipCommand()} uninstall ${id} and install again.${updatable ? ` ${command} update --from <signed update source> only upgrades to a newer version` : ""}`
+              ? `Install collision for ${id}/${command}: ${active} is already installed. To replace it with this ${pack ? "pack" : "artifact"} and keep its state, ${script ? `run ${process.platform === "win32" ? "powershell -NoProfile -ExecutionPolicy Bypass -File" : "sh"} ${shellArg(script)} --replace` : "run the install again with --replace"}. To restore it from a ${pack ? "pack" : "release"} you trust, run ${manager} repair ${id} ${pack ? "<pack archive or directory> --runtime <runtime archive>" : "<release archive or directory>"}; or run ${script ? `${command} uninstall` : `${pishipCommand()} uninstall ${id}`} and install again.${updatable ? ` ${command} update --from <signed update source> only upgrades to a newer version` : ""}`
               : `Install collision for ${id}/${command}: the install receipt ${receiptPath(id)} is damaged. To replace that install with this artifact and keep its state, run the install again with --replace; or run ${pishipCommand()} uninstall ${id} and install again`,
           );
         }

@@ -66,7 +66,7 @@ export const DIFF_TESTS = {
   compatibility:
     "Pi or package change: the branded version, doctor, and --smoke on an installed release",
   installed:
-    "install the release on every target in release.targets and run the branded version and doctor",
+    "install the release on every target in release.targets (a Company Pack: on every target the pack serves) and run the branded version and doctor",
   governance:
     "policy review: the branded policy explain and capabilities on an installed release",
   sandbox:
