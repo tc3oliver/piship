@@ -2,21 +2,13 @@
 import { join } from "node:path";
 import {
   type ApprovedNetworkEnvironment,
-  DEFAULT_NETWORK_POLICY,
+  isCredentialName,
   isNetworkEnvironmentName,
   PiShipError,
   redact,
-  sanitizeManagedEnvironment,
 } from "@piship/contracts";
 
-/**
- * Whether a variable name looks like a long-lived credential. Delegates to the
- * managed-runtime sanitizer so both boundaries strip exactly the same names.
- */
-export function isCredentialName(name: string): boolean {
-  const probe: NodeJS.ProcessEnv = { [name]: "x" };
-  return sanitizeManagedEnvironment(probe, DEFAULT_NETWORK_POLICY).length > 0;
-}
+export { isCredentialName };
 
 /** Whether a value has a known token shape or is a registered secret value. */
 export function looksLikeSecret(value: string): boolean {
@@ -64,7 +56,7 @@ export function filterEnvironment(
         {
           component: "sandbox",
           userAction:
-            "Pass credentials through a runtime credential binding, not through child environment settings",
+            "Remove it from env.set; a governed child process never receives a credential through its environment",
         },
       );
     output[name] = value;

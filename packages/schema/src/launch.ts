@@ -3,7 +3,7 @@
 // certain to fail at launch is rejected by the parser; one that fails or is
 // ignored only in some environments is reported as a warning by `validate`.
 import { posix, win32 } from "node:path";
-import { isLoopbackHost } from "@piship/contracts";
+import { isCredentialName, isLoopbackHost } from "@piship/contracts";
 import {
   AccessFieldError,
   type AccessManifest,
@@ -903,6 +903,31 @@ export function optionalHttpAuditSinks(
 }
 
 /**
+ * Allow-listed variable names the runtime treats as credentials (a name such
+ * as AWS_REGION matches a provider prefix) and drops from the child
+ * environment without a message. A warning, so existing manifests still load.
+ */
+export function droppedCredentialNames(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const governance = manifest.governance;
+  if (!governance) return [];
+  const lists: [string, readonly string[]][] = [
+    ["sandbox.environment.allow", governance.sandbox.environment.allow],
+    ...governance.mcp.servers.map((server): [string, readonly string[]] => [
+      `mcp.servers.${server.id}.env.allow`,
+      server.env.allow,
+    ]),
+  ];
+  return lists.flatMap(([path, names]) =>
+    names.filter(isCredentialName).map((name) => ({
+      path,
+      message: `${name} is treated as a credential and is never passed to the child process; remove it from the list`,
+    })),
+  );
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -919,6 +944,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...inertCaptureClasses(manifest),
     ...inertDataPurge(manifest),
     ...inertTempRetention(manifest),
+    ...droppedCredentialNames(manifest),
     ...optionalHttpAuditSinks(manifest),
     ...findings({
       mode: manifest.deployment.mode,

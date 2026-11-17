@@ -1626,6 +1626,11 @@ describe("v1alpha3 MCP", () => {
       { env: { set: { AZURE_CREDENTIALS: "x" } } },
       "mcp.servers.docs.env.set.AZURE_CREDENTIALS",
     ],
+    // A provider prefix the runtime strips: the server would fail at start.
+    [
+      { env: { set: { AWS_REGION: "eu-west-1" } } },
+      "mcp.servers.docs.env.set.AWS_REGION",
+    ],
     [
       { env: { set: { "bad-name": "x" } } },
       "mcp.servers.docs.env.set.bad-name",

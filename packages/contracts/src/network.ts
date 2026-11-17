@@ -1158,6 +1158,15 @@ export function sanitizeManagedEnvironment(
 }
 
 /**
+ * Whether a variable name looks like a long-lived credential. Delegates to the
+ * managed-runtime sanitizer so every boundary strips exactly the same names.
+ */
+export function isCredentialName(name: string): boolean {
+  const probe: NodeJS.ProcessEnv = { [name]: "x" };
+  return sanitizeManagedEnvironment(probe, DEFAULT_NETWORK_POLICY).length > 0;
+}
+
+/**
  * The network environment a child process may receive, derived from the
  * policy and the launch environment. Children get exactly these variables and
  * no other proxy, CA, or TLS-verification variable, so the settings a
