@@ -62,6 +62,31 @@ describe("install from a pack", () => {
     expect(existsSync(pack)).toBe(true);
   }, 900000);
 
+  it("verifies, inspects, and diffs the pack by the pack's own rules", () => {
+    const verified = cli("verify-release", pack);
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(verified.stdout).toContain("Verified Company Pack MyPi 1.0.0");
+    const inspected = cli("inspect", pack);
+    expect(inspected.status, inspected.stderr).toBe(0);
+    expect(inspected.stdout).toContain("mypi");
+    const diffed = cli("diff", pack, pack);
+    expect(diffed.status, diffed.stderr).toBe(0);
+    // A pack whose files no longer match its checksums is still refused.
+    const unpacked = join(root, "tampered-pack");
+    mkdirSync(unpacked);
+    expect(spawnSync("tar", ["-xzf", pack, "-C", unpacked]).status).toBe(0);
+    const folder = join(unpacked, "mypi-1.0.0-pack");
+    appendFileSync(join(folder, "pack", "piship.yaml"), "\n# x\n");
+    for (const args of [
+      ["verify-release", folder],
+      ["inspect", folder],
+    ]) {
+      const refused = cli(...args);
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("INTEGRITY_FAILED");
+    }
+  });
+
   it("says where the runtime goes when it is not beside the pack", () => {
     const refused = cli("install", pack);
     expect(refused.status).not.toBe(0);
@@ -101,6 +126,11 @@ describe("install from a pack", () => {
     expect(intact.status, intact.stderr).toBe(0);
     expect(intact.stdout).toContain("intact");
     appendFileSync(join(receipt.releases[0].payload, "piship.yaml"), "\n# x\n");
+    // A pack install has no release archive to restore from: the hint names the pack.
+    const damaged = await branded(command, ["doctor"], { cwd: root, env });
+    expect(damaged.status).not.toBe(0);
+    expect(damaged.stderr).toContain("piship repair mypi <pack archive>");
+    expect(damaged.stderr).not.toContain("release archive");
     const repaired = cli("repair", "mypi", pack, "--runtime", runtime);
     expect(repaired.status, repaired.stderr).toBe(0);
     expect(repaired.stdout).toContain("Repaired mypi 1.0.0");

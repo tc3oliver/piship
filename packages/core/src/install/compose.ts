@@ -260,6 +260,39 @@ export async function openPack(
   };
 }
 
+/**
+ * A Company Pack verified as `openPack` verifies it for an install, without
+ * installing it: its metadata, digest, and the lock it binds. The runtime
+ * archives it pins are checked by `sign-channel` and the install.
+ */
+export async function verifyPack(
+  source: string,
+  expectedSha256?: string,
+): Promise<{
+  readonly metadata: PackMetadata;
+  readonly sha256: string;
+  readonly lockText: string;
+}> {
+  const scratch = createTemporaryDirectory(tmpdir(), "verify");
+  try {
+    const opened = await openPack(
+      resolve(source),
+      scratch.path,
+      expectedSha256,
+    );
+    return {
+      metadata: opened.metadata,
+      sha256: opened.sha256,
+      lockText: readFileSync(
+        join(opened.directory, "pack", "piship.lock"),
+        "utf8",
+      ),
+    };
+  } finally {
+    scratch.remove();
+  }
+}
+
 /** Where the runtime archive for `target` is looked for besides an explicit path. */
 function runtimeArchive(
   source: string,

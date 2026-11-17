@@ -196,10 +196,12 @@ let payload;
 let command;
 let version;
 let missing;
+let pack;
 try {
   const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
   const release = receipt.releases.find((item) => item.version === receipt.active);
   command = receipt.app.command;
+  pack = Boolean(release?.release?.pack);
   if (
     release &&
     ${VERSION_NAME.toString()}.test(release.version) &&
@@ -215,7 +217,7 @@ try {
   }
 } catch {}
 if (!payload && missing) {
-  console.error(${JSON.stringify(`The installed ${id} release `)} + missing + ${JSON.stringify(` is missing, which an interrupted repair leaves. Download the release archive for this computer from the distribution's update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>`)});
+  console.error(${JSON.stringify(`The installed ${id} release `)} + missing + (pack ? ${JSON.stringify(` is missing, which an interrupted repair leaves. Download its pack and the runtime archive it pins from the distribution's update source, then run: piship repair ${id} <pack archive> --runtime <runtime archive>`)} : ${JSON.stringify(` is missing, which an interrupted repair leaves. Download the release archive for this computer from the distribution's update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>`)}));
   process.exit(1);
 }
 if (!payload) {
@@ -280,7 +282,7 @@ try {
   // Node reads the payload's package.json before any PiShip code runs; a damaged one is a damaged release, not a crash.
   if (error?.code !== "ERR_INVALID_PACKAGE_CONFIG") throw error;
   console.error("INTEGRITY_FAILED: The installed release of ${id} is damaged: " + String(error.message).split("\\n")[0]);
-  console.error("Action: Restore it from a trusted release of the same version with: piship repair ${id} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>");
+  console.error(pack ? "Action: Restore it from the same version's pack with: piship repair ${id} <pack archive> --runtime <runtime archive>" : "Action: Restore it from a trusted release of the same version with: piship repair ${id} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>");
   process.exit(1);
 }
 `);

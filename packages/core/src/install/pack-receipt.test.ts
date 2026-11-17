@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { verifyPayload } from "../payload.js";
 import {
   appDirectory,
   commandPathFor,
@@ -104,5 +105,21 @@ describe("receipts of composed releases", () => {
       expect(typeof release.payload).toBe("string");
     }
     expect(raw.releases[1].release.archiveSha256).toBeUndefined();
+  });
+
+  it("tells a damaged pack install to repair from its pack, not a release archive", () => {
+    writeReceipt(receipt("1.1.0", "1.0.0"));
+    const action = (version: string) => {
+      try {
+        verifyPayload(join(appDirectory("acmepi"), version));
+      } catch (error) {
+        return (error as { userAction?: string }).userAction ?? "";
+      }
+      throw new Error("a missing payload verified");
+    };
+    const pack = action("1.1.0");
+    expect(pack).toContain("piship repair acmepi <pack archive> --runtime");
+    expect(pack).not.toContain("release archive");
+    expect(action("1.0.0")).toContain("piship repair acmepi <release archive>");
   });
 });

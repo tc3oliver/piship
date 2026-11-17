@@ -510,6 +510,21 @@ function payloadIntegrityError(
     },
   );
 }
+/** Whether the receipt records `version` of `id` as composed from a Company Pack, which has no release archive. */
+export function installedFromPack(id: string, version: string): boolean {
+  try {
+    return Boolean(
+      readInstallReceipt(id).releases.find((item) => item.version === version)
+        ?.release?.pack,
+    );
+  } catch {
+    return false;
+  }
+}
+/** How to restore a release installed from a Company Pack: from that pack and the runtime archive it pins. */
+export function packRepairAction(id: string, version: string): string {
+  return `download the ${version} pack and the runtime archive it pins from the distribution's update source (its channel file names both), then run: piship repair ${id} <pack archive> --runtime <runtime archive> (--runtime may be omitted when the runtime archive is beside the pack)`;
+}
 /**
  * How to recover a payload that fails verification without running it. The
  * id is named when the payload is an installed release, `apps/<id>/<version>`.
@@ -523,6 +538,8 @@ function repairAction(root?: string, onlyUnexpected = false): string {
     basename(dirname(dirname(root))) === "apps" &&
     COMMAND_NAME.test(id as string);
   const name = installed ? id : "<id>";
+  if (installed && installedFromPack(id as string, basename(root)))
+    return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from the same version's Company Pack: ${packRepairAction(id as string, basename(root))} (repair does not run this payload; never run its piship.mjs)`;
   return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version: download that version's release archive for this computer from the distribution's update source (its channel file names the archive), extract it, and run: node <extracted release>/payload/piship.mjs repair ${name} <extracted release>; with the PiShip CLI: piship repair ${name} <release archive> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
 }
 /**
