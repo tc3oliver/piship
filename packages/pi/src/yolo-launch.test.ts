@@ -260,6 +260,12 @@ describe("--help", () => {
     );
   });
 
+  it("describes --smoke", async () => {
+    expect(await help(PERSONAL)).toContain(
+      "--smoke prints the launch report as JSON and exits",
+    );
+  });
+
   it("documents --yolo where a managed distribution allows it", async () => {
     const text = await help(MANAGED_ALLOWED);
     expect(text).toContain("[--yolo]");

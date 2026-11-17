@@ -400,9 +400,11 @@ export function resolveEffectiveConfig(
       : [...preferences.modelsAllowed];
     sources.push("user narrowing");
   }
+  const modelsRestricted = policy.allowed.length > 0 || sources.length > 1;
   entries.push({
     key: "models.allowed",
-    value: allowed,
+    // An empty list is "none" only when something restricts models.
+    value: modelsRestricted ? allowed : "any",
     source: sources.length > 1 ? "intersection" : "distribution-enforced",
     overridable: false,
     note: `${sources.join(" ∩ ")}; users may only narrow`,
@@ -410,7 +412,7 @@ export function resolveEffectiveConfig(
   return {
     values,
     allowedModels: allowed,
-    modelsRestricted: policy.allowed.length > 0 || sources.length > 1,
+    modelsRestricted,
     ...(userNarrowedFrom ? { userNarrowedFrom } : {}),
     entries,
     notices,

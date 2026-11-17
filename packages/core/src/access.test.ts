@@ -182,6 +182,13 @@ describe("configuration precedence", () => {
         values: {},
       }),
     ).toMatchObject({ allowedModels: [], modelsRestricted: false });
+    // config explain shows an open allowlist as "any", not as no model.
+    expect(
+      resolveEffectiveConfig(unrestricted, undefined, {
+        schema: "piship-preferences/v1",
+        values: {},
+      }).entries.find((entry) => entry.key === "models.allowed")?.value,
+    ).toBe("any");
     expect(
       resolveEffectiveConfig(unrestricted, undefined, {
         schema: "piship-preferences/v1",

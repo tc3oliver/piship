@@ -20,7 +20,7 @@ function lines(extensionTrust: unknown): string[] {
     } as unknown as DoctorData,
     { ok: add("ok"), warn: add("warn"), bad: add("fail"), info: add("info") },
   );
-  return out.filter((line) => line.includes("project trust"));
+  return out.filter((line) => line.includes("Claude Code config"));
 }
 
 describe("doctor Project group", () => {
@@ -32,7 +32,7 @@ describe("doctor Project group", () => {
         surfaces: [],
       }),
     ).toEqual([
-      "info project trust for extensions: not trusted (unknown project; nothing to load here)",
+      "info Claude Code config: not trusted (unknown project; nothing to load here)",
     ]);
   });
 
@@ -43,7 +43,17 @@ describe("doctor Project group", () => {
         reason: "policy denies hooks",
         surfaces: [{ path: ".claude/hooks" }],
       })[0],
-    ).toMatch(/^warn project trust for extensions: not trusted for/);
+    ).toMatch(/^warn Claude Code config: not trusted for/);
+  });
+
+  it("shows nothing found as info, not ok", () => {
+    expect(
+      lines({
+        effect: "allow",
+        reason: "no Claude Code configuration was found",
+        surfaces: [],
+      }),
+    ).toEqual(["info Claude Code config: none found"]);
   });
 });
 

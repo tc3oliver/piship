@@ -315,8 +315,9 @@ describe("CLI", () => {
     const built = run(bin, "build", manifest);
     expect(built.status, built.stderr).toBe(0);
     // The next step names the real command, not a `piship` that is not on PATH.
+    expect(built.stdout).toMatch(/^Next: node .*piship\.mjs"? install /m);
     expect(built.stdout).toContain(
-      `Next: node ${shellArg(bin)} test ${shellArg(manifest)}`,
+      `; node ${shellArg(bin)} test ${shellArg(manifest)} runs the acceptance smoke first`,
     );
     // A local build says it is not the qualified artifact, beside its output.
     expect(built.stderr).toContain("unqualified local build");
@@ -394,7 +395,9 @@ describe("CLI", () => {
     });
     expect(acceptance.status, acceptance.stderr).toBe(0);
     expect(acceptance.stdout).toContain("Personal acceptance passed");
-    expect(acceptance.stdout).toMatch(/^Next: .* build .* install /m);
+    // The payload test built is the one to install; no build in between.
+    expect(acceptance.stdout).toMatch(/^Next: node .*piship\.mjs"? install /m);
+    expect(acceptance.stdout).not.toMatch(/^Next: .* build /m);
     process.stderr.write(acceptance.stderr);
     const built = join(temp, "dist", "mypi");
     expect(
