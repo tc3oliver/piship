@@ -93,6 +93,7 @@ import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
 import { sandboxBackend } from "./governance/sandbox.js";
 import { seedDecision } from "./governed-tools.js";
+import { DEFAULT_GRANT_COMMANDS } from "./grant-command.js";
 import {
   revokePublishedSubagentGrant,
   type SubagentGrantBinding,
@@ -525,7 +526,12 @@ export class GovernanceSession {
       policyFile: join(this.options.stateDir, "config", "policy.json"),
       command: this.options.lock.app.command,
       ...(this.grantsAllowed
-        ? { grants: { actions: this.manifest.policy.taskGrants?.actions } }
+        ? {
+            grants: {
+              actions: this.manifest.policy.taskGrants?.actions,
+              commands: DEFAULT_GRANT_COMMANDS,
+            },
+          }
         : {}),
     });
     return hint ? ` ${hint}` : "";
@@ -1697,6 +1703,12 @@ export class GovernanceSession {
           );
         }
         this.#grantEvent("policy.grant_expired", { grant: id, uses });
+        // Closing ends every grant; only one that ran out mid-session is news.
+        if (!this.#closed)
+          this.#notice(
+            `Task grant ${id} expired; what it approved asks again.`,
+            "info",
+          );
       }
   }
 

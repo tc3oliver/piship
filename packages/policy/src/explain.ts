@@ -11,6 +11,7 @@ import {
   BUILTIN_UNKNOWN_ACTION_RULE,
   type PolicyExplanation,
 } from "./engine.js";
+import { grantShellPrograms, programRefusal } from "./grant.js";
 import { decisionStatus } from "./seams.js";
 
 const HEADINGS: Readonly<Record<PolicyEffect, string>> = {
@@ -199,14 +200,21 @@ export function decisionToJSON(
 export function denialHint(
   decision: Pick<PolicyDecision, "layer" | "action" | "ruleId" | "effect"> & {
     readonly approval?: ResolvedDecision["approval"];
+    readonly resource?: string;
   },
   deployment: "personal" | "managed",
   where: {
     readonly policyFile?: string;
     /** The distribution's command, which runs `policy explain`. */
     readonly command?: string;
-    /** Task grants are on; `actions` limits which actions a grant covers. */
-    readonly grants?: { readonly actions?: readonly string[] | undefined };
+    /**
+     * Task grants are on; `actions` limits which actions a grant covers, and
+     * `commands` are the programs a grant covers unless `--run` names others.
+     */
+    readonly grants?: {
+      readonly actions?: readonly string[] | undefined;
+      readonly commands?: readonly string[];
+    };
   } = {},
 ): string {
   const file = where.policyFile ?? "config/policy.json";
@@ -219,9 +227,22 @@ export function denialHint(
     (decision.action.startsWith("filesystem.") ||
       decision.action === "shell.execute") &&
     (where.grants.actions?.includes(decision.action) ?? true);
-  const grant = grantable
+  let grant = grantable
     ? " Or type `/grant <folder>` to approve that folder's prompts for a limited time (`--for` sets how long)."
     : "";
+  // A grant covers a command only when it lists every program of the chain.
+  const commands = where.grants?.commands;
+  if (
+    grant &&
+    decision.action === "shell.execute" &&
+    decision.resource !== undefined &&
+    commands
+  ) {
+    const programs = [...new Set(grantShellPrograms(decision.resource))];
+    if (!programs.length || programs.some(programRefusal)) grant = "";
+    else if (programs.some((program) => !commands.includes(program)))
+      grant = ` Or type \`/grant <folder> --run ${programs.join(",")}\` to approve that folder's prompts and these commands for a limited time; a plain \`/grant\` covers only ${commands.join(", ")}.`;
+  }
   // The person's own refusal of a prompt needs no way to change a rule.
   if (decision.approval === "denied" || decision.approval === "cancelled")
     return "";

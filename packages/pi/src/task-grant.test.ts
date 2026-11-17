@@ -341,6 +341,8 @@ describe("a task grant", () => {
         { expiresAt: new Date(Date.now() + 60_000).toISOString() },
       ),
     );
+    const notices: string[] = [];
+    session.attachNotices((message) => notices.push(message));
     const later = Date.now() + 120_000;
     vi.spyOn(Date, "now").mockReturnValue(later);
     expect(
@@ -351,6 +353,12 @@ describe("a task grant", () => {
       ),
     ).toMatchObject({ outcome: "deny", approval: "unavailable" });
     expect(session.listGrants()).toEqual([]);
+    // The person is told once, not only the audit log.
+    expect(notices).toEqual([
+      expect.stringMatching(
+        /^Task grant \w+ expired; what it approved asks again\.$/,
+      ),
+    ]);
   });
 
   it("is looked up again in the approval queue: added while waiting approves, revoked or expired does not", async () => {
@@ -1185,6 +1193,21 @@ describe("/grant and shell commands", () => {
         await session.decide("shell.execute", command, channel),
       ).toMatchObject({ approval: "approved" });
     expect(shown.count).toBe(8);
+  });
+
+  it("names the --run a refused command needs, and offers no /grant for one no grant covers", async () => {
+    const { session } = await open();
+    const ask = (resource: string) =>
+      session.denialHint({
+        layer: "distribution-default",
+        action: "shell.execute",
+        ruleId: "r1",
+        effect: "ask",
+        resource,
+      });
+    expect(ask("npm test")).toContain("`/grant <folder>` to approve");
+    expect(ask("node x.js")).toContain("`/grant <folder> --run node`");
+    expect(ask("bash x.sh")).not.toContain("/grant");
   });
 
   it("--run replaces the programs, --no-run and --run none cover files only", async () => {

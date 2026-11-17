@@ -8,6 +8,7 @@ import {
   getShellConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { printable, redact } from "@piship/contracts";
 import {
   leadingPartial,
   type TaskEvent,
@@ -64,7 +65,16 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
       recorder?.add(task.id);
       record("task.start", task, "allowed");
     },
-    exit: (task) => record("task.exit", task),
+    exit: (task) => {
+      record("task.exit", task);
+      // The person sees a task end on its own, not only the model.
+      const code =
+        task.exitCode !== null ? ` (exit code ${task.exitCode})` : "";
+      gov.notice(
+        `Background task ${task.id} ${task.status}${code}: ${printable(redact(task.command.split("\n")[0] ?? "")).slice(0, 60)}`,
+        task.status === "exited" && task.exitCode === 0 ? "info" : "warning",
+      );
+    },
     stop: (task) => record("task.stop", task),
     // Only a settled runner proves the process is gone; a stop that is
     // still pending keeps the record for doctor.

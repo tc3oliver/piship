@@ -354,6 +354,35 @@ describe("denialHint", () => {
     expect(denialHint(ask, "managed", where)).not.toMatch(/grant/);
   });
 
+  it("offers /grant for a command only when a grant could cover it", () => {
+    const where = {
+      policyFile: "/s/policy.json",
+      grants: { commands: ["git", "npm"] },
+    };
+    const ask = (resource: string) => ({
+      ...at("distribution-default"),
+      effect: "ask" as const,
+      resource,
+    });
+    expect(
+      denialHint(ask("npm test && git status"), "personal", where),
+    ).toMatch(/Or type `\/grant <folder>` to approve/);
+    // A program outside the default list needs `--run`, naming the whole chain.
+    expect(
+      denialHint(ask("npm run build && node x.js"), "personal", where),
+    ).toMatch(
+      /`\/grant <folder> --run npm,node` .*a plain `\/grant` covers only git, npm\./,
+    );
+    // No grant covers a wrapper, a path, a substitution, or a git push.
+    for (const resource of [
+      "bash -c 'node x.js'",
+      "./run.sh",
+      "node $(cat f)",
+      "git push origin main",
+    ])
+      expect(denialHint(ask(resource), "personal", where)).not.toMatch(/grant/);
+  });
+
   it("is empty after the person refused a prompt", () => {
     expect(
       denialHint({ ...at("user-preference"), approval: "denied" }, "personal"),
