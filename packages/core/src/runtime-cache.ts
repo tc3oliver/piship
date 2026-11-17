@@ -559,7 +559,8 @@ function publishTree(
  * (EXDEV), copied in once and left in the stage as well. A moved tree leaves
  * the stage without `node_modules`. Where the tree cannot be adopted (the
  * rename is refused, or the tree holds a link) the stage is left as it was and
- * the result is undefined.
+ * the result is undefined; where a moved tree cannot be moved back, this
+ * throws, naming the directory that still holds it.
  */
 export function adoptInstallTree(
   cache: RuntimeCache,
@@ -592,7 +593,13 @@ export function adoptInstallTree(
           join(location, "node_modules"),
           join(stage, "node_modules"),
         );
-      } catch {}
+      } catch (cause) {
+        // Thrown before the holding directory is discarded, so the tree survives.
+        throw new Error(
+          `The installed dependencies could not be moved back into ${stage}; they are kept in ${join(location, "node_modules")}`,
+          { cause },
+        );
+      }
     },
   );
 }
