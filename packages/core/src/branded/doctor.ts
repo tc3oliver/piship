@@ -9,6 +9,7 @@ import {
   inspectInstalledLauncher,
   installedRuntimeMatches,
   lifecycleStatus,
+  verifyPayloadContents,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
 import { installedHere, readFailedAttempt } from "./lifecycle.js";
@@ -151,8 +152,25 @@ function updateDoctor(
           .join(", "),
       );
   }
-  if (status.previous) ok("rollback", `${status.previous} retained`);
-  else ok("rollback", "no retained release");
+  if (status.previous) {
+    const retained = here.releases.find(
+      (item) => item.version === status.previous,
+    );
+    try {
+      if (!retained) throw new Error("the receipt lists no such release");
+      verifyPayloadContents(retained.payload, {
+        requireTarget: true,
+        verifyContents: false,
+      });
+      ok("rollback", `${status.previous} retained`);
+    } catch (error) {
+      warn(
+        "rollback",
+        `${status.previous} is recorded as retained but does not verify (${(error as Error).message}); a rollback would fail. Download the ${status.previous} release archive from the update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${ctx.metadata.app.id} <extracted release>`,
+      );
+    }
+  }
+  if (!status.previous) ok("rollback", "no retained release");
   const free = freeInstallBytes();
   if (free !== undefined) {
     const kept = [status.active, status.previous].filter(Boolean).join(", ");

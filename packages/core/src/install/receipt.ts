@@ -556,3 +556,14 @@ export function activeLock(receipt: InstallReceipt): DistributionLock {
     verifyContents: false,
   });
 }
+
+/** The same error, of the same kind, with one more sentence about what already happened. */
+export function withNote(error: unknown, note: string): Error {
+  const message = `${error instanceof Error ? error.message : String(error)}. ${note}`;
+  if (error instanceof PiShipError)
+    return new PiShipError(error.code, message, {
+      retryable: error.retryable,
+      ...(error.userAction ? { userAction: error.userAction } : {}),
+    });
+  return new Error(message, { cause: error });
+}

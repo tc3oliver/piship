@@ -194,6 +194,7 @@ process.on("exit", clearLaunching);
 let payload;
 let command;
 let version;
+let missing;
 try {
   const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
   const release = receipt.releases.find((item) => item.version === receipt.active);
@@ -201,11 +202,21 @@ try {
   if (
     release &&
     ${VERSION_NAME.toString()}.test(release.version) &&
-    /^[a-z][a-z0-9-]*$/.test(command) &&
-    realpathSync(release.payload) === realpathSync(join(home, release.version))
-  )
-    { payload = realpathSync(release.payload); version = release.version; }
+    /^[a-z][a-z0-9-]*$/.test(command)
+  ) {
+    try {
+      if (realpathSync(release.payload) === realpathSync(join(home, release.version)))
+        { payload = realpathSync(release.payload); version = release.version; }
+    } catch (error) {
+      // A readable receipt whose active release is gone: an interrupted repair.
+      if (error.code === "ENOENT") missing = release.version;
+    }
+  }
 } catch {}
+if (!payload && missing) {
+  console.error(${JSON.stringify(`The installed ${id} release `)} + missing + ${JSON.stringify(` is missing, which an interrupted repair leaves. Download the release archive for this computer from the distribution's update source, extract it, and run: node <extracted release>/payload/piship.mjs repair ${id} <extracted release>`)});
+  process.exit(1);
+}
 if (!payload) {
   console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
   process.exit(1);

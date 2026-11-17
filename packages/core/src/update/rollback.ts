@@ -21,7 +21,12 @@ import {
 } from "../migration.js";
 import { payloadStateSchemas } from "../release/index.js";
 import { storageOf } from "../storage-transition.js";
-import { clearCredentials, markActivated, repairStateMarker } from "./state.js";
+import {
+  clearCredentials,
+  commitAfterClear,
+  markActivated,
+  repairStateMarker,
+} from "./state.js";
 
 export interface RollbackResult {
   readonly id: string;
@@ -136,7 +141,7 @@ async function performRollback(
       .map((item) => item.reason);
     options.progress?.(`Switching to ${receipt.previous}`);
     notices.push(...(await clearCredentials(stateDir, id, migration, options)));
-    lifecycle.commit({
+    const committed = {
       ...readInstallReceipt(id),
       app: target.app,
       payload: previous.payload,
@@ -147,7 +152,12 @@ async function performRollback(
         channel: receipt.channel ?? current.updates?.channel ?? "stable",
         result: `rolled back ${receipt.active} -> ${receipt.previous}`,
       },
-    });
+    };
+    commitAfterClear(
+      () => lifecycle.commit(committed),
+      migration,
+      receipt.app.command,
+    );
     // Committed: from here on nothing reports the rollback as failed.
     options.faults?.("committed");
     // A stale launcher is replaced now, as after an update.
