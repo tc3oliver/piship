@@ -5,6 +5,7 @@ import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
+  redact,
 } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
@@ -540,6 +541,24 @@ describe("e2b-compatible backend against a mock server", () => {
         "check that sandbox.template (my-project-template) names a template this service has",
       ),
     });
+  });
+
+  it("names a concurrency limit when the service refuses a new sandbox with 429", async () => {
+    const busy = await e2bServer({ create: 429 });
+    await expect(activate(e2b(busy.url))).rejects.toMatchObject({
+      message: expect.stringContaining(
+        "often for a concurrency limit: wait or delete idle sandboxes",
+      ),
+    });
+  });
+
+  it("redacts the per-sandbox envd access token like the API key", async () => {
+    const token = "envd-token-SENTINEL-0009";
+    expect(redact(`echo ${token}`)).toContain(token);
+    const mock = await e2bServer({ accessToken: token });
+    const sandbox = await activate(e2b(mock.url));
+    expect(redact(`echo ${token}`)).not.toContain(token);
+    await sandbox.dispose();
   });
 
   it("splits Connect envelopes across chunk boundaries", () => {
@@ -1604,6 +1623,9 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
     const message = String((error as Error).message);
     expect(message).toMatch(/creating the SandboxClaim failed: HTTP 403/);
+    expect(message).toContain(
+      "grant this identity permission on sandboxclaims in namespace agents",
+    );
     expect(message).not.toContain(token);
     expect(rejected).toBe(0);
     expect(
@@ -1641,6 +1663,56 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
     expect(rejected).toBe(0);
     await sandbox.dispose();
+  });
+
+  it.each([
+    [
+      401,
+      "the Kubernetes API refused the token: store the right one with sandbox login",
+    ],
+    [
+      403,
+      "grant this identity permission on sandboxclaims in namespace agents",
+    ],
+    [
+      404,
+      "check that the Agent Sandbox CRDs are installed and namespace agents exists",
+    ],
+  ])(
+    "names the next step when listing claims returns HTTP %i",
+    async (status, hint) => {
+      const mock = await kubernetesServer(undefined, { listStatus: status });
+      expect(await kubernetes(mock.url).available()).toEqual({
+        available: false,
+        reason: `listing SandboxClaims returned HTTP ${status}; ${hint}`,
+      });
+    },
+  );
+
+  it("names network.allowHosts when the network policy blocks the Kubernetes API", async () => {
+    const mock = await kubernetesServer();
+    const blocked = kubernetes(mock.url, {
+      fetch: createManagedFetch(
+        { ...DEFAULT_NETWORK_POLICY, privateOnly: true, allowHosts: [] },
+        "sandbox",
+      ),
+    });
+    expect(await blocked.available()).toEqual({
+      available: false,
+      reason:
+        "the network policy blocks the Kubernetes API: Private-only network policy denies undeclared host 127.0.0.1; add 127.0.0.1 to network.allowHosts",
+    });
+  });
+
+  it("names the warm pool, namespace, and limit when a claim is never ready", async () => {
+    const mock = await kubernetesServer(undefined, { neverReady: true });
+    await expect(
+      kubernetes(mock.url, { readyTimeoutMs: 50 }).prepare({
+        profile: {} as SandboxProfile,
+      }),
+    ).rejects.toThrow(
+      "the SandboxClaim from warm pool python-pool in namespace agents did not become ready in time (0 s); check that the SandboxWarmPool has ready replicas",
+    );
   });
 
   it("rejects the bearer on a 401 and creates no claim", async () => {

@@ -14,6 +14,8 @@ export interface Cluster {
    * may not create claims (the body echoes the Authorization header).
    */
   createStatus?: number;
+  /** Status for the claims list (the availability check). */
+  listStatus?: number;
   /** Status for DELETE; 500 simulates an API outage during cleanup. */
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
@@ -66,8 +68,11 @@ export async function kubernetesServer(
         }),
       );
     }
-    if (request.method === "GET" && path === CLAIMS)
+    if (request.method === "GET" && path === CLAIMS) {
+      if (cluster.listStatus !== undefined)
+        response.statusCode = cluster.listStatus;
       return void response.end(JSON.stringify({ items: [] }));
+    }
     if (request.method === "POST" && path === CLAIMS) {
       if (cluster.createStatus !== undefined && cluster.createStatus >= 400) {
         response.statusCode = cluster.createStatus;
