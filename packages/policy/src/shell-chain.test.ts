@@ -493,6 +493,18 @@ describe("commands that cannot be split", () => {
     expect(run(`rm -rf /;${command}`).effect).toBe("deny");
   });
 
+  it("still denies a piece past the 4096-piece limit", () => {
+    const pieces = Array.from({ length: 5000 }, (_, i) => `a${i}`);
+    expect(run(`$(:);${pieces.join(";")};rm -rf /`)).toMatchObject({
+      effect: "deny",
+      ruleId: "e.rm",
+    });
+    expect(run(`$(:);${pieces.join(";")};sudo rm -rf /`)).toMatchObject({
+      effect: "deny",
+      ruleId: "e.rm",
+    });
+  });
+
   it("keeps an enforced ask in a piece under auto mode", () => {
     const enforcedAsk = new PolicyEngine({
       policy: makePolicy({

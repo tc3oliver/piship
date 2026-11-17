@@ -803,10 +803,10 @@ export class PolicyEngine {
     // A deny or ask rule also judges each command run through `sudo`,
     // `env`, `nice` and the like, and each fragment of a command that cannot
     // be split; its allow rules never widen this way.
-    const fragments = this.#fragments(action, resource);
+    const { fragments, overLimit } = this.#fragments(action, resource);
     const stricter = [
       ...this.#unprefixed(action, resource),
-      ...(fragments ?? []),
+      ...(overLimit ? [] : fragments),
     ]
       .map((inner) => this.#decide(action, inner))
       .filter(
@@ -814,7 +814,23 @@ export class PolicyEngine {
           decision.ruleId !== BUILTIN_DEFAULT_RULE &&
           (decision.effect === "deny" || decision.effect === "ask"),
       );
-    if (!fragments)
+    if (overLimit) {
+      // Too many pieces to judge fully: deny rules still see each one,
+      // in linear time, and everything else asks.
+      for (const fragment of fragments) {
+        const inner = unprefixedCommand(fragment);
+        const denied = [fragment, ...(inner === undefined ? [] : [inner])]
+          .map((text) => this.#decideOne(action, text))
+          .find(
+            (decision) =>
+              decision.effect === "deny" &&
+              decision.ruleId !== BUILTIN_DEFAULT_RULE,
+          );
+        if (denied) {
+          stricter.push(denied);
+          break;
+        }
+      }
       stricter.push({
         ...written,
         effect: "ask",
@@ -822,6 +838,7 @@ export class PolicyEngine {
         reason: `The command has more than ${MAX_FRAGMENTS} pieces to check`,
         layer: "builtin",
       });
+    }
     const effect = strictest(
       written.effect,
       ...stricter.map((entry) => entry.effect),
@@ -836,16 +853,19 @@ export class PolicyEngine {
    * a backtick) cut at every character that could start a command, quotes
    * ignored, so deny and ask rules still see `rm -rf /` in `x $(y); rm -rf /`.
    * It over-splits; that only ever refuses more, as allow rules never match
-   * a fragment. Undefined past `MAX_FRAGMENTS`, which then asks.
+   * a fragment. Past `MAX_FRAGMENTS` it sets `overLimit`, which asks.
    */
-  #fragments(action: string, resource: string): string[] | undefined {
+  #fragments(
+    action: string,
+    resource: string,
+  ): { fragments: string[]; overLimit: boolean } {
     // A fragment holds no cut character, so recursion stops one level down.
     if (
       action !== "shell.execute" ||
       !FRAGMENT_CUT.test(resource) ||
       chainSegments(resource, PLATFORM)
     )
-      return [];
+      return { fragments: [], overLimit: false };
     const fragments = new Set<string>();
     for (const part of resource.split(FRAGMENT_CUT)) {
       // Drop trailing blanks and the `$` of `$(`, with a loop for CodeQL.
@@ -854,9 +874,11 @@ export class PolicyEngine {
       const fragment = part.slice(0, end).trim();
       if (!fragment || fragment === resource) continue;
       fragments.add(fragment);
-      if (fragments.size > MAX_FRAGMENTS) return undefined;
     }
-    return [...fragments];
+    return {
+      fragments: [...fragments],
+      overLimit: fragments.size > MAX_FRAGMENTS,
+    };
   }
 
   /** POSIX shell commands of `resource` with their transparent prefixes removed. */
@@ -998,8 +1020,8 @@ export class PolicyEngine {
     const resource = this.normalizeResource(request);
     const { action } = request;
     const segments = this.#segments(action, resource);
-    const fragments = this.#fragments(action, resource);
-    if (!fragments) return true;
+    const { fragments, overLimit } = this.#fragments(action, resource);
+    if (overLimit) return true;
     if (
       [
         ...(segments ?? []),
