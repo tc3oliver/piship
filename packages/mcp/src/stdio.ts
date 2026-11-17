@@ -143,9 +143,15 @@ export class StdioTransport implements McpTransport {
       this.#options.distributionDir,
       source,
     );
+    // PATH is not a credential; without it an `npx` server's `#!/usr/bin/env
+    // node` shebang cannot find node. Windows' SystemRoot comes from the job helper.
     const env = runtime.filterEnvironment(
       source,
-      server.env.allow,
+      [
+        ...server.env.allow,
+        "PATH",
+        ...(process.platform === "win32" ? ["PATHEXT"] : []),
+      ],
       server.env.set,
     );
     const child = runtime.spawn({

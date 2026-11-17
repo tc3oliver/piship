@@ -314,7 +314,7 @@ export class McpGovernor {
       throw withStderr(
         late
           ? mcpUnhealthy(
-              `MCP server ${config.id} did not start within its startupTimeout of ${config.startupTimeoutMs / 1000}s`,
+              `MCP server ${config.id} did not start within its startupTimeout of ${config.startupTimeoutMs / 1000}s (a first npx or uvx download is a common cause; raise mcp.servers.${config.id}.startupTimeout in the manifest)`,
               {
                 retryable: true,
                 detail: {

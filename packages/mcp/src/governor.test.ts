@@ -626,7 +626,7 @@ describe("McpGovernor over stdio", () => {
     const [report] = await governor.start();
     expect(report?.state).toBe("failed");
     expect(report?.reason).toBe(
-      "MCP server hang did not start within its startupTimeout of 0.2s",
+      "MCP server hang did not start within its startupTimeout of 0.2s (a first npx or uvx download is a common cause; raise mcp.servers.hang.startupTimeout in the manifest)",
     );
     expect(Date.now() - started).toBeLessThan(3000);
   });
@@ -800,7 +800,9 @@ describe("McpGovernor with the sandbox process runtime", () => {
     expect(names).toContain("DOCS_MODE");
     expect(names).not.toContain("ACME_API_TOKEN");
     expect(names).not.toContain("UNRELATED");
-    if (process.platform !== "win32") expect(names).not.toContain("PATH");
+    // PATH is passed even when env.allow omits it, so `#!/usr/bin/env node` works.
+    expect(names).toContain("PATH");
+    expect(names).not.toContain("HOME");
     expect(JSON.stringify(spawned)).not.toContain("opaque-value-123456");
   });
 });
@@ -808,7 +810,7 @@ describe("McpGovernor with the sandbox process runtime", () => {
 describe("McpGovernor environment filtering (test runtime)", () => {
   it("never inherits variables outside allow and set", async () => {
     const { governor } = harness({
-      env: { LANG: "C", UNRELATED: "x", HOME: "/nowhere" },
+      env: { LANG: "C", UNRELATED: "x", HOME: "/nowhere", PATH: "/bin" },
       servers: [
         stdioServer("docs", {
           env: { allow: ["LANG"], set: { DOCS_MODE: "demo" } },
@@ -818,7 +820,11 @@ describe("McpGovernor environment filtering (test runtime)", () => {
     await governor.start();
     const echo = governor.tools().find((t) => t.tool === "echo_env");
     const names = JSON.parse((await echo?.call({}))?.text ?? "[]") as string[];
-    expect(names.filter((n) => !osAdded(n))).toEqual(["DOCS_MODE", "LANG"]);
+    expect(names.filter((n) => !osAdded(n))).toEqual([
+      "DOCS_MODE",
+      "LANG",
+      "PATH",
+    ]);
   });
 });
 
