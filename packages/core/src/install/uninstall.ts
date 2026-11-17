@@ -303,7 +303,7 @@ export function uninstallDistribution(
  * metadata references are deleted first, under the uninstall's locks and
  * while the release is still installed; when one cannot be deleted this
  * throws SECRET_STORE_UNAVAILABLE and nothing is removed, so the same
- * command can be run again. Then the install is removed, and the state last.
+ * command can be run again. Then the state is removed, and the install last.
  * A distribution that is still signed in is refused before anything is
  * removed: its `<command> logout` revokes what purge would only delete.
  */
@@ -325,8 +325,10 @@ export async function uninstallAndPurgeDistribution(
       options,
     );
     const secrets = await deleteReferencedSecrets(id, state, options);
-    hold.remove();
+    // The state goes first: a failure here leaves the install in place, so the
+    // branded command can run again; after the install is gone it could not.
     rmSync(state, { recursive: true, force: true });
+    hold.remove();
     return {
       state,
       deletedSecrets: secrets.deleted,

@@ -32,6 +32,7 @@ import { runtimeStateDirectory, type DistributionLock } from "../index.js";
 import {
   syncDirectory,
   syncTree,
+  withNote,
   writeFileAtomic,
   type LifecycleOptions,
 } from "../install/receipt.js";
@@ -327,6 +328,27 @@ export function repairStateMarker(id: string, lock: DistributionLock): void {
  * of the active release cannot commit a new generation between the two and
  * leave its secret with no metadata naming it.
  */
+/**
+ * Run the receipt commit that follows `clearCredentials`. The credentials are
+ * cleared first so the release that must not have them never sees them; when
+ * the commit then fails, the old release stays active but the sign-in is gone,
+ * and the error says so.
+ */
+export function commitAfterClear(
+  commit: () => void,
+  report: MigrationReport,
+  command: string,
+): void {
+  try {
+    commit();
+  } catch (error) {
+    if (!report.items.some((item) => item.action === "clear-and-reacquire"))
+      throw error;
+    const note = `Sign-in or local credentials were already cleared before this failed; run ${command} login to sign in again`;
+    throw withNote(error, note);
+  }
+}
+
 export async function clearCredentials(
   stateDir: string,
   distributionId: string,

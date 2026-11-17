@@ -47,6 +47,7 @@ import {
   releaseInfo,
   syncDirectory,
   syncTree,
+  withNote,
   writeReceipt,
   type InstallReceipt,
   type InstalledRelease,
@@ -334,8 +335,11 @@ export async function installDistribution(
     // The same locks an uninstall takes are taken by it, so it runs before
     // this install holds them. What it removes is the receipt, shim, and
     // releases; the state stays and is adopted below.
-    if (checks.replace && existsSync(receiptPath(id)))
+    let removedPrevious = false;
+    if (checks.replace && existsSync(receiptPath(id))) {
       uninstallDistribution(id, { removeEditedShim: false });
+      removedPrevious = true;
+    }
     const commandHold = acquireLifecycleLock(
       `${commandPath}.piship.lock`,
       () =>
@@ -549,7 +553,12 @@ export async function installDistribution(
             // Explicit maintenance reclaims abandoned payloads.
             removeTrustState(id);
           }
-          throw error;
+          throw removedPrevious
+            ? withNote(
+                error,
+                `--replace had already removed the previous ${id} install (its state is kept); install again from a verified release to restore it`,
+              )
+            : error;
         }
       } finally {
         hold.release();

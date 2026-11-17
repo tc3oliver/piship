@@ -72,6 +72,7 @@ import {
 } from "../release/index.js";
 import {
   clearCredentials,
+  commitAfterClear,
   markActivated,
   repairStateMarker,
   snapshotState,
@@ -1008,7 +1009,11 @@ async function performUpdate(
       // The objects this release placed are pinned while it is active or the
       // rollback target; a failure here only leaves them unpinned.
       store?.record(id, entry.version, installHome());
-      lifecycle.commit(next);
+      commitAfterClear(
+        () => lifecycle.commit(next),
+        migration,
+        receipt.app.command,
+      );
       written = false;
       lap("update receipt commit");
       // Committed: from here on nothing reports the update as failed.

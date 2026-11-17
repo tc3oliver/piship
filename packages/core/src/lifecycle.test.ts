@@ -5146,12 +5146,13 @@ else {
     expect(escaped.status).toBe(1);
     expect(escaped.stderr).toContain("install receipt is missing or damaged");
     expect(escaped.stdout).not.toContain("payload");
-    // A missing payload fails the same way.
+    // A missing payload fails closed too, and names the repair.
     writeFileSync(path, original);
     rmSync(receipt.payload, { recursive: true, force: true });
     const missing = launch(launcher);
     expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain("install receipt is missing or damaged");
+    expect(missing.stderr).toContain("release 1.0.0 is missing");
+    expect(missing.stderr).toContain("piship.mjs repair");
   });
 });
 
