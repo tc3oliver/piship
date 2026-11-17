@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   inertDataPurge,
+  inertTempRetention,
   launchWarnings,
   ManifestError,
+  optionalHttpAuditSinks,
   PISHIP_SCHEMA_V1ALPHA4,
   PISHIP_SCHEMA_V1ALPHA6,
   parseManifest,
@@ -154,6 +156,7 @@ describe("HTTP audit sinks under a private-only network policy", () => {
     expect(
       warnings(managed(sink("https://siem.acme.example/events", false))),
     ).toEqual([
+      expect.objectContaining({ path: "audit.sinks[0].required" }),
       expect.objectContaining({
         path: "audit.sinks[0].url",
         message: expect.stringContaining("dropped"),
@@ -756,5 +759,49 @@ describe("purge settings nothing acts on", () => {
   });
   it("is quiet when the branded logout runs the purge", () => {
     expect(inertDataPurge(manifest("http-broker", "none"))).toEqual([]);
+  });
+});
+
+describe("temp retention nothing applies", () => {
+  it("warns only when data.temp.retention is declared", () => {
+    const manifest = (retention: object) =>
+      ({ data: { retention } }) as unknown as Parameters<
+        typeof inertTempRetention
+      >[0];
+    expect(
+      inertTempRetention(manifest({ temp: { retentionSeconds: 3_600 } })).map(
+        (item) => item.path,
+      ),
+    ).toEqual(["data.temp.retention"]);
+    expect(
+      inertTempRetention(manifest({ cache: { retentionSeconds: 3_600 } })),
+    ).toEqual([]);
+  });
+});
+
+describe("optional HTTP audit sinks in a managed distribution", () => {
+  const manifest = (mode: string, enabled = true) =>
+    ({
+      deployment: { mode },
+      governance: {
+        audit: {
+          enabled,
+          sinks: [
+            { id: "local", type: "file", required: false },
+            { id: "siem", type: "http", url: "https://siem", required: true },
+            { id: "copy", type: "http", url: "https://copy", required: false },
+          ],
+        },
+      },
+    }) as unknown as Parameters<typeof optionalHttpAuditSinks>[0];
+
+  it("warns that an optional HTTP sink drops undelivered events", () => {
+    expect(
+      optionalHttpAuditSinks(manifest("managed")).map((item) => item.path),
+    ).toEqual(["audit.sinks[2].required"]);
+  });
+  it("is quiet in personal mode and with audit off", () => {
+    expect(optionalHttpAuditSinks(manifest("personal"))).toEqual([]);
+    expect(optionalHttpAuditSinks(manifest("managed", false))).toEqual([]);
   });
 });

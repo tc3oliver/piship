@@ -178,6 +178,9 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
       const item = declared.retention[dataClass];
       if (!item) return [];
       const bound = dataClass === "audit" ? "min" : "max";
+      // No sweep applies a temp retention (launch.ts inertTempRetention).
+      if (dataClass === "temp")
+        return [`temp ${duration(item.retentionSeconds)} (not acted on)`];
       return [`${dataClass} ${duration(item.retentionSeconds)} ${bound}`];
     });
     out.ok(

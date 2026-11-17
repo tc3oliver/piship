@@ -2156,6 +2156,40 @@ describe("Audit group", () => {
     );
   });
 
+  it("warns about a large live spool and keeps a small one informational", () => {
+    const live = (bytes: number) =>
+      group(
+        renderDoctor(
+          doctorData("managed", {
+            governance: governanceData({
+              audit: {
+                status: okStatus,
+                targets: [{ id: "local", target: "local file" }],
+                spools: [
+                  {
+                    directory: "logs/audit-spool/fedcba9876543210",
+                    sink: "siem",
+                    files: 2,
+                    bytes,
+                    stale: 0,
+                    quarantined: [],
+                    rejected: [],
+                  },
+                ],
+              },
+            }),
+          }),
+        ).render(),
+        "Audit",
+      );
+    expect(live(300)).toContain(
+      `  - ${"spool siem".padEnd(20)} 2 file(s), 300 bytes of undelivered events in logs/audit-spool/fedcba9876543210, held by running sessions`,
+    );
+    expect(live(8 * 1024 * 1024)).toContain(
+      `  ! ${"spool siem".padEnd(20)} 2 file(s), 8388608 bytes of undelivered events in logs/audit-spool/fedcba9876543210, held by running sessions: events the collector has not acknowledged, and a session whose spool reaches 16 MiB fails closed (AUDIT_UNAVAILABLE)`,
+    );
+  });
+
   it("reports a required sink that could not open, and an optional sink that dropped events", () => {
     const opened = renderDoctor(
       doctorData("managed", {
@@ -2636,7 +2670,7 @@ describe("Governance group", () => {
     expect(group(renderDoctor(data).render(), "Governance")).toEqual([
       `  ✓ ${"seam table".padEnd(20)} Pi 1.5.0`,
       `  ✓ ${"cache warming".padEnd(20)} off`,
-      `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h max`,
+      `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h (not acted on)`,
       `  ! ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none; the logout purge never runs: sign-in is Pi's, and Pi's /logout purges nothing`,
       `  ! ${"data retention".padEnd(20)} installed release 0.9.0 predates the data contract: rolled back to, it stops the retention sweep`,
     ]);

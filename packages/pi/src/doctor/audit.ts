@@ -2,7 +2,11 @@
 // closed, each sink with its delivery counts, and local metrics. A sink is
 // shown by its host only: the path or query of a sink URL may carry routing
 // secrets.
-import { AUDIT_SPOOL_LEASE_MS, type AuditStatus } from "@piship/audit";
+import {
+  AUDIT_SPOOL_LEASE_MS,
+  AUDIT_SPOOL_MAX_BYTES,
+  type AuditStatus,
+} from "@piship/audit";
 import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
 import type { LaunchContext } from "../launch/context.js";
 import type { DoctorData } from "./data.js";
@@ -102,6 +106,11 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
         out.warn(
           label,
           `${held}; ${spool.stale} not renewed for ${AUDIT_SPOOL_LEASE_MS / 60_000} minutes, replayed by the next launch that reaches the sink`,
+        );
+      else if (spool.bytes >= AUDIT_SPOOL_MAX_BYTES / 2)
+        out.warn(
+          label,
+          `${held}, held by running sessions: events the collector has not acknowledged, and a session whose spool reaches ${AUDIT_SPOOL_MAX_BYTES / 1024 / 1024} MiB fails closed (AUDIT_UNAVAILABLE)`,
         );
       else out.info(label, `${held}, held by running sessions`);
     }
