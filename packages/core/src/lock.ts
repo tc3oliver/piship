@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { manifestContainment, seamEvidence } from "@piship/policy";
 import {
   channelTrustKeys,
@@ -218,7 +218,46 @@ export function resolveLock(
       : {}),
   };
 }
+/**
+ * The app id recorded by the piship.lock beside a manifest when that lock
+ * belongs to another manifest in the same directory, else undefined. The lock
+ * always sits beside the manifest as piship.lock, so locking a second
+ * manifest there would silently replace the first's lock.
+ */
+export function lockOwnedByOther(manifestPath: string): string | undefined {
+  // piship.yaml owns the directory's lock, so its relock always proceeds,
+  // even after an app.id rename.
+  if (basename(manifestPath) === "piship.yaml") return undefined;
+  let recorded: string | undefined;
+  try {
+    recorded = (
+      JSON.parse(
+        readFileSync(
+          join(dirname(resolve(manifestPath)), "piship.lock"),
+          "utf8",
+        ),
+      ) as DistributionLock
+    ).app?.id;
+  } catch {
+    return undefined;
+  }
+  return recorded !== undefined &&
+    recorded !== readManifest(manifestPath).app.id
+    ? recorded
+    : undefined;
+}
+
+function checkLockOwner(manifestPath: string): void {
+  const other = lockOwnedByOther(manifestPath);
+  if (other === undefined) return;
+  const path = join(dirname(resolve(manifestPath)), "piship.lock");
+  throw new Error(
+    `${path} is the lock of app ${other}, not of ${readManifest(manifestPath).app.id} (${manifestPath}); locking here would replace it. Copy this manifest into its own directory as piship.yaml and lock it there.`,
+  );
+}
+
 export function lockManifest(manifestPath: string): string {
+  checkLockOwner(manifestPath);
   if (recordedPackagesReusable(manifestPath)) {
     const kept = relockKeepingPackages(manifestPath);
     if (kept) return kept;
@@ -250,6 +289,7 @@ export function emptyPackageWarnings(lockPath: string): ValidationDiagnostic[] {
 export function relockKeepingPackages(
   manifestPath: string,
 ): string | undefined {
+  checkLockOwner(manifestPath);
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   let recorded: Partial<DistributionLock>;
   try {

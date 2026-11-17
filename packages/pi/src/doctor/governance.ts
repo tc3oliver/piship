@@ -2,6 +2,8 @@
 // lock was proven against, every action no seam enforces, the tool exposure
 // a launch resolves, virtual models and Pi packages from the lock, the data
 // lifecycle, and whether the manifest schema predates the current one.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { POLICY_ACTIONS } from "@piship/contracts";
 import {
   inspectAgentFiles,
@@ -21,6 +23,17 @@ import type { DoctorSection } from "./report.js";
 
 const DAY = 86_400;
 const HOUR = 3_600;
+
+/** False for a `.json` file that does not parse; true for any other file. */
+function readsAsJson(agentDir: string, path: string): boolean {
+  if (!path.endsWith(".json")) return true;
+  try {
+    JSON.parse(readFileSync(join(agentDir, ...path.split("/")), "utf8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function duration(seconds: number): string {
   if (seconds % DAY === 0) return `${seconds / DAY}d`;
@@ -135,6 +148,14 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
       const mode = `${file.package} ${file.mode}`;
       if (file.state === "current")
         out.ok(`${mode} file`, `${file.path} as declared`);
+      else if (
+        file.state === "edited" &&
+        !readsAsJson(data.ctx.agentDir, file.path)
+      )
+        out.warn(
+          `${mode} file`,
+          `${file.path} was edited and is no longer valid JSON, so ${file.package} cannot read it and runs on its own built-in defaults instead of the declared ones; fix it, or delete it to restore the declared default`,
+        );
       else if (file.state === "edited")
         out.info(
           `${mode} file`,

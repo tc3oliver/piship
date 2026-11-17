@@ -14,6 +14,7 @@ import {
   LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA6,
   lockManifest,
+  lockOwnedByOther,
   requireCurrentLock,
   resolveLock,
 } from "./index.js";
@@ -159,5 +160,40 @@ updates: { channel: stable, channels: [stable] }
     expect(report.requiredTests).toContain(DIFF_TESTS.migration);
     // The digest moves with the schema id; it is not reported on its own.
     expect(diffLocks(after, after).changes).toEqual([]);
+  });
+});
+
+describe("a second manifest in a locked directory", () => {
+  it("refuses to replace the other manifest's lock and still relocks its own", () => {
+    const own = project(migrateManifestSource(V1ALPHA6).source);
+    lockManifest(own);
+    const lockPath = join(own, "..", "piship.lock");
+    const before = readFileSync(lockPath, "utf8");
+    const other = join(own, "..", "managed.piship.yaml");
+    writeFileSync(
+      other,
+      migrateManifestSource(V1ALPHA6).source.replace(
+        "id: acmepi",
+        "id: acmepi-managed",
+      ),
+    );
+    expect(lockOwnedByOther(other)).toBe("acmepi");
+    expect(lockOwnedByOther(own)).toBeUndefined();
+    expect(() => lockManifest(other)).toThrow(
+      /is the lock of app acmepi, not of acmepi-managed.*its own directory as piship\.yaml/,
+    );
+    expect(readFileSync(lockPath, "utf8")).toBe(before);
+    // Its own manifest, edited, relocks as before.
+    writeFileSync(own, readFileSync(own, "utf8").replace("1.0.0", "1.0.1"));
+    lockManifest(own);
+    expect(readFileSync(lockPath, "utf8")).toContain('"version": "1.0.1"');
+    // piship.yaml owns the lock: an app.id rename relocks without a delete.
+    writeFileSync(
+      own,
+      readFileSync(own, "utf8").replace("id: acmepi", "id: acmepi2"),
+    );
+    expect(lockOwnedByOther(own)).toBeUndefined();
+    lockManifest(own);
+    expect(readFileSync(lockPath, "utf8")).toContain('"id": "acmepi2"');
   });
 });
