@@ -183,7 +183,8 @@ describe("stored sandbox credential (local fixtures)", () => {
       ["sandbox", "login", "--secret", "fake-argv-token-0001"],
       sandbox,
     );
-    expect(argv.status).toBe(1);
+    // A refused command line is a usage error (exit 2).
+    expect(argv.status).toBe(2);
     expect(`${argv.stdout}${argv.stderr}`).not.toContain(
       "fake-argv-token-0001",
     );
