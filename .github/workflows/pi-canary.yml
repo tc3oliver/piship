@@ -20,6 +20,8 @@ concurrency:
 jobs:
   canary:
     runs-on: ${{ matrix.os }}
+    # Observed 1-3 minutes.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:

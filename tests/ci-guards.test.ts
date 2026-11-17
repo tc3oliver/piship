@@ -153,6 +153,7 @@ describe("the CI check runners", () => {
           `    needs: [${target}]`,
           "    if: always()",
           "    runs-on: ubuntu-24.04",
+          "    timeout-minutes: 5",
           "    steps:",
           '      - run: test "$RESULT" = success',
           "        env:",
@@ -298,4 +299,17 @@ describe("E2E vulnerability preflight", () => {
       expect(text).toMatch(/\n {2}report:\n {4}needs: \[preflight, /);
     });
   }
+});
+
+// Without a job timeout a hung runner holds the required check for GitHub's
+// six-hour default.
+describe("CI job timeouts", () => {
+  it("gives every ci.yml job a timeout", () => {
+    const jobs = [
+      ...ci.slice(ci.indexOf("\njobs:\n")).matchAll(/\n {2}([a-z][\w-]*):\n/g),
+    ].map((match) => match[1] as string);
+    expect(jobs.length).toBeGreaterThan(3);
+    for (const name of jobs)
+      expect(ciJob(name), name).toMatch(/\n {4}timeout-minutes: \d+\n/);
+  });
 });

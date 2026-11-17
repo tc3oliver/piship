@@ -25,6 +25,8 @@ jobs:
   ubuntu:
     name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-24.04
+    # Observed 2-3 minutes; a hung runner fails at three to four times that.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -148,6 +150,7 @@ jobs:
   macos:
     name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -160,6 +163,7 @@ jobs:
   windows:
     name: check (${{ matrix.os }}, ${{ matrix.part }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -177,6 +181,7 @@ jobs:
     needs: [ubuntu]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - run: test "$RESULT" = success
         env:
@@ -186,6 +191,7 @@ jobs:
     needs: [macos]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - run: test "$RESULT" = success
         env:
@@ -195,6 +201,7 @@ jobs:
     needs: [windows]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - run: test "$RESULT" = success
         env:
