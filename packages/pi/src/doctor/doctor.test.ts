@@ -773,7 +773,7 @@ describe("renderDoctor", () => {
     ).toEqual([
       `  ✓ ${"backend".padEnd(20)} macOS Keychain`,
       `  ! ${"revocation retries".padEnd(20)} pending revocation retries: 2, oldest 3h`,
-      `  ! ${"revocation".padEnd(20)} a replaced credential could not be revoked and may still be valid at the provider until it expires or an administrator revokes it`,
+      `  ! ${"revocation".padEnd(20)} a replaced credential could not be revoked and may still be valid at the provider until it expires; the next acmecode login retries the revocation, or an administrator can revoke it now`,
     ]);
     expect(
       lines({ readable: true, count: 20, dropped: 4, oldestAgeSeconds: 90 })[1],
@@ -783,7 +783,7 @@ describe("renderDoctor", () => {
     expect(
       lines({ readable: false, count: 0, dropped: 0, oldestAgeSeconds: null }),
     ).toContain(
-      `  ! ${"revocation retries".padEnd(20)} the pending revocation record is unreadable`,
+      `  ! ${"revocation retries".padEnd(20)} the pending revocation record is unreadable; the next login retries reading it. To revoke now, ask an administrator to revoke your earlier credentials at the provider`,
     );
     // Warnings never fail the report.
     expect(
@@ -815,10 +815,12 @@ describe("renderDoctor", () => {
         "Credential",
       );
     expect(lines(false)).toContain(
-      `  ! ${"pending request".padEnd(20)} credential request key-0001 is unresolved; the next renewal repeats it`,
+      `  ! ${"pending request".padEnd(20)} a credential request is unresolved; the next renewal repeats it. If renewal keeps failing, run acmecode logout, then acmecode login`,
     );
+    // The broker's request key is internal and never shown.
+    expect(lines(false).join("\n")).not.toContain("key-0001");
     expect(lines(true)).toContain(
-      `  ! ${"pending request".padEnd(20)} credential request key-0001 is older than broker retention; renewal fails until you run acmecode logout, then acmecode login`,
+      `  ! ${"pending request".padEnd(20)} a credential request is older than broker retention; renewal fails until you run acmecode logout, then acmecode login`,
     );
   });
 
@@ -901,7 +903,6 @@ describe("Network group", () => {
     expect(
       lines.slice(8).map((line) => line.trim().split(/\s{2,}/)[0]),
     ).toEqual([
-      "✓ egress: Pi",
       "- egress: extensions",
       "- egress: shell",
       "- egress: MCP stdio",
@@ -970,7 +971,7 @@ describe("Network group", () => {
     process.env.NO_PROXY = "10.0.0.6";
     const proxied = group(renderDoctor(data).render(), "Network");
     expect(proxied).toContain(
-      `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.20.30.40 would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add 10.20.30.40 to NO_PROXY`,
+      `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.20.30.40 would go through a proxy that is not a private host, so PiShip refuses it; add 10.20.30.40 to NO_PROXY`,
     );
     // NO_PROXY names the audit collector, so it goes direct.
     expect(
@@ -1230,8 +1231,11 @@ describe("Network group", () => {
       }),
     );
     expect(report.failed).toBe(true);
+    expect(report.summary()).toMatch(
+      /^\d+ ok, \d+ warn, 2 fail \(activation, TLS verification\)$/,
+    );
     expect(group(report.render(), "Network")[0]).toBe(
-      `  ✗ ${"TLS verification".padEnd(20)} DISABLED in environment`,
+      `  ✗ ${"TLS verification".padEnd(20)} off: NODE_TLS_REJECT_UNAUTHORIZED=0 is set; unset it and declare any enterprise CA in network.tls.additionalCA`,
     );
     expect(group(report.render(), "Inference")).toContain(
       `  ✗ ${"activation".padEnd(20)} TLS_POLICY_VIOLATION: TLS disabled`,
@@ -1332,9 +1336,8 @@ describe("Sandbox and Workspace groups", () => {
     // No sandbox: IT-owned egress is a note and does not fail the report.
     const bare = run("managed", undefined);
     expect(bare.failed).toBe(false);
-    expect(bare.lines).toContain(
-      `  ✓ ${"egress: Pi".padEnd(20)} PiShip: private-only, declared hosts`,
-    );
+    // Private-only Pi traffic is reported once, as "outbound".
+    expect(bare.lines.some((line) => line.includes("egress: Pi"))).toBe(false);
     expect(bare.lines.some((line) => line.startsWith(shell("-", none)))).toBe(
       true,
     );

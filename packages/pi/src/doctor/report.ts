@@ -104,6 +104,15 @@ export class DoctorReport {
     return this.#failed;
   }
 
+  /** A tally of the checks and the labels of the failed ones. */
+  summary(): string {
+    const checks = [...this.#groups.values()].flat();
+    const count = (status: DoctorCheck["status"]) =>
+      checks.filter((check) => check.status === status).length;
+    const failed = checks.filter((check) => check.status === "fail");
+    return `${count("ok")} ok, ${count("warn")} warn, ${failed.length} fail (${failed.map((check) => check.label).join(", ")})`;
+  }
+
   section(group: DoctorGroup): DoctorSection {
     const line =
       (mark: keyof typeof STATUS) => (label: string, value: string) => {

@@ -410,7 +410,7 @@ describe("managed distribution (local fixtures)", () => {
     });
     expect(insecureDoctor.status).toBe(1);
     expect(insecureDoctor.stdout).toMatch(
-      /[✗x] TLS verification\s+DISABLED in environment/,
+      /[✗x] TLS verification\s+off: NODE_TLS_REJECT_UNAUTHORIZED=0 is set/,
     );
     expect(insecureDoctor.stdout).toContain("TLS_POLICY_VIOLATION");
   }, 600000);

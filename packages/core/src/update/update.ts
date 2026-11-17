@@ -97,7 +97,10 @@ export function selectChannel(
       throw new PiShipError(
         "POLICY_DENIED",
         `Channel ${requested} is not allowed by this distribution (allowed: ${updates.channels.join(", ")})`,
-        { component: "update" },
+        {
+          component: "update",
+          userAction: `Use one of: ${updates.channels.map((channel) => `--channel ${channel}`).join(", ")}`,
+        },
       );
     return { channel: requested, notices: [] };
   }

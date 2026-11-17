@@ -64,7 +64,7 @@ describe.runIf(HOST_EVIDENCED)("doctor last check", () => {
     expect(failed).toHaveLength(2);
     expect(failed[0]).toMatch(/^ok last check available 1\.1\.0 \(/);
     expect(failed[1]).toMatch(
-      /^! last check update failed at \S+: UPDATE_FAILED: Update source has no stable\.json$/,
+      /^! last check update failed at \S+: Update source has no stable\.json$/,
     );
     // The receipt is unchanged by the failure; a later check clears the warning.
     await new Promise((resolve) => setTimeout(resolve, 5));

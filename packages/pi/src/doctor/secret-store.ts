@@ -27,7 +27,7 @@ export function secretStoreGroup(data: DoctorData, out: DoctorSection): void {
   if (!pending.readable) {
     out.warn(
       "revocation retries",
-      "the pending revocation record is unreadable",
+      "the pending revocation record is unreadable; the next login retries reading it. To revoke now, ask an administrator to revoke your earlier credentials at the provider",
     );
     return;
   }
@@ -41,7 +41,7 @@ export function secretStoreGroup(data: DoctorData, out: DoctorSection): void {
   );
   out.warn(
     "revocation",
-    "a replaced credential could not be revoked and may still be valid at the provider until it expires or an administrator revokes it",
+    `a replaced credential could not be revoked and may still be valid at the provider until it expires; the next ${data.ctx.metadata.app.command} login retries the revocation, or an administrator can revoke it now`,
   );
 }
 

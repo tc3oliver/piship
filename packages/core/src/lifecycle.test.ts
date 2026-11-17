@@ -1908,6 +1908,9 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(error.message).toMatch(
       /Channel dev is not allowed by this distribution \(allowed: stable, candidate\)/,
     );
+    expect(error.userAction).toBe(
+      "Use one of: --channel stable, --channel candidate",
+    );
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 

@@ -107,14 +107,9 @@ export async function runDoctor(
     );
   }
   // An installed launcher an earlier PiShip wrote is replaced, as at the end
-  // of a session, so the report below names the one that runs next.
-  try {
-    refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
-  } catch (error) {
-    ctx.err(
-      `Could not replace the installed launcher: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  // of a session, so the report below names the one that runs next. It never
+  // throws; a launcher it could not replace is reported under Update.
+  refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
   const report = renderDoctor(await collectDoctorData(ctx));
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),
@@ -122,6 +117,6 @@ export async function runDoctor(
   if (report.failed)
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
-      `${ctx.metadata.app.name} doctor found problems`,
+      `${ctx.metadata.app.name} doctor found problems: ${report.summary()}`,
     );
 }
