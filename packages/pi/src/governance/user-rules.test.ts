@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { filesystemPolicyDigest, readUserRules } from "./engine.js";
+import {
+  buildEngine,
+  filesystemPolicyDigest,
+  readUserRules,
+} from "./engine.js";
 
 let state: string;
 beforeEach(() => {
@@ -88,5 +92,70 @@ describe("filesystemPolicyDigest", () => {
     expect(await filesystemPolicyDigest(options("managed"), [])).not.toBe(
       denied,
     );
+  });
+});
+
+describe("rule warnings from the adapter and the user file", () => {
+  it("reach the engine's diagnostics, naming the file and the rule", async () => {
+    const userFile = join(state, "config", "policy.json");
+    writeFileSync(
+      userFile,
+      JSON.stringify([
+        {
+          id: "me.docs",
+          action: "mcp.tool.call",
+          resource: "mcp__docs__search",
+          effect: "deny",
+        },
+      ]),
+    );
+    mkdirSync(join(state, "resources"));
+    writeFileSync(
+      join(state, "resources", "team.mjs"),
+      `export default [{ id: "team.env", action: "filesystem.read", resource: ".env", effect: "deny" }];`,
+    );
+    const options = {
+      stateDir: state,
+      distributionDir: state,
+      lock: {
+        deployment: { mode: "personal" },
+        governance: {
+          manifest: {
+            policy: {
+              id: "p",
+              version: "1",
+              default: "allow",
+              enforced: [],
+              defaults: [],
+              adapter: "./team.mjs",
+            },
+          },
+        },
+      },
+    } as never;
+    const engine = await buildEngine(
+      options,
+      { root: state } as never,
+      [],
+      { level: "none", planes: [] } as never,
+      state,
+      state,
+    );
+    expect(
+      engine.diagnostics.map((item) => [item.source, item.message]),
+    ).toEqual([
+      [
+        "the policy adapter ./team.mjs",
+        expect.stringContaining(
+          "team.env (deny filesystem.read) never matches .env",
+        ),
+      ],
+      [
+        userFile,
+        expect.stringContaining(
+          "me.docs (deny mcp.tool.call) names the model-facing tool",
+        ),
+      ],
+    ]);
   });
 });

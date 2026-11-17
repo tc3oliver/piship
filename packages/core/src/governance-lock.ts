@@ -8,7 +8,13 @@ import {
   unenforcedAction,
   unenforcedRules,
 } from "@piship/policy";
-import type { Manifest, ValidationDiagnostic } from "@piship/schema";
+import {
+  inertRuleMessage,
+  type Manifest,
+  type PolicyRule,
+  shellGlobMessage,
+  type ValidationDiagnostic,
+} from "@piship/schema";
 import { withSessionExportRules } from "./data/session-export.js";
 import { checkPackageTrust } from "./pi-packages/trust.js";
 import type { LockedResource } from "./lock-schema.js";
@@ -183,88 +189,28 @@ export function unapprovedLoadWarnings(
   return warnings;
 }
 
-/**
- * A shell.execute deny or ask rule whose resource uses `*` but no `**`: `*`
- * stops at `/`, so `rm -rf *` lets `rm -rf /` and `rm -rf ./x` through.
- */
+/** A shell.execute deny or ask rule whose resource uses `*` but no `**`. */
 export function shellGlobWarnings(manifest: Manifest): ValidationDiagnostic[] {
-  const policy = manifest.governance?.policy;
-  if (!policy) return [];
-  return [
-    ...policy.enforced.map((rule) => ["enforced", rule] as const),
-    ...policy.defaults.map((rule) => ["defaults", rule] as const),
-  ].flatMap(([layer, rule]) =>
-    rule.action === "shell.execute" &&
-    rule.effect !== "allow" &&
-    rule.resource.includes("*") &&
-    !rule.resource.includes("**")
-      ? [
-          {
-            path: `policy.${layer}.${rule.id}`,
-            message: `"${rule.resource}" does not match arguments containing /; use ** (for example "${rule.resource.replaceAll("*", "**")}")`,
-          },
-        ]
-      : [],
-  );
+  return policyRuleMessages(manifest, shellGlobMessage);
 }
 
-const LOAD_ACTIONS = new Set<string>([
-  "resource.load",
-  "skill.load",
-  "instruction.load",
-  "extension.load",
-]);
-
-/**
- * Rules that parse but can never match: a `git.push` resource is
- * `<remote>/<branch>`, and a load resource is `<class>:./<path>` or
- * `<class>:**`.
- */
+/** Rules that parse but can never match (`inertRuleMessage`). */
 export function inertRuleWarnings(manifest: Manifest): ValidationDiagnostic[] {
+  return policyRuleMessages(manifest, inertRuleMessage);
+}
+
+function policyRuleMessages(
+  manifest: Manifest,
+  check: (rule: PolicyRule) => string | undefined,
+): ValidationDiagnostic[] {
   const policy = manifest.governance?.policy;
   if (!policy) return [];
   return [
     ...policy.enforced.map((rule) => ["enforced", rule] as const),
     ...policy.defaults.map((rule) => ["defaults", rule] as const),
   ].flatMap(([layer, rule]) => {
-    const path = `policy.${layer}.${rule.id}`;
-    if (rule.action === "git.push" && /\s/.test(rule.resource))
-      return [
-        {
-          path,
-          message: `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/main"), not a command`,
-        },
-      ];
-    if (
-      rule.action === "git.push" &&
-      !rule.resource.includes("/") &&
-      !rule.resource.includes("**")
-    )
-      return [
-        {
-          path,
-          message: `"${rule.resource}" never matches: a git.push resource is <remote>/<branch> (for example "origin/${rule.resource}", or "**/${rule.resource}" for any remote)`,
-        },
-      ];
-    // `<class>:` then `./...` or a glob; builtin and project resources are
-    // named differently (`builtin:<name>`, `project:<path>`).
-    const colon = rule.resource.indexOf(":");
-    const rest = rule.resource.slice(colon + 1);
-    if (
-      LOAD_ACTIONS.has(rule.action) &&
-      ["certified", "company", "user"].includes(
-        rule.resource.slice(0, colon),
-      ) &&
-      !rest.startsWith("./") &&
-      !rest.startsWith("*")
-    )
-      return [
-        {
-          path,
-          message: `"${rule.resource}" never matches: a ${rule.action} resource is <class>:./<path> or <class>:** (for example "company:./resources/skills/**")`,
-        },
-      ];
-    return [];
+    const message = check(rule);
+    return message ? [{ path: `policy.${layer}.${rule.id}`, message }] : [];
   });
 }
 

@@ -15,7 +15,11 @@ import {
   type PolicyRequest,
   redact,
 } from "@piship/contracts";
-import type { PolicyConfig, PolicyRule } from "@piship/schema";
+import {
+  type PolicyConfig,
+  type PolicyRule,
+  ruleWarnings,
+} from "@piship/schema";
 import {
   expandPathTokens,
   matchAction,
@@ -474,6 +478,10 @@ export function parseRuleList(
       return;
     }
     rules.push(rule);
+    // No ruleId: a rule that never matches widens nothing, so it is not a
+    // policy violation.
+    for (const message of ruleWarnings(normalizeRuleAction(rule)))
+      diagnostics.push({ level: "warning", source, message });
   });
   return { rules, ignored, diagnostics };
 }
