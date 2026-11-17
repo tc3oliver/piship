@@ -951,7 +951,32 @@ describe("the first-run journey from the directory above the source", () => {
     expect(first.stdout).not.toContain("diff");
     expect(first.stdout).toMatch(/^Next: .* test .* build /m);
     const again = await run(["lock", "my-agent"]);
-    expect(again.stdout).toContain("diff <previous piship.lock>");
+    // Nothing installed: lock overwrote the only earlier lock there was.
+    expect(again.stdout).not.toContain("diff");
+    expect(again.stdout).toMatch(/^Next: .* test /m);
+  });
+
+  it("points a relock of an installed distribution at diff against the install", async () => {
+    expect((await run(["init", ID])).status).toBe(0);
+    expect((await run(["lock", ID])).status).toBe(0);
+    installRecorder();
+    const again = await run(["lock", ID]);
+    expect(again.stdout).toMatch(
+      new RegExp(`^Next: piship diff ${ID} \\S*piship\\.lock"? reviews`, "m"),
+    );
+  });
+
+  it("diff of a bare id naming a source directory too reads the install, and says so", async () => {
+    mkdirSync(join(temp, ID));
+    writeFileSync(
+      join(temp, ID, "piship.yaml"),
+      readFileSync(join(temp, "my-agent", "piship.yaml")),
+    );
+    installRecorder();
+    const result = await run(["diff", ID, "my-agent"]);
+    expect(result.stderr).toContain(
+      `Note: diff reads the installed ${ID}, not the source directory of that name`,
+    );
   });
 
   it.each(["doctor", "install"])(

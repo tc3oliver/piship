@@ -706,7 +706,10 @@ function parseLockText(text: string, file: string): DistributionLock {
   }
   return value as unknown as DistributionLock;
 }
-async function lockFor(target: string): Promise<DistributionLock> {
+async function lockFor(
+  target: string,
+  note?: (line: string) => void,
+): Promise<DistributionLock> {
   const path = resolve(target);
   // A pack is verified by its own rules, then its bound lock is read.
   if (await isPack(path))
@@ -736,8 +739,16 @@ async function lockFor(target: string): Promise<DistributionLock> {
   }
   if (existsSync(path) && existsSync(join(path, "release.json")))
     return (await verifyRelease(path)).lock;
-  if (isDistributionSource(path))
-    return requireCurrentLock(join(target, "piship.yaml"));
+  if (isDistributionSource(path)) {
+    // As inspect and config: a bare id next to its source means the install.
+    const installed = installedPayload(target);
+    if (installed === undefined || note === undefined)
+      return requireCurrentLock(join(target, "piship.yaml"));
+    note(
+      `Note: diff reads the installed ${target}, not the source directory of that name; for the source, pass ${shellArg(join(target, "piship.yaml"))}.`,
+    );
+    return verifyPayload(installed);
+  }
   if (existsSync(path)) return verifyPayload(path);
   return verifyPayload(installedReceipt(target).payload);
 }
@@ -977,8 +988,12 @@ function manifestPath(
 function installedPayload(target: string): string | undefined {
   if (!isDistributionId(target) || !isDistributionSource(resolve(target)))
     return undefined;
+  return installedPayloadOf(target);
+}
+/** The payload of the installed `id`, or undefined when it is not installed. */
+function installedPayloadOf(id: string): string | undefined {
   try {
-    return readInstallReceipt(target).payload;
+    return readInstallReceipt(id).payload;
   } catch (error) {
     if (
       !(error instanceof Error) ||
@@ -987,6 +1002,10 @@ function installedPayload(target: string): string | undefined {
       throw error;
     return undefined;
   }
+}
+/** ` --replace` when `id` is installed: a plain install would stop at the collision. */
+function replaceFlag(id: string): string {
+  return installedPayloadOf(id) === undefined ? "" : " --replace";
 }
 /** Why a distribution's source directory is not something to install or check, and what to run. */
 function notBuilt(target: string, command: string): Error {
@@ -1558,12 +1577,13 @@ async function runAuthoring(
     output.stdout(
       first
         ? `Wrote ${written}\nNext: ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke; ${pishipCommand()} build ${shellArg(target)} assembles the payload to install.`
-        : `Wrote ${written}\nNext: ${pishipCommand()} diff <previous piship.lock> ${shellArg(written)} reviews what changed and what to check; ${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
+        : `Wrote ${written}\nNext: ${installedPayloadOf(locked.app.id) === undefined ? "" : `${pishipCommand()} diff ${shellArg(locked.app.id)} ${shellArg(written)} reviews what changed since the installed build and what to check; `}${pishipCommand()} test ${shellArg(target)} builds and runs the acceptance smoke.`,
     );
   } else if (command === "build") {
     const progress = progressReporter(output.stderr);
+    const current = requireCurrentLock(target);
     await downloadLockedSearchTools(
-      requireCurrentLock(target),
+      current,
       undefined,
       progress ? { progress } : {},
     );
@@ -1580,7 +1600,7 @@ async function runAuthoring(
     markLocalBuild(built);
     output.stderr(unqualifiedBuildNotice(target));
     output.stdout(
-      `Built ${built}\nNext: node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)} installs it for this user; ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke first if you have not.`,
+      `Built ${built}\nNext: node ${shellArg(join(built, "piship.mjs"))} install ${shellArg(built)}${replaceFlag(current.app.id)} installs it for this user; ${pishipCommand()} test ${shellArg(target)} runs the acceptance smoke first if you have not.`,
     );
   }
   return 0;
@@ -1676,7 +1696,7 @@ async function runDevOrTest(
     output.stdout(
       rest.includes("--json")
         ? result.stdout.trim()
-        : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)} installs it for this user.`}`,
+        : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance ${failedMcp.length ? "FAILED" : "passed"}\n${formatSmokeSummary(result.stdout.trim(), declared)}${failedMcp.length ? "" : `\nNext: node ${shellArg(join(artifact, "piship.mjs"))} install ${shellArg(artifact)}${replaceFlag(lock.app.id)} installs it for this user.`}`,
     );
   else if (!interactive) output.stdout(result.stdout.trim());
   // A declared server that did not start is a broken build, not a pass.
@@ -1997,8 +2017,8 @@ async function runLifecycle(
       verified.cleanup();
     }
   } else if (command === "diff") {
-    const before = await lockFor(first);
-    const after = await lockFor(second);
+    const before = await lockFor(first, output.stderr);
+    const after = await lockFor(second, output.stderr);
     let report: ReturnType<typeof diffLocks>;
     try {
       report = diffLocks(before, after);

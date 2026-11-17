@@ -202,7 +202,10 @@ updates:
   channels: [stable, candidate]
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: ${rollback}
-  trust:
+${
+  // No keys: a distribution without update trust.
+  keys.length
+    ? `  trust:
     bootstrap:
       version: 1
       expires: 2099-01-01T00:00:00Z
@@ -210,7 +213,9 @@ updates:
 ${listed.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicKey}\n`).join("")}      roles:
         root: { keyIds: [${rootIds}], threshold: 1 }
         channel: { keyIds: [${ids}], threshold: 1 }
-`;
+`
+    : ""
+}`;
 }
 
 function project(
@@ -3251,6 +3256,15 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(error.userAction).toMatch(
       /run \S+ update to move to another version/,
     );
+  });
+
+  it("names reinstalling the earlier build when there are no update keys", async () => {
+    const a = await release("1.0.0", true, undefined, []);
+    await installDistribution(a.archive);
+    const error = await rejection(rollbackDistribution(ID, {}));
+    expect(error.code).toBe("ROLLBACK_FAILED");
+    expect(error.userAction).toMatch(/install <previous build> --replace/);
+    expect(error.userAction).not.toMatch(/run \S+ update/);
   });
 
   it("leaves retained-file auditing to explicit verification", async () => {

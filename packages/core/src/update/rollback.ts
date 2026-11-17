@@ -6,6 +6,7 @@ import {
   verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
+import { pishipCommand } from "../invocation.js";
 import { refreshInstalledLauncher } from "../install/launcher.js";
 import { reclaimAfterCommit } from "../install/reclaim.js";
 import {
@@ -77,7 +78,11 @@ async function performRollback(
         "ROLLBACK_FAILED",
         `${receipt.app.id} has no retained release to roll back to`,
         {
-          userAction: `Only a release a previous update kept can be rolled back to; run ${receipt.app.command} update to move to another version`,
+          // Without update keys there is no update to run: the earlier build is reinstalled.
+          userAction:
+            receipt.trustState === true
+              ? `Only a release a previous update kept can be rolled back to; run ${receipt.app.command} update to move to another version`
+              : `Only a release a previous update kept can be rolled back to, and ${receipt.app.id} has no update keys; to go back, reinstall the earlier build: ${pishipCommand()} install <previous build> --replace (state is kept)`,
         },
       );
     if (compareVersions(receipt.previous, receipt.active) > 0)

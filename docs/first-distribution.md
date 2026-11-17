@@ -76,7 +76,7 @@ piship validate my-agent/piship.yaml
 piship test my-agent/piship.yaml
 ```
 
-`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly in an isolated state directory. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming the install command.
+`test` builds the distribution into `dist/my-agent` under the directory you ran it in and starts its command headlessly. Its state is the distribution's own state directory (`~/.piship/my-agent`), separate from Pi's `~/.pi` but not from an installed `my-agent`: once it is installed, `test` and `dev` read and write the installed command's sessions, settings, and sign-in. It ends with `Personal acceptance passed`, a short summary of what Pi loaded, and a `Next:` line naming the install command (with `--replace` when `my-agent` is already installed).
 
 A distribution that stores its own API key (`credential.provider: local-secret`, as in the [own endpoint example](#use-your-own-openai-compatible-endpoint)) has no key on the first run, so `test` fails with `CREDENTIAL_REQUIRED` and names the built command. Store the key with it, then test again:
 
@@ -93,7 +93,7 @@ The first time, there is no `piship.lock` yet, so `test` writes one and says so 
 
 ## 4. Edit and repeat
 
-`dev` runs the same isolated build and opens the command interactively; `dev --smoke` runs it headlessly.
+`dev` runs the same build and opens the command interactively; `dev --smoke` runs it headlessly.
 
 ```bash
 piship dev my-agent/piship.yaml
@@ -132,7 +132,7 @@ mkdir -p my-agent/resources/mcp
 cp ~/src/piship/examples/personal/resources/mcp/notes-server.mjs my-agent/resources/mcp/
 ```
 
-Each field is described in the manifest reference: [resources](manifest.md#resources-and-trust-classes), [Pi packages](manifest.md#pi-packages-v1alpha6), [MCP](manifest.md#mcp), [models](manifest.md#access-fields-v1alpha2-and-later), and [policy](manifest.md#policy). The [personal example](../examples/personal/piship.yaml) declares instructions, skills, an extension, prompts, a theme, and an MCP server. `test` reports what loaded (`resources  instructions 1, skills 1, extensions 1, ...` and one line per MCP server), and the built command's `policy explain <action> <resource>` shows which rule decides an action (`dist/<id>/bin/<command> policy explain git.push origin/main`).
+Each field is described in the manifest reference: [resources](manifest.md#resources-and-trust-classes), [Pi packages](manifest.md#pi-packages-v1alpha6), [MCP](manifest.md#mcp), [models](manifest.md#access-fields-v1alpha2-and-later), and [policy](manifest.md#policy). The [personal example](../examples/personal/piship.yaml) declares instructions, skills, an extension, prompts, a theme, and an MCP server. `test` reports what loaded (`resources  instructions 1, skills 1, extensions 1, ...` and one line per MCP server), and the built command's `policy explain <action> <resource>` shows which rule decides an action (`dist/<id>/bin/<command> policy explain git.push origin/main`). That command is the last build: after editing `piship.yaml`, run `dev`, `test`, or `build` again before `policy explain` shows the new rule.
 
 ### Use your own OpenAI-compatible endpoint
 
