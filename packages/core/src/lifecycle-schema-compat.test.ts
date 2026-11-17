@@ -267,7 +267,7 @@ describe.runIf(HOST_EVIDENCED)("releases across manifest schemas", () => {
     const b = await release("piship/v1", "1.1.0");
     const offeredA = await channelOffering(a.archive);
     const offeredB = await channelOffering(b.archive, offeredA);
-    const options: UpdateOptions = { source: offeredB, runCheck: fakeRun };
+    const options: UpdateOptions = { source: offeredB };
 
     await installDistribution(a.archive, true);
     const oldLock = join(appsDir(), "1.0.0", "piship.lock");
@@ -291,7 +291,7 @@ describe.runIf(HOST_EVIDENCED)("releases across manifest schemas", () => {
     expect(sha256(oldLock)).toBe(lockHash);
     expect(verifyPayload(join(appsDir(), "1.0.0")).app.version).toBe("1.0.0");
 
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(readInstallReceipt(ID)).toMatchObject({ active: "1.0.0" });
     expect(sha256(oldLock)).toBe(lockHash);
     expect(verifyPayload(join(appsDir(), "1.0.0")).app.version).toBe("1.0.0");

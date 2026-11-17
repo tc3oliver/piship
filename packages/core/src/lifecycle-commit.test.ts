@@ -95,7 +95,7 @@ describe.runIf(HOST_EVIDENCED)(
         await updateDistribution(ID, opts);
         const before = readFileSync(markerFile());
         injectFault(MARKER, fault);
-        const result = await rollbackDistribution(ID, { runCheck: fakeRun });
+        const result = await rollbackDistribution(ID, {});
         expect(result).toMatchObject({ from: "1.1.0", to: "1.0.0" });
         expect(result.notices).toEqual([
           expect.stringMatching(/^1\.0\.0 is active, but its state marker/),
@@ -108,9 +108,7 @@ describe.runIf(HOST_EVIDENCED)(
         clearFaults();
         // The next operation repairs the marker before anything else, even
         // one that then refuses (the retained 1.1.0 is newer than 1.0.0).
-        const next = await rejection(
-          rollbackDistribution(ID, { runCheck: fakeRun }),
-        );
+        const next = await rejection(rollbackDistribution(ID, {}));
         expect(next.message).toMatch(/use update instead/);
         expect(readStateMarker(stateDir())?.version).toBe("1.0.0");
         expect(readInstallReceipt(ID).active).toBe("1.0.0");
@@ -127,7 +125,7 @@ describe.runIf(HOST_EVIDENCED)(
         await updateDistribution(ID, opts);
         const before = readFileSync(markerFile());
         injectFault(MARKER, fault);
-        await rollbackDistribution(ID, { runCheck: fakeRun });
+        await rollbackDistribution(ID, {});
         expect(readFileSync(markerFile())).toEqual(before);
         expect(temporaries()).toEqual([]);
         clearFaults();
@@ -143,7 +141,7 @@ describe.runIf(HOST_EVIDENCED)(
       const stale = JSON.parse(readFileSync(markerFile(), "utf8"));
       write(markerFile(), JSON.stringify({ ...stale, version: "1.0.0" }));
       injectFault(MARKER, { op: "write", code: "ENOSPC" });
-      await rollbackDistribution(ID, { runCheck: fakeRun });
+      await rollbackDistribution(ID, {});
       expect(readInstallReceipt(ID).active).toBe("1.0.0");
       clearFaults();
       await updateDistribution(ID, opts);

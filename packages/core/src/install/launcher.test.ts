@@ -229,7 +229,7 @@ describe("replacing a launcher an earlier PiShip installed", () => {
     expect(readFileSync(path, "utf8")).toBe(current);
 
     writeFileSync(path, earlierLauncher(current));
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
     expect(readFileSync(path, "utf8")).toBe(current);
   }, 60_000);

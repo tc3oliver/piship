@@ -373,7 +373,6 @@ async function fixture(
   // reclaiming; the reclaim after a commit has its own tests.
   const opts: UpdateOptions = {
     source: channelDir,
-    runCheck: fakeRun,
     reclaim: false,
   };
   return { a, b, channelDir, old, opts };
@@ -1644,7 +1643,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       progress: (step) => steps.push(step),
     });
     await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       progress: (step) => steps.push(step),
     });
     expect(steps.map((step) => step.replace(/\(.*\)/, "(size)"))).toEqual([
@@ -1661,7 +1659,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive, true);
     await updateDistribution(ID, opts);
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     // A session started on 1.1.0 before the rollback is still running.
     const retained = join(appsDir(), "1.1.0");
     const marker = join(retained, "in-use-by-session");
@@ -1760,7 +1758,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const { a, b, channelDir, opts } = await fixture();
     await installDistribution(a.archive);
     await updateDistribution(ID, opts);
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(readInstallReceipt(ID)).toMatchObject({
       active: "1.0.0",
       previous: "1.1.0",
@@ -1790,7 +1788,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const { a, b, channelDir, opts } = await fixture();
     await installDistribution(a.archive);
     await updateDistribution(ID, opts);
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     const retained = join(appsDir(), "1.1.0");
     const before = treeHash(retained);
     process.env.SOURCE_DATE_EPOCH = "1767312000";
@@ -1822,7 +1820,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const { a, b, channelDir, opts } = await fixture();
     await installDistribution(a.archive);
     await updateDistribution(ID, opts);
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     const retained = join(appsDir(), "1.1.0");
     const before = treeHash(retained);
     process.env.SOURCE_DATE_EPOCH = "1767312000";
@@ -2074,7 +2072,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
         : new Response("", { status: 404 });
     }) as typeof fetch;
     return {
-      runCheck: fakeRun,
       fetcher,
       env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
     };
@@ -2085,7 +2082,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const a = await release("1.0.0", true, undefined, [KEY], [ROOT]);
     const b = await release("1.1.0", true, undefined, [KEY], [ROOT]);
     const channelDir = temp("piship-channel-");
-    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    const opts: UpdateOptions = { source: channelDir };
     await installDistribution(a.archive);
     await sign(channelDir, [b.archive]);
     const listed = JSON.parse(
@@ -2191,7 +2188,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const b = await release("1.1.0", true, undefined, [KEY, next], [ROOT]);
     const c = await release("1.2.0", true, undefined, [next], [ROOT]);
     const channelDir = temp("piship-channel-");
-    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    const opts: UpdateOptions = { source: channelDir };
     await installDistribution(a.archive);
     expect(readTrustState(ID)).toMatchObject({
       origin: "bootstrap",
@@ -2269,7 +2266,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       /^Nothing was changed\. Tell the distribution owner: stable\.json must be signed with a channel key of the newest published root \(piship sign-channel <channel-dir> --channel stable --key <file> --key-id <id> --previous-key <old-id>=<old-public-key> re-signs it without adding an archive\)/,
     );
     // Rolling back to B, whose lock trusts the old key, does not restore it.
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(readInstallReceipt(ID).active).toBe("1.1.0");
     expect(readTrustState(ID)?.root.version).toBe(2);
     forgeChannel(channelDir, KEY);
@@ -2514,20 +2511,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(readTrustState(ID)?.root.version).toBe(3);
   });
 
-  it("activates without spawning a redundant launch check", async () => {
-    const { a, opts } = await fixture();
-    await installDistribution(a.archive);
-    const runCheck = vi.fn(() => ({
-      status: 1,
-      stdout: "",
-      stderr: "cannot start",
-    }));
-    const result = await updateDistribution(ID, { ...opts, runCheck });
-    expect(result.status).toBe("updated");
-    expect(runCheck).not.toHaveBeenCalled();
-    expect(readInstallReceipt(ID).active).toBe("1.1.0");
-  });
-
   it("refuses local data the target would reinterpret", async () => {
     const { a, opts } = await fixture();
     seedState();
@@ -2603,7 +2586,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     // system -> file: the switching release (1.1.0) deletes it from the
     // platform store before 1.0.0 is active again.
     const rolled = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: platform.store,
     });
     expect(rolled.notices).toEqual([
@@ -2679,7 +2661,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
         : new Response("", { status: 404 });
     }) as typeof fetch;
     return {
-      runCheck: fakeRun,
       fetcher,
       env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
     };
@@ -2712,8 +2693,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
   it("updates to a retained release again without downloading it", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive, true);
-    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await updateDistribution(ID, { source: channelDir });
+    await rollbackDistribution(ID, {});
     const requested: string[] = [];
     const options = overHttps(channelDir, requested);
     // A check is answered from the retained release, migration preview included.
@@ -2732,8 +2713,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
   it("downloads a retained release again when its files no longer match the signed entry", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive, true);
-    await updateDistribution(ID, { source: channelDir, runCheck: fakeRun });
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await updateDistribution(ID, { source: channelDir });
+    await rollbackDistribution(ID, {});
     rmSync(join(appsDir(), "1.1.0", "piship.lock"));
     const requested: string[] = [];
     const result = await updateDistribution(
@@ -2809,7 +2790,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
         : new Response("", { status: 404 });
     }) as typeof fetch;
     const result = await updateDistribution(ID, {
-      runCheck: fakeRun,
       fetcher,
       env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
     });
@@ -2821,9 +2801,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       `/acmepi/acmepi-1.1.0-${currentTarget()}.tar.gz`,
     ]);
     // An unresolved source template is a configuration error, not a network call.
-    const error = await rejection(
-      updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
-    );
+    const error = await rejection(updateDistribution(ID, { fetcher, env: {} }));
     expect(error.code).toBe("CONFIG_UNAVAILABLE");
   });
 
@@ -2843,7 +2821,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
           : new Response("", { status: 404 });
       }) as typeof fetch;
       const result = await updateDistribution(ID, {
-        runCheck: fakeRun,
         fetcher,
         env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
       });
@@ -2892,7 +2869,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const attempt = (source: string) =>
       rejection(
         updateDistribution(ID, {
-          runCheck: fakeRun,
           fetcher,
           env: { ACMEPI_UPDATE_SOURCE: source },
         }),
@@ -2910,16 +2886,13 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(relative.code).toBe("CONFIG_INVALID");
     expect(relative.message).toMatch(/absolute local directory/);
     // Unset: the error says how to set it, or to pass --from instead.
-    const unset = await rejection(
-      updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
-    );
+    const unset = await rejection(updateDistribution(ID, { fetcher, env: {} }));
     expect(unset.code).toBe("CONFIG_UNAVAILABLE");
     expect(unset.userAction).toMatch(/[Ss]et ACMEPI_UPDATE_SOURCE/);
     expect(unset.userAction).toMatch(/--from <directory\|url>/);
     expect(requests).toBe(0);
     // An absolute local directory is accepted after resolution.
     const result = await updateDistribution(ID, {
-      runCheck: fakeRun,
       env: { ACMEPI_UPDATE_SOURCE: channelDir },
     });
     expect(result.status).toBe("updated");
@@ -2930,13 +2903,12 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     await installDistribution(a.archive);
     const denied = await rejection(
       updateDistribution(ID, {
-        runCheck: fakeRun,
         source: "ftp://updates.example.test/acmepi",
       }),
     );
     expect(denied.code).toBe("NETWORK_DENIED");
     const missing = await rejection(
-      updateDistribution(ID, { runCheck: fakeRun, source: join(temp(), "x") }),
+      updateDistribution(ID, { source: join(temp(), "x") }),
     );
     expect(missing.message).toMatch(/does not exist/);
     expect(missing.userAction).toMatch(/--from or updates\.source/);
@@ -2944,7 +2916,6 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     process.chdir(dirname(channelDir));
     try {
       const result = await updateDistribution(ID, {
-        runCheck: fakeRun,
         source: basename(channelDir),
       });
       expect(result.status).toBe("updated");
@@ -2962,9 +2933,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(receipt.releases.map((item) => item.version)).toEqual(["1.1.0"]);
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
     expect(recoverInstallation(ID)).toEqual(["1.0.0"]);
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const error = await rejection(rollbackDistribution(ID, {}));
     expect(error.code).toBe("ROLLBACK_FAILED");
     expect(error.message).toMatch(/no retained release to roll back to/);
   });
@@ -3089,9 +3058,7 @@ describe.runIf(HOST_EVIDENCED)("lifecycle lock", () => {
     expect(error.message).toMatch(
       `Another update, rollback, or uninstall of acmepi is running (process ${process.pid})`,
     );
-    const rollback = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const rollback = await rejection(rollbackDistribution(ID, {}));
     expect(rollback.code).toBe("ROLLBACK_FAILED");
     expect(rollback.message).toMatch(/Another update, rollback, or uninstall/);
     expect(() => uninstallDistribution(ID)).toThrow(
@@ -3134,7 +3101,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     const config = treeHash(join(stateDir(), "config"));
     const credentials = treeHash(join(stateDir(), "credentials-metadata"));
     checked.length = 0;
-    const result = await rollbackDistribution(ID, { runCheck: fakeRun });
+    const result = await rollbackDistribution(ID, {});
     expect(result).toMatchObject({
       id: ID,
       from: "1.1.0",
@@ -3163,9 +3130,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(readStateMarker(stateDir())?.version).toBe("1.0.0");
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
     // The retained release is now newer: rollback refuses, update returns to it.
-    const again = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const again = await rejection(rollbackDistribution(ID, {}));
     expect(again.code).toBe("ROLLBACK_FAILED");
     expect(again.message).toMatch(
       /1.1.0 is newer than the active 1.0.0; use update instead/,
@@ -3182,7 +3147,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     const { store, memory, deleted } = testStore();
     await memory.put(`piship:${ID}:inference#3`, new SecretValue(SENTINEL_V2));
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
     });
     expect(deleted).toEqual([
@@ -3198,9 +3162,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
   it("fails when there is no retained release", async () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const error = await rejection(rollbackDistribution(ID, {}));
     expect(error.code).toBe("ROLLBACK_FAILED");
     expect(error.message).toMatch(/has no retained release/);
     expect(error.userAction).toMatch(
@@ -3217,13 +3179,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     );
     expect(() => verifyPayload(payload)).toThrow(/integrity mismatch/);
     expect((await rollbackDistribution(ID)).to).toBe("1.0.0");
-  });
-
-  it("rolls back without a redundant launch check", async () => {
-    await updated();
-    const runCheck = vi.fn(() => ({ status: 1, stdout: "", stderr: "broken" }));
-    expect((await rollbackDistribution(ID, { runCheck })).to).toBe("1.0.0");
-    expect(runCheck).not.toHaveBeenCalled();
   });
 
   it("clears credentials the target cannot read and never restores the secret", async () => {
@@ -3243,7 +3198,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     const { store, memory, deleted } = testStore();
     await memory.put(`piship:${ID}:inference#2`, new SecretValue(SENTINEL_V2));
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
     });
     // Only references in this distribution's own namespace are deleted.
@@ -3309,7 +3263,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     };
     const error = await rejection(
       rollbackDistribution(ID, {
-        runCheck: fakeRun,
         secretStore: store,
         revokeCredential,
       }),
@@ -3330,7 +3283,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     // Once the store is unlocked, the same rollback deletes them and switches.
     lock.on = false;
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
     });
     expect(result.to).toBe("1.0.0");
@@ -3356,9 +3308,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
         generation: 4,
       }),
     );
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const error = await rejection(rollbackDistribution(ID, {}));
     expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
     expect(error.message).toContain(
       `piship:${ID}:inference#4: no secret store is available to delete it`,
@@ -3418,7 +3368,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     for (const [ref, value] of Object.entries(sentinels))
       await memory.put(ref, new SecretValue(value));
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
     });
     expect(
@@ -3475,7 +3424,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     const { store, deleted } = testStore();
     const revokeCredential = vi.fn(async () => ({ outcome: "revoked" }));
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
       revokeCredential,
     });
@@ -3514,7 +3462,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     const order: string[] = [];
     const { store } = testStore();
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: {
         ...store,
         delete: async (ref) => {
@@ -3557,7 +3504,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     );
     const { store, deleted } = testStore();
     const result = await rollbackDistribution(ID, {
-      runCheck: fakeRun,
       secretStore: store,
       revokeCredential: async () => {
         throw new Error("broker unreachable");
@@ -3580,7 +3526,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     rmSync(join(stateDir(), "identity"), { recursive: true });
     rmSync(join(stateDir(), "credentials-metadata"), { recursive: true });
     rmSync(join(stateDir(), "secrets"), { recursive: true });
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(existsSync(join(stateDir(), "identity"))).toBe(false);
     expect(existsSync(join(stateDir(), "credentials-metadata"))).toBe(false);
     expect(existsSync(join(stateDir(), "secrets"))).toBe(false);
@@ -3625,9 +3571,7 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
       removed: [],
       freedBytes: 0,
     });
-    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
-      "1.0.0",
-    );
+    expect((await rollbackDistribution(ID, {})).to).toBe("1.0.0");
   });
 
   it("never touches a directory a live runtime lease holds", async () => {
@@ -3716,7 +3660,7 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
       const { a, opts } = await fixture();
       await installDistribution(a.archive);
       await updateDistribution(ID, opts);
-      await rollbackDistribution(ID, { runCheck: fakeRun });
+      await rollbackDistribution(ID, {});
       const retained = join(appsDir(), "1.1.0");
       const before = treeHash(retained);
       // The update renamed the receipt-named release aside, then was killed.
@@ -3796,14 +3740,14 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
 
   it("is not part of an update or rollback that opts out of it", async () => {
     const { opts } = await strewn();
-    await rollbackDistribution(ID, { runCheck: fakeRun, reclaim: false });
+    await rollbackDistribution(ID, { reclaim: false });
     await updateDistribution(ID, opts);
     expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
   });
 
   it("runs at the end of a successful rollback and update, and never removes the active release or the rollback target", async () => {
     const { opts } = await strewn();
-    const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+    const rolled = await rollbackDistribution(ID, {});
     expect(rolled.notices.join("\n")).toMatch(
       /Removed 2 obsolete release directories \(.*0\.9\.0.*\)/,
     );
@@ -3811,7 +3755,6 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     write(join(appsDir(), "0.8.0", "bin", "run.js"), "o".repeat(1000));
     const updated = await updateDistribution(ID, {
       ...(opts.source ? { source: opts.source } : {}),
-      runCheck: fakeRun,
     });
     expect(updated.notices.join("\n")).toMatch(
       /Removed 1 obsolete release director/,
@@ -3827,7 +3770,7 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     await strewn();
     const hold = holdRuntimeLease(ID, "0.9.0");
     try {
-      const rolled = await rollbackDistribution(ID, { runCheck: fakeRun });
+      const rolled = await rollbackDistribution(ID, {});
       expect(rolled.notices.join("\n")).toMatch(
         /Left 0\.9\.0 in place \(a running session holds it\)/,
       );
@@ -3895,9 +3838,7 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
 
     // Neither is blocked any longer.
-    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
-      "1.0.0",
-    );
+    expect((await rollbackDistribution(ID, {})).to).toBe("1.0.0");
     expect((await updateDistribution(ID, f.opts)).status).toBe("updated");
     expect(readInstallReceipt(ID).active).toBe("1.1.0");
   });
@@ -3913,9 +3854,7 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     );
     const result = await repairDistribution(ID, f.a.archive);
     expect(result).toMatchObject({ status: "repaired", version: "1.0.0" });
-    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
-      "1.0.0",
-    );
+    expect((await rollbackDistribution(ID, {})).to).toBe("1.0.0");
   });
 
   it("restores a release whose directory is missing", async () => {
@@ -4197,9 +4136,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     const state = process.env.PISHIP_STATE_HOME as string;
     const nested = join(process.env.PISHIP_INSTALL_HOME as string, "state");
     process.env.PISHIP_STATE_HOME = nested;
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
+    const error = await rejection(rollbackDistribution(ID, {}));
     expect(error.message).toMatch(
       /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
     );
@@ -4207,7 +4144,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
     expect(existsSync(nested)).toBe(false);
     process.env.PISHIP_STATE_HOME = state;
-    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await rollbackDistribution(ID, {});
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
@@ -4755,22 +4692,6 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     expect(readInstallReceipt(ID).channel).toBe("stable");
   });
 
-  it("does not boot the candidate or create throwaway runtime state", async () => {
-    const { a, opts } = await fixture();
-    seedState();
-    await installDistribution(a.archive, true);
-    const homes: (string | undefined)[] = [];
-    const result = await updateDistribution(ID, {
-      ...opts,
-      runCheck: (payload, command, args, env) => {
-        homes.push(env.PISHIP_STATE_HOME);
-        return fakeRun(payload, command, args);
-      },
-    });
-    expect(result.status).toBe("updated");
-    expect(homes).toEqual([]);
-  });
-
   it("stops a download that grows past the signed size", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive);
@@ -4790,7 +4711,6 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     const env = { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" };
     const archive = await rejection(
       updateDistribution(ID, {
-        runCheck: fakeRun,
         fetcher: serve(4096, 0),
         env,
       }),
@@ -4799,7 +4719,6 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     expect(archive.message).toMatch(/exceeds \d+ bytes/);
     const metadata = await rejection(
       updateDistribution(ID, {
-        runCheck: fakeRun,
         fetcher: serve(0, 2 * 1024 * 1024),
         env,
       }),
@@ -4821,7 +4740,6 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     }) as typeof fetch;
     const error = await rejection(
       updateDistribution(ID, {
-        runCheck: fakeRun,
         fetcher,
         env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
       }),
@@ -4937,7 +4855,7 @@ wait();
       await sessionRelease("1.2.0"),
     ];
     const channel = temp("piship-channel-");
-    const options: UpdateOptions = { source: channel, runCheck: fakeRun };
+    const options: UpdateOptions = { source: channel };
     const receipt = await installDistribution(v1.archive);
     const session = await startSession(receipt.launcher as string);
     try {
@@ -4975,7 +4893,7 @@ wait();
     const session = await startSession(receipt.launcher as string);
     try {
       await sign(channel, [v2.archive]);
-      await updateDistribution(ID, { source: channel, runCheck: fakeRun });
+      await updateDistribution(ID, { source: channel });
       expect(
         readInstallReceipt(ID).releases.map((item) => item.version),
       ).toEqual(["1.1.0"]);

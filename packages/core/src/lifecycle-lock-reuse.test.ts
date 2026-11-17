@@ -160,7 +160,6 @@ describe.runIf(HOST_EVIDENCED)(
         const lock = join(appsDir(), ".lifecycle.lock");
         const error = await rejection(
           rollbackDistribution(ID, {
-            runCheck: fakeRun,
             faults: (at) => {
               if (at === "verified") lose(lock);
             },
@@ -179,9 +178,10 @@ describe.runIf(HOST_EVIDENCED)(
             "took-over",
           );
         rmSync(lock, { force: true });
-        await expect(
-          rollbackDistribution(ID, { runCheck: fakeRun }),
-        ).resolves.toMatchObject({ from: "1.1.0", to: "1.0.0" });
+        await expect(rollbackDistribution(ID, {})).resolves.toMatchObject({
+          from: "1.1.0",
+          to: "1.0.0",
+        });
         expect(launch()).toBe("payload 1.0.0");
       },
     );

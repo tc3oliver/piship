@@ -288,7 +288,7 @@ export async function installed(access = false, transport?: Transport) {
   write(join(stateDir(), "sessions", "s1.jsonl"), '{"type":"message"}\n');
   await installDistribution(a.archive, true);
   process.env.ACMEPI_UPDATE_SOURCE = channelDir;
-  const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+  const opts: UpdateOptions = { source: channelDir };
   return { a, b, channelDir, opts };
 }
 
