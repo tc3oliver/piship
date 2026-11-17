@@ -83,8 +83,12 @@ if (
     ? Number(process.argv[process.argv.indexOf("--port") + 1])
     : 0;
   const started = await startModelServer({ port });
-  const set = process.platform === "win32" ? "set " : "export ";
   console.log("# Stand-in local model server (canned replies, not a model).");
-  console.log(`${set}MYPI_MODEL_URL=${started.url}`);
+  // PowerShell reads cmd's `set` as Set-Variable, which sets no env var.
+  console.log(
+    process.platform === "win32"
+      ? `# PowerShell:\n$env:MYPI_MODEL_URL="${started.url}"\n# cmd.exe:\nset MYPI_MODEL_URL=${started.url}`
+      : `export MYPI_MODEL_URL=${started.url}`,
+  );
   console.log(`# API key for mypi-local login: ${started.key}`);
 }
