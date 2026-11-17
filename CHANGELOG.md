@@ -45,6 +45,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ### Fixed
 
+- In-session refusals no longer point at a dead end. A governed `read` or `edit` of a file over the size limit in Plan mode says to switch with `/build` instead of telling the model to use `bash`, which Plan mode refuses. A declined MCP tool call says the user declined it, and a policy denial carries the rule and who can change it, like a built-in tool does. The `/grant` cap message names `policy.taskGrants.maxTtlMinutes`. An oversized session file says PiShip has no way to resume it and names the file. The Build-mode prompt says to search with `bash`, since Pi's `grep`, `find` and `ls` are not in a governed session.
 - `piship install`, `repair`, and `update` from a pack refuse a `piship.lock` whose `app.command` is not a valid command name or whose resource path leaves `resources/`, before writing anything; before, a crafted pack wrote a launcher or resource outside the staging payload and only then failed verification.
 
 - A Windows user whose machine cannot build the compiled Job Object helper (no .NET Framework compiler, application control blocking the new executable, an unwritable state home) had every command and MCP server start through PowerShell, about 0.9 s slower each, with nothing saying so. `doctor` now has a `child supervisor` row in the Sandbox group on Windows: the compiled helper, not built yet, or PowerShell with the cause, the fix, and when it is retried.

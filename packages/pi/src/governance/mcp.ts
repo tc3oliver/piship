@@ -9,6 +9,7 @@ import {
 import { trustDecision } from "@piship/policy";
 import { defaultMcpServerClass } from "@piship/schema";
 import type { GovernanceSession } from "../governance-session.js";
+import { policyRefusal } from "../governed-tools.js";
 import { mcpToolExposure } from "./exposure.js";
 
 /** The longest reason a session notice carries. */
@@ -133,6 +134,15 @@ export async function startMcp(
         allowed: resolved.outcome === "allow",
         reason: resolved.reason ?? `policy ${resolved.ruleId}`,
         decision: resolved,
+        ...(resolved.outcome === "allow"
+          ? {}
+          : {
+              refusal: policyRefusal(
+                session,
+                resolved,
+                `MCP ${request.action === "mcp.tool.call" ? "tool" : "server"} ${request.resource}`,
+              ),
+            }),
       };
     },
     audit: (event: McpAuditEvent) => {

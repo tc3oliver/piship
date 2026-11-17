@@ -1042,7 +1042,9 @@ describe("/grant", () => {
       "error",
     ]);
     expect(dialogs).toEqual([]);
-    expect(notices[2]?.message).toBe("A task grant lasts at most 8h here");
+    expect(notices[2]?.message).toBe(
+      "A task grant lasts at most 8h here (policy.taskGrants.maxTtlMinutes)",
+    );
     expect(session.listGrants()).toEqual([]);
     expect(grantMinutes("1h30m")).toBe(90);
     expect(grantMinutes("0m")).toBeUndefined();

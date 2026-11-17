@@ -683,9 +683,17 @@ async function openDecided(
   }
 }
 
-function tooLarge(path: string, size: string, tool: string): Error {
+function tooLarge(
+  path: string,
+  size: string,
+  tool: string,
+  plan: boolean,
+): Error {
+  const part = plan
+    ? "Plan mode runs no commands; the user can switch to Build mode with /build to work on part of it"
+    : "Use bash to work on part of it, for example sed -n '1,200p', head -c 50000 or grep -n";
   return new Error(
-    `${path} is ${size}, over the ${formatSize(GOVERNED_READ_LIMIT_BYTES)} limit of the governed ${tool} tool. Use bash to work on part of it, for example sed -n '1,200p', head -c 50000 or grep -n.`,
+    `${path} is ${size}, over the ${formatSize(GOVERNED_READ_LIMIT_BYTES)} limit of the governed ${tool} tool. ${part}.`,
   );
 }
 
@@ -699,6 +707,7 @@ async function readBounded(
   handle: FileHandle,
   path: string,
   tool: string,
+  plan: boolean,
 ): Promise<Buffer> {
   const stats = await handle.stat();
   if (stats.isFIFO())
@@ -707,7 +716,7 @@ async function readBounded(
     );
   const { size } = stats;
   if (size > GOVERNED_READ_LIMIT_BYTES)
-    throw tooLarge(path, formatSize(size), tool);
+    throw tooLarge(path, formatSize(size), tool, plan);
   const chunks: Buffer[] = [];
   let total = 0;
   for (;;) {
@@ -724,6 +733,7 @@ async function readBounded(
         path,
         `more than ${formatSize(GOVERNED_READ_LIMIT_BYTES)}`,
         tool,
+        plan,
       );
   }
   return Buffer.concat(chunks, total);
@@ -1337,7 +1347,12 @@ export function governedTools(
           : error;
       });
       if (data.length > GOVERNED_READ_LIMIT_BYTES)
-        throw tooLarge(path, formatSize(data.length), tool);
+        throw tooLarge(
+          path,
+          formatSize(data.length),
+          tool,
+          gov.workflowMode === "plan",
+        );
       return data;
     }
     const handle = await openDecided(
@@ -1350,7 +1365,7 @@ export function governedTools(
     try {
       if ((await handle.stat()).isDirectory())
         return await listDirectory(handle, absolute(path));
-      return await readBounded(handle, path, tool);
+      return await readBounded(handle, path, tool, gov.workflowMode === "plan");
     } finally {
       await handle.close();
     }

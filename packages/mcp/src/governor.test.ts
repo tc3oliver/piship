@@ -422,6 +422,24 @@ describe("McpGovernor over stdio", () => {
     expect(readRecord(record).filter((r) => r.type === "call")).toEqual([]);
   });
 
+  it("reports the authorizer's own refusal text instead of a policy denial", async () => {
+    const { governor } = harness({
+      authorize: async (request) =>
+        request.action === "mcp.tool.call"
+          ? {
+              allowed: false,
+              reason: "declined",
+              refusal: "MCP tool docs:search was declined by the user.",
+            }
+          : { allowed: true, reason: "ok" },
+      servers: [stdioServer("docs")],
+    });
+    await governor.start();
+    await expect(governor.tools()[0]?.call({ query: "x" })).rejects.toThrow(
+      "MCP tool docs:search was declined by the user.",
+    );
+  });
+
   it("does not expose or send tools denied by the server tool list", async () => {
     const record = join(tempDir(), "calls.jsonl");
     const { governor } = harness({

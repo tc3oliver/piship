@@ -182,6 +182,8 @@ export interface McpAuthorizeResult {
   readonly allowed: boolean;
   readonly reason: string;
   readonly decision?: PolicyDecision;
+  /** Full text of the refusal the model reads; without it the call reports a policy denial. */
+  readonly refusal?: string;
 }
 
 export type McpAuthorize = (

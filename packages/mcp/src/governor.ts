@@ -496,7 +496,8 @@ export class McpGovernor {
     if (!decision.allowed) {
       this.#emit(denialEvent(resource, "mcp.tool.call", decision.decision));
       throw mcpDenied(
-        `MCP tool ${tool} on server ${config.id} is denied by policy`,
+        decision.refusal ??
+          `MCP tool ${tool} on server ${config.id} is denied by policy`,
         decision.reason,
       );
     }
