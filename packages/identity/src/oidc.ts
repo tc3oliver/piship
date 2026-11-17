@@ -42,6 +42,8 @@ export interface OidcIdentityOptions {
   readonly command?: string;
 }
 
+const REFRESH_FAILED = "Identity refresh failed";
+
 function mapError(
   error: unknown,
   action: string,
@@ -154,17 +156,28 @@ function mapError(
     );
   }
   if (error instanceof client.ResponseBodyError) {
-    const expired = error.error === "invalid_grant";
-    return new PiShipError(
-      expired ? "IDENTITY_EXPIRED" : "IDENTITY_INVALID",
-      `${action}: token endpoint returned ${error.error}`,
-      {
-        component: "identity",
-        userAction: expired
-          ? `Run ${login} again`
-          : "Contact your administrator",
-      },
-    );
+    if (error.error !== "invalid_grant")
+      return new PiShipError(
+        "IDENTITY_INVALID",
+        `${action}: token endpoint returned ${error.error}`,
+        { component: "identity", userAction: "Contact your administrator" },
+      );
+    // A refused refresh is an expired sign-in; a refused sign-in code is not
+    // fixed by signing in again and again.
+    return action === REFRESH_FAILED
+      ? new PiShipError(
+          "IDENTITY_EXPIRED",
+          "Your sign-in has expired; the identity provider no longer accepts it (invalid_grant)",
+          { component: "identity", userAction: `Run ${login}` },
+        )
+      : new PiShipError(
+          "IDENTITY_EXPIRED",
+          `${action}: token endpoint returned invalid_grant`,
+          {
+            component: "identity",
+            userAction: `Run ${login} once more; if it fails again, contact your administrator`,
+          },
+        );
   }
   if (code === "OAUTH_JWT_TIMESTAMP_CHECK_FAILED")
     return new PiShipError("IDENTITY_EXPIRED", `${action}: ${detail}`, {
@@ -492,7 +505,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
         this.#login,
       );
     } catch (error) {
-      throw mapError(error, "Identity refresh failed", this.#login);
+      throw mapError(error, REFRESH_FAILED, this.#login);
     }
   }
 

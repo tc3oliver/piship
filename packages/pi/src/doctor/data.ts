@@ -93,6 +93,8 @@ export interface AccessData {
   readonly identityError?: string;
   /** The session directory's per-principal subdirectory, when signed in. */
   readonly sessionPrincipal?: string;
+  /** The error code of `identityError`, which decides doctor's closing error. */
+  readonly identityErrorCode?: string;
   /**
    * Remote revocations that failed at a sign-in or user switch: counts and
    * ages only, never a credential identifier or secret.
@@ -498,7 +500,7 @@ async function collectAccess(
     }
   let activated: ActivatedAccess | undefined;
   let activationError: string | undefined;
-  let identityError: string | undefined;
+  let identityError: { message: string; code: string } | undefined;
   let gateway: AccessData["gateway"];
   if (opened && !tlsError)
     try {
@@ -521,8 +523,9 @@ async function collectAccess(
         }
     } catch (error) {
       activationError = formatError(error);
-      if (error instanceof PiShipError && error.component === "identity")
-        identityError = activationError;
+      if (error instanceof PiShipError && error.component === "identity") {
+        identityError = { message: activationError, code: error.code };
+      }
     }
   // Read after activation, which renews an expired or expiring credential
   // as a launch would: the state before it would say to sign in again.
@@ -588,7 +591,12 @@ async function collectAccess(
     ...(tlsError ? { tlsError } : {}),
     signedIn: !!status?.identity,
     ...(workload ? { workload } : {}),
-    ...(identityError ? { identityError } : {}),
+    ...(identityError
+      ? {
+          identityError: identityError.message,
+          identityErrorCode: identityError.code,
+        }
+      : {}),
     ...(activated?.identity
       ? {
           sessionPrincipal: principalDigest(principalKey(activated.identity)),

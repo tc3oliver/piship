@@ -1013,6 +1013,20 @@ describe("http-broker failure and retry contract", () => {
     },
   );
 
+  it.each([
+    [{ status: 503, retryAfter: 120 }, "Wait 120 s and run the command again"],
+    [{ status: 502 }, "Wait a few minutes and run the command again"],
+    [{ status: 400 }, "Contact your administrator"],
+  ] as const)("acquire: says what to do after %j", async (fault, action) => {
+    services.knobs.brokerFaults.push({ body: { error: "failure" }, ...fault });
+    const error = await failure(call.acquire(broker()));
+    expect(error.userAction).toMatch(new RegExp(`^${action}`));
+    if (fault.status !== 400)
+      expect(error.userAction).toMatch(
+        /if it keeps failing, contact your administrator$/,
+      );
+  });
+
   it.each([401, 404])(
     "revoke: treats %i as already revoked",
     async (status) => {

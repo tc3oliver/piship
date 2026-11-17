@@ -173,6 +173,9 @@ function statusFailure(
   const retryable = reason !== "rejected";
   const subject =
     operation === "acquire" ? "The credential broker" : "Credential revocation";
+  const retryAfterMs = retryable
+    ? parseRetryAfter(response.headers.get("retry-after"))
+    : undefined;
   return brokerFailure(
     operation,
     reason,
@@ -183,10 +186,11 @@ function statusFailure(
       retryable,
       status,
       // The server's wait is honored for every retryable answer, 5xx included.
-      retryAfterMs: retryable
-        ? parseRetryAfter(response.headers.get("retry-after"))
-        : undefined,
+      retryAfterMs,
       detail,
+      userAction: retryable
+        ? `Wait ${retryAfterMs ? `${Math.ceil(retryAfterMs / 1000)} s` : "a few minutes"} and run the command again; if it keeps failing, contact your administrator`
+        : "Contact your administrator",
     },
   );
 }
