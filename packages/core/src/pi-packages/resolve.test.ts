@@ -619,6 +619,16 @@ describe("npm packages", () => {
         /install-script: pi-packages\/with-install-script\/node_modules\/runs-scripts@1\.0\.0 runs npm lifecycle scripts/,
       );
       expect(() =>
+        checkPiPackageSources(declaration.id, resolved.dependencies, [
+          registry,
+        ]),
+      ).toThrow(
+        expect.objectContaining({
+          userAction:
+            'Review what the script does, then add "pi-packages/with-install-script/node_modules/runs-scripts@1.0.0" to release.installScripts',
+        }),
+      );
+      expect(() =>
         checkPiPackageSources(
           declaration.id,
           resolved.dependencies,
@@ -740,7 +750,9 @@ describe("npm packages", () => {
           mode: "managed",
           registry,
         }),
-      ).rejects.toThrow(/GHSA-aaaa-bbbb-cccc \(left-pad, critical\)/);
+      ).rejects.toThrow(
+        /Release gate vulnerability: package company-pi-platform has blocking advisories .*GHSA-aaaa-bbbb-cccc \(left-pad, critical\)/,
+      );
       await send({ advisories: {} });
     },
     SLOW,

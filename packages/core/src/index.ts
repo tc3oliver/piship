@@ -43,6 +43,7 @@ export {
   changedLocalPackages,
   channelTrustFromLock,
   checkPiVersion,
+  emptyPackageWarnings,
   lockManifest,
   lockNeedsNetwork,
   lockStatus,

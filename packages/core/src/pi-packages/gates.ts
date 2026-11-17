@@ -7,7 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReleaseManifest } from "@piship/schema";
 import { REVIEWED_INSTALL_SCRIPTS } from "../compatibility.js";
-import { checkLockedPackageSources } from "../release/sources.js";
+import {
+  checkLockedPackageSources,
+  installScriptAction,
+} from "../release/sources.js";
 import type { VulnerabilityReport } from "../release/metadata.js";
 import { evaluateVulnerabilities, npmAuditScanner } from "../release/scans.js";
 import { gate } from "../release/shared.js";
@@ -87,7 +90,7 @@ export function checkPiPackageInstallScripts(
         "POLICY_DENIED",
         "install-script",
         `${script} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
-        undefined,
+        installScriptAction(script),
         stage,
       );
 }
@@ -234,10 +237,10 @@ export async function auditPiPackage(
   }
   const report = evaluateVulnerabilities(audit, policy, now);
   if (report.verdict !== "passed")
-    throw packageError(
+    throw gate(
       "POLICY_DENIED",
-      id,
-      `blocking advisories at or above ${policy.failOn}: ${report.findings
+      "vulnerability",
+      `package ${id} has blocking advisories at or above ${policy.failOn}: ${report.findings
         .filter((item) => item.status === "blocking")
         .map((item) => `${item.id} (${item.package}, ${item.severity})`)
         .join(", ")}`,

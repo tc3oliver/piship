@@ -346,7 +346,9 @@ function build(path: string, options: Parameters<typeof buildRelease>[1] = {}) {
   });
 }
 
-function caught(fn: () => unknown): Error & { code?: string } {
+function caught(
+  fn: () => unknown,
+): Error & { code?: string; userAction?: string } {
   try {
     fn();
   } catch (error) {
@@ -767,6 +769,9 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.code).toBe("POLICY_DENIED");
     expect(error.message).toMatch(
       /Release gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources \(https:\/\/npm.internal.example\)/,
+    );
+    expect(error.userAction).toBe(
+      "Add https://registry.npmjs.org to release.sources if it is an approved origin, or resolve the package from one already listed",
     );
     // `piship build` runs the same gate before assembling anything.
     const out = temp("piship-build-out-");
