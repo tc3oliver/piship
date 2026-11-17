@@ -57,7 +57,7 @@ export async function runConfig(
   }
   if (action === "trust" && key === "forget" && rest.length <= 1) {
     const target = rest[0] === "--all" ? "all" : (rest[0] ?? process.cwd());
-    const count = forgetProjectTrust(ctx.stateDir, target);
+    const count = forgetProjectTrust(ctx.stateDir, target, ctx.forgetPiTrust);
     ctx.out(
       count
         ? `Forgot the remembered answer for ${count} project${count === 1 ? "" : "s"}; ${ctx.metadata.app.command} asks again at the next launch there.`

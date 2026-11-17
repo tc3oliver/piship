@@ -34,7 +34,7 @@ import { resolveProject } from "./governance/project.js";
 import { loadPackageFiles } from "./governance/resources.js";
 import { GovernanceSession } from "./governance-session.js";
 import { gatePath } from "./governed-tools.js";
-import { sessionProjectTrust } from "./launch/project-trust.js";
+import { forgetPiTrust, sessionProjectTrust } from "./launch/project-trust.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -298,7 +298,7 @@ describe("personal mode", () => {
     ).toBeDefined();
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatch(
-      /^Not loaded from this project: \.claude\/.* \(you declined; start unit again and answer a to trust it\)\.$/,
+      /^Not loaded from this project: \.claude\/.* \(you declined; start unit again and answer a to trust it\)\. Pi's \/trust does not apply in unit: answer a when unit asks at launch, or run unit config trust forget to be asked again\.$/,
     );
   });
 
@@ -540,6 +540,107 @@ describe("Pi's trust seam", () => {
     expect(new ProjectTrustStore(agentDir).get(cwd)).toBe(false);
   });
 
+  function personal(
+    decision: GovernanceSession["projectTrust"],
+    cwd: string,
+    stateDir: string,
+    notices: string[] = [],
+  ) {
+    const gov = stub(decision, cwd, [], notices);
+    Object.assign(gov.options, {
+      stateDir,
+      lock: { deployment: { mode: "personal" } },
+    });
+    return gov;
+  }
+
+  it("trusts the project again after answering n then a: a refusal PiShip wrote is its own, not the person's", () => {
+    const { cwd, agentDir } = directory();
+    const state = join(dirname(cwd), "state");
+    const store = new ProjectTrustStore(agentDir);
+    expect(
+      sessionProjectTrust(personal(trusted, cwd, state), cwd, agentDir),
+    ).toBe(true);
+    expect(
+      sessionProjectTrust(personal(denied, cwd, state), cwd, agentDir),
+    ).toBe(false);
+    expect(store.get(cwd)).toBe(false);
+    const notices: string[] = [];
+    expect(
+      sessionProjectTrust(
+        personal(trusted, cwd, state, notices),
+        cwd,
+        agentDir,
+      ),
+    ).toBe(true);
+    expect(notices).toEqual([]);
+    expect(store.get(cwd)).toBe(true);
+  });
+
+  it("recovers after a, config trust forget, n, a, and forget withdraws the store entry PiShip wrote", () => {
+    const { cwd, agentDir } = directory();
+    const state = join(dirname(cwd), "state");
+    const store = new ProjectTrustStore(agentDir);
+    const forget = () =>
+      forgetProjectTrust(state, cwd, (written) =>
+        forgetPiTrust(agentDir, written),
+      );
+    expect(
+      sessionProjectTrust(personal(trusted, cwd, state), cwd, agentDir),
+    ).toBe(true);
+    forget();
+    expect(store.getEntry(cwd)).toBeNull();
+    expect(
+      sessionProjectTrust(personal(denied, cwd, state), cwd, agentDir),
+    ).toBe(false);
+    const notices: string[] = [];
+    expect(
+      sessionProjectTrust(
+        personal(trusted, cwd, state, notices),
+        cwd,
+        agentDir,
+      ),
+    ).toBe(true);
+    expect(notices).toEqual([]);
+    // Every later launch stays trusted.
+    expect(
+      sessionProjectTrust(personal(trusted, cwd, state), cwd, agentDir),
+    ).toBe(true);
+    // A refusal PiShip wrote after `n` is withdrawn by forget as well.
+    expect(
+      sessionProjectTrust(personal(denied, cwd, state), cwd, agentDir),
+    ).toBe(false);
+    expect(store.get(cwd)).toBe(false);
+    forget();
+    expect(store.getEntry(cwd)).toBeNull();
+  });
+
+  it("keeps a refusal the person saved over PiShip's approval, and forget leaves it alone", () => {
+    const { cwd, agentDir } = directory();
+    const state = join(dirname(cwd), "state");
+    const store = new ProjectTrustStore(agentDir);
+    expect(
+      sessionProjectTrust(personal(trusted, cwd, state), cwd, agentDir),
+    ).toBe(true);
+    // The person saves "do not trust" with Pi's /trust.
+    store.set(cwd, false);
+    const notices: string[] = [];
+    expect(
+      sessionProjectTrust(
+        personal(trusted, cwd, state, notices),
+        cwd,
+        agentDir,
+      ),
+    ).toBe(false);
+    expect(notices.join()).toMatch(
+      /Pi's trust store \(.*trust\.json\) says not to trust .*remove its entry from that file/,
+    );
+    forgetProjectTrust(state, cwd, (written) =>
+      forgetPiTrust(agentDir, written),
+    );
+    expect(store.get(cwd)).toBe(false);
+  });
+
   it("does not trust a session whose directory is not the project the launch decided on", () => {
     const { cwd, agentDir } = directory();
     const other = join(dirname(cwd), "elsewhere");
@@ -574,7 +675,9 @@ describe("Pi's trust seam", () => {
     expect(
       sessionProjectTrust(stub(trusted, cwd, [], notices), cwd, agentDir),
     ).toBe(false);
-    expect(notices.join()).toMatch(/could not be recorded/);
+    expect(notices.join()).toMatch(
+      /could not be written to Pi's trust store \(.*trust\.json\)/,
+    );
     // A denial needs no record: the flag alone closes the extension.
     expect(sessionProjectTrust(stub(denied, cwd), cwd, agentDir)).toBe(false);
   });

@@ -221,7 +221,16 @@ export class LeftOut {
     } catch {
       // Unreadable state: say it.
     }
-    session.notice(`Not loaded from this project: ${clauses.join("; ")}.`);
+    // Pi tells the person to use its /trust, which never decides here.
+    const command = session.options.lock.app.command;
+    const piTrust = session.projectTrust.trusted
+      ? ""
+      : session.options.lock.deployment.mode === "personal"
+        ? ` Pi's /trust does not apply in ${command}: answer a when ${command} asks at launch, or run ${command} config trust forget to be asked again.`
+        : ` Pi's /trust does not apply in ${command}; the distribution policy decides.`;
+    session.notice(
+      `Not loaded from this project: ${clauses.join("; ")}.${piTrust}`,
+    );
     try {
       markProjectNotice(stateDir, session.project.root, key);
     } catch {
