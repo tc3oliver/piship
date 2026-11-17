@@ -1071,7 +1071,12 @@ describe.skipIf(!posix || asRoot)("a subagent child's changes", () => {
   });
 });
 
-describe.skipIf(!posix || asRoot)("sandbox.remote.cache", () => {
+// These tests wait on no clock beyond the product's own 1.5 s save notice;
+// they open several sessions in a row, each running git and the setup
+// command: a few seconds at rest, past the default timeout on a heavily
+// loaded machine.
+const slow = { timeout: 45_000 };
+describe.skipIf(!posix || asRoot)("sandbox.remote.cache", slow, () => {
   const SETUP =
     "mkdir -p node_modules/x && echo d > node_modules/x/a && echo built >> lock.txt";
   const withFiles = (workspace: string) => {
