@@ -289,10 +289,19 @@ interface ReferenceOptions {
    * turn to start it.
    */
   readonly stallStart?: boolean;
+  /**
+   * Block this process's event loop for `STALL_OUTPUT_MS` as the timed-out
+   * command's first line arrives, as a loaded host does: the kit's abort
+   * comes that much later than the command's own clock.
+   */
+  readonly stallOutput?: boolean;
 }
 
 /** How long the event loop is blocked, for `stallStart`: longer than the kit's wait for a command that prints nothing. */
 const STALL_MS = 800;
+
+/** How long the event loop is blocked, for `stallOutput`: as long as the timed-out command once ran in all. */
+const STALL_OUTPUT_MS = 1_000;
 
 /** How long a service under load takes to start a command, for `slowStart`. */
 const LATE_START_MS = 1_700;
@@ -724,6 +733,17 @@ function referenceAdapter(options: ReferenceOptions) {
             else to(chunk);
           };
         child.stdout?.on("data", (chunk: Buffer) => {
+          if (
+            options.stallOutput &&
+            !streaming &&
+            writesMarker(request.command, "timeout-")
+          )
+            Atomics.wait(
+              new Int32Array(new SharedArrayBuffer(4)),
+              0,
+              0,
+              STALL_OUTPUT_MS,
+            );
           streaming = true;
           deliver(io.onStdout)(chunk);
         });
@@ -1643,6 +1663,30 @@ describeIsolated(isolator)(
       expect(
         report.results.find((item) => item.behavior === "cancellation"),
       ).toMatchObject({ status: "passed" });
+    }, 120_000);
+
+    it.concurrent("passes a timeout where the host cannot see the workspace when the event loop stalls as the command's first line arrives", async () => {
+      const report = await run(
+        { variant: "synchronized", stallOutput: true },
+        { only: ["timeout"] },
+      );
+      const result = report.results.find((item) => item.behavior === "timeout");
+      expect(result, result?.reason).toMatchObject({ status: "passed" });
+    }, 120_000);
+
+    it.concurrent("detects a timed-out command left running where the host cannot see the workspace", async () => {
+      const report = await run(
+        {
+          variant: "synchronized",
+          fault: "starts a timed-out command late and leaves it running",
+        },
+        { only: ["timeout"] },
+      );
+      const result = report.results.find((item) => item.behavior === "timeout");
+      expect(result).toMatchObject({ status: "failed" });
+      expect(result?.reason).toMatch(
+        /the timed-out command kept running and wrote its marker/,
+      );
     }, 120_000);
 
     it.concurrent('fails only "ignores cancellation" when the event loop stalls as a command starts', async () => {
