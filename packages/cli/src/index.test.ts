@@ -296,11 +296,10 @@ describe("uninstall --purge", () => {
     };
     expect(await runCli(["uninstall", ID, "--purge", "--yes"], output)).toBe(1);
     expect(lines.join("\n")).toContain(
-      `Run ${ID} logout first, then purge again`,
+      `Run ${ID} logout first, then uninstall again; or add --without-logout to purge without signing out`,
     );
     expect(existsSync(payload)).toBe(true);
     expect(existsSync(state)).toBe(true);
-    expect(await runCli(["uninstall", ID, "--without-logout"], output)).toBe(2);
     lines.length = 0;
     expect(
       await runCli(
@@ -314,6 +313,28 @@ describe("uninstall --purge", () => {
     );
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(state)).toBe(false);
+  });
+  it("refuses a plain uninstall while signed in, as the branded uninstall does, unless --without-logout", async () => {
+    const { payload } = installRecorder();
+    const state = seedState();
+    mkdirSync(join(state, "identity"));
+    writeFileSync(
+      join(state, "identity", "session.json"),
+      JSON.stringify({ schema: "piship-identity-metadata/v1" }),
+    );
+    const lines: string[] = [];
+    const output = {
+      stdout: (message: string) => lines.push(message),
+      stderr: (message: string) => lines.push(message),
+    };
+    expect(await runCli(["uninstall", ID], output)).toBe(1);
+    expect(lines.join("\n")).toBe(
+      `CONFIG_UNAVAILABLE: ${ID} is still signed in (an identity session). Once it is uninstalled there is no ${ID} left to sign out with, and the sign-in would stay live until it expires\nAction: Run ${ID} logout, then uninstall again; or add --without-logout to uninstall and leave the sign-in`,
+    );
+    expect(existsSync(payload)).toBe(true);
+    expect(await runCli(["uninstall", ID, "--without-logout"], output)).toBe(0);
+    expect(existsSync(payload)).toBe(false);
+    expect(existsSync(state)).toBe(true);
   });
 });
 

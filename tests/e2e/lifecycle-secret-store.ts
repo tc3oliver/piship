@@ -209,7 +209,7 @@ export function secretStoreLifecycle(storage: Storage): void {
         const refused = purge();
         expect(refused.status).toBe(1);
         expect(refused.stderr).toContain(
-          `Run ${s.id} logout first, then purge again`,
+          `Run ${s.id} logout first, then uninstall again`,
         );
         expect(existsSync(s.command)).toBe(true);
         expect(refs()).toEqual(signedIn);

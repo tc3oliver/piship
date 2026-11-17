@@ -38,7 +38,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { type AccessEvent, DistributionAccess } from "./access/index.js";
 import type { BrandedContext } from "./branded/context.js";
-import { runLogout } from "./branded/login.js";
+import { runLogin, runLogout } from "./branded/login.js";
 import { resolveLock } from "./index.js";
 
 // The platform store is stood in for by a memory store the test sets, so that
@@ -269,6 +269,36 @@ describe("branded logout", () => {
     ]);
     const text = stateText(ctx);
     for (const secret of secrets) expect(text).not.toContain(secret);
+  });
+
+  it("records the credential a second user's login revokes under the user who held it", async () => {
+    // No browser and no pasted address: the test approves the printed URL.
+    process.env.PISHIP_NO_BROWSER = "1";
+    const ctx: BrandedContext = {
+      ...context().ctx,
+      err: (message) => {
+        const url = /^Open this URL in your browser to sign in:\n(\S+)/.exec(
+          message,
+        )?.[1];
+        if (url) void services.approve(url);
+      },
+    };
+    const user = (subject: string) =>
+      principalId({ issuer: services.issuer, subject });
+    await runLogin(ctx);
+    services.knobs.subject = "demo-user-2";
+    await runLogin(ctx);
+    const revoke = auditEvents(ctx).filter(
+      (event) => event.event === "credential.revoke",
+    );
+    expect(revoke.map((event) => [event.detail?.reason, event.user])).toEqual([
+      ["replace", user("demo-user-1")],
+    ]);
+    expect(
+      auditEvents(ctx)
+        .filter((event) => event.event === "identity.login")
+        .map((event) => event.user),
+    ).toEqual([user("demo-user-1"), user("demo-user-2")]);
   });
 
   it("clears local secrets without the runtime variables, and records the revocation it could not send", async () => {
