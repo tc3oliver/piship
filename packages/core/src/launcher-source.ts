@@ -66,6 +66,10 @@ import { verifyLaunchPayload } from "@piship/core";
 ${LAUNCHER_TIMING_SNIPPET}mark("node_entry");
 if (timing) timing.notes.payload_launcher = "${LAUNCHER_BUILD_PLACEHOLDER}";
 process.on("uncaughtException", (error) => { try { console.error(formatError(error)); } finally { process.exit(1); } });
+// A failure of a --json command is also one error object on stdout, unless the command already answered there (doctor's unhealthy report).
+const json = process.argv.includes("--json");
+let printed = false;
+if (json) { const write = process.stdout.write.bind(process.stdout); process.stdout.write = (...chunk) => { printed = true; return write(...chunk); }; }
 const directory = fileURLToPath(new URL("..", ${IMPORT_META_URL}));
 try {
   const version = process.versions.node.split(".").map(Number);
@@ -78,7 +82,7 @@ try {
   const { launchPiDistribution } = await import("@piship/pi");
   mark("pi_loaded");
   await launchPiDistribution({ distributionDir: directory, metadata, args: process.argv.slice(2) });
-} catch (error) { console.error(formatError(error)); process.exitCode = error?.usage === true ? 2 : 1; }
+} catch (error) { console.error(formatError(error)); if (json && !printed) console.log(JSON.stringify({ error: (await import("@piship/contracts")).errorJson(error) }, null, 2)); process.exitCode = error?.usage === true ? 2 : 1; }
 `);
 }
 export function portableCliSource(): string {

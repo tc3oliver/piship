@@ -184,6 +184,26 @@ export function systemError(
   );
 }
 
+/** A failure as a `--json` command prints it: code and action when PiShip knows them. */
+export function errorJson(error: unknown): {
+  code: string | null;
+  message: string;
+  action: string | null;
+} {
+  const known = systemError(error) ?? error;
+  if (known instanceof PiShipError)
+    return {
+      code: known.code,
+      message: known.message,
+      action: known.userAction ?? null,
+    };
+  return {
+    code: null,
+    message: redact(known instanceof Error ? known.message : String(known)),
+    action: null,
+  };
+}
+
 /** Human-readable, single-block, redacted rendering for CLI output. */
 export function formatError(error: unknown): string {
   const system = systemError(error);

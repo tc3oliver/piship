@@ -75,6 +75,7 @@ import {
   relockKeepingPackages,
   removeEmptyPiShipDirectories,
   notInstalled,
+  optionProblem,
   readInstallReceipt,
   readSigningPassphrase,
   repairDistribution,
@@ -100,12 +101,7 @@ import {
   type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
-import {
-  formatError,
-  PiShipError,
-  redact,
-  systemError,
-} from "@piship/contracts";
+import { errorJson, formatError, PiShipError, redact } from "@piship/contracts";
 import {
   launchWarnings,
   runtimeVariableUse,
@@ -324,13 +320,7 @@ function argumentProblem(
       if (args[index + 1] === undefined) return `${arg} needs a value.`;
       index += 1;
     } else if (arg.startsWith("-") && !known.includes(arg)) {
-      // Only the name: `--passphrase=<secret>` must not reach the terminal.
-      const name = arg.split("=")[0] ?? arg;
-      if (valued.includes(name))
-        return `Write ${name} <value> with a space, not ${name}=<value>.`;
-      if (known.includes(name)) return `${name} takes no value.`;
-      const near = nearestField(name, known);
-      return `Unknown option ${name} for ${command}.${near ? ` Did you mean ${near}?` : ""}`;
+      return optionProblem(command, arg, known, valued);
     } else if (!arg.startsWith("-") && positional >= maxPositional)
       // Not echoed either: a stray word may be a secret typed in the wrong place.
       return `${command} takes ${maxPositional === 0 ? "no" : `at most ${maxPositional}`} argument${maxPositional === 1 ? "" : "s"}.`;
@@ -1329,28 +1319,16 @@ export async function runCli(
         : formatError(error),
     );
     if (args.includes("--json") && !printed)
-      output.stdout(JSON.stringify({ error: errorJson(error) }, null, 2));
+      output.stdout(JSON.stringify({ error: cliErrorJson(error) }, null, 2));
     return 1;
   }
 }
-/** A failure as `--json` prints it: code and action when PiShip knows them. */
-function errorJson(error: unknown): {
-  code: string | null;
-  message: string;
-  action: string | null;
-} {
-  const known = systemError(error) ?? error;
-  if (known instanceof PiShipError)
-    return {
-      code: known.code,
-      message: known.message,
-      action: known.userAction ?? null,
-    };
-  return {
-    code: known instanceof ManifestError ? "CONFIG_INVALID" : null,
-    message: redact(known instanceof Error ? known.message : String(known)),
-    action: null,
-  };
+/** A failure as `--json` prints it; a manifest problem is CONFIG_INVALID. */
+function cliErrorJson(error: unknown): ReturnType<typeof errorJson> {
+  const json = errorJson(error);
+  return error instanceof ManifestError
+    ? { ...json, code: "CONFIG_INVALID" }
+    : json;
 }
 
 /** The commands that take one manifest, artifact or id instead of lifecycle options. */
