@@ -97,6 +97,11 @@ export interface GovernanceOptions {
   /** False for a session that only inspects the sandbox (doctor): it must start from the template, not a snapshot. */
   readonly sandboxCache?: false;
   /**
+   * The launch was interrupted: creating a remote sandbox stops (its claim or
+   * sandbox deleted) and the open fails.
+   */
+  readonly signal?: AbortSignal;
+  /**
    * `--yolo`: approve asks for this session only, without storing anything.
    * A managed distribution must allow auto-approval (`policy.userAuto`);
    * `GovernanceSession.open` refuses it otherwise.

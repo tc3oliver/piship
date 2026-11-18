@@ -380,6 +380,28 @@ export function remoteWorkdir(user: string): string {
   return `${user === "root" ? "/root" : `/home/${user}`}/workspace`;
 }
 
+/** `backend` whose `prepare` also stops when `signal` aborts. */
+export function interruptibleBackend(
+  backend: SandboxBackend,
+  signal: AbortSignal,
+): SandboxBackend {
+  const deleteSnapshot = backend.deleteSnapshot?.bind(backend);
+  return {
+    id: backend.id,
+    provider: backend.provider,
+    available: (options) => backend.available(options),
+    capabilities: () => backend.capabilities(),
+    ...(deleteSnapshot ? { deleteSnapshot } : {}),
+    prepare: (request) =>
+      backend.prepare({
+        ...request,
+        signal: request.signal
+          ? AbortSignal.any([request.signal, signal])
+          : signal,
+      }),
+  };
+}
+
 export async function sandboxBackend(
   governance: GovernanceOptions,
 ): Promise<SandboxBackend | undefined> {
@@ -440,6 +462,8 @@ export async function sandboxBackend(
           router: router ?? "",
           template: config.template ?? "",
           ...(config.namespace ? { namespace: config.namespace } : {}),
+          onProgress: (message) =>
+            process.stderr.write(`Notice: ${message} (Ctrl-C cancels).\n`),
         });
       case "custom":
         return await loadCustom(

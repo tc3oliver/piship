@@ -70,6 +70,52 @@ function sessionDirectory(
   return dir;
 }
 
+const STARTUP_SIGNALS: NodeJS.Signals[] =
+  process.platform === "win32" ? ["SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * Opens governance with signal handlers already in place. Node's default exit
+ * on SIGINT, SIGTERM or SIGHUP skips every cleanup, so a Ctrl-C while a remote
+ * sandbox is being created (a SandboxClaim waiting for a warm pod) would leave
+ * it on the cluster until its shutdownTime. Here the signal cancels creating
+ * it, closes a session that did open (stopping background tasks and disposing
+ * the sandbox), and exits with the signal's code. `release` hands the signals
+ * back once the mode's own handlers take over; an interrupted open never
+ * settles, since the handler exits the process.
+ */
+export function openInterruptible(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  interactive: boolean,
+  open = openGovernance,
+): { gov: Promise<GovernanceSession | null>; release: () => void } {
+  const abort = new AbortController();
+  const opening = open(ctx, prepared, interactive, true, abort.signal);
+  const onSignal = (signal: NodeJS.Signals) => {
+    const code = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
+    // A loop that drains before either exit still ends with the signal's code.
+    process.exitCode = code;
+    abort.abort();
+    setTimeout(() => process.exit(code), 10_000).unref();
+    void opening
+      .then((gov) => gov?.close())
+      .catch(() => undefined)
+      .finally(() => process.exit(code));
+  };
+  for (const signal of STARTUP_SIGNALS) process.once(signal, onSignal);
+  const never = new Promise<never>(() => undefined);
+  return {
+    gov: opening.then(
+      (gov) => (abort.signal.aborted ? never : gov),
+      (error: unknown) =>
+        abort.signal.aborted ? never : Promise.reject(error),
+    ),
+    release: () => {
+      for (const signal of STARTUP_SIGNALS) process.off(signal, onSignal);
+    },
+  };
+}
+
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";
 
 /**
@@ -182,7 +228,9 @@ export async function runSmoke(
   const prepared = await prepareAccess(ctx, requestedModel);
   startupMark("access_prepared");
   const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
-  const gov = await openGovernance(ctx, prepared, false);
+  // An acceptance run has no Pi signal handler: these stay until it ends.
+  const interrupts = openInterruptible(ctx, prepared, false);
+  const gov = await interrupts.gov;
   startupMark("governance_open");
   const { runtime, ownership } = await startGoverned(
     ctx,
@@ -192,24 +240,6 @@ export async function runSmoke(
   );
   startupMark("pi_initialized");
   let sessionFailed = false;
-  // An acceptance run has no Pi signal handler, and Node's default exit on
-  // SIGINT, SIGTERM or SIGHUP skips the exit hook that stops governed
-  // children. End the governance session first (it stops background tasks and records
-  // them), as Pi's own modes do, then exit with the signal's code.
-  const onSignal = (signal: NodeJS.Signals) => {
-    const code = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
-    // A loop that drains before either exit still ends with the signal's code.
-    process.exitCode = code;
-    setTimeout(() => process.exit(code), 10_000).unref();
-    void Promise.resolve(gov?.close())
-      .catch(() => undefined)
-      .finally(() => process.exit(code));
-  };
-  const signals: NodeJS.Signals[] =
-    process.platform === "win32"
-      ? ["SIGTERM"]
-      : ["SIGINT", "SIGTERM", "SIGHUP"];
-  for (const signal of signals) process.once(signal, onSignal);
   try {
     const { resourceLoader } = runtime.services;
     const sessionManager = runtime.session.sessionManager;
@@ -369,7 +399,7 @@ export async function runSmoke(
     sessionFailed = true;
     throw error;
   } finally {
-    for (const signal of signals) process.off(signal, onSignal);
+    interrupts.release();
     await endSession(ctx, prepared, runtime, gov, sessionFailed, ownership);
   }
 }
@@ -534,11 +564,12 @@ export async function runInteractive(
     );
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
-  const gov = await openGovernance(
+  const interrupts = openInterruptible(
     ctx,
     prepared,
     !!process.stdin.isTTY && !!process.stderr.isTTY,
   );
+  const gov = await interrupts.gov;
   startupMark("governance_open");
   const { runtime, theme, ownership } = await startGoverned(
     ctx,
@@ -547,6 +578,8 @@ export async function runInteractive(
     gov,
   );
   startupMark("pi_initialized");
+  // From here Pi's shutdown ends the governance session (see below).
+  interrupts.release();
   // Pi prints "To resume this session: pi ..." as it exits, naming Pi's own
   // command, which would open the session without this distribution's
   // policy. The branded command that resumes it governed follows it.
@@ -601,7 +634,8 @@ export async function runSubagentChild(
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, child.model, false, "subagent");
   startupMark("access_prepared");
-  const gov = await openGovernance(ctx, prepared, false);
+  const interrupts = openInterruptible(ctx, prepared, false);
+  const gov = await interrupts.gov;
   startupMark("governance_open");
   const { runtime, theme, ownership } = await startGoverned(
     ctx,
@@ -610,6 +644,7 @@ export async function runSubagentChild(
     gov,
   );
   startupMark("pi_initialized");
+  interrupts.release();
   let sessionFailed = false;
   const piDispose = runtime.dispose.bind(runtime);
   const end = endInsideDispose(

@@ -115,6 +115,8 @@ export function branded(
      * up on the sign-in would. POSIX only: Windows cannot deliver it.
      */
     interruptAfterApprove?: boolean;
+    /** Send SIGINT once stderr matches. POSIX only, like the above. */
+    interruptOnStderr?: RegExp;
   },
 ): Promise<Result> {
   return new Promise((resolve, reject) => {
@@ -131,11 +133,16 @@ export function branded(
     let approved = false;
     let approval: unknown;
     let approving: Promise<unknown> = Promise.resolve();
+    let interrupted = false;
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+      if (!interrupted && options.interruptOnStderr?.test(stderr)) {
+        interrupted = true;
+        child.kill("SIGINT");
+      }
       const match = /(http:\/\/127\.0\.0\.1:\d+\/idp\/authorize\S+)/.exec(
         stderr,
       );

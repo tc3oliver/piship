@@ -185,17 +185,26 @@ export class E2bCompatibleBackend implements SandboxBackend {
   }: SandboxPrepareRequest): Promise<SandboxInstance> {
     if (template !== undefined && !SNAPSHOT_ID.test(template))
       throw new Error("the snapshot id is not valid");
-    const created = await this.#create(profile.network, signal, template);
+    // The create request is not aborted in flight: a sandbox the service
+    // created after PiShip stopped listening would have no known id to
+    // delete. An abort is honored once its id is known.
+    const created = await this.#create(profile.network, template);
+    const remove = () =>
+      this.#control(
+        `sandboxes/${created.sandboxId}`,
+        { method: "DELETE" },
+        true,
+      )
+        .then((response) => response.body?.cancel())
+        .catch(() => undefined);
+    if (signal?.aborted) {
+      await remove();
+      throw new Error("aborted");
+    }
     const workdir = this.#options.workdir ?? "/home/user";
     if (this.#options.createWorkdir)
       await this.#makeWorkdir(created, workdir).catch(async (error) => {
-        await this.#control(
-          `sandboxes/${created.sandboxId}`,
-          { method: "DELETE" },
-          true,
-        )
-          .then((response) => response.body?.cancel())
-          .catch(() => undefined);
+        await remove();
         throw error;
       });
     let disposed = false;
@@ -313,7 +322,6 @@ export class E2bCompatibleBackend implements SandboxBackend {
 
   async #create(
     network: "deny" | "allow",
-    signal: AbortSignal | undefined,
     snapshot?: string,
   ): Promise<CreatedSandbox> {
     const response = await this.#control(
@@ -329,7 +337,6 @@ export class E2bCompatibleBackend implements SandboxBackend {
           metadata: { "created-by": "piship" },
           allow_internet_access: network === "allow",
         }),
-        ...(signal ? { signal } : {}),
       },
       false,
     );
