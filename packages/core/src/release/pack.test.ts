@@ -366,7 +366,9 @@ describe("piship pack", () => {
   });
 
   it.each([
+    // biome-ignore lint/suspicious/noExplicitAny: the edit reaches into the lock's parsed JSON
     ["app.command", (l: any) => (l.app.command = "../../../../escaped")],
+    // biome-ignore lint/suspicious/noExplicitAny: the edit reaches into the lock's parsed JSON
     ["resource path", (l: any) => (l.resources[0].path = "../../../escaped")],
   ])("refuses a lock with an unsafe %s before writing", async (_n, edit) => {
     const { path } = project();

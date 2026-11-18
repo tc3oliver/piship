@@ -22,6 +22,25 @@ npm run build && npx vitest run --config vitest.e2e.config.ts tests/e2e/cli.test
 
 An E2E file run alone still builds the shared release fixtures first, about a minute. `npm test` is the unit tier only and leaves out `tests/e2e`, `tests/compatibility`, and the enterprise reference tests.
 
+For a faster loop, run the package you changed first (`npx vitest run packages/<pkg>`), then `npm run check` before you push.
+
+| Test | Goes in | Run by |
+| --- | --- | --- |
+| Unit test of one package | next to the source, `packages/<pkg>/src/<name>.test.ts` | `npm test` |
+| Cross-package, docs, examples, and CI guards | `tests/<name>.test.ts` | `npm test` |
+| CLI end to end, against the built packages | `tests/e2e` | `npm run test:e2e` |
+| Pi compatibility | `tests/compatibility`, `packages/pi/src/compatibility*.test.ts` | `npm run test:compatibility` |
+
+A documentation change is checked by `tests/docs-commands.test.ts` (documented commands), `tests/docs-examples.test.ts` (manifest and adapter snippets), and `tests/troubleshooting.test.ts` (a row for every error code); `npx vitest run tests/docs-commands.test.ts tests/docs-examples.test.ts tests/troubleshooting.test.ts` runs the three.
+
+Some tests skip on a machine without what they need, and say why: the sandbox tests without an OS sandbox (bubblewrap on Linux), the sandbox adapter kit tests without an OS isolator (Seatbelt or bubblewrap), and the registry tests without the npm registry. CI makes those fail instead of skip, so a green local run can still fail there. To run strictly like CI:
+
+```bash
+PISHIP_REQUIRE_SANDBOX=1 PISHIP_REQUIRE_ISOLATOR=1 npm test
+```
+
+`PISHIP_REQUIRE_REGISTRY=1` does the same for the tests that call the real npm registry (`tests/e2e/registry-gates.test.ts`; Portable E2E sets it), and also stops the fake npm that otherwise answers the release gates' `npm audit` calls, so those gates run against the registry.
+
 CI evidence is routed to three tiers ([AGENTS.md](AGENTS.md#ci-evidence-tiers)); moving a check between tiers changes when it runs, never what it covers.
 
 - **Pull requests and `main` pushes: fast merge gate.** CI on Ubuntu, macOS, and Windows (formatting, lint, types, and boundaries once on Ubuntu; build, unit tests, and Pi compatibility on every target; the live platform secret-store test on every target: macOS Keychain, Windows Credential Manager, and the Linux Secret Service under GNOME Keyring) and CodeQL. Every pull request runs all of it, so the required checks always report. Superseded runs are cancelled. The critical path should stay around three to five minutes. After a merge, the same gate runs again on the `main` push; a `main` push starts neither the full Portable E2E nor release qualification.

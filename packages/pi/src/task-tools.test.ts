@@ -24,7 +24,7 @@ import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
-import { report, taskTools } from "./task-tools.js";
+import { report } from "./task-tools.js";
 
 /** The generic task tests use POSIX commands; Windows has its own Bash test. */
 const tasksRun = process.platform !== "win32";
@@ -261,6 +261,7 @@ describe("task_start decides a command as bash does", () => {
       };
       let output = text(started);
       if (first.details.status === "running") {
+        // biome-ignore lint/style/noNonNullAssertion: a session with task tools has background tasks
         await session.backgroundTasks!.settled(first.details.id);
         const finished = await call("task_output")(
           { id: first.details.id },

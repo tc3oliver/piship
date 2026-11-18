@@ -10,7 +10,6 @@ import {
   ID,
   age,
   appsDir,
-  fakeRun,
   installed,
   launch,
   livePid,

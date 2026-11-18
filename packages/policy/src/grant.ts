@@ -270,8 +270,8 @@ function askCovered(
     case "shell.execute": {
       const programs = grantShellPrograms(ask.resource, platform);
       return (
-        programs !== undefined &&
-        programs.every((program) => list(scope.commands).includes(program))
+        programs?.every((program) => list(scope.commands).includes(program)) ??
+        false
       );
     }
     case "mcp.tool.call":

@@ -5,7 +5,6 @@
 // liveness rules themselves are tested in @piship/contracts; here a real
 // process is killed in the middle of an operation and the next operation
 // finds a clean machine. Every scenario runs in a private OS temp directory.
-import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -18,8 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { readTemporaryOwner, type TemporaryKind } from "@piship/contracts";
+import type { TemporaryKind } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   HOST_EVIDENCED,

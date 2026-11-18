@@ -2327,8 +2327,10 @@ describe("what to do after an install", () => {
         deployment: { mode: "managed" },
         access: {
           variables: ["ACME_ISSUER", "ACME_SOURCE", "ACME_SHARED"],
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
           identity: { oidc: { issuer: "${ACME_ISSUER}/${ACME_SHARED}" } },
         },
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
         updates: { source: "${ACME_SOURCE}/${ACME_SHARED}" },
       }),
     );
@@ -2341,6 +2343,7 @@ describe("what to do after an install", () => {
         receipt({
           deployment: { mode: "managed" },
           access: { variables: ["ACME_SOURCE"] },
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
           updates: { source: "${ACME_SOURCE}" },
         }),
         [],

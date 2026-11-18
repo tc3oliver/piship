@@ -482,6 +482,7 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       });
       try {
         expect(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion is the input
           (await run(box, 'echo "cargo=${CARGO_HOME-unset}"')).output,
         ).toBe("cargo=unset\n");
       } finally {
@@ -508,6 +509,7 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       });
       try {
         expect(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion is the input
           (await run(box, 'echo "cargo=${CARGO_HOME-unset}"')).output,
         ).toBe("cargo=unset\n");
       } finally {

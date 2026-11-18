@@ -7,8 +7,6 @@ import {
   TIMING_SCHEMA,
 } from "./timing.js";
 
-const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
-
 function capture(enabled: boolean): { lines: () => string[]; end: () => void } {
   const saved = process.env.PISHIP_DEBUG_TIMING;
   if (enabled) process.env.PISHIP_DEBUG_TIMING = "1";

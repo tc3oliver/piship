@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import type { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DistributionLock } from "../index.js";
 import type { InstallReceipt } from "../install/index.js";

@@ -1,4 +1,4 @@
-import { PiShipError } from "@piship/contracts";
+import type { PiShipError } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import { mustRun } from "./command.js";
 

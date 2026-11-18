@@ -1343,8 +1343,8 @@ export function governedTools(
     tool: string,
     gated: boolean,
   ) => {
-    const seed = remote && gov.remote?.lookup();
-    if (!seed || seed.skipped(decided) !== "policy") return;
+    const seed = remote ? gov.remote?.lookup() : undefined;
+    if (seed?.skipped(decided) !== "policy") return;
     if (!gated) await gatePath(gov, "filesystem.read", decided, tool);
     await gone(seed.adopt(decided, gov.toolSignal()));
   };
@@ -1383,6 +1383,7 @@ export function governedTools(
   };
   const write = async (path: string, content: string, tool: string) => {
     if (remote)
+      // biome-ignore lint/style/noNonNullAssertion: remote is set only when gov.remote is
       return gov.remote!.track(
         gone(
           remote.write(

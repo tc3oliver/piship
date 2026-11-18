@@ -20,7 +20,6 @@ import {
   HOST_EVIDENCED,
   ID,
   KEY,
-  fakeRun,
   installed,
   launch,
   rejection,
@@ -216,6 +215,7 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
       (label, value) => lines.push(`! ${label} ${value}`),
     );
     expect(lines).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is what the line reports
       "ok source ${ACMEPI_UPDATE_SOURCE} = https://updates.corp.internal/acmepi",
     );
     expect(lines.join("\n")).not.toMatch(/hunter2|deploy|token/);

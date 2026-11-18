@@ -182,8 +182,17 @@ export default () => ({
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
 afterEach(async () => {
-  for (const session of sessions.splice(0))
-    await session.close().catch(() => undefined);
+  // The closing line of a session a test left open is not asserted, and a
+  // session opened with `reuse` shares the fake sandbox directory, so the
+  // first one's final checkpoint fails (exit 128) once the second replaced
+  // it. Tests that check the closing line close the session themselves.
+  const closing = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  try {
+    for (const session of sessions.splice(0))
+      await session.close().catch(() => undefined);
+  } finally {
+    closing.mockRestore();
+  }
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
   delete (globalThis as { __pishipRemote?: Log }).__pishipRemote;

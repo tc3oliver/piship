@@ -269,6 +269,7 @@ The [status page](docs/status.md) has the evidence behind every claim.
 ## Contributing
 
 ```bash
+npm ci
 npm run check
 npm run test:compatibility
 ```
