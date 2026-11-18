@@ -131,10 +131,17 @@ export function policy(
     "policy taskGrants.wildcardHosts",
     bg?.wildcardHosts ?? false,
     ag?.wildcardHosts ?? false,
+    // No task grant can name a host yet (/grant and declared grants have no hosts).
     (_, y) =>
       y === "true"
-        ? ["high", "Lets a task grant name a wildcard host."]
-        : ["low", "Task grants can no longer name a wildcard host."],
+        ? [
+            "low",
+            "Lets a task grant name a wildcard host; no effect yet: no task grant can name a host.",
+          ]
+        : [
+            "low",
+            "Task grants can no longer name a wildcard host; no effect yet: no task grant can name a host.",
+          ],
   );
   out.scalar("policy", "policy adapter", bp?.adapter, ap?.adapter, (_, y) =>
     y === ""

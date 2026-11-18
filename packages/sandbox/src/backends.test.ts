@@ -843,6 +843,25 @@ describe("the environment a backend receives", () => {
   });
 });
 
+describe("the process a backend starts", () => {
+  it("reaches the caller's onSpawn", async () => {
+    const { backend } = fakeBackend({
+      exec: async (_request, io) => {
+        io.onSpawn?.(4242);
+        return { exitCode: 0 };
+      },
+    });
+    const sandbox = await activate(backend);
+    const pids: number[] = [];
+    await sandbox.exec("true", workspace, {
+      onData: () => {},
+      onSpawn: (pid) => pids.push(pid),
+    });
+    expect(pids).toEqual([4242]);
+    await sandbox.dispose();
+  });
+});
+
 describe("PiShip owns timeout, cancellation, and dispose", () => {
   /** A backend command that only ends when its signal aborts. */
   const untilAborted =

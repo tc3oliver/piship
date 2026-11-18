@@ -970,6 +970,37 @@ export function inertTempRetention(manifest: Manifest): ValidationDiagnostic[] {
 }
 
 /**
+ * Task grant settings for hosts: `/grant` and `taskGrants.declared` cover
+ * paths, tools and commands only, so no grant can name a host yet.
+ */
+export function inertTaskGrantHosts(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const grants = manifest.governance?.policy.taskGrants;
+  if (!grants) return [];
+  return [
+    ...(grants.wildcardHosts
+      ? [
+          {
+            path: "policy.taskGrants.wildcardHosts",
+            message:
+              "has no effect yet: no task grant can name a host (/grant covers a folder and shell commands); remove policy.taskGrants.wildcardHosts",
+          },
+        ]
+      : []),
+    ...(grants.actions?.includes("web.request")
+      ? [
+          {
+            path: "policy.taskGrants.actions",
+            message:
+              "web.request has no effect yet: no task grant can name a host (/grant covers a folder and shell commands); remove web.request from policy.taskGrants.actions",
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
  * An openai-compatible endpoint without `models.default` (managed mode
  * already refuses it): every launch fails until the user passes `--model` or
  * sets one. A warning, not an error, because a user `model` preference makes
@@ -1055,6 +1086,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...inertCaptureClasses(manifest),
     ...inertDataPurge(manifest),
     ...inertTempRetention(manifest),
+    ...inertTaskGrantHosts(manifest),
     ...droppedCredentialNames(manifest),
     ...optionalHttpAuditSinks(manifest),
     ...findings({

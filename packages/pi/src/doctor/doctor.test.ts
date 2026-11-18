@@ -2172,11 +2172,18 @@ describe("Audit group", () => {
   it("warns about background tasks a killed PiShip process left behind", () => {
     const report = renderDoctor({
       ...doctorData("managed", { governance: governanceData({}) }),
-      orphanedTasks: [{ id: "abc", owner: 4242 }],
+      orphanedTasks: [
+        { id: "abc", owner: 4242 },
+        { id: "def", owner: 4242, pid: 5151 },
+      ],
     });
     expect(report.failed).toBe(false);
-    expect(group(report.render(), "Sandbox")).toContain(
+    const sandbox = group(report.render(), "Sandbox");
+    expect(sandbox).toContain(
       `  ! ${"task abc".padEnd(20)} started by PiShip process 4242, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
+    );
+    expect(sandbox).toContain(
+      `  ! ${"task def".padEnd(20)} started by PiShip process 4242, which is gone (killed without cleanup); it still runs as process 5151. Stop it and its children with: kill -- -5151; this is reported once`,
     );
   });
 

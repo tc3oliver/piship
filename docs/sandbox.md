@@ -267,7 +267,7 @@ interface SandboxBackend {
 interface SandboxInstance {
   exec(
     request: { command: string; cwd: string; workspacePath: string | undefined; env: Record<string, string> },
-    io: { signal: AbortSignal; onStdout(chunk: Buffer): void; onStderr(chunk: Buffer): void },
+    io: { signal: AbortSignal; onStdout(chunk: Buffer): void; onStderr(chunk: Buffer): void; onSpawn?(pid: number): void },
   ): Promise<{ exitCode: number | null; signal?: NodeJS.Signals | null }>;
   wrap?(command: { file: string; args: string[]; cwd: string; env: Record<string, string> }): WrappedCommand;
   dispose(options?: { signal?: AbortSignal }): Promise<void>;
@@ -276,7 +276,7 @@ interface SandboxInstance {
 }
 ```
 
-A backend never decides policy, never reads PiShip's state, and must pass `env` through as given. `exec` must stop when `io.signal` aborts. `wrap` is only for local backends: spawning the returned command on this host must run it contained. `epoch` changes when the backend moves the session to a new environment (the Kubernetes backend returns the claim name, which changes when an expired claim is replaced); a change makes PiShip check a shared or synchronized workspace again before the next command.
+A backend never decides policy, never reads PiShip's state, and must pass `env` through as given. `exec` must stop when `io.signal` aborts. A backend that starts a process on this host may pass its ID to `io.onSpawn`, so `doctor` can name a background task a killed PiShip process left running; a remote backend does not call it. `wrap` is only for local backends: spawning the returned command on this host must run it contained. `epoch` changes when the backend moves the session to a new environment (the Kubernetes backend returns the claim name, which changes when an expired claim is replaced); a change makes PiShip check a shared or synchronized workspace again before the next command.
 
 ## Network denial
 

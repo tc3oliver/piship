@@ -137,7 +137,7 @@ describe("policy.taskGrants in piship diff", () => {
     ]);
   });
 
-  it("rates a higher ttl cap medium and a wildcard host high", () => {
+  it("rates a higher ttl cap medium and a wildcard host low, as it has no effect yet", () => {
     const base = { mode: "session", maxTtlMinutes: 30 };
     expect(changes(base, { ...base, maxTtlMinutes: 120 })[0]).toMatchObject({
       risk: "medium",
@@ -147,7 +147,8 @@ describe("policy.taskGrants in piship diff", () => {
     });
     expect(changes(base, { ...base, wildcardHosts: true })[0]).toMatchObject({
       item: "policy taskGrants.wildcardHosts",
-      risk: "high",
+      risk: "low",
+      reason: expect.stringContaining("no effect yet"),
     });
   });
 });
