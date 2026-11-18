@@ -41,6 +41,12 @@ export interface KubernetesAgentSandboxOptions extends RemoteBackendOptions {
   /** Poll interval while waiting. Default 1 s. */
   readonly pollMs?: number;
   /**
+   * Called once when the session's first claim is still not ready after a
+   * few seconds, with a sentence naming the warm pool and namespace it waits
+   * on.
+   */
+  readonly onProgress?: (message: string) => void;
+  /**
    * The claim's bounded lifetime in seconds (`spec.lifecycle.shutdownTime`),
    * renewed while the session uses it. Default 3600.
    */
@@ -60,6 +66,8 @@ const GROUP = "extensions.agents.x-k8s.io/v1beta1";
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** How long a claim may be pending before `onProgress` is called. */
+const PROGRESS_AFTER_MS = 3000;
 /** Ready reasons after which a claim never becomes ready. */
 const TERMINAL_REASONS = new Set([
   "InvalidMetadata",
@@ -294,7 +302,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     // cancelled only by the session ending, never by one command's signal.
     const session = new AbortController();
     let current: Lease | undefined = lease(
-      Promise.resolve(await this.#claim(signal)),
+      Promise.resolve(await this.#claim(signal, this.#options.onProgress)),
     );
     let disposed = false;
     /** The claim the last command ran in: a replaced claim is a new environment. */
@@ -517,7 +525,11 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     );
   }
 
-  async #claim(signal: AbortSignal | undefined): Promise<Claim> {
+  /** `onProgress` only at the start: a replacement mid-session prints nothing. */
+  async #claim(
+    signal: AbortSignal | undefined,
+    onProgress?: (message: string) => void,
+  ): Promise<Claim> {
     const name = `piship-${randomBytes(6).toString("hex")}`;
     const wallAt = this.#now();
     const monotonicAt = this.#monotonic();
@@ -542,7 +554,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
           },
         },
       }),
-      ...(signal ? { signal } : {}),
+      // Not aborted in flight: a claim the cluster created after PiShip
+      // stopped listening would be left to its shutdownTime. An abort is
+      // seen by the readiness wait below, which deletes the claim.
     });
     if (!created.ok)
       throw new Error(
@@ -551,7 +565,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     await created.body?.cancel().catch(() => undefined);
     try {
       return {
-        ...(await this.#ready(name, signal)),
+        ...(await this.#ready(name, signal, onProgress)),
         expiresAt,
         wallAt,
         monotonicAt,
@@ -565,9 +579,12 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
   async #ready(
     name: string,
     signal: AbortSignal | undefined,
+    onProgress: ((message: string) => void) | undefined,
   ): Promise<Pick<Claim, "claim" | "sandbox">> {
     const timeoutMs = this.#options.readyTimeoutMs ?? 120_000;
-    const deadline = this.#monotonic() + timeoutMs;
+    const started = this.#monotonic();
+    const deadline = started + timeoutMs;
+    let reported = false;
     for (;;) {
       const response = await this.#request(`${this.#claims()}/${name}`, {
         method: "GET",
@@ -599,6 +616,12 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         throw new Error(
           `the SandboxClaim from warm pool ${this.#options.template} in namespace ${this.#namespace} did not become ready in time (${Math.round(timeoutMs / 1000)} s); check that the SandboxWarmPool has ready replicas`,
         );
+      if (!reported && this.#monotonic() - started >= PROGRESS_AFTER_MS) {
+        reported = true;
+        onProgress?.(
+          `requesting a sandbox from warm pool ${this.#options.template} in namespace ${this.#namespace}; waiting up to ${Math.round(timeoutMs / 1000)} s for it to become ready`,
+        );
+      }
       await wait(this.#options.pollMs ?? 1000, signal);
     }
   }

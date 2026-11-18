@@ -543,6 +543,21 @@ describe("e2b-compatible backend against a mock server", () => {
     });
   });
 
+  it("deletes the sandbox when preparing was aborted while it was being created", async () => {
+    const mock = await e2bServer();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      e2b(mock.url).prepare({
+        profile: { network: "deny" } as SandboxProfile,
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("aborted");
+    expect(
+      mock.requests.map((request) => `${request.method} ${request.path}`),
+    ).toEqual(["POST /sandboxes", "DELETE /sandboxes/sbx1"]);
+  });
+
   it("names a concurrency limit when the service refuses a new sandbox with 429", async () => {
     const busy = await e2bServer({ create: 429 });
     await expect(activate(e2b(busy.url))).rejects.toMatchObject({
@@ -1713,6 +1728,56 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     ).rejects.toThrow(
       "the SandboxClaim from warm pool python-pool in namespace agents did not become ready in time (0 s); check that the SandboxWarmPool has ready replicas",
     );
+  });
+
+  it("reports a claim still pending after 3 s and deletes it when preparing is aborted", async () => {
+    const mock = await kubernetesServer(undefined, { neverReady: true });
+    let clock = 0;
+    const progress: string[] = [];
+    const abort = new AbortController();
+    const preparing = kubernetes(mock.url, {
+      monotonic: () => clock,
+      onProgress: (message) => progress.push(message),
+    }).prepare({ profile: {} as SandboxProfile, signal: abort.signal });
+    preparing.catch(() => undefined);
+    await vi.waitFor(() =>
+      expect(mock.requests.some((r) => r.method === "GET")).toBe(true),
+    );
+    expect(progress).toEqual([]);
+    clock = 3000;
+    await vi.waitFor(() =>
+      expect(progress).toEqual([
+        "requesting a sandbox from warm pool python-pool in namespace agents; waiting up to 120 s for it to become ready",
+      ]),
+    );
+    abort.abort();
+    await expect(preparing).rejects.toThrow("aborted");
+    const name = JSON.parse(
+      mock.requests
+        .find((request) => request.method === "POST")
+        ?.body.toString() ?? "{}",
+    ).metadata.name;
+    expect(mock.requests.at(-1)).toMatchObject({
+      method: "DELETE",
+      path: `${CLAIMS}/${name}`,
+    });
+    expect(progress).toHaveLength(1);
+  });
+
+  it("deletes the claim when preparing was aborted while it was being created", async () => {
+    const mock = await kubernetesServer();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      kubernetes(mock.url).prepare({
+        profile: {} as SandboxProfile,
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow();
+    expect(mock.requests.map((request) => request.method)).toEqual([
+      "POST",
+      "DELETE",
+    ]);
   });
 
   it("rejects the bearer on a 401 and creates no claim", async () => {

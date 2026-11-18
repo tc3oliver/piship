@@ -105,6 +105,7 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
     fixtures: ["demo"],
   },
   "sandbox-credential": { seconds: { linux: 28, darwin: 48, win32: 26 } },
+  "sandbox-interrupt": { seconds: { linux: 10, darwin: 12, win32: 1 } },
   "security-controls": { seconds: { linux: 94, darwin: 107, win32: 143 } },
   "security-findings-session": {
     seconds: { linux: 28, darwin: 52, win32: 55 },

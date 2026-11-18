@@ -91,7 +91,7 @@ import type {
 } from "./governance/options.js";
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
-import { sandboxBackend } from "./governance/sandbox.js";
+import { interruptibleBackend, sandboxBackend } from "./governance/sandbox.js";
 import { seedDecision } from "./governed-tools.js";
 import { DEFAULT_GRANT_COMMANDS } from "./grant-command.js";
 import {
@@ -398,8 +398,12 @@ export class GovernanceSession {
             await filesystemPolicyDigest(options, candidates),
           )
         : undefined;
-      const backend =
+      const cached =
         declared && cache ? cachedBackend(declared, cache) : declared;
+      const backend =
+        cached && options.signal
+          ? interruptibleBackend(cached, options.signal)
+          : cached;
       sandbox = await activateSandbox(sandboxConfig(options), {
         ...(backend ? { backend } : {}),
         workspace: project.root,
@@ -410,6 +414,8 @@ export class GovernanceSession {
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,
       });
+      // Interrupted after the sandbox was made: the catch below disposes it.
+      options.signal?.throwIfAborted();
       startupMark("governance_sandbox_active");
       const { level, adapter, networkDenial } = sandbox.report;
       bestEffort(() =>

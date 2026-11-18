@@ -266,12 +266,15 @@ export async function openGovernance(
   interactive: boolean,
   /** False for doctor, which checks the sandbox as a fresh one. */
   sandboxCache = true,
+  /** Aborts creating the sandbox: the launch was interrupted. */
+  signal?: AbortSignal,
 ): Promise<GovernanceSession | null> {
   const lock = governedLock(ctx);
   if (!lock) return null;
   const gov = await GovernanceSession.open({
     ...governanceOptions(ctx, lock, prepared, interactive),
     ...(sandboxCache ? {} : { sandboxCache: false as const }),
+    ...(signal ? { signal } : {}),
   });
   // Before Pi's screen opens, and in a headless run where nothing else shows it.
   if (gov.yolo) ctx.err(`Notice: ${describeYolo(ctx.mode)}`);
