@@ -1,0 +1,583 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/tc3oliver/piship/main/schema/piship-v1.schema.json",
+  "title": "PiShip manifest (piship/v1)",
+  "description": "piship.yaml for schema piship/v1. Editor hints only: piship validate is authoritative. Reference: https://github.com/tc3oliver/piship/blob/main/docs/manifest.md",
+  "type": "object",
+  "required": ["schema", "app", "deployment", "updates"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "description": "Manifest schema version.",
+      "const": "piship/v1"
+    },
+    "app": {
+      "description": "Distribution identity: id, display name, command, and version.",
+      "type": "object",
+      "required": ["id", "name", "command", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Safe lowercase distribution ID.",
+          "type": "string"
+        },
+        "name": { "description": "Display name.", "type": "string" },
+        "command": {
+          "description": "Branded command name (safe lowercase name).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Distribution semver, independent of PiShip and Pi versions.",
+          "type": "string"
+        },
+        "banner": {
+          "description": "Optional banner text shown at startup.",
+          "type": "string"
+        },
+        "theme": {
+          "description": "Built-in or declared custom theme name.",
+          "type": "string"
+        }
+      }
+    },
+    "runtime": {
+      "description": "Pi runtime settings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pi": {
+          "description": "Exact Pi version; must equal the version this PiShip pins. Leave out to follow the pin.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Tool exposure, Codemode (off, on, only), and tool search (off, on).",
+          "type": "object"
+        },
+        "cacheWarming": {
+          "description": "Prompt cache warming: mode (off, streaming, idle) and userOverride.",
+          "type": "object"
+        },
+        "searchTools": {
+          "description": "Bundle pinned fd and rg: mode: bundled, optional fd and rg versions.",
+          "type": "object"
+        },
+        "verifyAtLaunch": {
+          "description": "Verify the installed payload against the lock at every launch (default false).",
+          "type": "boolean"
+        }
+      }
+    },
+    "deployment": {
+      "description": "Deployment mode.",
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "personal or managed; managed requires identity, credential, inference, and models.",
+          "enum": ["personal", "managed"]
+        }
+      }
+    },
+    "resources": {
+      "description": "Instruction files, skill, extension, prompt, and theme roots grouped by trust class, and Pi packages.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "description": "Instruction Markdown files by trust class (company, user, certified).",
+          "type": "object"
+        },
+        "skills": {
+          "description": "Skill directories by trust class (company, user, certified).",
+          "type": "object"
+        },
+        "extensions": {
+          "description": "Pi extensions by trust class, plus builtin PiShip extensions.",
+          "type": "object"
+        },
+        "prompts": {
+          "description": "Prompt roots by trust class (company, user, certified).",
+          "type": "object"
+        },
+        "themes": {
+          "description": "Theme roots by trust class (company, user, certified).",
+          "type": "object"
+        },
+        "packages": {
+          "description": "Pi packages (source npm, git, or local) with a trust class.",
+          "type": "array"
+        }
+      }
+    },
+    "variables": {
+      "description": "Names allowed in ${NAME} runtime references.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "identity": {
+      "description": "How users sign in.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "Identity mode.",
+          "enum": ["none", "oidc", "adapter"]
+        },
+        "oidc": {
+          "description": "OIDC public client: issuer, clientId, flow, scopes, audience, redirectUri, httpTransport.",
+          "type": "object"
+        },
+        "adapter": {
+          "description": "./ path to an .mjs or .js IdentityProvider module.",
+          "type": "string"
+        }
+      }
+    },
+    "credential": {
+      "description": "Where the inference credential comes from. Secrets are never declared here.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "description": "Credential provider.",
+          "enum": [
+            "http-broker",
+            "local-secret",
+            "pi-native",
+            "none",
+            "adapter"
+          ]
+        },
+        "broker": {
+          "description": "endpoint and optional revokeEndpoint (http-broker only).",
+          "type": "object"
+        },
+        "adapter": {
+          "description": "./ module path (adapter only).",
+          "type": "string"
+        },
+        "storage": {
+          "description": "provider: system (default) or file, and acknowledgePlaintext.",
+          "type": "object"
+        },
+        "refresh": {
+          "description": "beforeExpiry duration such as 5m.",
+          "type": "object"
+        }
+      }
+    },
+    "inference": {
+      "description": "Model gateway.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "description": "Inference provider.",
+          "enum": ["openai-compatible", "pi-native"]
+        },
+        "baseUrl": {
+          "description": "Gateway base URL (openai-compatible).",
+          "type": "string"
+        },
+        "api": {
+          "description": "Wire API (openai-compatible; default openai-completions).",
+          "enum": ["openai-completions", "openai-responses"]
+        },
+        "liveCatalog": {
+          "description": "Query GET {baseUrl}/models at launch (default false).",
+          "type": "boolean"
+        },
+        "httpTransport": {
+          "description": "https forces https; http-allowed (default) admits plain HTTP to a private host.",
+          "enum": ["https", "http-allowed"]
+        }
+      }
+    },
+    "models": {
+      "description": "Model allowlist and catalog.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "Default model ID; must be in models.allowed.",
+          "type": "string"
+        },
+        "allowed": {
+          "description": "Distribution model allowlist (provider/model for pi-native).",
+          "type": "array"
+        },
+        "catalog": {
+          "description": "Model metadata by ID: name, contextWindow, maxOutputTokens, type, virtual, and more.",
+          "type": "object"
+        }
+      }
+    },
+    "config": {
+      "description": "Pi settings the distribution enforces or defaults (model, theme, thinkingLevel).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enforced": {
+          "description": "Values users cannot change.",
+          "type": "object"
+        },
+        "defaults": {
+          "description": "Default values users may change.",
+          "type": "object"
+        },
+        "userOverridable": {
+          "description": "Keys users may set; defaults to every key not enforced.",
+          "type": "array"
+        }
+      }
+    },
+    "network": {
+      "description": "Proxy, TLS, and host restrictions.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proxy": {
+          "description": "inheritEnvironment: honor HTTP(S)_PROXY and NO_PROXY (default true).",
+          "type": "object"
+        },
+        "tls": {
+          "description": "additionalCA: absolute PEM bundle paths added to the trust roots.",
+          "type": "object"
+        },
+        "publicFallback": {
+          "description": "managed requires deny.",
+          "enum": ["deny", "allow"]
+        },
+        "privateOnly": {
+          "description": "Restrict requests to declared endpoint hosts plus allowHosts.",
+          "type": "boolean"
+        },
+        "allowHosts": {
+          "description": "Exact hostnames or IP literals; no wildcards or suffix matches.",
+          "type": "array"
+        }
+      }
+    },
+    "capabilities": {
+      "description": "Named capability contracts, each with enabled, provider, settings, and requirements.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {
+          "description": "Implemented by builtin/permissions; enabled by default.",
+          "type": "object"
+        },
+        "workflow": {
+          "description": "Plan/Build mode; implemented by builtin/workflow; disabled by default.",
+          "type": "object"
+        },
+        "checkpoint": {
+          "description": "Known but not implemented.",
+          "type": "object"
+        },
+        "subagents": {
+          "description": "Known but not implemented.",
+          "type": "object"
+        },
+        "code-intel": {
+          "description": "Known but not implemented.",
+          "type": "object"
+        },
+        "acp": { "description": "Known but not implemented.", "type": "object" }
+      }
+    },
+    "policy": {
+      "description": "Policy rules and trust decisions.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Lowercase policy ID (default app.id).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Positive integer (default 1).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "default": {
+          "description": "Effect when no rule matches (default ask managed, allow personal).",
+          "enum": ["allow", "ask", "deny"]
+        },
+        "adapter": {
+          "description": "./ .mjs or .js module exporting team rules (narrowing only).",
+          "type": "string"
+        },
+        "resourceTrust": {
+          "description": "allow or deny per resource trust class; project: policy, allow, or deny.",
+          "type": "object"
+        },
+        "providerTrust": {
+          "description": "Capability-provider trust per class.",
+          "type": "object"
+        },
+        "projectTrust": {
+          "description": "Project origin matchers and per-dimension effects.",
+          "type": "object"
+        },
+        "enforced": {
+          "description": "Rules that nothing below can relax.",
+          "type": "array"
+        },
+        "defaults": {
+          "description": "Distribution rules a personal user may relax.",
+          "type": "array"
+        },
+        "userAuto": {
+          "description": "Managed only: allowed lets users switch on auto mode.",
+          "enum": ["off", "allowed"]
+        },
+        "taskGrants": {
+          "description": "Caps on task grants: mode, maxTtlMinutes, actions, declared.",
+          "type": "object"
+        },
+        "acknowledgeUnenforced": {
+          "description": "\"<action>:<resource>\" keys of rules no runtime seam enforces.",
+          "type": "array"
+        },
+        "packs": {
+          "description": "Opt-in built-in rule packs, such as piship.routine.",
+          "type": "array"
+        }
+      }
+    },
+    "mcp": {
+      "description": "MCP servers and where definitions may come from.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "off, allowlist (declared servers only), or explicit (personal only).",
+          "enum": ["off", "allowlist", "explicit"]
+        },
+        "project": {
+          "description": "Whether project .mcp.json servers may be used in explicit mode.",
+          "enum": ["allow", "deny"]
+        },
+        "user": {
+          "description": "Accepted; user-level MCP definitions are not loaded.",
+          "enum": ["allow", "deny"]
+        },
+        "servers": {
+          "description": "Declared servers by ID (stdio or streamable-http).",
+          "type": "object"
+        }
+      }
+    },
+    "sandbox": {
+      "description": "OS or remote sandbox for commands the agent runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "description": "true activates the sandbox and fails the launch when it cannot be enforced.",
+          "type": "boolean"
+        },
+        "provider": {
+          "description": "Sandbox provider (default native).",
+          "enum": [
+            "native",
+            "custom",
+            "e2b-compatible",
+            "kubernetes-agent-sandbox"
+          ]
+        },
+        "adapter": {
+          "description": "Backend setting for providers that use it.",
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "Remote provider endpoint; accepts runtime references.",
+          "type": "string"
+        },
+        "router": {
+          "description": "Remote provider router; accepts runtime references.",
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Backend setting for providers that use it.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Backend setting for providers that use it.",
+          "type": "string"
+        },
+        "workdir": {
+          "description": "Backend setting for providers that use it.",
+          "type": "string"
+        },
+        "user": {
+          "description": "Sandbox user (e2b-compatible only).",
+          "type": "string"
+        },
+        "credential": {
+          "description": "Backend credential source for providers that use it.",
+          "type": "string"
+        },
+        "lifetimeSeconds": {
+          "description": "Remote sandbox lifetime, 1-86400 seconds (default 3600).",
+          "type": "integer"
+        },
+        "httpTransport": {
+          "description": "https or http-allowed for sandbox.endpoint and sandbox.router.",
+          "enum": ["https", "http-allowed"]
+        },
+        "workspace": {
+          "description": "remote: the remote sandbox directory is the workspace.",
+          "enum": ["remote"]
+        },
+        "remote": {
+          "description": "Remote workspace seeding, pull, refresh, and cache settings.",
+          "type": "object"
+        },
+        "filesystem": {
+          "description": "read.deny and write.allow path lists.",
+          "type": "object"
+        },
+        "network": {
+          "description": "mode (deny or allow) and egress.",
+          "type": "object"
+        },
+        "environment": {
+          "description": "allow: variables passed into contained processes.",
+          "type": "object"
+        }
+      }
+    },
+    "audit": {
+      "description": "Audit events and where they go.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Default true managed, false personal; needs at least one sink.",
+          "type": "boolean"
+        },
+        "sinks": {
+          "description": "Sinks with id, type (file or http), url, and required.",
+          "type": "array"
+        },
+        "buffer": {
+          "description": "maxEvents and flushInterval per sink.",
+          "type": "object"
+        },
+        "capture": {
+          "description": "Opt-in content classes such as commandText.",
+          "type": "object"
+        }
+      }
+    },
+    "updates": {
+      "description": "Update channel, source, rollback, and trust (required).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "description": "Channel this build follows.",
+          "enum": ["stable", "candidate", "dev"]
+        },
+        "channels": {
+          "description": "Channels the update source publishes.",
+          "type": "array"
+        },
+        "source": {
+          "description": "Update source URL; may be a runtime reference.",
+          "type": "string"
+        },
+        "transport": {
+          "description": "https forces HTTPS-only; http-allowed admits plain HTTP to a private host.",
+          "enum": ["https", "http-allowed"]
+        },
+        "rollback": {
+          "description": "Whether a failed update rolls back.",
+          "type": "boolean"
+        },
+        "trust": {
+          "description": "Update trust bootstrap: root and channel signing keys.",
+          "type": "object"
+        }
+      }
+    },
+    "release": {
+      "description": "Release targets and supply-chain checks.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targets": {
+          "description": "Platform targets to build.",
+          "type": "array"
+        },
+        "sources": {
+          "description": "Origins the lock may download from.",
+          "type": "array"
+        },
+        "vulnerabilities": {
+          "description": "npm audit settings, such as registry.",
+          "type": "object"
+        },
+        "installScripts": {
+          "description": "Reviewed install scripts in Pi package closures.",
+          "type": "array"
+        },
+        "strip": {
+          "description": "Strip the payload (default true).",
+          "type": "boolean"
+        },
+        "bundle": {
+          "description": "Bundle the payload (default true).",
+          "type": "boolean"
+        }
+      }
+    },
+    "packageTrust": {
+      "description": "Rules for Pi package sources.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "npm": { "description": "requireIntegrity.", "type": "object" },
+        "git": {
+          "description": "hosts and requireCommitSha.",
+          "type": "object"
+        },
+        "local": { "description": "paths.", "type": "object" }
+      }
+    },
+    "data": {
+      "description": "Retention, purge, and export of local data.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessions": {
+          "description": "retention: maximum duration such as 30d.",
+          "type": "object"
+        },
+        "audit": {
+          "description": "retention: minimum duration such as 90d.",
+          "type": "object"
+        },
+        "cache": {
+          "description": "retention: maximum duration such as 7d.",
+          "type": "object"
+        },
+        "temp": {
+          "description": "retention: parsed, not yet acted on.",
+          "type": "object"
+        },
+        "purge": {
+          "description": "onLogout data classes and onUninstall (none or all).",
+          "type": "object"
+        },
+        "export": {
+          "description": "allow, ask, or deny per export kind (public, local, support).",
+          "type": "object"
+        }
+      }
+    }
+  }
+}

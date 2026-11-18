@@ -95,7 +95,9 @@ describe("CLI", () => {
       const manifest = join(temp, "new-agent", "piship.yaml");
       expect(cli("init", join(temp, "new-agent"), ...flags).status).toBe(0);
       expect(readFileSync(manifest, "utf8")).toMatch(
-        new RegExp(`^schema: ${LATEST_SCHEMA}\n`),
+        new RegExp(
+          `^# yaml-language-server: \\$schema=\\S+\nschema: ${LATEST_SCHEMA}\n`,
+        ),
       );
       // The test environment makes `init` leave out the bundled fd and rg, so
       // the `lock` below needs no download from GitHub.

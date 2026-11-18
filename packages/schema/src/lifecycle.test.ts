@@ -8,6 +8,7 @@ import {
   launchWarnings,
   ManifestError,
   migrateManifestSource,
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
@@ -228,7 +229,16 @@ describe("v1alpha4 section gating", () => {
   it("requires updates on v1alpha4", () => {
     const input = personal();
     delete input.updates;
-    rejects(input, "updates", "requires an updates section");
+    rejects(input, "updates", "require an updates section");
+  });
+  it("does not name an older schema when a v1 manifest leaves out updates", () => {
+    const input = personal({ schema: PISHIP_SCHEMA_V1 });
+    delete input.updates;
+    rejects(
+      input,
+      "updates",
+      "piship/v1alpha4 and later require an updates section; add updates: {}",
+    );
   });
   it.each([
     [PISHIP_SCHEMA_V1ALPHA3, "updates"],

@@ -10,6 +10,9 @@ import { isDistributionId, suggestDistributionId } from "./state-paths.js";
 
 // Absolute: a new distribution repository does not contain PiShip's docs.
 const DOCS = "https://github.com/tc3oliver/piship/blob/main/docs";
+// Editor completion and hover through the YAML language server (VS Code's YAML extension).
+const JSON_SCHEMA =
+  "https://raw.githubusercontent.com/tc3oliver/piship/main/schema/piship-v1.schema.json";
 
 /**
  * Governance and lifecycle sections shared by both init templates: explicit
@@ -189,7 +192,8 @@ export function initDistribution(
       `${JSON.stringify(id)} cannot be a distribution id: ${unusable}${options.id === undefined ? "; pass --id <id> to name it" : ""}`,
     );
   mkdirSync(join(root, "resources"), { recursive: true });
-  const header = `schema: ${LATEST_SCHEMA}
+  const header = `# yaml-language-server: $schema=${JSON_SCHEMA}
+schema: ${LATEST_SCHEMA}
 app:
   id: ${id}
   name: ${id}
