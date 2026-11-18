@@ -3960,6 +3960,26 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(readInstallReceipt(ID).active).toBe("1.1.0");
   });
 
+  it("refuses, retryably, to repair a release a running session still uses", async () => {
+    const f = await updated();
+    write(
+      join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
+      "# tampered\n",
+    );
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      const error = await rejection(repairDistribution(ID, f.a.archive));
+      expect(error).toMatchObject({
+        code: "UPDATE_FAILED",
+        retryable: true,
+        userAction: expect.stringMatching(/Exit every running acmepi session/),
+      });
+    } finally {
+      releaseLease();
+    }
+    expect((await repairDistribution(ID, f.a.archive)).status).toBe("repaired");
+  });
+
   it("restores a modified file in the retained release, so rollback works again", async () => {
     const f = await updated();
     write(
@@ -4125,6 +4145,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       expect.objectContaining({
         code: "CONFIG_UNAVAILABLE",
         sanitizedDetail: { id: ID, notInstalled: true },
+        userAction: expect.stringMatching(/install <artifact>/),
       }),
     );
     expect(lifecycleStatus(ID, requireCurrentLockFor(a.directory))).toEqual({

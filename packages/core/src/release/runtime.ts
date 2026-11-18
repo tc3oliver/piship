@@ -364,6 +364,7 @@ export async function buildRuntimeRelease(
           "UPDATE_FAILED",
           "test",
           `required test runtime-version failed: ${(result.stderr || result.stdout).trim().slice(0, 500)}`,
+          `The runtime payload's piship.mjs --version did not print ${PISHIP_VERSION}: rebuild PiShip (npm run build) and run the runtime release again`,
         );
       return [{ name: "runtime-version", result: "passed" as const }];
     });

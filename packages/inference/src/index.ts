@@ -45,6 +45,9 @@ export interface CatalogConstraints {
   readonly userAllowed?: readonly string[];
 }
 
+/** The availability reason of a model the user's models.allowed preference leaves out. */
+const USER_EXCLUDED = "excluded by user preference";
+
 /** Combine static metadata with every allowlist; lists intersect, never widen. */
 export function buildModelDefinitions(
   providerId: string,
@@ -88,7 +91,7 @@ export function buildModelDefinitions(
         !constraints.userAllowed.includes(entry.id) &&
         !userRoutes.has(entry.id)
       )
-        reason = "excluded by user preference";
+        reason = USER_EXCLUDED;
       return {
         id: entry.id,
         name: entry.name,
@@ -120,7 +123,10 @@ export function resolveRequestedModel(
   const model = ctx.models.find((item) => item.id === requested);
   if (model && !model.availability.available)
     throw new PiShipError(
-      "MODEL_UNAVAILABLE",
+      // The user's own exclusion is a refusal that waiting cannot change.
+      model.availability.reason === USER_EXCLUDED
+        ? "MODEL_DENIED"
+        : "MODEL_UNAVAILABLE",
       `Model ${requested} is unavailable: ${model.availability.reason ?? "not currently offered"}`,
       {
         component: "inference",

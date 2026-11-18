@@ -97,6 +97,9 @@ export async function repairDistribution(
         throw new PiShipError(
           "UPDATE_FAILED",
           `${source} is ${lock.app.id} ${version}, which is not a release of ${id} this installation records (${receipt.releases.map((item) => item.version).join(", ")}); repair restores a recorded release, use update or install for another`,
+          {
+            userAction: `Pass the release archive of a recorded version of ${id}, or use update or install for another release`,
+          },
         );
       const problems = [
         lock.app.command !== receipt.app.command && "command",
@@ -145,6 +148,10 @@ export async function repairDistribution(
             throw new PiShipError(
               "UPDATE_FAILED",
               `Cannot repair ${id} ${version} while ${live.length} runtime session(s) still use it; close them and retry`,
+              {
+                retryable: true,
+                userAction: `Exit every running ${receipt.app.command} session, then run repair again`,
+              },
             );
           syncTree(payload);
           // Two renames in one directory: an interruption between them leaves

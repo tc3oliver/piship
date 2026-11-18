@@ -253,7 +253,10 @@ describe("runtime release", () => {
           stderr: "",
         }),
       }),
-    ).rejects.toThrow(/runtime-version failed/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/runtime-version failed/),
+      userAction: expect.stringMatching(/rebuild PiShip/),
+    });
   });
 
   it("binds the PiShip and Pi versions to the payload", async () => {

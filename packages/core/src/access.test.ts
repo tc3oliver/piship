@@ -332,7 +332,7 @@ describe("configuration precedence", () => {
       setPreference(path, access, undefined, "model", "acme/coder"),
     ).toThrow(
       expect.objectContaining({
-        code: "MODEL_UNAVAILABLE",
+        code: "MODEL_DENIED",
         message: expect.stringContaining(
           "excluded by your models.allowed preference",
         ),

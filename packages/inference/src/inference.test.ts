@@ -387,6 +387,19 @@ describe("effective model catalog (§10)", () => {
     );
   });
 
+  it("refuses a model the user's preference excludes as MODEL_DENIED", () => {
+    const models = buildModelDefinitions("acmecode", catalog, {
+      allowed: [A, B],
+      userAllowed: [A],
+    });
+    expect(() => resolveRequestedModel(B, { models, allowed: [A] })).toThrow(
+      expect.objectContaining({
+        code: "MODEL_DENIED",
+        message: expect.stringContaining("excluded by user preference"),
+      }),
+    );
+  });
+
   it("yields exactly B for allowlist A,B, entitlement B,C, and live gateway B,C,D", () => {
     expect(
       offered({

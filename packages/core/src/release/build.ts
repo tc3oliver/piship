@@ -221,6 +221,7 @@ async function runReleaseTests(
             "UPDATE_FAILED",
             "test",
             `required test ${name} failed: ${(result.stderr || result.stdout).trim().slice(0, 500)}`,
+            `Reproduce it with piship build and install, then ${lock.app.command} ${args.join(" ")}; fix the distribution and run release again`,
           );
         return { name, result: "passed" as const };
       } finally {

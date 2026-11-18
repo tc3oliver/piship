@@ -458,7 +458,7 @@ describe("personal Pi-native governance", () => {
       runtime.streamSimple(narrowed, { messages: [] } as never),
     ).toThrow(
       expect.objectContaining({
-        code: "MODEL_UNAVAILABLE",
+        code: "MODEL_DENIED",
         message: expect.stringContaining("excluded by user preference"),
       }),
     );

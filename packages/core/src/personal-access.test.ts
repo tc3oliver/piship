@@ -254,7 +254,7 @@ describe("personal distributions without identity", () => {
     setPreference(preferences, access, undefined, "models.allowed", "acme/x");
     const refused = distribution.activate();
     await expect(refused).rejects.toMatchObject({
-      code: "MODEL_UNAVAILABLE",
+      code: "MODEL_DENIED",
       message: expect.stringContaining(
         "excluded by your models.allowed preference",
       ),

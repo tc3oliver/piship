@@ -291,7 +291,11 @@ export function readInstallReceipt(id: string): InstallReceipt {
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
       `No PiShip installation recorded for ${id}. ${installedSummary()}`,
-      { component: "install", sanitizedDetail: { id, notInstalled: true } },
+      {
+        component: "install",
+        sanitizedDetail: { id, notInstalled: true },
+        userAction: `Check the ID against the installed ones; to install it first, run ${pishipCommand()} install <artifact>`,
+      },
     );
   const fail = (check: string, mismatch?: [string, string]) =>
     new PiShipError(
