@@ -307,10 +307,12 @@ export class McpGovernor {
     } catch (error) {
       await session.close().catch(() => undefined);
       // Name the setting to raise rather than the milliseconds left over.
+      // Every timeout here is derived from the deadline, and a timer can fire
+      // a moment before Date.now() reaches it, so a timeout counts as late.
       const late =
         error instanceof PiShipError &&
         error.retryable &&
-        Date.now() >= deadline;
+        (isTimeout(error) || Date.now() >= deadline);
       throw withStderr(
         late
           ? mcpUnhealthy(
@@ -751,6 +753,7 @@ async function withDeadline<T>(
         reject(
           mcpUnhealthy(`MCP server ${server} did not start in time`, {
             retryable: true,
+            detail: { timeoutMs: 0 },
           }),
         ),
       Math.max(0, deadline - Date.now()),

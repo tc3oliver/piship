@@ -90,6 +90,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 ### Fixed
 
 #### For distribution authors
+- An MCP server that does not answer `initialize` within its `startupTimeout` always reports the startup-timeout reason that names `mcp.servers.<id>.startupTimeout` to raise; under load it sometimes showed `did not answer initialize within <n> ms` (or `did not start in time`) with no next step instead.
 - **Warning:** a declared `sandbox.filesystem.read.deny` replaces the default list, so `deny: [~/secrets]` alone leaves `~/.ssh`, `~/.aws`, and the other default credential paths readable by shell commands. `validate` and `lock` now warn with a required sandbox and name each default the list leaves out; restate them to keep them hidden ([sandbox](docs/sandbox.md#configuration)).
 - `piship doctor <build folder>` marks the state it creates as test state, like `test` and `dev`, so a following `install` adopts it instead of failing with `State already exists ... --use-existing-state`.
 - `piship lock` prints the same rule warnings as `validate`, including a `shell.execute` deny or ask whose `*` stops at `/` and a rule that can never match, which it left out; both name the rule as `policy.<list>[<index>].resource`.
