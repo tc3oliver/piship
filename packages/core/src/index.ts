@@ -43,6 +43,7 @@ export {
   channelTrustFromLock,
   checkPiVersion,
   emptyPackageWarnings,
+  staleInstallScriptWarnings,
   lockManifest,
   lockNeedsNetwork,
   lockOwnedByOther,

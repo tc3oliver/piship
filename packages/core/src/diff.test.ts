@@ -826,6 +826,29 @@ describe("diffLocks", () => {
     expect(report.requiredTests).toContain(DIFF_TESTS.release);
   });
 
+  it("flags reviewed install script changes like release sources", () => {
+    const old = "pi-packages/lens/node_modules/@ast-grep/cli@0.51.0";
+    const added = "pi-packages/lens/node_modules/@ast-grep/cli@0.51.1";
+    const before = clone(base);
+    before.release.installScripts = [old];
+    const after = clone(base);
+    after.release.installScripts = [added];
+    expect(diffLocks(before, after).changes).toEqual([
+      expect.objectContaining({
+        area: "release",
+        kind: "removed",
+        item: `install script ${old}`,
+        risk: "low",
+      }),
+      expect.objectContaining({
+        area: "release",
+        kind: "added",
+        item: `install script ${added}`,
+        risk: "high",
+      }),
+    ]);
+  });
+
   it("flags v1alpha5 bootstrap root changes as changes to who can publish", () => {
     const keyA = `MCowBQYDK2VwAyEA${Buffer.alloc(32, 1).toString("base64")}`;
     const keyB = `MCowBQYDK2VwAyEA${Buffer.alloc(32, 2).toString("base64")}`;

@@ -24,6 +24,7 @@ import {
   certifiedPiWarnings,
   unapprovedLoadWarnings,
   emptyPackageWarnings,
+  staleInstallScriptWarnings,
   checkPiVersion,
   PI_VERSION,
   checkStateMigration,
@@ -1614,6 +1615,7 @@ async function runAuthoring(
       ...unapprovedLoadWarnings(locked),
       ...certifiedPiWarnings(locked),
       ...emptyPackageWarnings(written),
+      ...staleInstallScriptWarnings(written),
     ])
       output.stderr(`Warning: ${warning.path}: ${warning.message}`);
     output.stdout(
