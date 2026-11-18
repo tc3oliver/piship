@@ -1443,8 +1443,27 @@ export function governedTools(
         writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
           if (remote) {
-            // The sandbox creates parents when it writes the file.
-            await gatePath(gov, "filesystem.write", absolute(dir), "write");
+            // The sandbox creates parents when it writes the file. As locally,
+            // an existing directory is not an ancestor that could be replaced;
+            // the file API cannot name the workspace root, which always exists.
+            // Plan mode refuses the write, so it neither seeds nor asks.
+            const target = absolute(dir);
+            let existingDirectory =
+              resolve(target) === resolve(gov.sandbox.profile.workspace);
+            if (!existingDirectory && gov.workflowMode !== "plan") {
+              await gov.remote?.ensureSeeded(gov.toolSignal());
+              const info = await gone(remote.stat(target)).catch(
+                () => undefined,
+              );
+              existingDirectory = info?.type === "directory";
+            }
+            await gatePath(
+              gov,
+              "filesystem.write",
+              target,
+              "write",
+              existingDirectory,
+            );
             return;
           }
           // Keep the parent policy decision even when mkdir needs no change:

@@ -212,6 +212,8 @@ async function open(
   options: {
     subagent?: boolean;
     sandbox?: string[];
+    /** Switch the resolved lock to managed, as governed.test.ts does. */
+    managed?: boolean;
     setup?: (workspace: string) => void;
     /** A second session of the same project: same host files, state and distribution. */
     reuse?: { root: string };
@@ -288,7 +290,13 @@ async function open(
       ].join("\n"),
     );
   }
-  const lock = resolveLock(manifest);
+  const resolved = resolveLock(manifest);
+  const lock = options.managed
+    ? {
+        ...resolved,
+        deployment: { ...resolved.deployment, mode: "managed" as const },
+      }
+    : resolved;
   const stateDir = join(root, "state");
   const session = await GovernanceSession.open({
     lock: lock as Parameters<typeof GovernanceSession.open>[0]["lock"],
@@ -549,6 +557,19 @@ describe.skipIf(!posix || asRoot)("a remote workspace session", () => {
         edits: [{ oldText: "a", newText: "b" }],
       }),
     ).rejects.toThrow();
+  });
+
+  it("in managed mode writes a file in the project root but never into .claude", async () => {
+    const { remote, tool } = await open({ managed: true });
+    await tool("write")({ path: "a.txt", content: "root\n" });
+    expect(readFileSync(join(remote, "a.txt"), "utf8")).toBe("root\n");
+    await expect(
+      tool("write")({ path: ".claude/settings.json", content: "{}\n" }),
+    ).rejects.toThrow(/controls executable project configuration/);
+    await expect(
+      tool("write")({ path: ".claude", content: "x" }),
+    ).rejects.toThrow(/controls executable project configuration/);
+    expect(existsSync(join(remote, ".claude"))).toBe(false);
   });
 
   it("fails the call when the seed fails and seeds again on the next call", async () => {

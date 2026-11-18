@@ -224,6 +224,12 @@ describe.skipIf(!posix)("remote workspace (local fixtures)", () => {
         },
       },
       { name: "bash", arguments: { command: "cat a.txt" } },
+      // Managed: a new file in the project root is written, .claude is not.
+      { name: "write", arguments: { path: "b.txt", content: "new\n" } },
+      {
+        name: "write",
+        arguments: { path: ".claude/settings.json", content: "{}\n" },
+      },
     ];
     services.state.toolResults = [];
     const launched = await dist.run(["--smoke-model"], env);
@@ -232,6 +238,11 @@ describe.skipIf(!posix)("remote workspace (local fixtures)", () => {
     expect(services.state.toolResults.join("\n")).toContain("ONE");
     expect(readFileSync(edited, "utf8")).toBe("one\ntwo\n");
     expect(readFileSync(join(remote, "a.txt"), "utf8")).toBe("ONE\ntwo\n");
+    expect(readFileSync(join(remote, "b.txt"), "utf8")).toBe("new\n");
+    expect(services.state.toolResults.join("\n")).toMatch(
+      /controls executable project configuration/,
+    );
+    expect(existsSync(join(remote, ".claude"))).toBe(false);
     expect(launched.stdout + launched.stderr).toMatch(/sandbox pull/);
 
     const patches = join(dist.state, "sandbox-workspace");
@@ -262,6 +273,7 @@ describe.skipIf(!posix)("remote workspace (local fixtures)", () => {
     const pulled = await dist.run(["sandbox", "pull", "--yes"], env);
     expect(pulled.status, pulled.stderr).toBe(0);
     expect(readFileSync(edited, "utf8")).toBe("ONE\ntwo\n");
+    expect(readFileSync(join(dist.project, "b.txt"), "utf8")).toBe("new\n");
     const log = spawnSync("git", ["log", "--oneline"], {
       cwd: dist.project,
       encoding: "utf8",
