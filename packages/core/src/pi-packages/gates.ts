@@ -128,8 +128,8 @@ export function checkCertifiedPackage(
     throw packageError(
       "INTEGRITY_FAILED",
       declaration.id,
-      "the locked package does not match its certified integrity",
-      "Review the resolved package and update its certified evidence",
+      `the locked package does not match its certified integrity: the evidence records ${evidence.integrity}, the lock resolved tree ${locked.tree}`,
+      `Review the resolved package, then set its certified integrity to ${locked.tree}`,
     );
 }
 

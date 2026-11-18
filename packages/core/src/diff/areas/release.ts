@@ -31,6 +31,14 @@ export function release(out: Collector, b: AnyLock, a: AnyLock): void {
     ["high", "Approves a new package source origin."],
     ["low", "Removes an approved package source."],
   );
+  out.set(
+    "release",
+    "install script",
+    x?.installScripts,
+    y?.installScripts,
+    ["high", "Reviews a new npm lifecycle script; it may run at install."],
+    ["low", "Removes a reviewed install script."],
+  );
   out.scalar(
     "release",
     "vulnerabilities failOn",

@@ -37,7 +37,9 @@ import {
   currentPiPackages,
   declaredPackages,
   lockPiPackages,
+  packageLockFiles,
 } from "./pi-packages/lock.js";
+import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import { resolveResources } from "./resources.js";
 import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
@@ -279,6 +281,41 @@ export function emptyPackageWarnings(lockPath: string): ValidationDiagnostic[] {
     }));
 }
 /**
+ * `release.installScripts` entries that name nothing the lock resolved: no
+ * package root at that commit or tree digest, and no npm lockfile entry at
+ * that path and version. Left over after an upgrade, a removed package, or
+ * a local package edit, they review nothing and can be removed.
+ */
+export function staleInstallScriptWarnings(
+  lockPath: string,
+): ValidationDiagnostic[] {
+  const lock = JSON.parse(readFileSync(lockPath, "utf8")) as DistributionLock;
+  const reviewed = lock.release?.installScripts ?? [];
+  if (!reviewed.length) return [];
+  const present = new Set<string>();
+  for (const item of lock.packages ?? []) {
+    const prefix = `${PI_PACKAGE_VENDOR_DIRECTORY}/${item.id}/`;
+    present.add(`${prefix}package@${item.commit ?? item.tree}`);
+    let npm: { packages?: Record<string, { version?: string }> } = {};
+    try {
+      npm = JSON.parse(
+        readFileSync(
+          packageLockFiles(dirname(lockPath), item.id).lockfile,
+          "utf8",
+        ),
+      );
+    } catch {}
+    for (const [path, entry] of Object.entries(npm.packages ?? {}))
+      if (path) present.add(`${prefix}${path}@${entry.version}`);
+  }
+  return reviewed
+    .filter((entry) => !present.has(entry))
+    .map((entry) => ({
+      path: "release.installScripts",
+      message: `${entry} matches nothing in the locked packages, so it reviews nothing; it can be removed`,
+    }));
+}
+/**
  * Relocks offline when no Pi package can resolve differently: the package
  * declarations, `packageTrust`, the release settings, the deployment mode,
  * the stored npm lockfiles, and local package trees are all as the lock
@@ -406,10 +443,13 @@ export function requireCurrentLock(manifestPath: string): DistributionLock {
     } catch {
       // An unreadable lock is just stale.
     }
+    if (typeof pi === "string" && pi !== PI_VERSION)
+      throw new Error(
+        `Lockfile is stale: ${path} was made for Pi ${pi} and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock, run ${pishipCommand()} lock ${shellArg(manifestPath)}, then ${pishipCommand()} diff previous.lock piship.lock to review the Pi upgrade`,
+      );
+    const local = changedLocalPackages(manifestPath);
     throw new Error(
-      typeof pi === "string" && pi !== PI_VERSION
-        ? `Lockfile is stale: ${path} was made for Pi ${pi} and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock, run ${pishipCommand()} lock ${shellArg(manifestPath)}, then ${pishipCommand()} diff previous.lock piship.lock to review the Pi upgrade`
-        : `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
+      `Lockfile is stale: ${path}${local.length ? `: the files of the local Pi package ${local.join(", ")} changed since it was written` : ""}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
   }
   return JSON.parse(expected) as DistributionLock;

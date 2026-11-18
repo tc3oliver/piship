@@ -117,6 +117,7 @@ interface TrustKeyLock {
 interface ReleaseLock {
   readonly targets?: readonly string[];
   readonly sources?: readonly string[];
+  readonly installScripts?: readonly string[];
   readonly vulnerabilities?: {
     readonly failOn?: string;
     readonly allow?: readonly {

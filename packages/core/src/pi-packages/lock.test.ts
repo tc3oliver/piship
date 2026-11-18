@@ -31,6 +31,7 @@ import {
   lockManifest,
   relockKeepingPackages,
   requireCurrentLock,
+  staleInstallScriptWarnings,
 } from "../lock.js";
 import type { DistributionLock } from "../lock-schema.js";
 import { type CommandRunner, runCommand } from "./command.js";
@@ -237,7 +238,10 @@ describe("Pi packages in the lock", () => {
       "packages/team/skills/triage/SKILL.md":
         "---\nname: triage\ndescription: Triage an issue.\n---\nChanged.\n",
     });
-    expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+    // build names the changed local package, as test and dev do.
+    expect(() => requireCurrentLock(manifest)).toThrow(
+      /stale: .*piship\.lock: the files of the local Pi package team changed/,
+    );
     lockManifest(manifest);
     expect(() => requireCurrentLock(manifest)).not.toThrow();
     const stored = join(
@@ -248,6 +252,7 @@ describe("Pi packages in the lock", () => {
     );
     writeFileSync(stored, `${readFileSync(stored, "utf8")}\n`);
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
+    expect(() => requireCurrentLock(manifest)).not.toThrow(/local Pi package/);
   }, 120_000);
 
   it("names a local package whose files changed, and none for other edits", (context) => {
@@ -476,6 +481,50 @@ describe("Pi packages in the lock", () => {
     expect(() => lockPackages(manifest)).not.toThrow();
   }, 120_000);
 
+  it("lock warns about reviewed install scripts that match nothing it resolved", (context) => {
+    requireNpm11(context);
+    const manifest = lockedDistribution();
+    const lock = readLock(manifest);
+    const team = `pi-packages/team/package@${lock.packages?.[0]?.tree}`;
+    const review = `pi-packages/pi-review/package@${commit}`;
+    const upgraded = "pi-packages/team/node_modules/left-pad@1.0.0";
+    const removed = "pi-packages/gone/node_modules/left-pad@1.0.0";
+    const stored = join(
+      dirname(manifest),
+      PACKAGE_LOCK_DIRECTORY,
+      "team",
+      "package-lock.json",
+    );
+    const npm = JSON.parse(readFileSync(stored, "utf8"));
+    npm.packages["node_modules/left-pad"] = { version: "1.0.1" };
+    writeFileSync(stored, JSON.stringify(npm));
+    writeFileSync(
+      join(dirname(manifest), "piship.lock"),
+      JSON.stringify({
+        ...lock,
+        release: {
+          installScripts: [
+            team,
+            review,
+            "pi-packages/team/node_modules/left-pad@1.0.1",
+            upgraded,
+            removed,
+          ],
+        },
+      }),
+    );
+    expect(
+      staleInstallScriptWarnings(join(dirname(manifest), "piship.lock")).map(
+        (item) => item.message,
+      ),
+    ).toEqual(
+      [upgraded, removed].map(
+        (entry) =>
+          `${entry} matches nothing in the locked packages, so it reviews nothing; it can be removed`,
+      ),
+    );
+  }, 120_000);
+
   it("a certified package's evidence must match the locked tree", (context) => {
     requireNpm11(context);
     const manifest = lockedDistribution();
@@ -499,7 +548,7 @@ describe("Pi packages in the lock", () => {
       );
     writeFileSync(manifest, certified(`sha256-${"0".repeat(64)}`));
     expect(() => lockPackages(manifest)).toThrow(
-      /pi-review: the locked package does not match its certified integrity/,
+      `pi-review: the locked package does not match its certified integrity: the evidence records sha256-${"0".repeat(64)}, the lock resolved tree ${tree}`,
     );
     writeFileSync(manifest, certified(tree as string));
     expect(lockPackages(manifest)[1]?.class).toBe("certified");
