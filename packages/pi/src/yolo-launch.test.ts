@@ -157,9 +157,20 @@ describe("--yolo as a leading option", () => {
     );
   });
 
-  it("is a leading option only", async () => {
-    const error = await failure(PERSONAL, ["--smoke", "--yolo"]);
-    expect(error?.message).toMatch(/^Unknown branded command option/);
+  it("may also follow --smoke or --smoke-model, like the other session options", async () => {
+    for (const args of [
+      ["--smoke", "--yolo"],
+      ["--smoke-model", "--new-session", "--yolo"],
+    ]) {
+      const error = await failure({ mode: "managed" }, args);
+      expect(error?.code).toBe("POLICY_DENIED");
+    }
+    const resumed = await failure(PERSONAL, ["--smoke", "--session", "abc"]);
+    expect(resumed?.message).toMatch(/^--session resumes one session/);
+    const unknown = await failure(PERSONAL, ["--smoke", "--bogus"]);
+    expect(unknown?.message).toMatch(
+      /^Unknown branded command option: --smoke --bogus/,
+    );
   });
 });
 

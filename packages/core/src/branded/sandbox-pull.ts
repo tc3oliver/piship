@@ -4,6 +4,7 @@
 // which neither commits nor runs any hook. With the main slot empty, the oldest
 // patch another session parked for the project is pulled the same way.
 // `--branch` applies it in a new git worktree on a new branch instead, and commits there.
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -245,9 +246,13 @@ export async function sandboxPull(
     return;
   }
   const storedPatch = remoteWorkspacePaths(sourceState, root).patch;
+  // Left when a pull merged this patch with conflicts: it is in the tree, so applying it again only conflicts again.
+  const conflictMarker = `${storedPatch}.conflicted`;
+  const patchHash = createHash("sha256").update(checkpoint.patch).digest("hex");
   const cmd = `${ctx.metadata.app.command} sandbox pull`;
   const remove = () => {
     const source = remoteWorkspacePaths(sourceState, root);
+    rmSync(conflictMarker, { force: true });
     rmSync(source.patch, { force: true });
     rmSync(source.meta, { force: true });
     if (sourceState === ctx.stateDir) return;
@@ -294,6 +299,16 @@ export async function sandboxPull(
     others();
     return;
   }
+  let marked: string | undefined;
+  try {
+    marked = readFileSync(conflictMarker, "utf8").trim();
+  } catch {}
+  if (branch === undefined && marked === patchHash)
+    throw failure(
+      "An earlier sandbox pull already applied this patch with conflicts, so applying it again would only conflict again",
+      `Finish that merge: resolve the conflict markers and git add the files (git status lists them). Then run ${cmd} --discard to drop the stored copy`,
+      "SANDBOX_UNAVAILABLE",
+    );
   if (checkpoint.patch.length === 0) {
     remove();
     ctx.out("The sandbox session made no changes.");
@@ -512,11 +527,21 @@ export async function sandboxPull(
       );
     // Why git could not apply: a stale or edited tree is cured by committing; anything else is shown as git said it.
     const cannot = (stderr: string, what: string) => {
-      const shown = printable(stderr).trim();
+      // git's per-file "Applied patch to 'x' cleanly." is undone when the whole apply fails.
+      const shown = printable(
+        stderr
+          .split("\n")
+          .filter(
+            (line) =>
+              !/^Applied patch to '.*' cleanly\.$/.test(line) &&
+              line !== "Falling back to direct application...",
+          )
+          .join("\n"),
+      ).trim();
       if (branch !== undefined)
         return failure(
           `The sandbox patch does not fit a clean checkout of the branch's starting commit, so no branch or worktree was kept: ${shown}`,
-          `The session started from your working tree, which held edits that are not in that commit. Run ${cmd} without --branch to apply the patch to your working tree, or commit your work and run ${cmdBranch} again. The stored patch is at ${storedPatch}`,
+          `The session started from your working tree, which held edits that are not in that commit, and --branch always starts from that commit. Run ${cmd} without --branch to apply the patch to your working tree; to keep it on its own branch, first switch to a new one there (git switch -c <name>). The stored patch is at ${storedPatch}`,
           "SANDBOX_UNAVAILABLE",
         );
       const edited = [...stderr.matchAll(/error: (.+?): does not match index/g)]
@@ -608,12 +633,16 @@ export async function sandboxPull(
               .toString("utf8")
               .split("\0")
               .filter(Boolean);
-      if (conflicted.length > 0)
+      if (conflicted.length > 0) {
+        try {
+          writeFileSync(conflictMarker, `${patchHash}\n`, { mode: 0o600 });
+        } catch {}
         throw failure(
           `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file(s): ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
-          `Resolve the conflict markers and git add those files. Do not run pull again: the patch is already applied. The stored copy is kept; run ${cmd} --discard when you are done`,
+          `Resolve the conflict markers and git add those files. The patch is already applied, so ${cmd} will not apply it again; the stored copy is kept until you run ${cmd} --discard when you are done`,
           "SANDBOX_UNAVAILABLE",
         );
+      }
       // Not a conflict: git may have written some files before failing. Say what is true.
       const untouched = matchesSnapshot(target, snapshot);
       const restored = untouched || restoreSnapshot(target, snapshot);

@@ -126,6 +126,15 @@ const BRANDED_COMMANDS = [
   "capabilities",
 ];
 
+/** The leading session options, which may also follow `--smoke` or `--smoke-model`. */
+const SESSION_OPTIONS = new Set([
+  "--model",
+  "--new-session",
+  "--task-grant",
+  "--yolo",
+  "--session",
+  "--session-dir",
+]);
 /** `help` after a command means its `--help`. */
 const helpArgs = (rest: readonly string[]): readonly string[] =>
   rest.length === 1 && rest[0] === "help" ? ["--help"] : rest;
@@ -236,7 +245,13 @@ export async function launchPiDistribution(
         );
       resume = { id: resume?.id ?? "", dir };
       args = args.slice(2);
-    } else break;
+    } else if (
+      (args[0] === "--smoke" || args[0] === "--smoke-model") &&
+      SESSION_OPTIONS.has(args[1] ?? "")
+    )
+      // `--smoke-model --new-session` means the same as the other order.
+      args = [...args.slice(1), args[0]];
+    else break;
   }
   if (resume && (!resume.id || newSession || args.length > 0))
     throw new PiShipError(

@@ -295,7 +295,9 @@ describe("sandbox pull --branch", () => {
     );
     expect(failed?.message).toMatch(/does not fit a clean checkout/);
     expect(failed?.userAction).toMatch(/demo sandbox pull without --branch/);
-    expect(failed?.userAction).toMatch(/demo sandbox pull --branch again/);
+    // Committing changes nothing: --branch always starts from the session's commit.
+    expect(failed?.userAction).not.toMatch(/--branch again/);
+    expect(failed?.userAction).toMatch(/git switch -c <name>/);
     expect(existsSync(wt())).toBe(false);
     expect(worktrees()).toHaveLength(1);
     expect(git(repo, "branch", "--list", "sandbox/*").toString()).toBe("");
