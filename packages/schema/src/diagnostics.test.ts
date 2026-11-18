@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -228,6 +228,54 @@ extra: true
       "updates: appears twice in the same mapping (again at line 13); merge the two updates: blocks into one",
     );
     expect(error.errors[0]?.position?.line).toBe(13);
+  });
+
+  it("names the over-indented line once, in plain words", () => {
+    const error = failure(manifest(valid.replace("  name:", "    name:")));
+    expect(error.errors).toHaveLength(1);
+    expect(error.message).toContain(
+      "A line after line 3 is indented further than line 3",
+    );
+    expect(error.errors[0]?.position?.line).toBe(3);
+  });
+
+  it("reports only the tab when a tab indents a line", () => {
+    const error = failure(manifest(valid.replace("  name:", "\tname:")));
+    expect(error.errors).toHaveLength(1);
+    expect(error.message).toContain("Tabs are not allowed as indentation");
+  });
+
+  it("does not call a misspelled section missing", () => {
+    const error = failure(manifest(valid.replace("deployment:", "deploymnt:")));
+    expect(error.message).toBe(
+      "invalid field at manifest.deploymnt (line 9, column 1): Unknown field deploymnt; did you mean deployment?",
+    );
+  });
+
+  it("says merge keys are not supported, at the << key", () => {
+    const error = failure(
+      manifest(
+        valid
+          .replace("app:", "base: &app\n  id: mypi\napp:")
+          .replace("  id: mypi\n  name", "  <<: *app\n  name"),
+      ),
+    );
+    expect(error.message).toContain(
+      "app.<< (line 5, column 3): Unknown field <<; YAML merge keys are not supported",
+    );
+  });
+
+  it("says a YAML 1.1 yes is text and to write true", () => {
+    const example = readFileSync(
+      new URL("../../../examples/personal/piship.yaml", import.meta.url),
+      "utf8",
+    );
+    const error = failure(
+      manifest(example.replace("required: false", "required: yes")),
+    );
+    expect(error.message).toMatch(
+      /^invalid field at sandbox\.required \(line \d+, column \d+\): Expected true or false; YAML 1\.2 reads yes as text, so write true$/,
+    );
   });
 
   it("locates the problems of a manifest being migrated", () => {
