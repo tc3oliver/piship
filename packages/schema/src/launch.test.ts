@@ -997,3 +997,22 @@ describe("task grant host settings nothing acts on", () => {
     expect(inertTaskGrantHosts(manifest(undefined))).toEqual([]);
   });
 });
+
+describe("template placeholder model", () => {
+  it("warns while example/coder is still allowed, and not for a real model", () => {
+    const placeholder = managed({
+      models: {
+        default: "example/coder",
+        allowed: ["example/coder"],
+        catalog: { "example/coder": catalog["acme/coder"] },
+      },
+    });
+    expect(warnings(placeholder)).toEqual([
+      expect.objectContaining({
+        path: "models",
+        message: expect.stringContaining("example/coder"),
+      }),
+    ]);
+    expect(warnings(managed())).toEqual([]);
+  });
+});

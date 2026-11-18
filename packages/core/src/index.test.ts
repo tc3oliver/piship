@@ -1,7 +1,7 @@
 import {
   existsSync,
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -9,14 +9,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import {
   LATEST_SCHEMA,
   type Manifest,
   narrowRuleWarnings,
   readManifest,
 } from "@piship/schema";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  certifiedPiWarnings,
   checkGovernance,
   checkPiVersion,
   distributionStateDirectory,
@@ -25,17 +26,17 @@ import {
   lockManifest,
   lockNeedsNetwork,
   lockStatus,
-  pishipCommand,
-  shellArg,
-  suggestDistributionId,
-  requireCurrentLock,
-  unapprovedLoadWarnings,
-  certifiedPiWarnings,
   PI_VERSION,
   piSignedIn,
+  pishipCommand,
+  requireCurrentLock,
   resolveLock,
   runtimeStateDirectory,
+  shellArg,
+  suggestDistributionId,
+  unapprovedLoadWarnings,
 } from "./index.js";
+
 const roots: string[] = [];
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "piship-core-"));
@@ -87,7 +88,7 @@ describe("distribution core", () => {
     lock.runtime.version = "1.1.0";
     writeFileSync(lockPath, JSON.stringify(lock));
     expect(() => requireCurrentLock(path)).toThrow(
-      `${lockPath} was made for Pi 1.1.0 and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock`,
+      `${lockPath} was made for Pi 1.1.0 and this PiShip uses Pi ${PI_VERSION}. Copy it to ${join(dir, "previous.lock")}`,
     );
     // Any other drift keeps the plain message.
     lockManifest(path);

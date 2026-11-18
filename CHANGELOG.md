@@ -91,6 +91,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 
 ### Fixed
 
+- `piship validate` warns while a manifest still uses the managed template's placeholder model `example/coder`; `init` on a non-empty directory says to choose a new one or remove a leftover; the stale-lock message for a Pi upgrade names the manifest directory in its `previous.lock` and `diff` steps.
 - `<command> uninstall --purge --yes` deletes a stored local-secret API key instead of refusing as if a broker held it; a broker-issued credential is still refused until logout.
 - `piship uninstall <id>` prints the same removed/kept summary as `<command> uninstall`, including Pi's own sign-in.
 - Without update keys, `doctor` shows one `updates` row (rebuild and reinstall) with no source, key, or failure rows, and `validate` and `install` no longer say update needs the source variable.

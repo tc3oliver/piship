@@ -175,7 +175,9 @@ export function initDistribution(
     );
   const root = resolve(directory);
   if (existsSync(root) && readdirSync(root).length)
-    throw new Error(`Directory is not empty: ${root}`);
+    throw new Error(
+      `Directory is not empty: ${root}. Choose a new directory, or remove this one if it is left over from an earlier attempt`,
+    );
   const id = options.id ?? basename(root).toLowerCase();
   if (!isDistributionId(id)) {
     const suggestion = suggestDistributionId(id);

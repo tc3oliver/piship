@@ -1048,6 +1048,24 @@ export function missingDefaultModel(
     : [];
 }
 
+/** The model ID `piship init --managed` writes as a stand-in. */
+const TEMPLATE_MODEL = "example/coder";
+
+/** The managed template's placeholder model is still allowed or the default. */
+export function placeholderModel(manifest: Manifest): ValidationDiagnostic[] {
+  const models = manifest.access?.models;
+  return models &&
+    (models.default === TEMPLATE_MODEL ||
+      models.allowed.includes(TEMPLATE_MODEL))
+    ? [
+        {
+          path: "models",
+          message: `${TEMPLATE_MODEL} is the template's placeholder; replace it in models.default, models.allowed and models.catalog with the model IDs your gateway serves, or the first request fails`,
+        },
+      ]
+    : [];
+}
+
 /**
  * An optional HTTP audit sink in a managed distribution drops what it cannot
  * deliver, and nothing says so until `doctor`.
@@ -1128,6 +1146,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
   return [
     ...unusedVariables(manifest),
     ...missingDefaultModel(manifest),
+    ...placeholderModel(manifest),
     ...unknownToolDenials(manifest),
     ...unknownMcpServerRules(manifest),
     ...unmatchablePathRules(manifest),
