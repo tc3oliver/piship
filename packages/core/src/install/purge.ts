@@ -112,6 +112,32 @@ export function signedInClasses(state: string): string[] {
 }
 
 /**
+ * Whether `state` holds Pi's own sign-in: an `agent/auth.json` with at least
+ * one stored API key or OAuth credential. Pi may leave the file as `{}`.
+ */
+export function piSignedIn(state: string): boolean {
+  try {
+    const data = JSON.parse(
+      readFileSync(join(state, "agent", "auth.json"), "utf8"),
+    ) as unknown;
+    return (
+      typeof data === "object" &&
+      data !== null &&
+      Object.values(data).some(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          ["api_key", "oauth"].includes(
+            (item as { type?: unknown }).type as string,
+          ),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Refuse, before anything is deleted, to purge a distribution that is still
  * signed in: purge revokes nothing, so its credentials would stay live at
  * the broker. `logout` is the way out; `withoutLogout` purges anyway and

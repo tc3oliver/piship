@@ -2373,6 +2373,16 @@ describe("what to do after an install", () => {
       );
   });
 
+  it("does not ask a Pi-native state that keeps Pi's own sign-in to /login again", () => {
+    expect(
+      installNext(receipt({ deployment: { mode: "personal" } }), [
+        "Pi's own sign-in",
+      ]),
+    ).toBe(
+      "Next: run acme; it is already signed in. acme --help lists its commands.",
+    );
+  });
+
   it("tells a personal local-secret distribution to log in first", () => {
     expect(
       installNext(

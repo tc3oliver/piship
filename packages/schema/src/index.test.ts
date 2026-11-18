@@ -31,6 +31,9 @@ describe("alpha manifest", () => {
       schema: PISHIP_SCHEMA_VERSION,
     });
   });
+  it("reads an empty runtime: left by removing runtime.pi as absent", () => {
+    expect(parseManifest({ ...valid, runtime: null }).runtime).toEqual({});
+  });
   it("allows ordinary words that resemble credential names", () => {
     expect(
       parseManifest({ ...valid, app: { ...valid.app, name: "Secret Agent" } })

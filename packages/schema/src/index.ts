@@ -513,7 +513,8 @@ export function parseManifest(
     ),
   );
   const runtime = attempt(() =>
-    root.runtime === undefined
+    // A bare `runtime:` (YAML null) is left behind by removing its only line.
+    root.runtime === undefined || root.runtime === null
       ? {}
       : record(
           root.runtime,

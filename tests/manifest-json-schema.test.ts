@@ -15,7 +15,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 type Node = {
-  type?: string;
+  type?: string | string[];
   additionalProperties?: boolean;
   properties?: Record<string, Node>;
   required?: string[];
@@ -133,7 +133,7 @@ describe("schema/piship-v1.schema.json", () => {
     throw new Error(`No fixture reports the allowed fields of ${field}`);
   }
   const sections = Object.entries(schema.properties ?? {})
-    .filter(([, node]) => node.type === "object")
+    .filter(([, node]) => [node.type].flat().includes("object"))
     .map(([name]) => name);
 
   it.each(["", ...sections])("allows the validator's keys at %s", (section) => {

@@ -9,6 +9,7 @@ import {
   unenforcedRules,
 } from "@piship/policy";
 import type { Manifest, ValidationDiagnostic } from "@piship/schema";
+import { PI_VERSION } from "./compatibility.js";
 import { withSessionExportRules } from "./data/session-export.js";
 import { checkPackageTrust } from "./pi-packages/trust.js";
 import type { LockedResource } from "./lock-schema.js";
@@ -181,6 +182,49 @@ export function unapprovedLoadWarnings(
           );
     }
   return warnings;
+}
+
+/**
+ * Certified evidence whose `pi` list leaves out the Pi this PiShip pins: the
+ * runtime skips that resource or provider without failing the launch, so an
+ * upgrade would otherwise drop it with only a doctor line to show for it.
+ */
+export function certifiedPiWarnings(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const governance = manifest.governance;
+  if (!governance) return [];
+  const evidence = [
+    ...governance.resources.declared.map(
+      (item) =>
+        [
+          `resources.${item.kind}.certified`,
+          item.path,
+          item.certified,
+        ] as const,
+    ),
+    ...(governance.resources.packages ?? []).map(
+      (item) => ["resources.packages", item.id, item.certified] as const,
+    ),
+    ...governance.capabilities.map(
+      (item) =>
+        [
+          `capabilities.${item.name}.provider`,
+          item.provider?.id,
+          item.provider?.certified,
+        ] as const,
+    ),
+  ];
+  return evidence.flatMap(([path, what, certified]) =>
+    certified && !certified.pi.includes(PI_VERSION)
+      ? [
+          {
+            path,
+            message: `${what} is certified for Pi ${certified.pi.join(", ")}, not Pi ${PI_VERSION} that this PiShip uses, so it is not loaded; review it on Pi ${PI_VERSION} and add "${PI_VERSION}" to its certified pi list`,
+          },
+        ]
+      : [],
+  );
 }
 
 /**

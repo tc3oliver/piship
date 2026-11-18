@@ -398,9 +398,19 @@ export function requireCurrentLock(manifestPath: string): DistributionLock {
     throw new Error(
       `Lockfile missing: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
-  if (readFileSync(path, "utf8") !== expected)
+  const recorded = readFileSync(path, "utf8");
+  if (recorded !== expected) {
+    let pi: unknown;
+    try {
+      pi = (JSON.parse(recorded) as Partial<DistributionLock>).runtime?.version;
+    } catch {
+      // An unreadable lock is just stale.
+    }
     throw new Error(
-      `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
+      typeof pi === "string" && pi !== PI_VERSION
+        ? `Lockfile is stale: ${path} was made for Pi ${pi} and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock, run ${pishipCommand()} lock ${shellArg(manifestPath)}, then ${pishipCommand()} diff previous.lock piship.lock to review the Pi upgrade`
+        : `Lockfile is stale: ${path}. Run ${pishipCommand()} lock ${shellArg(manifestPath)}`,
     );
+  }
   return JSON.parse(expected) as DistributionLock;
 }

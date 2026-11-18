@@ -19,6 +19,7 @@ export {
   releaseLogout,
   removeEmptyPiShipDirectories,
   signedInClasses,
+  piSignedIn,
   type PurgeResult,
 } from "./purge.js";
 export {

@@ -21,6 +21,7 @@ import {
   checkToolExposure,
   checkGovernance,
   mcpModuleWarnings,
+  certifiedPiWarnings,
   unapprovedLoadWarnings,
   emptyPackageWarnings,
   checkPiVersion,
@@ -58,6 +59,7 @@ import {
   purgeManager,
   shellArg,
   signedInClasses,
+  piSignedIn,
   markLocalBuild,
   nextTrustRoot,
   payloadApp,
@@ -1212,7 +1214,9 @@ export function installNext(
     lock &&
     (lock.access?.credential.provider === "pi-native" || !lock.access)
   )
-    return `Next: run ${command}, then sign in inside Pi with /login. ${command} --help lists its commands.`;
+    return signedIn.includes("Pi's own sign-in")
+      ? `Next: run ${command}; it is already signed in. ${command} --help lists its commands.`
+      : `Next: run ${command}, then sign in inside Pi with /login. ${command} --help lists its commands.`;
   if (lock?.access?.credential.provider === "local-secret")
     return signedIn.includes("a runtime credential")
       ? `Next: run ${command}; its API key is already stored. ${command} --help lists its commands.`
@@ -1508,6 +1512,7 @@ async function runAuthoring(
     for (const warning of [
       ...launchWarnings(manifest),
       ...unapprovedLoadWarnings(manifest),
+      ...certifiedPiWarnings(manifest),
       ...checkSkills(manifest, target),
       ...mcpModuleWarnings(manifest, target),
     ])
@@ -1600,6 +1605,7 @@ async function runAuthoring(
     for (const warning of [
       ...launchWarnings(locked),
       ...unapprovedLoadWarnings(locked),
+      ...certifiedPiWarnings(locked),
       ...emptyPackageWarnings(written),
     ])
       output.stderr(`Warning: ${warning.path}: ${warning.message}`);
@@ -1953,14 +1959,16 @@ async function runLifecycle(
         ...(options["--runtime"] ? { runtime: options["--runtime"] } : {}),
       },
     );
+    const state = runtimeStateDirectory({ value: receipt.app.id });
     output.stdout(
       [
         `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
         pathHint(dirname(receipt.commandPath)),
-        installNext(
-          receipt,
-          signedInClasses(runtimeStateDirectory({ value: receipt.app.id })),
-        ),
+        installNext(receipt, [
+          ...signedInClasses(state),
+          // Pi's own sign-in (an API key or /login) kept in an adopted state.
+          ...(piSignedIn(state) ? ["Pi's own sign-in"] : []),
+        ]),
       ]
         .filter(Boolean)
         .join("\n"),
@@ -1980,6 +1988,8 @@ async function runLifecycle(
     // Where the runtime came from is no part of the release, so it goes to
     // stderr and to the build-info file beside the archive.
     output.stderr(runtimeCacheLine(built.runtimeCache));
+    for (const warning of certifiedPiWarnings(readManifest(first)))
+      output.stderr(`Warning: ${warning.path}: ${warning.message}`);
   } else if (command === "runtime-release") {
     const built = await buildRuntimeRelease({
       ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
