@@ -145,7 +145,7 @@ describe.runIf(HOST_EVIDENCED)("doctor install checks", () => {
         expect(
           updateGroup().filter((line) => line.startsWith("! state")),
         ).toEqual([
-          `! state ${stateDir()} is not writable (EACCES), so ${ID} cannot start a session. Give your user write access to that directory, then run doctor again`,
+          `! state ${stateDir()} is not writable (EACCES), so ${ID} cannot start a session. Give your user write access to that directory, then run ${ID} doctor again`,
         ]);
       } finally {
         chmodSync(stateDir(), 0o700);

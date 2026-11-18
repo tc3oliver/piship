@@ -186,7 +186,7 @@ describe.runIf(HOST_EVIDENCED)("branded update and rollback messages", () => {
     const stop = await session("1.0.0");
     try {
       expect(await run(runUpdate)).toContain(
-        "Updated AcmePi 1.0.0 -> 1.1.0 (stable, signed by test-release). 1.0.0 is kept for acmepi rollback; sessions and settings were preserved.\n1 running AcmePi session(s) still use 1.0.0; restart them to use 1.1.0.",
+        "Updated AcmePi 1.0.0 -> 1.1.0 (stable, signed by test-release). 1.0.0 is kept for acmepi rollback; sessions and settings were preserved.\n1 running AcmePi session still use 1.0.0; restart them to use 1.1.0.",
       );
       // No session runs 1.1.0: the rollback says nothing about one.
       expect(await run(runRollback)).not.toContain("running");

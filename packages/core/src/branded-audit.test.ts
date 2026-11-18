@@ -372,6 +372,23 @@ describe("branded command audit with a required sink", () => {
     expect(errors).toEqual([]);
   });
 
+  it("tells the user what to do when the required audit log cannot be opened, by mode", async () => {
+    const unresolved = sinks("https://${PISHIP_TEST_UNDECLARED}/audit", true);
+    const managed = context(unresolved).ctx;
+    for (const [mode, userAction] of [
+      [
+        "managed",
+        "Try again once the audit service is reachable; if it keeps failing, tell your administrator",
+      ],
+      ["personal", "Check audit.sinks in piship.yaml, then try again"],
+    ] as const)
+      await expect(
+        auditLifecycle({ ...managed, mode }, "runtime.update", "allowed", {
+          from: "1.0.0",
+        }),
+      ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE", userAction });
+  });
+
   it("fails the command when the required sink's spool cannot keep the events", async () => {
     await collector.close();
     const { ctx, errors } = context(sinks(collector.url, true));

@@ -223,7 +223,7 @@ describe("--yolo where the distribution does not allow it", () => {
     expect(error).toBeInstanceOf(PiShipError);
     expect(error?.code).toBe("POLICY_DENIED");
     expect(error?.message).toContain(
-      "this distribution does not allow auto-approval (policy.userAuto is off)",
+      "AcmeCode does not allow auto-approval (policy.userAuto is off)",
     );
     expect(error?.userAction).toContain("acmecode");
     expect(stateCreated()).toBe(false);

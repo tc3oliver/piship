@@ -205,7 +205,7 @@ export async function sandboxPull(
   if (unknown || (discard && (yes || showDiff || branch !== undefined)))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `${unknown ? "That option is not recognised. " : "--discard cannot be combined with other options. "}${usage(command)}`,
+      `${unknown ? "That option is not recognized. " : "--discard cannot be combined with other options. "}${usage(command)}`,
       {
         component: "sandbox",
         userAction: `Run ${command} sandbox pull --help, or ${command} sandbox pull --discard alone`,
@@ -289,7 +289,7 @@ export async function sandboxPull(
   const interactiveOnly = policy?.confirm === "required";
   if (yes && interactiveOnly)
     throw failure(
-      "This distribution's policy requires an interactive review of sandbox changes, so --yes is not accepted",
+      `${ctx.metadata.app.name}'s policy requires an interactive review of sandbox changes, so --yes is not accepted`,
       `Run ${cmd} in a terminal and answer the prompt`,
       "POLICY_DENIED",
     );
@@ -322,10 +322,11 @@ export async function sandboxPull(
   );
   if (!result.ok)
     throw failure(
-      `The sandbox patch is refused as a whole and nothing was applied${result.protectedOnly ? " (this distribution's policy refuses a patch that touches protected files)" : ""}: ${result.refused.slice(0, 5).map(printable).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,
+      `The sandbox patch is refused as a whole and nothing was applied${result.protectedOnly ? ` (${ctx.metadata.app.name}'s policy refuses a patch that touches protected files)` : ""}: ${result.refused.slice(0, 5).map(printable).join("; ")}${result.refused.length > 5 ? `; and ${result.refused.length - 5} more` : ""}`,
       `The patch is stored at ${storedPatch} for you to inspect or apply by hand. Run ${cmd} --discard to drop it`,
       "POLICY_DENIED",
     );
+  const fileCount = `${result.files.length} file${result.files.length === 1 ? "" : "s"}`;
   // A path on this machine the patch cannot be written over, named with the next step.
   const refusePath = (problem: NonNullable<ReturnType<typeof pathProblem>>) => {
     const name = printable(problem.path);
@@ -562,7 +563,7 @@ export async function sandboxPull(
     const plainCheck = await apply(["--check"]);
     let threeWay = false;
     if (plainCheck.code === 0)
-      ctx.out(`${result.files.length} file(s) apply cleanly to ${where}.`);
+      ctx.out(`${fileCount} apply cleanly to ${where}.`);
     else {
       const merge = await apply(["--3way", "--check"]);
       const conflicts = [
@@ -591,8 +592,8 @@ export async function sandboxPull(
       if (
         !(await confirm(
           branch === undefined
-            ? `Apply ${result.files.length} file(s) to ${root}? [y/N] `
-            : `Commit ${result.files.length} file(s) on branch ${created?.name} in ${target}? [y/N] `,
+            ? `Apply ${fileCount} to ${root}? [y/N] `
+            : `Commit ${fileCount} on branch ${created?.name} in ${target}? [y/N] `,
         ))
       ) {
         await abandon();
@@ -638,7 +639,7 @@ export async function sandboxPull(
           writeFileSync(conflictMarker, `${patchHash}\n`, { mode: 0o600 });
         } catch {}
         throw failure(
-          `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file(s): ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
+          `The patch did not fit your working tree, so git merged it (3-way) and it conflicts in ${conflicted.length} file${conflicted.length === 1 ? "" : "s"}: ${conflicted.slice(0, 5).map(printable).join(", ")}${conflicted.length > 5 ? ", ..." : ""}. Conflict markers are in the working tree, and the patch's other files are applied and staged.`,
           `Resolve the conflict markers and git add those files. The patch is already applied, so ${cmd} will not apply it again; the stored copy is kept until you run ${cmd} --discard when you are done`,
           "SANDBOX_UNAVAILABLE",
         );
@@ -731,7 +732,7 @@ export async function sandboxPull(
     if (created) {
       const dir = shellArg(target);
       ctx.out(
-        `Applied ${result.files.length} file(s) in ${target} on branch ${created.name}${threeWay ? " with a 3-way merge" : ""}. ${
+        `Applied ${fileCount} in ${target} on branch ${created.name}${threeWay ? " with a 3-way merge" : ""}. ${
           committed
             ? `Committed as ${committed}; your own checkout was not touched.`
             : `They are staged but not committed (${notCommitted}). Fix that (for example set user.name and user.email), then run git -C ${dir} commit; your own checkout was not touched.`
@@ -743,8 +744,8 @@ export async function sandboxPull(
     } else
       ctx.out(
         threeWay
-          ? `Applied ${result.files.length} file(s) to ${root} with a 3-way merge; git staged them. Nothing was committed.`
-          : `Applied ${result.files.length} file(s) to ${root}. They are changed in the working tree only: nothing was staged or committed.`,
+          ? `Applied ${fileCount} to ${root} with a 3-way merge; git staged them. Nothing was committed.`
+          : `Applied ${fileCount} to ${root}. They are changed in the working tree only: nothing was staged or committed.`,
       );
     others();
   } finally {

@@ -192,7 +192,7 @@ function reportRunningSessions(
   }
   if (running)
     ctx.out(
-      `${running} running ${ctx.metadata.app.name} session(s) still use ${from}; restart them to use ${to}.`,
+      `${running} running ${ctx.metadata.app.name} session${running === 1 ? "" : "s"} still use ${from}; restart them to use ${to}.`,
     );
 }
 

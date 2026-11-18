@@ -67,13 +67,13 @@ export async function runModels(
     }
     if (ids.length === 0) {
       ctx.out(
-        "Pi-native inference: no model has a provider set up yet. Start the command and use /login to sign in to a provider, then /model to choose a model.",
+        `Pi-native inference: no model has a provider set up yet. Start ${ctx.metadata.app.command} and use /login to sign in to a provider, then /model to choose a model.`,
       );
       return;
     }
     ctx.out(
       allowed.length > 0
-        ? "Models this distribution allows (Pi-native inference; sign in with /login inside the session, choose with /model):"
+        ? `Models ${ctx.metadata.app.name} allows (Pi-native inference; sign in with /login inside the session, choose with /model):`
         : "Models Pi can use here (Pi-native inference; choose with /model inside the session):",
     );
     for (const id of ids) {

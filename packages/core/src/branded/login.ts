@@ -195,14 +195,13 @@ export async function untilInterrupted<T>(
 }
 
 /** No secret was entered: the prompt was cancelled or stdin ended. */
-function noSecretEntered(): PiShipError {
+function noSecretEntered(command?: string): PiShipError {
   return new PiShipError(
     "CREDENTIAL_REQUIRED",
     "No secret was entered: the prompt was cancelled or input ended",
     {
       component: "credential",
-      userAction:
-        "Run the command in a terminal and type the secret at the prompt, or pipe it on the first line of stdin",
+      userAction: `Run ${command ?? "the command"} in a terminal and type the secret at the prompt, or pipe it on the first line of stdin`,
     },
   );
 }
@@ -214,7 +213,10 @@ function noSecretEntered(): PiShipError {
  * of stdin before a line rejects, so the caller's cleanup (a lock it holds)
  * still runs.
  */
-export async function readSecretInput(prompt: string): Promise<string> {
+export async function readSecretInput(
+  prompt: string,
+  command?: string,
+): Promise<string> {
   process.stderr.write(`${prompt}: `);
   if (!process.stdin.isTTY) {
     // The first line is enough: a pipe left open after it must not hang.
@@ -224,7 +226,7 @@ export async function readSecretInput(prompt: string): Promise<string> {
       if (/[\r\n]/.test(data)) break;
     }
     process.stderr.write("\n");
-    if (!data) throw noSecretEntered();
+    if (!data) throw noSecretEntered(command);
     return data.split(/\r?\n/)[0] ?? "";
   }
   const rl = createInterface({
@@ -236,8 +238,8 @@ export async function readSecretInput(prompt: string): Promise<string> {
     // Closing the interface (Ctrl-D, end of input) never calls the question
     // callback, and a SIGINT listener keeps Ctrl-C from closing it silently.
     return await new Promise<string>((resolveAnswer, reject) => {
-      rl.once("close", () => reject(noSecretEntered()));
-      rl.once("SIGINT", () => reject(noSecretEntered()));
+      rl.once("close", () => reject(noSecretEntered(command)));
+      rl.once("SIGINT", () => reject(noSecretEntered(command)));
       rl.question("", resolveAnswer);
     });
   } finally {
@@ -274,7 +276,7 @@ async function interactiveLogin(
         );
         openBrowser(url);
       },
-      readSecret: readSecretInput,
+      readSecret: (prompt) => readSecretInput(prompt, ctx.metadata.app.command),
       ...(paste ? { readRedirectUrl: readRedirectLine } : {}),
       signal,
     }),
@@ -334,7 +336,7 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
   )
     throw new PiShipError(
       "POLICY_DENIED",
-      "This distribution delegates authentication to Pi; start it and use Pi's /login inside the session",
+      `${ctx.metadata.app.name} delegates authentication to Pi; start ${ctx.metadata.app.command} and use Pi's /login inside the session`,
     );
   assertTlsVerificationEnabled();
   const events: AccessEvent[] = [];
@@ -542,7 +544,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   if (!manifest || manifest.credential.provider === "pi-native")
     throw new PiShipError(
       "POLICY_DENIED",
-      "This distribution delegates authentication to Pi; use Pi's /logout inside the session",
+      `${ctx.metadata.app.name} delegates authentication to Pi; use Pi's /logout inside the session`,
     );
   assertTlsVerificationEnabled();
   const events: AccessEvent[] = [];

@@ -26,7 +26,10 @@ function context(access?: object, models?: object) {
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(models));
   const out: string[] = [];
   const ctx = {
-    metadata: { app: { id: "acmepi", command: "acmepi" }, access },
+    metadata: {
+      app: { id: "acmepi", name: "AcmePi", command: "acmepi" },
+      access,
+    },
     agentDir,
     out: (message: string) => out.push(message),
   } as unknown as LaunchContext;
@@ -68,7 +71,7 @@ describe("models for a Pi-native distribution", () => {
       PROVIDERS,
     );
     await runModels(ctx);
-    expect(out[0]).toMatch(/Models this distribution allows/);
+    expect(out[0]).toMatch(/Models AcmePi allows/);
     expect(out[1]).toMatch(/^\* acme\/coder +Acme Coder +ready$/);
     expect(out[2]).toMatch(/^ {2}other\/model +needs \/login$/);
   });

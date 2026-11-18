@@ -121,7 +121,7 @@ export async function runUninstall(
   const usage = `Usage: ${app.command} uninstall ${UNINSTALL_OPTIONS}`;
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     ctx.out(
-      `${usage}\n\nUninstall ${app.name} for this user. Sessions and settings stay unless --purge --yes also deletes them; a distribution still signed in is refused until ${app.command} logout, or --without-logout leaves the sign-in.`,
+      `${usage}\n\nUninstall ${app.name} for this user. Sessions and settings stay unless --purge --yes also deletes them; while ${app.name} is still signed in, it is refused until ${app.command} logout, or --without-logout leaves the sign-in.`,
     );
     return;
   }
@@ -140,7 +140,7 @@ export async function runUninstall(
   if (purge && !flags.has("--yes"))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `${app.command} uninstall --purge also deletes this distribution's data in ${state}`,
+      `${app.command} uninstall --purge also deletes ${app.name}'s data in ${state}`,
       {
         userAction: `Repeat it with --yes: ${app.command} uninstall --purge --yes`,
         usage: true,

@@ -11,7 +11,7 @@ const lock = (
   policy?: { userAuto?: "allowed" | "off" },
 ) =>
   ({
-    app: { command: "acmecode" },
+    app: { name: "AcmeCode", command: "acmecode" },
     deployment: { mode },
     ...(policy ? { governance: { manifest: { policy } } } : {}),
   }) as unknown as DistributionLock;
@@ -31,7 +31,7 @@ describe("yoloRefusal", () => {
       expect(refusal).toMatchObject({
         code: "POLICY_DENIED",
         message:
-          "--yolo is not allowed: this distribution does not allow auto-approval (policy.userAuto is off)",
+          "--yolo is not allowed: AcmeCode does not allow auto-approval (policy.userAuto is off)",
       });
       expect(refusal?.userAction).toContain("acmecode");
     }

@@ -4735,9 +4735,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       const { receipt, ctx } = await installed();
       const win32 = { platform: "win32" as const };
       const confirm = await rejection(runUninstall(ctx, ["--purge"], win32));
-      expect(confirm.message).toContain(
-        "also deletes this distribution's data",
-      );
+      expect(confirm.message).toContain("also deletes AcmePi's data");
       write(
         join(stateDir(), "credentials-metadata", "inference.json"),
         JSON.stringify({
