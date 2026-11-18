@@ -1,0 +1,247 @@
+schema: piship/v1
+
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+  version: 1.0.0
+  banner: AcmeCode managed demo distribution (fictional)
+
+runtime:
+  pi: "1.1.0"
+
+deployment:
+  mode: managed
+
+# Non-secret endpoints resolved from the launch environment at runtime.
+# The lock keeps these templates, never the resolved values.
+variables:
+  - ACMECODE_OIDC_ISSUER
+  - ACMECODE_OIDC_CLIENT_ID
+  - ACMECODE_CREDENTIAL_BROKER_URL
+  - ACMECODE_CREDENTIAL_REVOKE_URL
+  - ACMECODE_LLM_GATEWAY_URL
+  - ACMECODE_UPDATE_SOURCE
+
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${ACMECODE_OIDC_ISSUER}
+    clientId: ${ACMECODE_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    scopes: [openid, profile, email]
+    redirectUri: http://127.0.0.1:8765/callback
+
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage:
+    provider: system
+  refresh:
+    beforeExpiry: 5m
+
+inference:
+  provider: openai-compatible
+  baseUrl: ${ACMECODE_LLM_GATEWAY_URL}
+  liveCatalog: true
+
+models:
+  default: acme/coder
+  allowed:
+    - acme/coder
+    - acme/general
+    - acme/review
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+      policyTags: [general, code]
+    acme/general:
+      name: Acme General
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [general]
+    acme/review:
+      name: Acme Review
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [review]
+
+config:
+  enforced:
+    theme: dark
+  defaults:
+    thinkingLevel: "off"
+  userOverridable: [model, thinkingLevel]
+
+network:
+  proxy:
+    inheritEnvironment: true
+  publicFallback: deny
+  privateOnly: true
+
+resources:
+  instructions:
+    company: [./resources/AGENTS.md]
+  skills:
+    company: [./resources/skills]
+    certified:
+      - path: ./resources/certified/release-notes
+        id: release-notes
+        version: 1.0.0
+        source: https://example.org/acme/release-notes
+        integrity: sha256-a8c5c2e41d4ef17370f6fe6d7036cd36a781c2114eb1ed99fdc63b18676f2047
+        license: MIT
+        pi: ["1.1.0"]
+  extensions:
+    builtin: [piship-ask-user, piship-workflow]
+    company: [./resources/extensions/enterprise-context]
+
+capabilities:
+  permissions:
+    enabled: true
+    provider: { id: builtin/permissions }
+  workflow:
+    enabled: true
+    provider: { id: builtin/workflow }
+    settings:
+      defaultMode: plan
+      planPrompt: Plan mode. Investigate and propose a plan; do not change files or run commands.
+      buildPrompt: Build mode. Implement the approved plan with the smallest safe change.
+
+# Fictional policy for the demo. Headless runs have no approval channel, so
+# every `ask` below resolves to deny there.
+policy:
+  id: acme-engineering
+  version: 1
+  default: ask
+  # Repositories on the (fictional) company Git host that are checked out
+  # under the managed source root are company projects; every other
+  # workspace is unknown. The origin remote alone is only a claim, so the
+  # matcher also requires the path. Unlisted dimensions keep the managed
+  # defaults: no project extensions, hooks, agents, MCP, or providers.
+  projectTrust:
+    company:
+      match:
+        - remote: "git.acme.example/**"
+          path: "/srv/src/**"
+  enforced:
+    - id: acme.secrets.read
+      action: filesystem.read
+      resource: "~/.ssh/**"
+      effect: deny
+      reason: Credentials stay outside the agent
+    - id: acme.docs.destructive
+      action: mcp.tool.call
+      resource: "docs:delete_*"
+      effect: deny
+      reason: Destructive handbook operations are not delegated to the agent
+  defaults:
+    - id: acme.models
+      action: model.select
+      resource: "acmecode/**"
+      effect: allow
+    - id: acme.skills
+      action: skill.load
+      resource: "**"
+      effect: allow
+    - id: acme.instructions
+      action: instruction.load
+      resource: "**"
+      effect: allow
+    - id: acme.extensions
+      action: extension.load
+      resource: "**"
+      effect: allow
+    - id: acme.workspace.read
+      action: filesystem.read
+      resource: "workspace/**"
+      effect: allow
+    - id: acme.workspace.write
+      action: filesystem.write
+      resource: "workspace/**"
+      effect: ask
+    - id: acme.shell
+      action: shell.execute
+      resource: "**"
+      effect: ask
+    - id: acme.tools
+      action: tool.execute
+      resource: "*"
+      effect: allow
+    - id: acme.docs.read
+      action: mcp.tool.call
+      resource: "docs:*"
+      effect: allow
+    - id: acme.docs.start
+      action: mcp.server.start
+      resource: docs
+      effect: allow
+
+mcp:
+  mode: allowlist
+  servers:
+    docs:
+      transport: stdio
+      module: ./resources/mcp/docs-server.mjs
+      expectedServerName: acme-docs
+      timeout: 30s
+      tools:
+        search: direct
+        get_document: direct
+        delete_document: direct
+        "*": hidden
+      class: company
+      exposure: direct
+
+sandbox:
+  required: true
+  filesystem:
+    read:
+      # A declared list replaces PiShip's default list rather than adding to
+      # it, so this one restates every default and then adds its own.
+      deny:
+        - ~/.ssh
+        - ~/.aws
+        - ~/.gnupg
+        - ~/.config/gcloud
+        - ~/.azure
+        - ~/.kube
+        - ~/.docker
+        - ~/.netrc
+        - ~/.npmrc
+        - ~/.pi
+    write:
+      allow: [workspace, tmp]
+  network:
+    mode: deny
+
+audit:
+  enabled: true
+  sinks:
+    - id: local
+      type: file
+      required: false
+
+# Signed release channels. Users may pick stable or candidate; production
+# stays on stable. Updates are verified against the Ed25519 keys of
+# updates.trust.bootstrap (an offline root key and a channel release key);
+# the demo ships none, so update fails closed until a distribution owner adds
+# its own keys (piship keygen).
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${ACMECODE_UPDATE_SOURCE}
+  rollback: true
+
+release:
+  targets: [linux-x64, darwin-arm64, win32-x64]
+  sources: [https://registry.npmjs.org]
+  vulnerabilities:
+    failOn: high

@@ -2458,6 +2458,28 @@ describe("explicitProjectTrust", () => {
     expect(parsed(explicitProjectTrust(aliased))).toEqual(parsed(aliased));
   });
 
+  it("fills an anchored class without writing through to its alias", () => {
+    // Personal external and unknown defaults differ, so a write-through shows.
+    const aliased = `${stringify({
+      schema: "piship/v1",
+      app,
+      runtime: {},
+      deployment: { mode: "personal" },
+      updates: {},
+    })}policy:
+  projectTrust:
+    external: &e
+      mcp: deny
+    unknown: *e
+`;
+    const explicit = explicitProjectTrust(aliased);
+    expect(parsed(explicit)).toEqual(parsed(aliased));
+    const trust = parseYaml(explicit).policy.projectTrust;
+    expect(trust.external.agents).toBe("allow");
+    expect(trust.unknown.agents).toBe("ask");
+    expect(trust.unknown.mcp).toBe("deny");
+  });
+
   it("returns a manifest without governance unchanged", () => {
     const plain = stringify({
       schema: PISHIP_SCHEMA_V1ALPHA2,

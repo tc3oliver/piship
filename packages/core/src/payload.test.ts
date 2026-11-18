@@ -324,6 +324,11 @@ describe("launch integrity verification", () => {
     expect(legacy).not.toBe(digest(parse(source)));
     const lock = JSON.parse(readFileSync(join(dir, "piship.lock"), "utf8"));
     lock.manifest.sha256 = legacy;
+    lock.runtime = {
+      ...lock.runtime,
+      pishipVersion: "0.13.0",
+      version: "1.1.0",
+    };
     write(dir, "piship.lock", JSON.stringify(lock));
     write(
       dir,
@@ -348,6 +353,21 @@ describe("launch integrity verification", () => {
       path,
       readFileSync(path, "utf8").replace('"pi":"1.0.0"', '"pi":"1.0.1"'),
     );
+    expect(verify(dir)).toThrow(/manifest and lock mismatch/);
+  });
+  it.each([
+    ["a later PiShip", { pishipVersion: "0.14.0", version: "1.1.0" }],
+    [
+      "a build pinning a later Pi",
+      { pishipVersion: "0.13.0", version: "1.5.0" },
+    ],
+    ["no recorded versions", {}],
+  ])("does not apply the 0.13 defaults to a lock from %s", (_, runtime) => {
+    const dir = legacyPayload();
+    const path = join(dir, "piship.lock");
+    const lock = JSON.parse(readFileSync(path, "utf8"));
+    lock.runtime = { npmLockSha256: lock.runtime.npmLockSha256, ...runtime };
+    writeFileSync(path, JSON.stringify(lock));
     expect(verify(dir)).toThrow(/manifest and lock mismatch/);
   });
   it("refuses a 0.13 payload's manifest edited to declare the newer, looser defaults", () => {

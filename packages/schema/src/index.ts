@@ -2,7 +2,14 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { printable, systemError } from "@piship/contracts";
 import { valid as validSemver } from "semver";
-import { type Document, isAlias, LineCounter, parseDocument } from "yaml";
+import {
+  type Document,
+  isAlias,
+  LineCounter,
+  type Node,
+  parseDocument,
+  visit,
+} from "yaml";
 import {
   AccessFieldError,
   type AccessManifest,
@@ -794,18 +801,26 @@ export function explicitProjectTrust(
   const document = parseDocument(source, { uniqueKeys: true });
   const kinds = ["company", "external", "unknown"] as const;
   let changed = false;
-  // A YAML alias on the way is replaced by a copy, so filling one class
-  // never writes through to another.
+  // Filling writes into the policy, projectTrust, and class maps, so every
+  // YAML alias of one of them, there or anywhere else, becomes a copy first:
+  // the fill never writes through to another place.
+  const filled = new Set<unknown>();
   for (const at of [
     ["policy"],
     ["policy", "projectTrust"],
     ...kinds.map((kind) => ["policy", "projectTrust", kind]),
   ]) {
     const node = document.getIn(at, true);
-    if (!isAlias(node)) continue;
-    document.setIn(at, document.createNode(node.toJS(document)));
-    changed = true;
+    filled.add(isAlias(node) ? node.resolve(document) : node);
   }
+  visit(document, {
+    Alias(_, alias) {
+      const target = alias.resolve(document);
+      if (!filled.has(target)) return;
+      changed = true;
+      return document.createNode(target?.toJS(document)) as Node;
+    },
+  });
   for (const kind of kinds)
     for (const dimension of PROJECT_TRUST_DIMENSIONS) {
       const path = ["policy", "projectTrust", kind, dimension];
