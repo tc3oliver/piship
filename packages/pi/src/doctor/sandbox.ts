@@ -304,6 +304,11 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       (declared === "shared" || declared === "synchronized")
     )
       declaredLine("isolation", REMOTE_WORKSPACE_TEXT);
+    else if (failed && governance.isolation === "none")
+      declaredLine(
+        "isolation",
+        "none (launch is refused, so nothing runs outside the sandbox)",
+      );
     else if (governance.isolation)
       declaredLine("isolation", ISOLATION_TEXT[governance.isolation]);
     if (itEgress(data) && report.network === "allow")
@@ -317,7 +322,9 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       );
     out.ok(
       "scope",
-      "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",
+      report.level === "enforced" && !report.localProcesses
+        ? "shell commands; MCP stdio servers do not start with this backend; Pi and in-process extensions are not contained"
+        : "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",
     );
     out.info("summary", inspection.containment);
     for (const warning of report.warnings) out.warn("sandbox", warning);

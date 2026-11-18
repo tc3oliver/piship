@@ -400,7 +400,7 @@ describe("a snapshot backend", () => {
     expect(sandbox.workspace()).toEqual(sandbox.report.workspace);
     expect(tree(workspace)).toEqual(before);
     expect(describeContainment(sandbox.report)).toContain(
-      "Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
+      "Workspace: snapshot. Remote commands see what the backend's template or image holds, not the files the agent edits; this is not a complete coding-agent workspace.",
     );
     await sandbox.dispose();
   });
@@ -2007,7 +2007,7 @@ describe("the workspace sentence", () => {
         complete: false,
         gitControlProtection: "not-applicable",
       },
-      "Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
+      "Workspace: snapshot. Remote commands see what the backend's template or image holds, not the files the agent edits; this is not a complete coding-agent workspace.",
     ],
     [
       {

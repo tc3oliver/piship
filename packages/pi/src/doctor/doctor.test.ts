@@ -1413,6 +1413,28 @@ describe("Sandbox and Workspace groups", () => {
     );
   });
 
+  it("says MCP stdio servers do not start on a backend without local processes", () => {
+    const scope = (inspected: GovernanceInspection) =>
+      group(
+        renderDoctor(
+          doctorData("managed", {
+            governance: governanceData({
+              inspection: inspected,
+              isolation: sandboxIsolation(inspected.sandbox),
+              workspace: workspaceData(inspected),
+            }),
+          }),
+        ).render(),
+        "Sandbox",
+      ).find((line) => line.includes(" scope "));
+    expect(scope(remote(snapshot))).toBe(
+      `  ✓ ${"scope".padEnd(20)} shell commands; MCP stdio servers do not start with this backend; Pi and in-process extensions are not contained`,
+    );
+    expect(scope(inspection())).toBe(
+      `  ✓ ${"scope".padEnd(20)} tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained`,
+    );
+  });
+
   it("separates what PiShip restricts from IT-owned egress it cannot verify", () => {
     const run = (
       mode: "managed" | "personal",
@@ -1843,8 +1865,8 @@ describe("Sandbox lines when a required sandbox is unavailable", () => {
     expect(lines.find((line) => line.includes("containment"))).toMatch(
       /^ {2}✗/,
     );
-    expect(lines.find((line) => line.includes(" isolation "))).toMatch(
-      /^ {2}-/,
+    expect(lines.find((line) => line.includes(" isolation "))).toBe(
+      `  - ${"isolation".padEnd(20)} none (launch is refused, so nothing runs outside the sandbox)`,
     );
     expect(lines.find((line) => line.includes(" network "))).toBe(
       `  - ${"network".padEnd(20)} deny (declared; not in effect while the sandbox is unavailable)`,
