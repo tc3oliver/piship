@@ -5,7 +5,10 @@ import { whyAsked } from "./governance/approval.js";
 import { policyRefusal, userText } from "./governed-tools.js";
 
 const gov = {
-  denialHint: () => " Ask the distribution owner.",
+  denialHint: (d: ResolvedDecision) =>
+    d.approval === "denied" || d.approval === "cancelled"
+      ? ""
+      : " Ask the distribution owner.",
 } as unknown as GovernanceSession;
 const decision = (extra: Partial<ResolvedDecision> = {}) =>
   ({
@@ -45,6 +48,34 @@ describe("a policy refusal", () => {
     );
     expect(text).toBe(
       "This command was declined by the user (acme rule no-curl asks for approval). Do not retry it unless the user asks; ask how they want to proceed.",
+    );
+  });
+
+  it("keeps the /grant hint after the user declined or dismissed a prompt", () => {
+    const grants = {
+      denialHint: () =>
+        " Type `/grant <folder>` to approve that folder's prompts.",
+    } as unknown as GovernanceSession;
+    const ask = { effect: "ask" } as const;
+    expect(
+      policyRefusal(
+        grants,
+        decision({ ...ask, approval: "denied" }),
+        "This command",
+      ),
+    ).toBe(
+      "This command was declined by the user (acme rule no-curl asks for approval). Type `/grant <folder>` to approve that folder's prompts. Do not retry it unless the user asks; ask how they want to proceed.",
+    );
+    expect(
+      userText(
+        policyRefusal(
+          grants,
+          decision({ ...ask, approval: "cancelled" }),
+          "This command",
+        ),
+      ),
+    ).toBe(
+      "This command did not run: the approval prompt was dismissed (acme rule no-curl asks for approval). Type `/grant <folder>` to approve that folder's prompts.",
     );
   });
 

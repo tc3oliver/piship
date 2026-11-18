@@ -170,6 +170,8 @@ export async function grantCommand(
   let message: string;
   let level: "info" | "warning" | "error" = "info";
   try {
+    // Registered even where grants are off, so `/grant` never reaches the model.
+    gov.assertGrantsAllowed();
     if (first === "help" || first === "-h" || first === "--help") {
       if (rest.length) throw new Error(USAGE);
       message = USAGE;

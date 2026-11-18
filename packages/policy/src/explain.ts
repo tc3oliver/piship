@@ -333,9 +333,10 @@ export function denialHint(
     else if (programs.some((program) => !commands.includes(program)))
       grant = ` Or type \`/grant <folder> --run ${programs.join(",")}\` to approve that folder's prompts and these commands for a limited time; a plain \`/grant\` covers only ${commands.join(", ")}.`;
   }
-  // The person's own refusal of a prompt needs no way to change a rule.
+  // The person's own refusal of a prompt needs no way to change a rule, only
+  // the way to stop being asked there.
   if (decision.approval === "denied" || decision.approval === "cancelled")
-    return "";
+    return grant.replace(" Or type", "Type");
   const explain = `\`${where.command ?? "piship"} policy explain ${decision.action} <resource>\` shows how it was decided`;
   switch (decision.layer) {
     case "distribution-enforced":

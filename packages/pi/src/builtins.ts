@@ -300,12 +300,12 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
               : "Auto mode: in personal mode you own the policy; status says how to approve actions without a prompt",
         handler: (args, ctx) => autoCommand(gov, args, ctx),
       });
-      if (gov.grantsAllowed)
-        pi.registerCommand("grant", {
-          description:
-            "Task grant: approve asks inside a folder without a prompt for a while (add [path] [--for 2h] [--run npm,pytest | --no-run] [--task label], list, revoke <id|all>)",
-          handler: (args, ctx) => grantCommand(gov, args, ctx),
-        });
+      pi.registerCommand("grant", {
+        description: gov.grantsAllowed
+          ? "Task grant: approve asks inside a folder without a prompt for a while (add [path] [--for 2h] [--run npm,pytest | --no-run] [--task label], list, revoke <id|all>)"
+          : "Task grant: not enabled by this distribution (policy.taskGrants)",
+        handler: (args, ctx) => grantCommand(gov, args, ctx),
+      });
       // Audit is keyed on tool_execution_start/end, not tool_call: a call
       // to an unknown tool or with invalid arguments ends before tool_call.
       // Nested calls (Codemode scripts, an extension's ctx.executeTool)

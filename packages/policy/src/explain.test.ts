@@ -477,4 +477,30 @@ describe("denialHint", () => {
       denialHint({ ...at("user-preference"), approval: "denied" }, "personal"),
     ).toBe("");
   });
+
+  it("offers only /grant after the person refused a prompt a grant could cover", () => {
+    const where = {
+      policyFile: "/s/policy.json",
+      grants: { commands: ["npm"] },
+    };
+    const ask = {
+      ...at("user-preference"),
+      effect: "ask" as const,
+      resource: "npm test",
+    };
+    for (const approval of ["denied", "cancelled"] as const)
+      expect(denialHint({ ...ask, approval }, "personal", where)).toBe(
+        "Type `/grant <folder>` to approve that folder's prompts for a limited time (`--for` sets how long).",
+      );
+    expect(
+      denialHint(
+        { ...ask, resource: "node x.js", approval: "denied" },
+        "personal",
+        where,
+      ),
+    ).toMatch(/^Type `\/grant <folder> --run node`/);
+    expect(denialHint({ ...ask, approval: "denied" }, "managed", where)).toBe(
+      "",
+    );
+  });
 });

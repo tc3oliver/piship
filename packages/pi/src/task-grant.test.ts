@@ -24,6 +24,7 @@ import { PI_VERSION, resolveLock } from "@piship/core";
 import type { TaskGrant } from "@piship/policy";
 import type { TaskGrantsPolicy } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { governanceHooks } from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
 import {
   DEFAULT_GRANT_COMMANDS,
@@ -1110,6 +1111,24 @@ describe("/grant", () => {
       await expect(
         off.session.addGrant(grant({ paths: [off.workspace] })),
       ).rejects.toMatchObject({ userAction: expect.stringMatching(action) });
+      // `/grant` is still a command, so it never reaches the model as a prompt.
+      const commands = new Map<
+        string,
+        { handler: (args: string, ctx: ExtensionContext) => Promise<void> }
+      >();
+      const extension = governanceHooks(off.session);
+      (typeof extension === "function" ? extension : extension.factory)({
+        on: () => {},
+        registerCommand: (name: string, options: never) =>
+          commands.set(name, options),
+      } as never);
+      const { ctx, dialogs, notices } = ui();
+      await commands.get("grant")?.handler(".", ctx);
+      expect(dialogs).toEqual([]);
+      expect(notices).toEqual([
+        { message: expect.stringMatching(action), level: "error" },
+      ]);
+      expect(off.session.listGrants()).toEqual([]);
     }
     const { session, workspace } = await open({
       mode: "managed",

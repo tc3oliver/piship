@@ -46,6 +46,7 @@ import {
   buildExposureTable,
   exposureConfigOf,
   PISHIP_TOOLS,
+  TASK_TOOLS,
   type ToolExposureTable,
 } from "../governance/exposure.js";
 import {
@@ -322,6 +323,7 @@ function exposureData(session: GovernanceSession): ExposureData {
   );
   const names = [
     ...PISHIP_TOOLS,
+    ...TASK_TOOLS,
     ...(session.mcp?.tools() ?? []).map((tool) => tool.name),
   ].sort();
   const tools: Record<string, ToolExposure> = {};
