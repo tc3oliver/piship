@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   LATEST_SCHEMA,
+  type Manifest,
   narrowRuleWarnings,
   readManifest,
 } from "@piship/schema";
@@ -29,6 +30,8 @@ import {
   suggestDistributionId,
   requireCurrentLock,
   unapprovedLoadWarnings,
+  certifiedPiWarnings,
+  PI_VERSION,
   resolveLock,
   runtimeStateDirectory,
 } from "./index.js";
@@ -75,6 +78,31 @@ describe("distribution core", () => {
     expect(resolveLock(path).resources[0]?.sha256).not.toBe(
       lock.resources[0]?.sha256,
     );
+  });
+  it("names the Pi upgrade when the lock was made by an older Pi", () => {
+    const { dir, path } = fixture();
+    const lockPath = lockManifest(path);
+    const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+    lock.runtime.version = "1.1.0";
+    writeFileSync(lockPath, JSON.stringify(lock));
+    expect(() => requireCurrentLock(path)).toThrow(
+      `${lockPath} was made for Pi 1.1.0 and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock`,
+    );
+    // Any other drift keeps the plain message.
+    lockManifest(path);
+    writeFileSync(join(dir, "resources", "AGENTS.md"), "changed\n");
+    expect(() => requireCurrentLock(path)).not.toThrow("was made for Pi");
+  });
+  it("uses the pinned Pi when an emptied runtime: is left behind", () => {
+    const { path } = fixture();
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace(
+        'runtime:\n  pi: "1.5.0"\n',
+        "runtime:\n",
+      ),
+    );
+    expect(readManifest(path).runtime.pi).toBeUndefined();
   });
   it("requires a current lock before building", () => {
     const { path } = fixture();
@@ -517,6 +545,63 @@ describe("unapproved load warnings", () => {
     ]);
     expect(unapprovedLoadWarnings(readManifest(path))[0]?.message).toBe(
       './resources/ext: no policy rule allows extension.load company:./resources/ext, so policy.default (ask) asks at every launch and headless runs leave it out; add a policy.defaults allow rule for extension.load on "company:**"',
+    );
+  });
+});
+
+describe("certified Pi warnings", () => {
+  it("names certified evidence that leaves out the pinned Pi", () => {
+    const evidence = (pi: string[]) => ({
+      id: "x",
+      version: "1.0.0",
+      source: "s",
+      integrity: "sha256-0",
+      license: "MIT",
+      pi,
+      platforms: [],
+    });
+    const manifest = {
+      governance: {
+        resources: {
+          declared: [
+            {
+              kind: "skills",
+              class: "certified",
+              path: "./old",
+              certified: evidence(["1.1.0"]),
+            },
+            {
+              kind: "skills",
+              class: "certified",
+              path: "./new",
+              certified: evidence([PI_VERSION]),
+            },
+            { kind: "skills", class: "user", path: "./mine" },
+          ],
+          builtin: [],
+          packages: [
+            { id: "pkg", class: "certified", certified: evidence(["1.1.0"]) },
+          ],
+        },
+        capabilities: [
+          {
+            name: "workflow",
+            provider: {
+              id: "certified/flow",
+              certified: evidence(["1.1.0", "1.2.0"]),
+            },
+          },
+        ],
+      },
+    } as unknown as Manifest;
+    const warnings = certifiedPiWarnings(manifest);
+    expect(warnings.map((item) => item.path)).toEqual([
+      "resources.skills.certified",
+      "resources.packages",
+      "capabilities.workflow.provider",
+    ]);
+    expect(warnings[0]?.message).toBe(
+      `./old is certified for Pi 1.1.0, not Pi ${PI_VERSION} that this PiShip uses, so it is not loaded; review it on Pi ${PI_VERSION} and add "${PI_VERSION}" to its certified pi list`,
     );
   });
 });

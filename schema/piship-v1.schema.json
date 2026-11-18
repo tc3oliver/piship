@@ -42,7 +42,7 @@
     },
     "runtime": {
       "description": "Pi runtime settings.",
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
       "properties": {
         "pi": {

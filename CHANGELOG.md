@@ -91,6 +91,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 ### Fixed
 
 #### For distribution authors
+- Upgrading from v0.13: a `runtime:` left empty by removing its `runtime.pi` line now means the pinned Pi instead of `Expected an object`; `validate`, `lock`, and `release` warn about certified evidence whose `pi` list leaves out the pinned Pi (the runtime skips that resource); and `build` with a lock made for another Pi says which Pi made it and to lock, then `piship diff`.
 - An MCP server that does not answer `initialize` within its `startupTimeout` always reports the startup-timeout reason that names `mcp.servers.<id>.startupTimeout` to raise; under load it sometimes showed `did not answer initialize within <n> ms` (or `did not start in time`) with no next step instead.
 - **Warning:** a declared `sandbox.filesystem.read.deny` replaces the default list, so `deny: [~/secrets]` alone leaves `~/.ssh`, `~/.aws`, and the other default credential paths readable by shell commands. `validate` and `lock` now warn with a required sandbox and name each default the list leaves out; restate them to keep them hidden ([sandbox](docs/sandbox.md#configuration)).
 - Manifest YAML messages. An over-indented line gives one plain message naming the line instead of two parser errors, a tab gives only the tab error, a misspelled section (`deploymnt:`) no longer also reports `deployment` as missing, a YAML merge key (`<<: *name`) says merge keys are not supported, and `yes` or `on` where true or false is expected says to write `true`.
@@ -199,6 +200,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - Missing or malformed options of `sign-channel`, `trust-root`, and `keygen` (`--expires-days 0`, no `--channel`, `--key a` without `=`) exit 2 with the usage line, like other usage errors.
 
 #### For personal users
+- With Pi's own sign-in (`agent/auth.json`) in the state, `uninstall` says it stays with the kept data and that purge deletes it, instead of `no sign-in is stored`, and `install --replace` says the command is already signed in instead of asking for `/login`.
 - A launch with no allowed model (such as a `models.allowed` preference listing only a model Pi does not know) no longer reports a resumed session that does not exist or asks the distribution owner; it names your preference and says `<command> config unset models.allowed`, or in a managed distribution without one, to ask your administrator.
 - A passing `<command> doctor` with warnings ends with `No problems; N warning(s): <group>/<label>, ...`, so the warnings are not shown only by the `!` mark.
 

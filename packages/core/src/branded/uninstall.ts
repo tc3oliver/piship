@@ -145,6 +145,8 @@ export async function runUninstall(
       },
     );
   const live = signedInClasses(state);
+  // Pi's own sign-in is not PiShip's to revoke: it stays with the kept state.
+  const piAuth = join(state, "agent", "auth.json");
   // A local-secret key never expires and has no remote side to revoke: only
   // logout deletes it from the secret store.
   if (
@@ -230,8 +232,15 @@ export async function runUninstall(
       `  kept     ${state}: sessions and settings, ${held}`,
       live.length
         ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
-        : "  signed out: no sign-in is stored",
+        : existsSync(piAuth)
+          ? ""
+          : "  signed out: no sign-in is stored",
+      existsSync(piAuth)
+        ? `  signed in: Pi's own sign-in (${piAuth}) stays with the kept data; purge deletes it`
+        : "",
       `A later install of ${app.name} picks the kept data up again. To delete it, ${purgeHint} Next time, ${app.command} uninstall --purge --yes does both.`,
-    ].join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
 }

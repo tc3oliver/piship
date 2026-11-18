@@ -4530,6 +4530,21 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     );
 
     it.skipIf(process.platform === "win32")(
+      "says Pi's own sign-in stays with the kept data",
+      async () => {
+        const { ctx, out } = await installed();
+        const auth = join(stateDir(), "agent", "auth.json");
+        write(auth, "{}");
+        await runUninstall(ctx, []);
+        const text = out.join("\n");
+        expect(text).not.toContain("signed out: no sign-in is stored");
+        expect(text).toContain(
+          `signed in: Pi's own sign-in (${auth}) stays with the kept data; purge deletes it`,
+        );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
       "names the release directory's piship.mjs for purge after an install.sh install",
       async () => {
         const { ctx, out } = await installed("directory");
