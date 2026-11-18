@@ -170,6 +170,32 @@ describe("task_start decides a command as bash does", () => {
   });
 
   it.runIf(tasksRun)(
+    "names itself a background task with its time limit in the prompt",
+    async () => {
+      const { call } = await open();
+      for (const [timeout, label] of [
+        [undefined, "background task, stopped after 30 min: true"],
+        [90, "background task, stopped after 90 s: true"],
+        [99_999, "background task, stopped after 120 min: true"],
+      ] as const) {
+        const shown: string[] = [];
+        const { ctx } = context(false);
+        const ui = (ctx as unknown as { ui: Record<string, unknown> }).ui;
+        ui.confirm = async (...args: unknown[]) => {
+          shown.push(JSON.stringify(args));
+          return false;
+        };
+        ui.select = async (...args: unknown[]) => {
+          shown.push(JSON.stringify(args));
+          return "Deny";
+        };
+        await outcome(call("task_start")({ command: "true", timeout }, ctx));
+        expect(shown.join("\n")).toContain(`shell.execute ${label}`);
+      }
+    },
+  );
+
+  it.runIf(tasksRun)(
     "is refused in Plan mode, as bash is, while reading and stopping a task are not",
     async () => {
       const { session, call } = await open();

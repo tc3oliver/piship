@@ -183,7 +183,20 @@ export function taskTools(
           { command: input.command },
           ctx,
         );
-        const commandRefusal = await gateCommand(gov, spawn.command, "bash");
+        // The prompt tells a task from a one-off bash call: it keeps running.
+        const { defaultTimeoutSeconds, maxTimeoutSeconds } = tasks.limits;
+        const seconds =
+          typeof input.timeout === "number" &&
+          Number.isFinite(input.timeout) &&
+          input.timeout > 0
+            ? Math.min(input.timeout, maxTimeoutSeconds)
+            : defaultTimeoutSeconds;
+        const commandRefusal = await gateCommand(
+          gov,
+          spawn.command,
+          "bash",
+          `background task, stopped after ${seconds % 60 ? `${seconds} s` : `${seconds / 60} min`}`,
+        );
         if (commandRefusal) throw blocked(commandRefusal);
         let started: string;
         try {
@@ -214,7 +227,7 @@ export function taskTools(
               });
             },
             spawn.command,
-            input.timeout,
+            seconds,
           );
         } catch (error) {
           if (error instanceof TaskLimitError) throw blocked(error.message);

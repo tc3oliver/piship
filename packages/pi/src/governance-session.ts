@@ -1440,7 +1440,8 @@ export class GovernanceSession {
     return this.#storeGrant(grant);
   }
 
-  async #storeGrant(grant: TaskGrant): Promise<TaskGrant> {
+  /** Throws POLICY_DENIED, with what to do instead, where grants are not allowed. */
+  assertGrantsAllowed(): void {
     if (!this.grantsAllowed)
       throw new PiShipError(
         "POLICY_DENIED",
@@ -1453,6 +1454,10 @@ export class GovernanceSession {
               : "Answer each prompt as it comes; ask your administrator to enable policy.taskGrants for task grants",
         },
       );
+  }
+
+  async #storeGrant(grant: TaskGrant): Promise<TaskGrant> {
+    this.assertGrantsAllowed();
     this.#checkGrantSlot(grant.id);
     // Both clocks at one instant: the monotonic deadline is the same lifetime.
     const started = performance.now();

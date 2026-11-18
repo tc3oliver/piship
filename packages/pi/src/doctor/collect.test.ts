@@ -42,6 +42,22 @@ vi.mock("../governance-session.js", () => ({
   }),
 }));
 
+// The exposure a launch would resolve: the background task tools are offered.
+vi.mock("../governance/exposure.js", async (actual) => ({
+  ...(await actual<typeof import("../governance/exposure.js")>()),
+  exposureConfigOf: () => ({}),
+  buildExposureTable: () =>
+    Object.assign(
+      new Map(
+        ["read", "task_start", "task_output", "task_stop"].map((name) => [
+          name,
+          "direct",
+        ]),
+      ),
+      { codemode: "off", codemodeOn: false, toolSearchOn: false },
+    ),
+}));
+
 const { collectDoctorData, networkChecks } = await import("./data.js");
 const { renderDoctor } = await import("../commands/doctor.js");
 
@@ -198,6 +214,16 @@ describe("collectDoctorData", () => {
     expect(
       renderDoctor(await collectDoctorData(context())).render(),
     ).not.toContain("remote tar");
+  });
+
+  it("lists the background task tools in the tool exposure", async () => {
+    const data = await collectDoctorData(context());
+    expect(data.governance?.exposure?.tools).toEqual({
+      read: "direct",
+      task_output: "direct",
+      task_start: "direct",
+      task_stop: "direct",
+    });
   });
 
   it("reports a cleanup failure at session end apart from audit", async () => {

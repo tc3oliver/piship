@@ -271,10 +271,10 @@ export function policyRefusal(
   const askUser = model ? ` ${ASK_USER_NEXT}` : "";
   if (decision.approval === "denied")
     return model
-      ? `${subject} was declined by the user (${asked}).${askUser}`
-      : `${subject} was declined (${asked}).`;
+      ? `${subject} was declined by the user (${asked}).${gov.denialHint(decision)}${askUser}`
+      : `${subject} was declined (${asked}).${gov.denialHint(decision)}`;
   if (decision.approval === "cancelled")
-    return `${subject} did not run: the approval prompt was dismissed (${asked}).${askUser}`;
+    return `${subject} did not run: the approval prompt was dismissed (${asked}).${gov.denialHint(decision)}${askUser}`;
   const refused = `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? (gov.options.subagent ? " (a subagent cannot ask for approval, and approvals given in its parent session do not carry over)" : " (approval needs an interactive session)") : ""}`;
   // A rule's reason may already end the sentence ("No network from the shell.").
   return `${refused}${/[.!?]$/.test(refused) ? "" : "."}${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
@@ -808,6 +808,8 @@ export async function gateCommand(
   gov: GovernanceSession,
   command: string,
   source: "bash" | "user-bash",
+  /** What the prompt calls the command; `bash` by default. */
+  label = "bash",
 ): Promise<string | undefined> {
   if (gov.workflowMode === "plan") {
     gov.metrics.recordPolicyDenial("shell.execute");
@@ -826,7 +828,7 @@ export async function gateCommand(
     denied: "tool.denied",
     resource: source,
     // The user typed a `!` command themselves; the prompt says so.
-    prompt: `${source === "bash" ? "bash" : "your own ! command"}: ${command}`,
+    prompt: `${source === "bash" ? label : "your own ! command"}: ${command}`,
     detail: { commandBytes: Buffer.byteLength(command) },
     content: { command },
   } as const;
