@@ -94,7 +94,8 @@ Pi's message keeps only the SDK's text for a request that got no answer ("Connec
 | Gateway outage | `GATEWAY_UNREACHABLE` at launch with `liveCatalog: true` and in `doctor`; otherwise Pi reports the failed request |
 | Model outside the allowlist | `MODEL_DENIED` |
 | A routed request to a model outside the declared `routes`, or one `model.dispatch` denies | `MODEL_DENIED` |
-| Model unentitled, unlisted, or narrowed out | `MODEL_UNAVAILABLE` |
+| Model excluded by the user's own `models.allowed` preference, or a launch where that preference leaves no model | `MODEL_DENIED`; the action names `config unset models.allowed` |
+| Model unentitled or not listed by the gateway | `MODEL_UNAVAILABLE` |
 | Undeclared host under `privateOnly` | `NETWORK_DENIED` |
 | Non-loopback plain HTTP endpoint | Admitted when the host is private or internal, unless `inference.httpTransport: https` (piship/v1alpha6) forces HTTPS-only, which gives `NETWORK_DENIED`; then only the gateway's own origin is admitted over plain HTTP, and the credential and prompts travel unencrypted ([manifest](manifest.md#plain-http-to-internal-endpoints-v1alpha6)) |
 | Plain HTTP to a public host | Refused by `validate`; a `${NAME}` that resolves to one fails the launch with `CONFIG_INVALID` |
