@@ -272,6 +272,26 @@ describe("personal distributions without identity", () => {
     );
   });
 
+  it("points at the user's own models.allowed when it excludes every gateway model", async () => {
+    const distribution = open("local-secret");
+    await login(distribution);
+    // Written before the distribution dropped the model; config set would refuse it now.
+    mkdirSync(join(distribution.paths.preferences, ".."), { recursive: true });
+    writeFileSync(
+      distribution.paths.preferences,
+      JSON.stringify({
+        schema: "piship-preferences/v1",
+        values: {},
+        modelsAllowed: ["gone/model"],
+      }),
+    );
+    await expect(open("local-secret").activate()).rejects.toMatchObject({
+      code: "MODEL_DENIED",
+      userAction:
+        "Run mypi-local config unset models.allowed, or set it to include one of: local/coder, local/fast",
+    });
+  });
+
   it.each(["local-secret", "none"] as const)(
     "keeps the model selection across login, logout, and login with %s credentials",
     async (mode) => {

@@ -35,7 +35,7 @@ The effective catalog is an intersection that can only narrow:
 3. The live gateway listing from `GET {baseUrl}/models`, when `liveCatalog: true`.
 4. The user's optional `models.allowed` preference, set with `config set models.allowed a,b`. It can only remove models.
 
-A model outside the distribution allowlist, or a Pi model in managed mode, is refused with `MODEL_DENIED`. An allowed model that is unentitled, not listed by the gateway, or excluded by user preference is `MODEL_UNAVAILABLE`, with the reason. PiShip never substitutes another model. If no allowed model is available, launch fails with `MODEL_UNAVAILABLE`.
+A model outside the distribution allowlist, or a Pi model in managed mode, is refused with `MODEL_DENIED`. An allowed model that is unentitled or not listed by the gateway is `MODEL_UNAVAILABLE`, with the reason. A model excluded by the user's own `models.allowed` preference is `MODEL_DENIED`, and so is a launch where that preference leaves no model at all; the action names `config unset models.allowed`. PiShip never substitutes another model. If otherwise no allowed model is available, launch fails with `MODEL_UNAVAILABLE`.
 
 The distribution allowlist is the ceiling: every other list only removes models from it. With `models.allowed: [A, B]`, a credential entitled to `B, C`, and a gateway listing `B, C, D`, the only available model is `B`; `A` is `MODEL_UNAVAILABLE` (not entitled), and `C` and `D` are `MODEL_DENIED`. A gateway listing never authorizes a model, and an enforced model does not override a narrower entitlement: if the enforced model is not entitled, launch fails with `MODEL_UNAVAILABLE`.
 
