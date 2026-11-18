@@ -17,32 +17,32 @@ import {
   type ValidationDiagnostic,
 } from "@piship/schema";
 import { PI_VERSION, PISHIP_VERSION } from "./compatibility.js";
+import { checkDataContract } from "./data/contract.js";
+import { sessionExportStatus } from "./data/session-export.js";
 import { canonicalJson, digest, hash } from "./digest.js";
-import { pishipCommand, shellArg } from "./invocation.js";
 import { governanceLock } from "./governance-lock.js";
+import { pishipCommand, shellArg } from "./invocation.js";
 import {
   type DistributionLock,
-  type LockedPiPackage,
+  LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA2,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
-  LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
+  type LockedPiPackage,
 } from "./lock-schema.js";
-import { checkDataContract } from "./data/contract.js";
-import { sessionExportStatus } from "./data/session-export.js";
+import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import {
   currentPiPackages,
   declaredPackages,
   lockPiPackages,
   packageLockFiles,
 } from "./pi-packages/lock.js";
-import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import { resolveResources } from "./resources.js";
-import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
+import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { checkToolExposure, lockedTools } from "./tool-exposure.js";
 
 /**
@@ -443,9 +443,10 @@ export function requireCurrentLock(manifestPath: string): DistributionLock {
     } catch {
       // An unreadable lock is just stale.
     }
+    const previous = join(dirname(manifestPath), "previous.lock");
     if (typeof pi === "string" && pi !== PI_VERSION)
       throw new Error(
-        `Lockfile is stale: ${path} was made for Pi ${pi} and this PiShip uses Pi ${PI_VERSION}. Copy it to previous.lock, run ${pishipCommand()} lock ${shellArg(manifestPath)}, then ${pishipCommand()} diff previous.lock piship.lock to review the Pi upgrade`,
+        `Lockfile is stale: ${path} was made for Pi ${pi} and this PiShip uses Pi ${PI_VERSION}. Copy it to ${previous}, run ${pishipCommand()} lock ${shellArg(manifestPath)}, then ${pishipCommand()} diff ${shellArg(previous)} ${shellArg(path)} to review the Pi upgrade`,
       );
     const local = changedLocalPackages(manifestPath);
     throw new Error(
