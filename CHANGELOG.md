@@ -90,6 +90,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 ### Fixed
 
 #### For distribution authors
+- An MCP server that does not answer `initialize` within its `startupTimeout` always reports the startup-timeout reason that names `mcp.servers.<id>.startupTimeout` to raise; under load it sometimes showed `did not answer initialize within <n> ms` (or `did not start in time`) with no next step instead.
 - **Warning:** a declared `sandbox.filesystem.read.deny` replaces the default list, so `deny: [~/secrets]` alone leaves `~/.ssh`, `~/.aws`, and the other default credential paths readable by shell commands. `validate` and `lock` now warn with a required sandbox and name each default the list leaves out; restate them to keep them hidden ([sandbox](docs/sandbox.md#configuration)).
 - Manifest YAML messages. An over-indented line gives one plain message naming the line instead of two parser errors, a tab gives only the tab error, a misspelled section (`deploymnt:`) no longer also reports `deployment` as missing, a YAML merge key (`<<: *name`) says merge keys are not supported, and `yes` or `on` where true or false is expected says to write `true`.
 - `piship doctor <build folder>` marks the state it creates as test state, like `test` and `dev`, so a following `install` adopts it instead of failing with `State already exists ... --use-existing-state`.

@@ -644,6 +644,10 @@ describe("McpGovernor over stdio", () => {
         httpServer("slow", "http://127.0.0.1:9/mcp", { startupTimeoutMs: 200 }),
       ],
     });
+    // A timer can fire a little before Date.now() reaches its deadline; a
+    // frozen clock makes that the case every time.
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    cleanup.push(() => now.mockRestore());
     const [report] = await governor.start();
     expect(report?.reason).toBe(
       "MCP server slow did not start: http://127.0.0.1:9 did not answer initialize within 0.2s; check that it is up, or raise mcp.servers.slow.startupTimeout",
