@@ -17,6 +17,7 @@ describe("login waiting hint", () => {
     const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
       timeoutMs: 300_000,
       paste: false,
+      ascii: false,
     });
     expect(hint).toContain(
       "Waiting up to 5 minutes for the browser to return to http://127.0.0.1:8765/callback",
@@ -36,6 +37,7 @@ describe("login waiting hint", () => {
     const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
       timeoutMs: 300_000,
       paste: true,
+      ascii: false,
     });
     expect(hint).toContain("paste the full address");
     expect(hint).toContain("press Enter");
@@ -48,6 +50,7 @@ describe("login waiting hint", () => {
     const hint = loginWaitingHint(authorize("http://[::1]:9000/cb"), {
       timeoutMs: 300_000,
       paste: true,
+      ascii: false,
     });
     expect(hint.split("\n")).toHaveLength(6);
     expect(hint).toContain("http://[::1]:9000/cb");
@@ -56,9 +59,29 @@ describe("login waiting hint", () => {
   it("does not claim a return address or a timeout it does not know", () => {
     const hint = loginWaitingHint("https://idp.example/device?code=ABCD", {
       paste: true,
+      ascii: false,
     });
     expect(hint).toBe(
       "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.\n等待在瀏覽器完成登入，按 Ctrl-C 取消。",
+    );
+  });
+
+  it("prints only the English lines, with straight quotes, where output is ASCII only", () => {
+    const hint = loginWaitingHint(authorize("http://127.0.0.1:8765/callback"), {
+      timeoutMs: 300_000,
+      paste: true,
+      ascii: true,
+    });
+    expect(hint.split("\n")).toHaveLength(3);
+    expect(hint).toContain('("can\'t connect" is expected)');
+    expect(hint).toMatch(/^[\x20-\x7e\n]*$/);
+    expect(
+      loginWaitingHint("https://idp.example/device", {
+        paste: false,
+        ascii: true,
+      }),
+    ).toBe(
+      "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
     );
   });
 });

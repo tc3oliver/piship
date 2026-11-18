@@ -89,6 +89,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 ### Fixed
 
 #### For distribution authors
+- `piship doctor <build folder>` marks the state it creates as test state, like `test` and `dev`, so a following `install` adopts it instead of failing with `State already exists ... --use-existing-state`.
 - `piship lock` prints the same rule warnings as `validate`, including a `shell.execute` deny or ask whose `*` stops at `/` and a rule that can never match, which it left out; both name the rule as `policy.<list>[<index>].resource`.
 - MCP messages. A project `.mcp.json` entry that is rejected (`type: sse`, a `${NAME}` url, which a project file never interpolates), ignored in part (`headers`), or shadowed by a declared server of the same id, and a `.mcp.json` that is not JSON, now appear in `--smoke`, `doctor`, and the launch notice with the file and the reason, instead of being dropped silently. `validate` says a variable only optional MCP servers read stops just those servers, not the launch. A Streamable HTTP server's startup timeout names the origin that did not answer instead of an `npx` download, and the action comes first so the 160-character summary keeps it.
 - Manifest guidance about `credential` and `sandbox.credential` (a missing `credential.provider`, managed mode's provider, `credential` or `sandbox.credential` set to `runtime` or `stored`) no longer reads `credential: [REDACTED]` after diagnostic redaction, which also swallowed a closing `)`; the messages are reworded and redaction is unchanged.
@@ -192,6 +193,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - Missing or malformed options of `sign-channel`, `trust-root`, and `keygen` (`--expires-days 0`, no `--channel`, `--key a` without `=`) exit 2 with the usage line, like other usage errors.
 
 #### For personal users
+- A passing `<command> doctor` with warnings ends with `No problems; N warning(s): <group>/<label>, ...`, so the warnings are not shown only by the `!` mark.
 
 - `<command> --smoke-model --new-session` (and other session options after `--smoke` or `--smoke-model`) was refused as an unknown option, while the other order worked; both orders now do.
 - Personal distributions are not sent to an administrator: refused `config set`, an off `policy.taskGrants.mode`, endpoint variables, model provider and gateway errors, and `update` with no source name the user's own `piship.yaml` keys, API key, base URL, rate limits, or server instead. A 429 with `insufficient_quota` says the account is out of quota and is not retryable; a 404 from the model list is `GATEWAY_PROTOCOL_ERROR` naming the base URL; `--smoke-model` gives up after 60 s ([troubleshooting](docs/troubleshooting.md#error-codes)).
@@ -241,6 +243,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - A subagent child stopped by SIGINT (Ctrl-C at the parent's terminal) records `session.end`, as one stopped by SIGTERM already did.
 
 #### Platform
+- On Windows, output redirected to a file or pipe uses ASCII marks even in Windows Terminal, since PowerShell 5.1 re-encodes it in the OEM code page. The `login` waiting hint prints only its English lines, with straight quotes, wherever output is ASCII only (`PISHIP_ASCII=1` or the legacy console).
 
 - Linux: bwrap failures name the kernel setting blocking user namespaces and the `sysctl` that allows them, a refused mount in a container, or the `bwrap` install command; an old Node.js names its version; a Secret Service without a D-Bus session bus gets an action and `login` checks the store before asking for the key; Linux ARM without bundled search tools skips that check in `test`; launch errors lead `test` and `doctor` output ([troubleshooting](docs/troubleshooting.md#prerequisites)).
 - Windows: lifecycle locks wait out a pending delete instead of `EPERM`; parallel launches keep waiting while the package-configuration lock queue moves; Constrained Language Mode is named when it blocks the supervisor (and agent `bash` runs under it from `piship/v1alpha3`); the runtime `npm ci` runs without `cmd.exe`; and printed commands use double quotes and no `&&`, with backslash paths quoted for Git Bash.

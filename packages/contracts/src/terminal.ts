@@ -11,15 +11,18 @@ type Env = Readonly<Record<string, string | undefined>>;
  * Windows is affected, and not when the terminal is known to handle Unicode:
  * Windows Terminal (`WT_SESSION`), an editor or modern terminal that names
  * itself (`TERM_PROGRAM`, such as vscode), a terminal that sets `TERM` (Git
- * Bash, mintty, ssh), or ConEmu.
+ * Bash, mintty, ssh), or ConEmu. Output redirected on Windows is ASCII even
+ * there, since PowerShell 5.1 re-encodes it in the OEM code page.
  */
 export function asciiOnly(
   env: Env = process.env,
   platform: NodeJS.Platform = process.platform,
+  isTTY: boolean = process.stdout.isTTY === true,
 ): boolean {
   if (env.PISHIP_ASCII === "1") return true;
   if (env.PISHIP_ASCII === "0") return false;
   if (platform !== "win32") return false;
+  if (!isTTY) return true;
   return !(env.WT_SESSION || env.TERM_PROGRAM || env.TERM || env.ConEmuPID);
 }
 

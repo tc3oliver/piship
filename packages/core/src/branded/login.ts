@@ -5,6 +5,7 @@ import { LocalMetrics } from "@piship/audit";
 import {
   PiShipError,
   applyProcessNetworkPolicy,
+  asciiOnly,
   assertTlsVerificationEnabled,
   formatError,
   isLoopbackHost,
@@ -131,16 +132,21 @@ export function readRedirectLine(
  * and Traditional Chinese, one pair of lines per message. A loopback
  * `redirect_uri` in the URL names where the browser must return. Where it
  * cannot return (see `pasteFallbackEnabled`) the hint says to paste the
- * address instead. The timeout is named only when it is known.
+ * address instead. The timeout is named only when it is known. Where output is
+ * ASCII only (see `asciiOnly`) the hint is the English lines alone.
  */
 export function loginWaitingHint(
   url: string,
-  options: { timeoutMs?: number; paste: boolean },
+  options: { timeoutMs?: number; paste: boolean; ascii?: boolean },
 ): string {
-  const plain = [
+  const ascii = options.ascii ?? asciiOnly();
+  // Each message is an English line then its Chinese line.
+  const text = (lines: string[]) =>
+    (ascii ? lines.filter((_, i) => i % 2 === 0) : lines).join("\n");
+  const plain = text([
     "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.",
     "等待在瀏覽器完成登入，按 Ctrl-C 取消。",
-  ].join("\n");
+  ]);
   let redirect: URL;
   try {
     redirect = new URL(new URL(url).searchParams.get("redirect_uri") ?? "");
@@ -162,10 +168,10 @@ export function loginWaitingHint(
   ];
   if (options.paste)
     lines.push(
-      `No browser here? Open the URL on any computer, sign in, then paste the full address it ends on (\u201ccan't connect\u201d is expected) here and press Enter.`,
+      `No browser here? Open the URL on any computer, sign in, then paste the full address it ends on (${ascii ? '"can\'t connect"' : "\u201ccan't connect\u201d"} is expected) here and press Enter.`,
       "這裡沒有瀏覽器？在任何電腦開啟網址登入，把最後的完整網址（顯示「無法連線」屬正常）貼到這裡，按 Enter。",
     );
-  return lines.join("\n");
+  return text(lines);
 }
 
 /**

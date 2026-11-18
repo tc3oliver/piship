@@ -13,7 +13,14 @@ describe("asciiOnly", () => {
     { TERM: "xterm-256color" },
     { ConEmuPID: "1234" },
   ])("keeps Unicode in a known Unicode terminal on Windows: %j", (env) => {
-    expect(asciiOnly(env, "win32")).toBe(false);
+    expect(asciiOnly(env, "win32", true)).toBe(false);
+  });
+
+  it("falls back to ASCII on Windows when output is redirected, even in a Unicode terminal", () => {
+    expect(asciiOnly({ WT_SESSION: "guid" }, "win32", false)).toBe(true);
+    expect(asciiOnly({ TERM: "xterm" }, "win32", false)).toBe(true);
+    expect(asciiOnly({}, "linux", false)).toBe(false);
+    expect(asciiOnly({ PISHIP_ASCII: "0" }, "win32", false)).toBe(false);
   });
 
   it("keeps Unicode elsewhere", () => {

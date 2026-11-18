@@ -279,7 +279,12 @@ describe("DoctorReport", () => {
     out.warn("c", "d");
     out.info("e", "f");
     expect(report.failed).toBe(false);
+    report.section("Audit").warn("state", "x");
+    expect(report.warnings()).toBe(
+      "No problems; 2 warnings: Gateway/c, Audit/state",
+    );
     out.bad("g", "h");
+    expect(report.warnings()).toBeUndefined();
     expect(report.failed).toBe(true);
     expect(report.render()).toContain(`  ✗ ${"g".padEnd(20)} h`);
     expect(report.render()).toContain(`  ! ${"c".padEnd(20)} d`);

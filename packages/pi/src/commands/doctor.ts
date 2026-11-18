@@ -112,9 +112,11 @@ export async function runDoctor(
   refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
   const data = await collectDoctorData(ctx);
   const report = renderDoctor(data);
-  ctx.out(
-    args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),
-  );
+  if (args[0] === "--json") ctx.out(JSON.stringify(report, null, 2));
+  else {
+    const warnings = report.warnings();
+    ctx.out(warnings ? `${report.render()}\n\n${warnings}` : report.render());
+  }
   if (report.failed) {
     const message = `${ctx.metadata.app.name} doctor found problems: ${report.summary()}`;
     const signIn = signInFailure(data, report);
