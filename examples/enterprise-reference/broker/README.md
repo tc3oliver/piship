@@ -167,10 +167,11 @@ docker compose up --wait
 node broker/live-check.mjs            # alice and bob sign in, get keys, use them; revoke; deleted key refused
 ```
 
-The contract test needs no Docker (Node 22.19 or later):
+The contract tests need no Docker (Node 22.19 or later), but `piship-client.test.mjs` imports PiShip's built packages, so build the repository first:
 
 ```sh
-cd broker
+npm ci && npm run build      # at the repository root
+cd examples/enterprise-reference/broker
 node --test test/*.test.mjs
 ```
 

@@ -2,7 +2,9 @@
 
 A local, runnable version of the company services a managed PiShip distribution talks to, five Compose services in all: an OIDC identity provider, a credential broker, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
 
-This is reference infrastructure for tests and local exploration, not a production deployment. Beside the services it includes [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack, and a [container sandbox](#reference-container-sandbox) that distribution can run its commands in. Nothing here needs an Internet model provider or a paid API key.
+This is reference infrastructure for tests and local exploration, not a production deployment ([before production](#before-production) lists what to change). Beside the services it includes [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack, and a [container sandbox](#reference-container-sandbox) that distribution can run its commands in. Nothing here needs an Internet model provider or a paid API key.
+
+Contents: [Run it](#run-it) ([Ports](#ports)) · [The generated env file](#the-generated-env-file) · [Identity provider (Keycloak)](#identity-provider-keycloak) · [Gateway (LiteLLM)](#gateway-litellm) · [Credential broker](#credential-broker) · [Tests against the stack](#tests-against-the-stack) · [Mock upstream](#mock-upstream) · [Measured startup](#measured-startup) · [AcmeCode reference distribution](#acmecode-reference-distribution) ([Try it](#try-it)) · [Reference container sandbox](#reference-container-sandbox) · [Reference E2E workflow](#reference-e2e-workflow) · [Live provider qualification](#live-provider-qualification) · [Before production](#before-production)
 
 | Service | Image (pinned by index digest) | Host port (default) | Role |
 | --- | --- | --- | --- |
@@ -44,6 +46,8 @@ compose=(docker compose -p "$PROJECT" --env-file "$ENV_FILE")
 { echo "KEYCLOAK_PUBLISHED_PORT=$("${compose[@]}" port keycloak 8080 | cut -d: -f2)"
   echo "LITELLM_PUBLISHED_PORT=$("${compose[@]}" port litellm 4000 | cut -d: -f2)"; } >> "$ENV_FILE"
 "${compose[@]}" up --wait                    # starts the broker; the rest keep running
+echo "BROKER_PUBLISHED_PORT=$("${compose[@]}" port broker 8080 | cut -d: -f2)" >> "$ENV_FILE"
+node broker/live-check.mjs --env-file "$ENV_FILE"   # reads the *_PUBLISHED_PORT values
 ```
 
 The second `up` leaves the running services as they are, since their configuration does not read the two variables. Started again, Keycloak or LiteLLM gets a new port the broker does not know; start the broker again after giving it the new one.
@@ -55,7 +59,7 @@ The second `up` leaves the running services as they are, since their configurati
 | Variable | Contents |
 | --- | --- |
 | `KEYCLOAK_PORT`, `LITELLM_PORT`, `MOCK_UPSTREAM_PORT`, `POSTGRES_PORT`, `BROKER_PORT` | Host ports on `127.0.0.1`. Defaults 18080, 14000, 18090, 15432, 18070 (an older `.env` without `BROKER_PORT` gets 18070); set any of them in the environment before generating to choose others, or to `0` for one Docker chooses ([Ports](#ports)) |
-| `KEYCLOAK_PUBLISHED_PORT`, `LITELLM_PUBLISHED_PORT` | Not generated. The ports Docker chose for Keycloak and LiteLLM when their variable above is `0`, for the broker ([Ports](#ports)) |
+| `KEYCLOAK_PUBLISHED_PORT`, `LITELLM_PUBLISHED_PORT`, `BROKER_PUBLISHED_PORT` | Not generated. The ports Docker chose for Keycloak, LiteLLM, and the broker when their variable above is `0`: the first two for the broker, all three for `broker/live-check.mjs` ([Ports](#ports)) |
 | `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap `admin` password |
 | `POSTGRES_PASSWORD` | Password of the `litellm` database user |
 | `LITELLM_MASTER_KEY` | LiteLLM admin key (`sk-` prefix). Only a broker should hold it |
@@ -120,7 +124,7 @@ Observed LiteLLM behavior tests should expect (v1.103.0, this config):
 
 ## Credential broker
 
-[`broker/`](broker/README.md) implements PiShip's `http-broker` contract: `POST /v1/credential` with the user's Keycloak access token returns a LiteLLM virtual key limited to the models of the user's groups (`/engineering`: `acme/coder` and `acme/general`; `/support`: `acme/coder`), on one LiteLLM user per `(iss, sub)` with a per-user budget and no team; `POST /v1/revoke` with that key deletes it. It holds the master key and no other secret. `node broker/live-check.mjs` runs the happy path against the stack; `node --test broker/test/*.test.mjs` is its contract test, which needs no Docker.
+[`broker/`](broker/README.md) implements PiShip's `http-broker` contract: `POST /v1/credential` with the user's Keycloak access token returns a LiteLLM virtual key limited to the models of the user's groups (`/engineering`: `acme/coder` and `acme/general`; `/support`: `acme/coder`), on one LiteLLM user per `(iss, sub)` with a per-user budget and no team; `POST /v1/revoke` with that key deletes it. It holds the master key and no other secret. `node broker/live-check.mjs` runs the happy path against the stack; `node --test broker/test/*.test.mjs` is its contract test, which needs no Docker but needs `npm ci && npm run build` at the repository root first (`piship-client.test.mjs` imports the built packages).
 
 ## Tests against the stack
 
@@ -281,12 +285,14 @@ node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
 ~/.local/bin/acmecode-reference login              # sign in as alice on the Keycloak page
 ~/.local/bin/acmecode-reference models
 ~/.local/bin/acmecode-reference --smoke-model
-~/.local/bin/acmecode-reference login              # sign in as bob, without a logout
+PISHIP_NO_BROWSER=1 ~/.local/bin/acmecode-reference login   # open the printed URL in a private window, sign in as bob
 ~/.local/bin/acmecode-reference models             # acme/general is no longer available
 ~/.local/bin/acmecode-reference logout
 node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 ( cd examples/enterprise-reference && docker compose down )
 ```
+
+The second `login` must not reuse alice's Keycloak session: the browser that signed her in still holds Keycloak's SSO cookie (the realm keeps an idle session for 30 minutes, `ssoSessionIdleTimeout` 1800 s) and PiShip does not ask Keycloak to show the sign-in page again, so that browser would sign alice in silently and `models` would still list `acme/general`. Open the printed URL in a private window, or first sign out at Keycloak's account page (`http://127.0.0.1:18080/realms/piship-reference/account`).
 
 The launcher is named `acmecode-reference` (`app.command`), so it installs beside the demo company example's `acmecode` without replacing it, and uninstalling one leaves the other. The two share nothing: the launcher, and the state and secret-store entries (kept apart by the distribution ID, `acmecode-reference`), differ. The reference tests read the command from the manifest.
 
@@ -328,7 +334,7 @@ The kit's behaviors, all `passed`: availability, capabilities, prepare, execute,
 
 [`.github/workflows/reference-e2e.yml`](../../.github/workflows/reference-e2e.yml) (`Reference E2E`) runs everything above on clean `ubuntu-latest` runners. It is part of `Release qualification`, whose `Release candidate` waits for it, and also runs nightly and by `workflow_dispatch`; it is not a pull request gate. Five jobs run at once, and the run passes only when all five pass:
 
-- `stack`, the stack as a user starts it: generate an `.env` outside the workspace, pull the images, `docker compose up --wait --wait-timeout 300`, and run `node broker/live-check.mjs` against the stack. The pull and startup times go into the job summary. The stack is then stopped and its `.env` deleted. Then the tests that need no stack: `node --test test/*.test.mjs` in `broker/`, the broker's contract tests, `node --test scripts/test/*.test.mjs`, the log scrubber's tests, `node --test mock-upstream/test/*.test.mjs`, the mock upstream's queued tool calls, and `node --test test/*.test.mjs` in `sandbox/`, the [container sandbox](#reference-container-sandbox)'s contract tests. These use Node built-ins only, so the job runs no `npm ci`.
+- `stack`, the stack as a user starts it: generate an `.env` outside the workspace, pull the images, `docker compose up --wait --wait-timeout 300`, and run `node broker/live-check.mjs` against the stack. The pull and startup times go into the job summary. The stack is then stopped and its `.env` deleted. Then the tests that need no stack: `node --test test/*.test.mjs` in `broker/`, the broker's contract tests, `node --test scripts/test/*.test.mjs`, the log scrubber's tests, `node --test mock-upstream/test/*.test.mjs`, the mock upstream's queued tool calls, and `node --test test/*.test.mjs` in `sandbox/`, the [container sandbox](#reference-container-sandbox)'s contract tests. The broker's and the sandbox's contract tests import PiShip's built packages, so the job runs `npm ci` and `npm run build` first.
 - `reference (1)` to `reference (4)`, the test files, in four groups that `vitest.reference.config.ts` names (`PISHIP_REFERENCE_SHARD=<group>/4`), balanced by their measured durations, about three and a half minutes each; a file no group names runs in the last group. Each runner has its own Docker; the groups split the time, since the stacks, on ports Docker chooses, could also share one host. Each job pulls the images and installs bubblewrap (AcmeCode requires the OS sandbox) and GNOME Keyring with `secret-tool` in the background while it runs `npm ci` and `npm run build`, then runs `npm run test:reference` for its group on a private D-Bus session with an unlocked GNOME Keyring, set up as in the `CI` check job, and `PISHIP_LIVE_SECRET_STORE=1`: AcmeCode stores its credential in the Linux Secret Service and fails with `SECRET_STORE_UNAVAILABLE` rather than use a file. The group with `tests/sandbox.test.ts` needs no stack for that file: it starts the container sandbox service and its own containers.
 
 Every step that can hang has a `timeout-minutes`. When a step fails, the job uploads `reference-e2e-logs-stack` or `reference-e2e-logs-<group>` (kept 14 days): the container logs of the `stack` job's stack or of every stack a test file of that group started, and the log of the sandbox service. The workflow's stack and the test stacks write their logs only through [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs), which replaces every value of 8 characters or more in the stack's `.env` except the ports (every generated secret is 36 characters or longer), anything shaped like a LiteLLM key (`sk-...`), a JWT, or a `Bearer` or `Basic` authorization value, and the value of an OAuth `code`, `state`, or `session_state` parameter. It knows these shapes only: it is a filter for this stack's logs, not a general secret scanner. The `.env` itself is never uploaded. The tests keep logs only when `PISHIP_REFERENCE_LOG_DIR` names a directory, one file per stack, `<project>-<time>.log`; the workflow sets it. A failed nightly run opens or updates the `Nightly Reference E2E is failing` issue.
@@ -376,3 +382,14 @@ The environment must exist and be restricted before the first run: a job that na
 
 To run it locally, with Docker and after `npm run build`, set the variables and `PISHIP_LIVE_PROVIDER=1` for `npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts` at the repository root, without printing the key or leaving it in your shell history. It starts its stack as the other tests in `tests/` do, on ports Docker chooses.
 
+## Before production
+
+The stack takes shortcuts that are fine on a loopback-only machine and wrong anywhere else. Before running the same pieces for real users:
+
+- **Keycloak:** run `start` instead of `start-dev` ([`compose.yaml`](compose.yaml)), with HTTPS and an external database; here the realm lives in the container and is reimported on every start.
+- **Realm:** keep the client's audience mapper naming the broker's `BROKER_AUDIENCE` (`piship-reference-broker` here) and the groups mapper with `full.path` on ([`keycloak/piship-reference-realm.json`](keycloak/piship-reference-realm.json)); the broker matches groups by full path.
+- **LiteLLM database:** a persistent PostgreSQL; here it is on tmpfs, so every user, key, and spend record goes with `docker compose down`. `LITELLM_SALT_KEY` must not change while that database exists.
+- **Broker back channel:** remove `BROKER_ALLOW_INSECURE_BACKCHANNEL` and give the broker `https` URLs for Keycloak's JWKS and LiteLLM ([broker configuration](broker/README.md#configuration)).
+- **Entitlements:** set your groups and models in `GROUP_MODELS` in [`broker/src/broker.mjs`](broker/src/broker.mjs).
+- **Broker state:** idempotency records, rate limits, and per-user serialization are in memory; more than one instance needs a shared store and lock ([broker limits](broker/README.md#limits)).
+- **Endpoints:** give the distribution `https` URLs for the issuer, broker, revoke endpoint, and gateway (the `ACMECODE_*` runtime variables of [`piship.yaml`](piship.yaml)).

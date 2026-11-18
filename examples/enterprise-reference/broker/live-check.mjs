@@ -24,8 +24,10 @@ const fileEnv = Object.fromEntries(
     .map((match) => [match[1], match[2]]),
 );
 const env = { ...fileEnv, ...process.env };
-const broker = `http://127.0.0.1:${env.BROKER_PORT ?? 18070}`;
-const gateway = `http://127.0.0.1:${env.LITELLM_PORT ?? 14000}`;
+// With BROKER_PORT=0 or LITELLM_PORT=0 the ports Docker chose are recorded as
+// *_PUBLISHED_PORT (README, Ports), as get-token.mjs reads Keycloak's.
+const broker = `http://127.0.0.1:${env.BROKER_PUBLISHED_PORT || env.BROKER_PORT || 18070}`;
+const gateway = `http://127.0.0.1:${env.LITELLM_PUBLISHED_PORT || env.LITELLM_PORT || 14000}`;
 
 const rows = [];
 function check(condition, step, detail) {

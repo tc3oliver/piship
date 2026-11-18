@@ -41,10 +41,10 @@ SANDBOX_SHELL=/bin/bash \
 node service/server.mjs
 ```
 
-The distribution is the reference distribution built from [`piship.yaml`](piship.yaml) in this directory, with the [reference stack](../README.md) running for sign-in. `COMMAND` is the launcher's name, `app.command` in the manifest:
+The distribution is the reference distribution built from [`piship.yaml`](piship.yaml) in this directory, with the [reference stack](../README.md) running for sign-in. Leave the service running and, in a second terminal, from the repository root (after `npm ci && npm run build`), build and install it. `COMMAND` is the launcher's installed path; `acmecode-reference` is `app.command` in the manifest:
 
 ```sh
-COMMAND=acmecode-reference
+COMMAND=~/.local/bin/acmecode-reference
 export ACMECODE_SANDBOX_URL=http://127.0.0.1:18075
 # ...and the stack's variables, as in the reference README ("Try it")
 node packages/cli/dist/bin.js build examples/enterprise-reference/sandbox/piship.yaml
