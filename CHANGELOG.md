@@ -262,6 +262,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (`git log --format=%H`, `HEAD^`).
 - A subagent child starts in its parent's Plan/Build mode when the parent started it, never a wider one, instead of always in `defaultMode`; a child started after `/build` could not write and was told to run `/build` ([security](docs/security.md#subagent-child-launch)).
 - A subagent child stopped by SIGINT (Ctrl-C at the parent's terminal) records `session.end`, as one stopped by SIGTERM already did.
+- Parallel session launches keep waiting for the package-configuration lock when their first look finds it already let go, instead of failing with "Package configuration is being changed by another launch" once that first attempt (slow on a loaded machine, or on Windows where the holder check starts a process) has used up the three-second wait.
 
 #### Platform
 - Linux: in a sandbox that denies the network, commands get `npm_config_fetch_retries=0` unless it is set, so `npm view` fails at once instead of after about 70 s of retries. A bwrap failure inside a container names the container's seccomp profile, and [bubblewrap inside a container](docs/troubleshooting.md#bubblewrap-inside-a-container) gives the `--security-opt` options that work without `--privileged`. `doctor` shows bubblewrap's permanent missing `.git/commondir` and `.git/config.worktree` as a note, not a warning.

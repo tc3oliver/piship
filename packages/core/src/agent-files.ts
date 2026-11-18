@@ -612,11 +612,11 @@ function agentFilesTransaction<T>(
           : owner === "missing" && !existsSync(guard) && !existsSync(recovery)
             ? "released"
             : owner;
-      if (seen !== holder || seen === "released") {
-        if (holder !== null)
-          deadline = Math.min(performance.now() + waitMs, cap);
-        holder = seen;
-      }
+      // A release counts on the first look too: a slow first attempt (a
+      // loaded machine) that finds the lock already let go saw the queue move.
+      if (seen === "released" || (holder !== null && seen !== holder))
+        deadline = Math.min(performance.now() + waitMs, cap);
+      holder = seen;
       const left = deadline - performance.now();
       if (left <= 0) throw error;
       const ceiling = Math.min(20 * 2 ** attempt, 400);

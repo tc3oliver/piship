@@ -1108,8 +1108,15 @@ describe("parallel session launches", () => {
         }
         renameSync(from, to);
       };
-      agentFilesLockHooks.beforeHolderCheck = () =>
+      // The first look outlasts the whole budget, as on a loaded runner (a
+      // 1451 ms failure on macOS CI): the release it finds still counts.
+      let first = true;
+      agentFilesLockHooks.beforeHolderCheck = () => {
+        if (first)
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+        first = false;
         rmSync(guard(), { recursive: true, force: true });
+      };
       session(300).restore();
       expect(held).toBeGreaterThan(1);
       expect(Date.now() - started).toBeGreaterThanOrEqual(900);
