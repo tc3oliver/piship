@@ -44,7 +44,7 @@
 - **自己的品牌、自己的指令。** 叫 `acmecode`、`teampi` 或任何名字都行，公司的 instructions、skills、extensions、prompts 和 themes 直接內建。
 - **公司帳號登入。** 開發者用 SSO 登入，PiShip 拿這個身分去公司的 credential broker 換一張短效的 gateway 憑證，存進系統金鑰庫，到期自動續，登出就撤銷。
 - **你的 gateway、你的模型。** 請求只會送到公司的 OpenAI 相容 gateway（LiteLLM 就可以），而且只能用你允許的模型。
-- **真的會執行的政策。** 工具呼叫、讀寫檔案、shell 指令、MCP 工具，都在執行前檢查。想知道為什麼被擋，問 `acmecode policy explain`。你允許的話，每位使用者可以自己打開會留下稽核紀錄的 auto 模式，讓設成 `ask` 的動作不再逐一詢問；`deny` 和強制規則照樣有效。
+- **真的會強制執行的政策。** 工具呼叫、讀寫檔案、shell 指令、MCP 工具，都在執行前檢查。想知道為什麼被擋，問 `acmecode policy explain`。你允許的話，每位使用者可以自己打開會留下稽核紀錄的 auto 模式，讓設成 `ask` 的動作不再逐一詢問；`deny` 和強制規則照樣有效。
 - **沒有沙箱就不執行。** 要求沙箱但沙箱不在，指令就不會在主機上跑，不會偷偷退回沒有保護的模式。
 - **信得過的發版。** 每個平台都是可重現的建置，附 SBOM、授權聲明、弱點掃描關卡、簽章更新通道，一個指令就能 rollback。
 
@@ -87,7 +87,7 @@ acmecode policy explain shell.execute "git status"
 
 玩完先 `acmecode logout`，再執行 `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` 清乾淨。
 
-在 Windows 上，這個 demo 需要原生 sandbox，而 Windows 沒有：改一行設定的方法見 [demo README](examples/demo-company/README.md#deterministic-local-path)，或先從下面的個人版範例開始。在 PowerShell 裡，安裝好的指令是 `$HOME\.local\bin\<name>.cmd`；把這個資料夾加進 `PATH`（`install` 會印出要加的那一行），之後直接用名稱執行，例如 `acmecode login`。
+在 Windows 上，這個 demo 需要原生沙箱，而 Windows 沒有：改一行設定的方法見 [demo README](examples/demo-company/README.md#deterministic-local-path)，或先從下面的個人版範例開始。在 PowerShell 裡，安裝好的指令是 `$HOME\.local\bin\<name>.cmd`；把這個資料夾加進 `PATH`（`install` 會印出要加的那一行），之後直接用名稱執行，例如 `acmecode login`。
 
 CLI 沒有發佈到 npm，請用 `node packages/cli/dist/bin.js` 執行；用 `npx` 或 `npm exec` 會跑去公開的 registry 找。遇到錯誤可以查 [troubleshooting](docs/troubleshooting.md)，每個錯誤代碼和處理方式都在裡面。完整步驟見 [公司 demo](examples/demo-company/README.md)。
 
@@ -206,7 +206,7 @@ updates:
 
 裡面不放任何機密，看起來像機密的欄位會被 schema 直接擋掉。政策、資源、MCP server、稽核和發版關卡都是選填。所有欄位都在 [manifest 說明](docs/manifest.md)。
 
-要做自己公司的發行版，執行 `node packages/cli/dist/bin.js init ./company-agent --managed`，放在自己的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。每個要填的值，[設定指南](docs/agent-setup.md) 都有說明。
+要做自己公司的發行版，執行 `node packages/cli/dist/bin.js init ./company-agent --managed`，放在一個獨立的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。每個要填的值，[設定指南](docs/agent-setup.md) 都有說明。
 
 ## 不是公司也能用
 
@@ -220,7 +220,7 @@ node dist/mypi/piship.mjs install dist/mypi
 
 Windows（PowerShell）：`node packages\cli\dist\bin.js build examples\personal\piship.yaml`，接著 `node dist\mypi\piship.mjs install dist\mypi`，把 `$HOME\.local\bin` 加進 `PATH` 之後直接執行 `mypi`（`install` 會印出要貼的那一行）。
 
-想要開箱即用的 coding agent，可以看 [developer 範例](examples/developer/README.md)（`devcode`）：內建六個 Pi 套件，包括 Claude Code 相容、診斷與 LSP、背景工作、code review、瀏覽器和權限提供者。日常工作不會跳出詢問，只有在 `sudo`、遞迴刪除、破壞性 git、寫到工作區之外時才詢問。另有給公司用的[加固版本](examples/developer/managed.piship.yaml)。先讀[環境需求](examples/developer/README.md#requirements)，確認 Chrome 與瀏覽器套件的 Node 24.18.0 限制。
+想要開箱即用的 coding agent，可以看 [developer 範例](examples/developer/README.md)（`devcode`）：內建六個 Pi 套件，包括 Claude Code 相容、診斷與 LSP、背景工作、code review、瀏覽器和權限提供者。日常工作不會跳出詢問，只有在 `sudo`、遞迴刪除、破壞性 git、寫到工作區之外時才詢問。另有給公司用的[強化版本](examples/developer/managed.piship.yaml)，示範公司如何收緊設定。先讀[環境需求](examples/developer/README.md#requirements)，確認 Chrome 與瀏覽器套件的 Node 24.18.0 限制。
 
 ```bash
 node packages/cli/dist/bin.js build examples/developer/piship.yaml
@@ -244,9 +244,9 @@ agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。
 
 PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還沒：
 
-- **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的 archive（每個 target 各有 `acmecode`、`mypi`、`devcode`）。更早的基準版本（各有 GitHub pre-release）和各版變更見 [docs/status.md](docs/status.md) 與 [changelog](CHANGELOG.md)。
+- **v0.13.0** 是[正式環境驗證的基準版本](docs/status.md#v0130-production-validation-baseline)，用 Pi 1.1.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0) 上有九份附 attestation 的封存檔（每個 target 各有 `acmecode`、`mypi`、`devcode`）。更早的基準版本（各有 GitHub pre-release）和各版變更見 [docs/status.md](docs/status.md) 與 [changelog](CHANGELOG.md)。
 - `main` 釘的是 Pi 1.5.0（就是上面徽章那個版本），還沒發佈，也還沒跑過 release qualification；remote workspace 和 Company Pack 也只在 `main` 上（[status](docs/status.md#other-changes-on-main-unreleased)）。
-- personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
+- personal 發行版已正式支援；managed 存取、治理和發版流程仍是候選（candidate）階段。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
 - 還沒驗證過：真實公司正式環境的 IdP 或 gateway；實際部署的 E2B、CubeSandbox 或 Kubernetes Agent Sandbox；Windows 的本機沙箱（Windows 請改用遠端沙箱）。
 
