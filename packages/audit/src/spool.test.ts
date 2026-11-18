@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { NO_CONTENT_CAPTURE, PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import {
   AUDIT_SPOOL_DIRECTORY,
   AUDIT_SPOOL_LEASE_MS,
@@ -119,12 +120,6 @@ function spoolFiles(): string[] {
   return readdirSync(root).flatMap((key) =>
     readdirSync(join(root, key)).map((name) => join(root, key, name)),
   );
-}
-
-/** The ID of a process that has exited. */
-function deadPid(): number {
-  const { pid } = spawnSync(process.execPath, ["-e", ""]);
-  return pid as number;
 }
 
 /** Make a spool look as if `pid` (on this host) wrote it and then died or lives on. */

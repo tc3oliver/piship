@@ -2,7 +2,7 @@
 // identity and credential state: none survives the sign-out, with or
 // without the runtime variables, while the principal binding and the
 // pending-revocation record (which logout keeps) lose only abandoned ones.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -18,6 +18,7 @@ import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import { DistributionAccess } from "./access/index.js";
 import type { BrandedContext } from "./branded/context.js";
 import { runLogout } from "./branded/login.js";
@@ -96,9 +97,6 @@ async function signIn(ctx: BrandedContext): Promise<string[]> {
   ];
 }
 
-function deadPid(): number {
-  return spawnSync(process.execPath, ["-e", ""]).pid as number;
-}
 function livePid(): number {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: "ignore",

@@ -2,7 +2,7 @@
 // leaves one beside identity metadata, credential metadata, or preferences.
 // The committed file stays authoritative, the startup sweep removes what an
 // abandoned writer left, and a live writer's temporary is never touched.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -21,6 +21,7 @@ import {
   fired,
   injectFault,
 } from "../../../../tests/helpers/fs-faults.js";
+import { deadPid } from "../../../../tests/helpers/processes.js";
 import { accessStatePaths, writeJsonAtomic } from "../access/state.js";
 import { readPreferences, setPreference } from "../config.js";
 import {
@@ -48,9 +49,6 @@ afterEach(() => {
 
 const SENTINEL = "sentinel-secret-temporaries-5d1c";
 const paths = () => accessStatePaths(state);
-function deadPid(): number {
-  return spawnSync(process.execPath, ["-e", ""]).pid as number;
-}
 function livePid(): number {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: "ignore",
