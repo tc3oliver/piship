@@ -28,8 +28,6 @@ export { canonicalJson } from "./digest.js";
 export {
   checkEnforceability,
   checkGovernance,
-  inertRuleWarnings,
-  shellGlobWarnings,
   unapprovedLoadWarnings,
 } from "./governance-lock.js";
 export { initDistribution } from "./init.js";

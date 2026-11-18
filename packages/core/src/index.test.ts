@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LATEST_SCHEMA, readManifest } from "@piship/schema";
+import {
+  LATEST_SCHEMA,
+  narrowRuleWarnings,
+  readManifest,
+} from "@piship/schema";
 import {
   checkGovernance,
   checkPiVersion,
@@ -24,8 +28,6 @@ import {
   shellArg,
   suggestDistributionId,
   requireCurrentLock,
-  inertRuleWarnings,
-  shellGlobWarnings,
   unapprovedLoadWarnings,
   resolveLock,
   runtimeStateDirectory,
@@ -527,7 +529,7 @@ describe("shell glob warnings", () => {
     const rule = (id: string, resource: string, effect: string) =>
       `    - { id: ${id}, action: shell.execute, resource: "${resource}", effect: ${effect} }\n`;
     const yaml = readFileSync(path, "utf8");
-    expect(shellGlobWarnings(readManifest(path))).toEqual([]);
+    expect(narrowRuleWarnings(readManifest(path))).toEqual([]);
     writeFileSync(
       path,
       yaml.replace(
@@ -535,11 +537,12 @@ describe("shell glob warnings", () => {
         `policy:\n  enforced:\n${rule("no-rm", "rm -rf *", "deny")}${rule("rm-ok", "rm -rf **", "deny")}${rule("ls-ok", "ls *", "allow")}${rule("push-force", "git push ** --force*", "ask")}`,
       ),
     );
-    const warnings = shellGlobWarnings(readManifest(path));
+    const warnings = narrowRuleWarnings(readManifest(path));
     expect(warnings.map((item) => item.path)).toEqual([
-      "policy.enforced.no-rm",
-      "policy.enforced.push-force",
+      "policy.enforced[0].resource",
+      "policy.enforced[3].resource",
     ]);
+    expect(warnings[0]?.message).toMatch(/^no-rm: /);
     expect(warnings[0]?.message).toContain(
       "does not match arguments containing / or :",
     );
@@ -638,7 +641,7 @@ describe("inert rule warnings", () => {
     const rule = (id: string, action: string, resource: string) =>
       `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: deny }\n`;
     const yaml = readFileSync(path, "utf8");
-    expect(inertRuleWarnings(readManifest(path))).toEqual([]);
+    expect(narrowRuleWarnings(readManifest(path))).toEqual([]);
     writeFileSync(
       path,
       yaml.replace(
@@ -657,11 +660,11 @@ describe("inert rule warnings", () => {
       ),
     );
     expect(
-      inertRuleWarnings(readManifest(path)).map((item) => item.path),
+      narrowRuleWarnings(readManifest(path)).map((item) => item.path),
     ).toEqual([
-      "policy.enforced.p-bare",
-      "policy.enforced.p-cmd",
-      "policy.enforced.l-bad",
+      "policy.enforced[0].resource",
+      "policy.enforced[1].resource",
+      "policy.enforced[4].resource",
     ]);
   });
 });

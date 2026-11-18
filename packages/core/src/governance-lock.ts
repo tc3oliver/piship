@@ -8,13 +8,7 @@ import {
   unenforcedAction,
   unenforcedRules,
 } from "@piship/policy";
-import {
-  inertRuleMessage,
-  type Manifest,
-  type PolicyRule,
-  shellGlobMessage,
-  type ValidationDiagnostic,
-} from "@piship/schema";
+import type { Manifest, ValidationDiagnostic } from "@piship/schema";
 import { withSessionExportRules } from "./data/session-export.js";
 import { checkPackageTrust } from "./pi-packages/trust.js";
 import type { LockedResource } from "./lock-schema.js";
@@ -187,31 +181,6 @@ export function unapprovedLoadWarnings(
           );
     }
   return warnings;
-}
-
-/** A shell.execute deny or ask rule whose resource uses `*` but no `**`. */
-export function shellGlobWarnings(manifest: Manifest): ValidationDiagnostic[] {
-  return policyRuleMessages(manifest, shellGlobMessage);
-}
-
-/** Rules that parse but can never match (`inertRuleMessage`). */
-export function inertRuleWarnings(manifest: Manifest): ValidationDiagnostic[] {
-  return policyRuleMessages(manifest, inertRuleMessage);
-}
-
-function policyRuleMessages(
-  manifest: Manifest,
-  check: (rule: PolicyRule) => string | undefined,
-): ValidationDiagnostic[] {
-  const policy = manifest.governance?.policy;
-  if (!policy) return [];
-  return [
-    ...policy.enforced.map((rule) => ["enforced", rule] as const),
-    ...policy.defaults.map((rule) => ["defaults", rule] as const),
-  ].flatMap(([layer, rule]) => {
-    const message = check(rule);
-    return message ? [{ path: `policy.${layer}.${rule.id}`, message }] : [];
-  });
 }
 
 /**

@@ -2,11 +2,11 @@ import { join, resolve } from "node:path";
 import {
   approvedNetworkEnvironment,
   DEFAULT_NETWORK_POLICY,
+  isCredentialName,
 } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
   filterEnvironment,
-  isCredentialName,
   STDERR_TRUNCATION_MARKER,
   sanitizeStderr,
   stripCredentials,

@@ -641,6 +641,42 @@ describe("validate", () => {
     expect(stderr.join("\n")).toContain(warning);
   });
 
+  it("validate and lock print the same rule warnings", async () => {
+    const rule = (id: string, action: string, resource: string) => ({
+      id,
+      action,
+      resource,
+      effect: "deny",
+    });
+    const result = await validate({
+      policy: {
+        default: "ask",
+        enforced: [
+          rule("acme.rm", "shell.execute", "rm -rf *"),
+          rule("acme.push", "git.push", "main"),
+        ],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const warnings = (text: string) =>
+      text.split("\n").filter((line) => line.startsWith("Warning: policy."));
+    expect(warnings(result.stderr)).toEqual([
+      expect.stringContaining(
+        "Warning: policy.enforced[0].resource: acme.rm: ",
+      ),
+      expect.stringContaining(
+        "Warning: policy.enforced[1].resource: acme.push: ",
+      ),
+    ]);
+    const stderr: string[] = [];
+    const locked = await runCli(["lock", join(temp, "piship.yaml")], {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    expect(locked, stderr.join("\n")).toBe(0);
+    expect(warnings(stderr.join("\n"))).toEqual(warnings(result.stderr));
+  });
+
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;
