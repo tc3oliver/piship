@@ -75,6 +75,11 @@ export interface SubagentParent {
   readonly session: string;
   readonly workspace: string;
   readonly grant?: SubagentGrantBinding;
+  /**
+   * The parent's Plan/Build mode when it started the child; the child starts
+   * in it (never wider). Absent when the parent has no workflow mode.
+   */
+  readonly workflowMode?: "plan" | "build";
   /** Rechecks the live owner record at every grant use. Never serialized. */
   readonly grantActive?: () => boolean;
 }
@@ -133,7 +138,10 @@ function parse(text: string): OwnerRecord | undefined {
       typeof value.host === "string" &&
       typeof value.session === "string" &&
       typeof value.workspace === "string" &&
-      (value.grant === undefined || validBinding(value.grant))
+      (value.grant === undefined || validBinding(value.grant)) &&
+      (value.workflowMode === undefined ||
+        value.workflowMode === "plan" ||
+        value.workflowMode === "build")
     )
       return value;
   } catch {
@@ -229,11 +237,11 @@ export function publishSubagentOwner(
   removeAtExit(path);
 }
 
-/** Revocation is visible to already-running children on their next decision. */
-export function revokePublishedSubagentGrant(
+/** Rewrites this process's published records of `session` through `change`. */
+function rewritePublished(
   stateDir: string,
   session: string,
-  id: string,
+  change: (record: OwnerRecord) => OwnerRecord | undefined,
 ): void {
   const directory = join(stateDir, SUBAGENT_OWNER_DIRECTORY);
   for (const path of published) {
@@ -242,12 +250,11 @@ export function revokePublishedSubagentGrant(
       const record = parse(
         readOwnedFile(path, MAX_RECORD_BYTES, { closed: true }),
       );
-      if (!record || record.session !== session || record.grant?.id !== id)
-        continue;
-      const { grant: _grant, ...withoutGrant } = record;
+      const next = record?.session === session ? change(record) : undefined;
+      if (!next) continue;
       const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
       try {
-        writeFileSync(temporary, JSON.stringify(withoutGrant), {
+        writeFileSync(temporary, JSON.stringify(next), {
           flag: "wx",
           mode: 0o600,
         });
@@ -264,6 +271,35 @@ export function revokePublishedSubagentGrant(
       }
     }
   }
+}
+
+/**
+ * Records the session's current Plan/Build mode for the children it starts
+ * from now on; a child already running keeps the mode it started in.
+ */
+export function publishSubagentWorkflowMode(
+  stateDir: string,
+  session: string,
+  workflowMode: "plan" | "build",
+): void {
+  rewritePublished(stateDir, session, (record) =>
+    record.workflowMode === workflowMode
+      ? undefined
+      : { ...record, workflowMode },
+  );
+}
+
+/** Revocation is visible to already-running children on their next decision. */
+export function revokePublishedSubagentGrant(
+  stateDir: string,
+  session: string,
+  id: string,
+): void {
+  rewritePublished(stateDir, session, (record) => {
+    if (record.grant?.id !== id) return undefined;
+    const { grant: _grant, ...withoutGrant } = record;
+    return withoutGrant;
+  });
 }
 
 /**
@@ -304,7 +340,9 @@ export function authenticateSubagentChild(
   )
     throw unauthenticated();
   const binding = record.grant;
-  if (!binding) return { session: record.session, workspace: record.workspace };
+  const mode = record.workflowMode ? { workflowMode: record.workflowMode } : {};
+  if (!binding)
+    return { session: record.session, workspace: record.workspace, ...mode };
   const active = (): boolean => {
     try {
       const current = parse(
@@ -328,6 +366,7 @@ export function authenticateSubagentChild(
   return {
     session: record.session,
     workspace: record.workspace,
+    ...mode,
     grant: binding,
     grantActive: active,
   };

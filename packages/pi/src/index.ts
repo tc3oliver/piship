@@ -393,6 +393,9 @@ export async function launchPiDistribution(
       ? {
           subagent: {
             parentSession: parent.session,
+            ...(parent.workflowMode
+              ? { workflowMode: parent.workflowMode }
+              : {}),
             ...(parent.grant ? { grant: parent.grant } : {}),
             ...(parent.grantActive ? { grantActive: parent.grantActive } : {}),
           },

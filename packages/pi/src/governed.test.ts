@@ -56,6 +56,10 @@ import {
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
 import { modelPolicy } from "./launch/governance.js";
+import {
+  authenticateSubagentChild,
+  publishSubagentOwner,
+} from "./launch/subagent-owner.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 useCompiledJobHelper();
@@ -2769,6 +2773,52 @@ describe("piship-workflow", () => {
     expect(start()).toEqual({ piship_workflow: "Company build rules." });
     await workflow.commands.get("plan")?.handler("", context(true));
     expect(session.workflowMode).toBe("plan");
+  });
+
+  it("records the parent's current mode for the subagent children it starts", async () => {
+    const { session } = await open();
+    const env: NodeJS.ProcessEnv = {};
+    const state = session.options.stateDir;
+    const record = { session: session.sessionId, workspace: tmpdir() };
+    publishSubagentOwner(state, record, env);
+    const workflow = load(workflowExtension(session, {}));
+    const childMode = () =>
+      authenticateSubagentChild(state, { ...env }).workflowMode;
+    expect(childMode()).toBe("plan");
+    await workflow.commands.get("build")?.handler("", context(true));
+    expect(childMode()).toBe("build");
+    await workflow.commands.get("plan")?.handler("", context(true));
+    expect(childMode()).toBe("plan");
+  });
+
+  it("starts a subagent child in its parent's mode, never wider, else the default", () => {
+    const child = (workflowMode?: "plan" | "build") =>
+      ({
+        workflowMode: null,
+        sessionId: "child",
+        options: {
+          stateDir: tmpdir(),
+          subagent: {
+            parentSession: "parent",
+            ...(workflowMode ? { workflowMode } : {}),
+          },
+        },
+      }) as unknown as GovernanceSession;
+    const start = (
+      parent: "plan" | "build" | undefined,
+      defaultMode: string,
+    ) => {
+      const gov = child(parent);
+      workflowExtension(gov, { defaultMode });
+      return gov.workflowMode;
+    };
+    // A child of a Build parent can write, as the parent can.
+    expect(start("build", "plan")).toBe("build");
+    // A Plan parent keeps its child in Plan even where the default is Build.
+    expect(start("plan", "build")).toBe("plan");
+    // No recorded mode: the distribution default, as before.
+    expect(start(undefined, "plan")).toBe("plan");
+    expect(start(undefined, "build")).toBe("build");
   });
 });
 

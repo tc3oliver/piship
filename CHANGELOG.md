@@ -219,6 +219,8 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - The sandbox hint names the right path: Seatbelt redirection errors, relative paths, and Linux `Device or resource busy` on protected git files now name the path or git hint, and a refused connection, or a network command that printed nothing under `network.mode: deny`, gets the network hint ([sandbox](docs/sandbox.md#what-piship-controls)).
 - The `read` tool returns PNG, JPEG, GIF, WebP, and BMP files as images, on the host and in a remote workspace, instead of garbled text. A `bash` result no longer names a full-output file deleted after a late write failure.
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (`git log --format=%H`, `HEAD^`).
+- A subagent child starts in its parent's Plan/Build mode when the parent started it, never a wider one, instead of always in `defaultMode`; a child started after `/build` could not write and was told to run `/build` ([security](docs/security.md#subagent-child-launch)).
+- A subagent child stopped by SIGINT (Ctrl-C at the parent's terminal) records `session.end`, as one stopped by SIGTERM already did.
 
 #### Platform
 

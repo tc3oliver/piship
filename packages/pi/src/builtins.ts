@@ -30,6 +30,7 @@ import {
   uiChannel,
 } from "./governed-tools.js";
 import { grantCommand } from "./grant-command.js";
+import { publishSubagentWorkflowMode } from "./launch/subagent-owner.js";
 
 export const DEFAULT_PLAN_PROMPT =
   "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available (read on a directory lists it): do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
@@ -568,8 +569,17 @@ export function workflowExtension(
   gov: GovernanceSession,
   settings: Readonly<Record<string, string>>,
 ): InlineExtension {
-  const initial = settings.defaultMode === "build" ? "build" : "plan";
-  gov.workflowMode = initial;
+  // A subagent child starts in its parent's mode, so it is never wider than
+  // the parent; without a recorded mode it takes the default.
+  const initial =
+    gov.options.subagent?.workflowMode ??
+    (settings.defaultMode === "build" ? "build" : "plan");
+  const record = (mode: "plan" | "build") => {
+    gov.workflowMode = mode;
+    if (!gov.options.subagent)
+      publishSubagentWorkflowMode(gov.options.stateDir, gov.sessionId, mode);
+  };
+  record(initial);
   const show = (ctx: ExtensionContext) => {
     if (ctx.hasUI)
       ctx.ui.setStatus(
@@ -583,7 +593,7 @@ export function workflowExtension(
       const switchTo =
         (mode: "plan" | "build") =>
         async (_args: string, ctx: ExtensionContext) => {
-          gov.workflowMode = mode;
+          record(mode);
           gov.emit("policy.loaded", {
             policy: gov.policyId,
             detail: { workflowMode: mode },
