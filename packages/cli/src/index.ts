@@ -1852,12 +1852,13 @@ async function runOperations(
     const json = rest[0] === "--json";
     const distribution = { id: app.id, version: app.version };
     let report: unknown;
-    if (lock.access || lock.governance) {
-      const result = runLauncher(
-        artifact,
-        app.command,
-        json ? ["doctor", "--json"] : ["doctor"],
+    // State doctor creates is marked, so a later install adopts it.
+    const launch = (args: string[]) =>
+      withTestState({ value: app.id }, () =>
+        runLauncher(artifact, app.command, args),
       );
+    if (lock.access || lock.governance) {
+      const result = launch(json ? ["doctor", "--json"] : ["doctor"]);
       const text = result.stdout.trimEnd();
       if (json)
         try {
@@ -1875,7 +1876,7 @@ async function runOperations(
         throw new Error(result.stderr.trim() || "doctor found problems");
       }
     }
-    const result = runLauncher(artifact, app.command, ["--smoke"]);
+    const result = launch(["--smoke"]);
     if (result.status !== 0) {
       const error = `Pi launch failed: ${launcherFailure(result, "Pi")}`;
       if (json)

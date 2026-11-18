@@ -293,7 +293,7 @@ describe("CLI", () => {
     );
     expect(dev("build", manifest).status).toBe(0);
   }, 360000);
-  it("installs after piship test without --use-existing-state, and only once", () => {
+  it("installs after piship test or doctor without --use-existing-state, and only once", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-first-run-"));
     temporary.push(temp);
     const directory = join(temp, "first-run");
@@ -356,6 +356,25 @@ describe("CLI", () => {
     expect(run(manager, "uninstall", "first-run").status).toBe(0);
     const again = run(manager, "install", payload);
     expect(again.status, again.stderr).toBe(0);
+    // `piship doctor` on the build folder marks the state it creates as test
+    // state too, so a first install after it adopts that state.
+    const fresh: NodeJS.ProcessEnv = {
+      ...env,
+      PISHIP_STATE_HOME: join(temp, "doctor-state"),
+      PISHIP_INSTALL_HOME: join(temp, "doctor-install"),
+      PISHIP_BIN_HOME: join(temp, "doctor-bin"),
+    };
+    const afterDoctor = (...args: string[]) =>
+      spawnSync(process.execPath, args, {
+        cwd: temp,
+        env: fresh,
+        encoding: "utf8",
+      });
+    const doctor = afterDoctor(bin, "doctor", payload);
+    expect(doctor.status, doctor.stderr).toBe(0);
+    expect(existsSync(join(temp, "doctor-state", "first-run"))).toBe(true);
+    const adopted = afterDoctor(manager, "install", payload);
+    expect(adopted.status, adopted.stderr).toBe(0);
   }, 360000);
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";

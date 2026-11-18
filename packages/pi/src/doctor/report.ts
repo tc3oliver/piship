@@ -113,6 +113,18 @@ export class DoctorReport {
     return `${count("ok")} ok, ${count("warn")} warn, ${failed.length} fail (${failed.map((check) => check.label).join(", ")})`;
   }
 
+  /** The closing line of a passing report with warnings, else undefined. */
+  warnings(): string | undefined {
+    if (this.#failed) return undefined;
+    const warned = this.toJSON().groups.flatMap(({ group, checks }) =>
+      checks
+        .filter((check) => check.status === "warn")
+        .map((check) => `${group}/${check.label}`),
+    );
+    if (!warned.length) return undefined;
+    return `No problems; ${warned.length} warning${warned.length === 1 ? "" : "s"}: ${warned.join(", ")}`;
+  }
+
   section(group: DoctorGroup): DoctorSection {
     const line =
       (mark: keyof typeof STATUS) => (label: string, value: string) => {
