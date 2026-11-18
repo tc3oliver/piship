@@ -21,6 +21,16 @@ Seven schemas are accepted. `piship/v1` is the stable contract ([stability](#sta
 - **Provider versions and capability contracts stay separate.** A provider's SemVer `version` and the `piship.capability/<name>/v1` contract it `implements` are different things; neither changes the manifest schema.
 - **`model.use`** stays accepted as an alias of `model.select` in manifests and in `config/policy.json`.
 
+## Editor support
+
+[`schema/piship-v1.schema.json`](../schema/piship-v1.schema.json) is a JSON Schema (draft-07) for `piship/v1` manifests: completion, a one-line description on hover, values for mode-like fields, and a warning on an unknown field. It checks section and field names, not the validation rules below, so `piship validate` stays authoritative. `piship init` writes this first line, which the YAML language server (VS Code's YAML extension, and other editors that use it) reads:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/tc3oliver/piship/main/schema/piship-v1.schema.json
+```
+
+Add the same line to an existing manifest. The URL follows `main`, which may name a field the PiShip you run does not have yet; to match a release, replace `main` with its tag (any release after v0.13.0, the first to carry the file). The examples do not carry the line, because each example's lock records the manifest's bytes.
+
 ## Common fields
 
 Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, and `deployment.mode`. `runtime.pi` is optional: left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest; a manifest that states it must state exactly that pin (`validate` says to remove the line or set the pin). `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (from v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
