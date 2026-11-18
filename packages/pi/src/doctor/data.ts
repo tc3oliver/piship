@@ -42,6 +42,7 @@ import {
   windowsSystemRoot,
 } from "@piship/sandbox";
 import type { GovernanceManifest, ToolExposure } from "@piship/schema";
+import { interruptible, openInterruptible } from "../commands/session.js";
 import {
   buildExposureTable,
   exposureConfigOf,
@@ -697,8 +698,16 @@ async function collectSession(
   let openError: string | undefined;
   let closeError: string | undefined;
   let status: AuditStatus | undefined;
+  // A Ctrl-C deletes a sandbox claim the probe is creating or holds.
+  const interrupts = openInterruptible(
+    ctx,
+    prepared,
+    false,
+    (c, p, interactive, _cache, signal) =>
+      openGovernance(c, p, interactive, false, signal),
+  );
   try {
-    session = await openGovernance(ctx, prepared, false, false);
+    session = await interrupts.gov;
     if (session) {
       mcp = session.mcpReports;
       // The sandbox this session already activated serves the checks.
@@ -738,6 +747,7 @@ async function collectSession(
       else shutdownError = formatError(error);
       status = session.audit.status();
     }
+  interrupts.release();
   return {
     ...(mcp ? { mcp } : {}),
     ...(exposure ? { exposure } : {}),
@@ -786,13 +796,19 @@ export async function collectDoctorData(
     const manifest = lock.governance.manifest;
     let inspection: GovernanceInspection | undefined;
     let inspectionError: string | undefined;
+    // Inspecting activates the sandbox once: a Ctrl-C deletes its claim.
+    const inspecting = interruptible((signal) =>
+      inspectGovernance({
+        ...governanceOptions(ctx, lock, prepared, false),
+        signal,
+      }),
+    );
     try {
-      inspection = await inspectGovernance(
-        governanceOptions(ctx, lock, prepared, false),
-      );
+      inspection = await inspecting.result;
     } catch (error) {
       inspectionError = formatError(error);
     }
+    inspecting.release();
     // Without a policy there is nothing a session could enforce.
     const session = inspection
       ? await collectSession(ctx, prepared)

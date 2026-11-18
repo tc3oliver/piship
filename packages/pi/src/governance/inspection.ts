@@ -34,7 +34,7 @@ import {
 } from "./options.js";
 import { projectItemRequest } from "./project.js";
 import { fileMatches, packageRoot, payloadTree } from "./resources.js";
-import { sandboxBackend } from "./sandbox.js";
+import { interruptibleBackend, sandboxBackend } from "./sandbox.js";
 
 export interface GovernanceInspection {
   readonly project: ProjectIdentity;
@@ -82,7 +82,11 @@ export async function inspectGovernance(
   let workspace: WorkspaceReport | undefined;
   let tmpDir = tmpdir();
   try {
-    const backend = await sandboxBackend(options);
+    const declared = await sandboxBackend(options);
+    const backend =
+      declared && options.signal
+        ? interruptibleBackend(declared, options.signal)
+        : declared;
     const sandbox = await activateSandbox(sandboxConfig(options), {
       ...(backend ? { backend } : {}),
       workspace: project.root,

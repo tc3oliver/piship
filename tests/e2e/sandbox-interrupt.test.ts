@@ -23,7 +23,7 @@ import { branded, launcher } from "../helpers/distribution.js";
 
 // A Ctrl-C while the launch waits for a SandboxClaim from a warm pool with no
 // ready pod: the claim is deleted at once, not left holding a pod until its
-// shutdownTime, and the launch exits 130.
+// shutdownTime, and the launch exits 130. Doctor's sandbox probe likewise.
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
 const temporary: string[] = [];
@@ -122,20 +122,27 @@ describe.skipIf(process.platform === "win32")(
       const login = await run(["login"]);
       expect(login.status, login.stderr).toBe(0);
 
-      const done = await run(["--smoke"], true);
-      expect(done.stderr).toContain(
-        "Notice: requesting a sandbox from warm pool python-pool in namespace agents; waiting up to 120 s for it to become ready (Ctrl-C cancels).",
-      );
-      expect(done.status, done.stderr).toBe(130);
-      const created = cluster.requests.find(
-        (request) => request.method === "POST" && request.path === CLAIMS,
-      );
-      const name = JSON.parse(created?.body.toString() ?? "{}").metadata?.name;
-      expect(name).toMatch(/^piship-/);
-      expect(cluster.requests.at(-1)).toMatchObject({
-        method: "DELETE",
-        path: `${CLAIMS}/${name}`,
-      });
+      // Doctor probes the sandbox with a fresh claim, cancelled the same way.
+      for (const args of [["--smoke"], ["doctor"]]) {
+        const from = cluster.requests.length;
+        const done = await run(args, true);
+        expect(done.stderr).toContain(
+          "Notice: requesting a sandbox from warm pool python-pool in namespace agents; waiting up to 120 s for it to become ready (Ctrl-C cancels).",
+        );
+        expect(done.status, done.stderr).toBe(130);
+        const created = cluster.requests
+          .slice(from)
+          .find(
+            (request) => request.method === "POST" && request.path === CLAIMS,
+          );
+        const name = JSON.parse(created?.body.toString() ?? "{}").metadata
+          ?.name;
+        expect(name).toMatch(/^piship-/);
+        expect(cluster.requests.at(-1)).toMatchObject({
+          method: "DELETE",
+          path: `${CLAIMS}/${name}`,
+        });
+      }
     }, 180000);
   },
 );
