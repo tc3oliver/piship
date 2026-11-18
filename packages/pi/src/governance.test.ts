@@ -73,6 +73,7 @@ async function managedSession(
     tools?: boolean;
     fail?: () => Error;
     baseUrl?: string;
+    noCredential?: boolean;
   } = {
     keys: [],
   },
@@ -96,6 +97,7 @@ async function managedSession(
     providerId: "acmecode",
     allowedModelIds: ["acme/coder"],
     command: "acme",
+    ...(options.noCredential ? { noCredential: true } : {}),
     apiKey: async ({ force }) => {
       calls += 1;
       if (options.fail) throw options.fail();
@@ -356,6 +358,21 @@ describe("managed model governance on the pinned Pi runtime", () => {
     expect(last(session)?.errorMessage).toMatch(
       /\nAction: Send the message again; if it fails again, run acme login in a terminal$/,
     );
+    session.dispose();
+  });
+
+  it("does not advise login after a 401 when no credential provider is configured", async () => {
+    services.knobs.acceptedKeys = [];
+    const { session } = await managedSession({
+      keys: ["piship-no-credential"],
+      noCredential: true,
+    });
+    await session.prompt("hello");
+    const text = last(session)?.errorMessage;
+    expect(text).toMatch(
+      /\nAction: This distribution sends no credential \(credential\.provider: none\); check whether the model server needs a key, and if it does, set credential\.provider in the manifest$/,
+    );
+    expect(text).not.toContain("login");
     session.dispose();
   });
 

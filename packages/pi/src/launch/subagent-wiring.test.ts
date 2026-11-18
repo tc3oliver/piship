@@ -85,7 +85,7 @@ describe("a subagent child's options reach what enforces them", () => {
     await expect(
       runSubagentChild(ctx, { prompt: "t", model: "acme/m" }),
     ).rejects.toThrow("stop-after-prepareAccess");
-    expect(seen.access).toEqual([[ctx, "acme/m"]]);
+    expect(seen.access).toEqual([[ctx, "acme/m", false, "subagent"]]);
   });
 
   it("passes the child's exclusions and allowlist to Pi's session", async () => {

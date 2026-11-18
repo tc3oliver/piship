@@ -573,7 +573,7 @@ export async function runSubagentChild(
 ): Promise<void> {
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
-  const prepared = await prepareAccess(ctx, child.model);
+  const prepared = await prepareAccess(ctx, child.model, false, "subagent");
   startupMark("access_prepared");
   const gov = await openGovernance(ctx, prepared, false);
   startupMark("governance_open");

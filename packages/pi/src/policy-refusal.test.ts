@@ -1,4 +1,4 @@
-import type { ResolvedDecision } from "@piship/contracts";
+import { type ResolvedDecision, redact } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import type { GovernanceSession } from "./governance-session.js";
 import { whyAsked } from "./governance/approval.js";
@@ -23,7 +23,7 @@ const decision = (extra: Partial<ResolvedDecision> = {}) =>
 describe("a policy refusal", () => {
   it("names the policy, rule, reason and remedy, and tells the model not to retry", () => {
     expect(policyRefusal(gov, decision(), "curl")).toBe(
-      "curl is not allowed by acme rule no-curl: network tools are blocked. Ask the distribution owner. Do not retry it or work around the rule; tell the user what was blocked.",
+      "curl is not allowed by acme rule no-curl (network tools are blocked). Ask the distribution owner. Do not retry it or work around the rule; tell the user what was blocked.",
     );
   });
 
@@ -36,8 +36,28 @@ describe("a policy refusal", () => {
         false,
       ),
     ).toBe(
-      "curl is not allowed by acme rule no-curl: No network from the shell. Ask the distribution owner.",
+      "curl is not allowed by acme rule no-curl (No network from the shell). Ask the distribution owner.",
     );
+  });
+
+  it("keeps the reason of a rule whose id ends in a credential word through redact", () => {
+    for (const ruleId of [
+      "deny.secret",
+      "no-token",
+      "password",
+      "credentials",
+    ]) {
+      const text = policyRefusal(
+        gov,
+        decision({ ruleId, reason: "Secrets are off limits." }),
+        "read",
+        false,
+      );
+      expect(redact(text)).toBe(text);
+      expect(text).toContain("(Secrets are off limits)");
+    }
+    // A secret value is still masked.
+    expect(redact("token: abc123")).toBe("token: [REDACTED]");
   });
 
   it("says the user declined, not that a rule did", () => {
@@ -93,7 +113,7 @@ describe("a policy refusal", () => {
 
   it("speaks to the user, not the model, for the user's own ! command", () => {
     expect(policyRefusal(gov, decision(), "This command", false)).toBe(
-      "This command is not allowed by acme rule no-curl: network tools are blocked. Ask the distribution owner.",
+      "This command is not allowed by acme rule no-curl (network tools are blocked). Ask the distribution owner.",
     );
     expect(
       policyRefusal(
@@ -109,7 +129,7 @@ describe("a policy refusal", () => {
 describe("what the user reads of a refusal", () => {
   it("leaves out the instructions to the model, and says what the user does", () => {
     expect(userText(policyRefusal(gov, decision(), "curl"))).toBe(
-      "curl is not allowed by acme rule no-curl: network tools are blocked. Ask the distribution owner.",
+      "curl is not allowed by acme rule no-curl (network tools are blocked). Ask the distribution owner.",
     );
     expect(
       userText(

@@ -473,7 +473,7 @@ export function parseRuleList(
         level: "warning",
         source,
         ruleId: rule.id,
-        message: `Ignored allow rule ${rule.id}: ${why}`,
+        message: `Ignored allow rule ${rule.id} (${why})`,
       });
       return;
     }
@@ -618,7 +618,7 @@ export class PolicyEngine {
           level: "warning",
           source,
           ruleId: rule.id,
-          message: `Ignored allow rule ${rule.id}: ${why}`,
+          message: `Ignored allow rule ${rule.id} (${why})`,
         });
       }
       return wrap(kept, layer, source);

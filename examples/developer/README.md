@@ -66,7 +66,7 @@ The decisions come from the permission provider, configured by the file the mani
 
 | Area | What |
 | --- | --- |
-| Files | `read`, `write`, `edit`, `grep`, `find`, and `ls` in the workspace; reads anywhere outside it (toolchains, sibling repositories, caches) except the denied paths; writes to `/tmp`, the system temporary folders, and `~/.cache` |
+| Files | `read`, `write`, and `edit` in the workspace (a governed session has no `grep`, `find`, or `ls` tool; searching runs through the shell); reads anywhere outside it (toolchains, sibling repositories, caches) except the denied paths; writes to `/tmp`, the system temporary folders, and `~/.cache` |
 | Inspecting | `cat`, `head`, `tail`, `wc`, `diff`, `rg`, `fd`, `jq`, `sed`, `awk`, `ps`, `lsof`, `which`, `echo`, `sleep`, and similar |
 | Changing the workspace | `mkdir`, `touch`, `cp`, `mv`, `ln`, `rm` without a recursive flag, `tee`, `chmod` without `-R`, `tar`, `zip`, `patch`, and scripts the project holds (`./...`, `node_modules/.bin/...`, `.venv/bin/...`, `bash x.sh`) |
 | Version control | `git` in general, `git clean -n`, and reading `git config`; `gh pr`, `issue`, `repo`, `run`, and `search` reads |

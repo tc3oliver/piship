@@ -198,6 +198,7 @@ export async function createModelRuntime(
       kind: "managed-endpoint",
       providerId: activated.runtime.providerId,
       command: ctx.metadata.app.command,
+      ...(activated.runtime.requiresCredential ? {} : { noCredential: true }),
       allowedModelIds,
       // A virtual model is selected, never dispatched.
       dispatchModelIds,

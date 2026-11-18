@@ -74,6 +74,7 @@ export async function prepareAccess(
   ctx: LaunchContext,
   requestedModel: string | undefined,
   listOnly = false,
+  requestedBy?: "subagent",
 ): Promise<PreparedAccess> {
   const metrics = launchMetrics(ctx.metadata, ctx.stateDir, VERSION);
   if (!ctx.metadata.access) {
@@ -138,6 +139,7 @@ export async function prepareAccess(
   try {
     const activated = await access.activate({
       ...(requestedModel ? { requestedModel } : {}),
+      ...(requestedBy ? { requestedBy } : {}),
       ...(listOnly ? { listOnly } : {}),
     });
     return { metrics, access, activated, removedEnvironment, events };

@@ -297,6 +297,24 @@ describe("effective model catalog (§10)", () => {
     ).toBe(GENERAL);
   });
 
+  it("points a subagent's refused model at its agent definition, not --model", async () => {
+    services.knobs.entitledModels = [CODER];
+    const distribution = DistributionAccess.open(options());
+    await login(distribution);
+    const refused = distribution.activate({
+      requestedModel: GENERAL,
+      requestedBy: "subagent",
+    });
+    await expect(refused).rejects.toMatchObject({
+      userAction: expect.stringContaining(
+        `Choose one of: ${CODER}. Change or remove model: in the subagent's agent definition`,
+      ),
+    });
+    await expect(refused).rejects.not.toMatchObject({
+      userAction: expect.stringContaining("--model"),
+    });
+  });
+
   it("lets a user preference only narrow the effective catalog", async () => {
     services.knobs.entitledModels = [CODER, GENERAL];
     const distribution = DistributionAccess.open(options());
