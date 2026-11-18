@@ -70,12 +70,15 @@ function sessionDirectory(
   return dir;
 }
 
+// Node emulates SIGINT (Ctrl-C) and SIGBREAK (Ctrl-Break) for a Windows console.
 const STARTUP_SIGNALS: NodeJS.Signals[] =
-  process.platform === "win32" ? ["SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+  process.platform === "win32"
+    ? ["SIGINT", "SIGTERM", "SIGBREAK"]
+    : ["SIGINT", "SIGTERM", "SIGHUP"];
 
 /**
  * Opens governance with signal handlers already in place. Node's default exit
- * on SIGINT, SIGTERM or SIGHUP skips every cleanup, so a Ctrl-C while a remote
+ * on SIGINT, SIGTERM, SIGHUP or SIGBREAK skips every cleanup, so a Ctrl-C while a remote
  * sandbox is being created (a SandboxClaim waiting for a warm pod) would leave
  * it on the cluster until its shutdownTime. Here the signal cancels creating
  * it, closes a session that did open (stopping background tasks and disposing
@@ -89,24 +92,42 @@ export function openInterruptible(
   interactive: boolean,
   open = openGovernance,
 ): { gov: Promise<GovernanceSession | null>; release: () => void } {
+  const { result, release } = interruptible(
+    (signal) => open(ctx, prepared, interactive, true, signal),
+    (gov) => gov?.close(),
+  );
+  return { gov: result, release };
+}
+
+/**
+ * The signal handling of `openInterruptible` around any start that may create
+ * a sandbox, such as doctor's governance inspection; `close` ends what a start
+ * that settled anyway made.
+ */
+export function interruptible<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  close: (value: T) => unknown = () => undefined,
+): { result: Promise<T>; release: () => void } {
   const abort = new AbortController();
-  const opening = open(ctx, prepared, interactive, true, abort.signal);
+  const opening = start(abort.signal);
   const onSignal = (signal: NodeJS.Signals) => {
-    const code = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
+    // 128 + the signal number (SIGBREAK is 21 on Windows); SIGTERM is 143.
+    const code =
+      { SIGHUP: 129, SIGINT: 130, SIGBREAK: 149 }[signal as string] ?? 143;
     // A loop that drains before either exit still ends with the signal's code.
     process.exitCode = code;
     abort.abort();
     setTimeout(() => process.exit(code), 10_000).unref();
     void opening
-      .then((gov) => gov?.close())
+      .then(close)
       .catch(() => undefined)
       .finally(() => process.exit(code));
   };
   for (const signal of STARTUP_SIGNALS) process.once(signal, onSignal);
   const never = new Promise<never>(() => undefined);
   return {
-    gov: opening.then(
-      (gov) => (abort.signal.aborted ? never : gov),
+    result: opening.then(
+      (value) => (abort.signal.aborted ? never : value),
       (error: unknown) =>
         abort.signal.aborted ? never : Promise.reject(error),
     ),

@@ -36,8 +36,7 @@ function fakeOpen(onAbort: "resolve" | "reject", close = vi.fn()) {
   return { open, close, signal: () => signal };
 }
 
-// Windows has no SIGINT handler here (STARTUP_SIGNALS is SIGTERM only).
-describe.skipIf(process.platform === "win32")("openInterruptible", () => {
+describe("openInterruptible", () => {
   beforeEach(() => {
     // The handler's 10 s fallback exit must never fire in the test process.
     vi.useFakeTimers();
@@ -91,4 +90,41 @@ describe.skipIf(process.platform === "win32")("openInterruptible", () => {
     release();
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
+
+  it.each([
+    ["SIGINT", 130],
+    ["SIGBREAK", 149],
+  ] as const)(
+    "aborts on a Windows console %s and exits %i",
+    async (signal, code) => {
+      const exit = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const platform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      vi.resetModules();
+      try {
+        // The signal list is chosen when the module loads.
+        const windows = await import("./session.js");
+        const hup = process.listenerCount("SIGHUP");
+        const fake = fakeOpen("resolve");
+        const { gov, release } = windows.openInterruptible(
+          ctx,
+          prepared,
+          false,
+          fake.open,
+        );
+        // No SIGHUP on Windows; Ctrl-Break is SIGBREAK.
+        expect(process.listenerCount("SIGHUP")).toBe(hup);
+        process.emit(signal as NodeJS.Signals, signal as NodeJS.Signals);
+        expect(fake.signal()?.aborted).toBe(true);
+        expect(await settled(gov)).toBe(false);
+        expect(exit).toHaveBeenCalledWith(code);
+        expect(fake.close).toHaveBeenCalledOnce();
+        release();
+      } finally {
+        if (platform) Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 });
