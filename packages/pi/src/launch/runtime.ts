@@ -306,24 +306,39 @@ function openChildSession(cwd: string, child: SubagentChild) {
   return { sessionManager, ownership };
 }
 
+/** Why a launch has no allowed model, for the refusal's cause and next step. */
+export interface NoModelCause {
+  /** The session being resumed, or false for a new session. */
+  readonly resumed: boolean;
+  /** The user's own models.allowed preference narrowed the allowlist. */
+  readonly userNarrowed: boolean;
+  readonly mode: "managed" | "personal";
+}
+
 /**
- * The model a resumed session switches to when the one it ended on is no
- * longer allowed: the one the launch chose, or else the first the
- * distribution still allows. Only a distribution that allows none fails.
+ * The model a session switches to when the one Pi picked (a resumed
+ * session's last model, or Pi's default) is not allowed: the one the launch
+ * chose, or else the first the distribution still allows. Only a launch with
+ * no allowed model at all fails.
  */
 export function replacementModel<T>(
   chosen: T | undefined,
   allowed: readonly T[],
   previous: string,
   command: string,
+  cause: NoModelCause,
 ): T {
   const replacement = chosen ?? allowed[0];
   if (replacement === undefined)
     throw new PiShipError(
       "MODEL_DENIED",
-      `The resumed session uses ${previous}, which is not allowed, and this distribution allows no other model`,
+      `${cause.resumed ? `The resumed session uses ${previous}, which is not allowed, and no` : "No"} allowed model is available: ${cause.userNarrowed ? "no model Pi offers matches your models.allowed preference" : "the distribution allows no model Pi offers"}`,
       {
-        userAction: `Ask the distribution owner to allow a model, then start ${command} again`,
+        userAction: cause.userNarrowed
+          ? `Run ${command} config unset models.allowed, or set it to a model ${command} models lists, then start ${command} again`
+          : cause.mode === "personal"
+            ? `Set models.allowed in piship.yaml to a model ${command} models lists, then start ${command} again`
+            : `Ask your administrator to allow a model Pi offers, then start ${command} again`,
         component: "inference",
       },
     );
@@ -641,6 +656,8 @@ async function startRuntime(
         );
       }
     }
+    // Pi restores the model of a session that already has messages.
+    const resumed = sessionManager.buildSessionContext().messages.length > 0;
     startupMark("agent_session_start");
     const result = await createAgentSession({
       cwd,
@@ -684,11 +701,17 @@ async function startRuntime(
         modelRuntime.getAvailableSnapshot(),
         `${current.provider}/${current.id}`,
         ctx.metadata.app.command,
+        {
+          resumed,
+          userNarrowed: activated?.config.userNarrowedFrom !== undefined,
+          mode: ctx.mode,
+        },
       );
       await result.session.setModel(replacement);
-      ctx.err(
-        `Notice: the resumed session used ${current.provider}/${current.id}, which is no longer allowed; switched to ${replacement.provider}/${replacement.id}.`,
-      );
+      if (resumed)
+        ctx.err(
+          `Notice: the resumed session used ${current.provider}/${current.id}, which is no longer allowed; switched to ${replacement.provider}/${replacement.id}.`,
+        );
     }
     const services: AgentSessionServices = {
       cwd,

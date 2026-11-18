@@ -7,23 +7,76 @@ import {
 } from "./runtime.js";
 
 describe("replacementModel", () => {
+  const cause = {
+    resumed: true,
+    userNarrowed: false,
+    mode: "managed",
+  } as const;
   it("keeps the model the launch chose", () => {
-    expect(replacementModel("chosen", ["first"], "old/model", "acme")).toBe(
-      "chosen",
-    );
+    expect(
+      replacementModel("chosen", ["first"], "old/model", "acme", cause),
+    ).toBe("chosen");
   });
 
   it("switches to the first allowed model when the launch chose none", () => {
     expect(
-      replacementModel(undefined, ["first", "second"], "old/model", "acme"),
+      replacementModel(
+        undefined,
+        ["first", "second"],
+        "old/model",
+        "acme",
+        cause,
+      ),
     ).toBe("first");
   });
 
-  it("fails with the next action only when no model is allowed", () => {
-    expect(() => replacementModel(undefined, [], "old/model", "acme")).toThrow(
+  it("names the resumed session and the administrator when no model is allowed", () => {
+    expect(() =>
+      replacementModel(undefined, [], "old/model", "acme", cause),
+    ).toThrow(
       expect.objectContaining({
         code: "MODEL_DENIED",
-        userAction: expect.stringContaining("allow a model"),
+        message: expect.stringContaining(
+          "The resumed session uses old/model, which is not allowed",
+        ),
+        userAction: expect.stringContaining("Ask your administrator"),
+      }),
+    );
+  });
+
+  it("blames the user's models.allowed preference, not a resumed session, in a new one", () => {
+    let error: unknown;
+    try {
+      replacementModel(undefined, [], "unknown/unknown", "acme", {
+        resumed: false,
+        userNarrowed: true,
+        mode: "personal",
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      code: "MODEL_DENIED",
+      message:
+        "No allowed model is available: no model Pi offers matches your models.allowed preference",
+      userAction:
+        "Run acme config unset models.allowed, or set it to a model acme models lists, then start acme again",
+    });
+    expect(String((error as Error).message)).not.toContain("resumed");
+  });
+
+  it("points a personal owner at piship.yaml when the distribution allows nothing", () => {
+    expect(() =>
+      replacementModel(undefined, [], "a/b", "acme", {
+        resumed: false,
+        userNarrowed: false,
+        mode: "personal",
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        userAction: expect.stringContaining(
+          "Set models.allowed in piship.yaml",
+        ),
       }),
     );
   });
