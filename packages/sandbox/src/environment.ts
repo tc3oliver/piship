@@ -8,8 +8,6 @@ import {
   redact,
 } from "@piship/contracts";
 
-export { isCredentialName };
-
 /** Whether a value has a known token shape or is a registered secret value. */
 export function looksLikeSecret(value: string): boolean {
   return redact(value) !== value;

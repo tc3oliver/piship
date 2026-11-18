@@ -72,7 +72,6 @@ export {
 export {
   CACHE_VARIABLES,
   filterEnvironment,
-  isCredentialName,
   looksLikeSecret,
   STDERR_TRUNCATION_MARKER,
   sanitizeStderr,

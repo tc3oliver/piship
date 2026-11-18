@@ -1,6 +1,7 @@
 // The session's subagent token is for its children only: no command a model
 // runs, contained or not, can read it.
-import { isCredentialName, stripCredentials } from "@piship/sandbox";
+import { isCredentialName } from "@piship/contracts";
+import { stripCredentials } from "@piship/sandbox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GovernanceSession } from "./governance-session.js";
 import {

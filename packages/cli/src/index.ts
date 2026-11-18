@@ -20,8 +20,6 @@ import {
   checkSkills,
   checkToolExposure,
   checkGovernance,
-  inertRuleWarnings,
-  shellGlobWarnings,
   mcpModuleWarnings,
   unapprovedLoadWarnings,
   emptyPackageWarnings,
@@ -1529,8 +1527,6 @@ async function runAuthoring(
     for (const warning of [
       ...launchWarnings(manifest),
       ...unapprovedLoadWarnings(manifest),
-      ...shellGlobWarnings(manifest),
-      ...inertRuleWarnings(manifest),
       ...checkSkills(manifest, target),
       ...mcpModuleWarnings(manifest, target),
     ])

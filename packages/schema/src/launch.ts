@@ -734,6 +734,29 @@ export function unmatchablePathRules(
   );
 }
 
+/**
+ * Rules whose resource glob is too narrow (`shellGlobMessage`) or that parse
+ * but can never match (`inertRuleMessage`).
+ */
+export function narrowRuleWarnings(manifest: Manifest): ValidationDiagnostic[] {
+  const policy = manifest.governance?.policy;
+  if (!policy) return [];
+  return (["enforced", "defaults"] as const).flatMap((list) =>
+    policy[list].flatMap((rule, index) =>
+      [shellGlobMessage(rule), inertRuleMessage(rule)].flatMap((message) =>
+        message
+          ? [
+              {
+                path: `policy.${list}[${index}].resource`,
+                message: `${rule.id}: ${message}`,
+              },
+            ]
+          : [],
+      ),
+    ),
+  );
+}
+
 function unmatchablePathMessage(rule: PolicyRule): string | undefined {
   if (
     rule.effect === "allow" ||
@@ -1081,6 +1104,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...unknownToolDenials(manifest),
     ...unknownMcpServerRules(manifest),
     ...unmatchablePathRules(manifest),
+    ...narrowRuleWarnings(manifest),
     ...uncontainedReadDenials(manifest),
     ...inactivePackRules(manifest),
     ...inertCaptureClasses(manifest),
