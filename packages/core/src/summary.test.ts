@@ -35,6 +35,14 @@ const smoke = {
 };
 
 describe("formatSmokeSummary", () => {
+  it("lists the launch's warnings, one row each", () => {
+    const text = formatSmokeSummary(
+      JSON.stringify({ ...smoke, warnings: ["first", "second"] }),
+    );
+    expect(text).toMatch(/warning\s+first\n\s+second$/);
+    expect(formatSmokeSummary(JSON.stringify(smoke))).not.toContain("warning");
+  });
+
   it("turns the smoke JSON into a few readable lines", () => {
     const text = formatSmokeSummary(JSON.stringify(smoke));
     expect(text).not.toContain("{");

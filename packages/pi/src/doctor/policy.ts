@@ -10,6 +10,7 @@ import {
   matchAction,
   unenforcedRules,
 } from "@piship/policy";
+import type { GovernanceManifest } from "@piship/schema";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
@@ -71,32 +72,36 @@ export function policyGroup(data: DoctorData, out: DoctorSection): void {
     if (auto.state === "on" || auto.state === "off") out.ok("auto", line);
     else out.warn("auto", line);
   }
-  // PiShip cannot answer the provider's own prompts, so an `ask` on both sides
-  // can prompt twice for one action. Only the distribution's own policy is
-  // read, not user, team, or project rules.
-  const permissions = governance.manifest.capabilities.find(
-    (item) => item.name === "permissions",
-  );
-  if (permissions?.enabled && permissions.provider?.package) {
-    const asks = [...policy.enforced, ...policy.defaults]
-      .filter(
-        (rule) =>
-          rule.effect === "ask" &&
-          [...PROVIDER_GOVERNED_ACTIONS].some((action) =>
-            matchAction(rule.action, action),
-          ),
-      )
-      .map((rule) => `${rule.action} ${rule.resource} (rule ${rule.id})`);
-    if (policy.default === "ask")
-      asks.push(
-        "the provider's actions not covered by a rule (policy.default)",
-      );
-    if (asks.length > 0)
-      out.warn(
-        "double ask",
-        `PiShip asks for ${asks.join(", ")}, and the permission provider ${permissions.provider.package} also decides these actions, so you can be asked twice. This reads only the distribution's own policy, not user, team, or project rules. Set the PiShip rule or policy.default to allow for them, or let the provider own the question`,
-      );
-  }
+  const doubleAsk = doubleAskWarning(governance.manifest);
+  if (doubleAsk) out.warn("double ask", doubleAsk);
   for (const diagnostic of inspection.engine.diagnostics)
     out.warn(diagnostic.source, diagnostic.message);
+}
+
+/**
+ * PiShip cannot answer a permission provider's own prompts, so an `ask` on
+ * both sides can prompt twice for one action. Only the distribution's own
+ * policy is read, not user, team, or project rules.
+ */
+export function doubleAskWarning(
+  manifest: GovernanceManifest,
+): string | undefined {
+  const policy = manifest.policy;
+  const permissions = manifest.capabilities.find(
+    (item) => item.name === "permissions",
+  );
+  if (!permissions?.enabled || !permissions.provider?.package) return;
+  const asks = [...policy.enforced, ...policy.defaults]
+    .filter(
+      (rule) =>
+        rule.effect === "ask" &&
+        [...PROVIDER_GOVERNED_ACTIONS].some((action) =>
+          matchAction(rule.action, action),
+        ),
+    )
+    .map((rule) => `${rule.action} ${rule.resource} (rule ${rule.id})`);
+  if (policy.default === "ask")
+    asks.push("the provider's actions not covered by a rule (policy.default)");
+  if (asks.length > 0)
+    return `PiShip asks for ${asks.join(", ")}, and the permission provider ${permissions.provider.package} also decides these actions, so you can be asked twice. This reads only the distribution's own policy, not user, team, or project rules. Set the PiShip rule or policy.default to allow for them, or let the provider own the question`;
 }

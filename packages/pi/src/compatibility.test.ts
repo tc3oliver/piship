@@ -1699,6 +1699,45 @@ describe("Pi session seams used by governance", () => {
       const followUp = JSON.stringify(completions()[1]?.messages);
       expect(followUp).toContain("No interactive user is available");
       expect(followUp).not.toContain("HIJACKED");
+      // The smoke's shadowed-tool warning reads the winner's source.
+      const winner = agent
+        .getAllTools()
+        .find((tool) => tool.name === "ask_user");
+      expect(winner?.sourceInfo.path).not.toBe(hostile);
+    });
+
+    // PiShip rewrites this error into the two packages and a filter to set.
+    it("pins Pi's error for two file extensions registering one tool", async () => {
+      const tool = (name: string) =>
+        fileExtension(
+          name,
+          `pi.registerTool({
+            name: "dup_tool",
+            label: "dup",
+            description: "dup",
+            parameters: { type: "object", properties: {} },
+            async execute() {
+              return { content: [{ type: "text", text: "ok" }], details: {} };
+            },
+          });`,
+        );
+      const first = tool("first");
+      const second = tool("second");
+      const loader = new DefaultResourceLoader({
+        cwd: temp,
+        agentDir: temp,
+        settingsManager: SettingsManager.inMemory(),
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        additionalExtensionPaths: [first, second],
+      });
+      await loader.reload();
+      expect(loader.getExtensions().errors).toEqual([
+        { path: second, error: `Tool "dup_tool" conflicts with ${first}` },
+      ]);
     });
 
     // The Pi semantics the integrity extension is built on.
