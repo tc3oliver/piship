@@ -92,7 +92,7 @@ describe("configuration precedence", () => {
       effective.entries.find((entry) => entry.key === "model"),
     ).toMatchObject({ source: "user-preference" });
     expect(effective.notices).toEqual([
-      "Preference theme=light is ignored: the distribution enforces dark",
+      "Preference theme=light is ignored: the distribution enforces dark; run config unset theme",
     ]);
     const defaults = resolveEffectiveConfig(access, undefined, {
       schema: "piship-preferences/v1",
@@ -137,7 +137,7 @@ describe("configuration precedence", () => {
     expect(effective.values.model).toBe("acme/coder");
     expect(effective.allowedModels).toEqual(["acme/coder"]);
     expect(effective.notices).toEqual([
-      "Preference model=acme/general is ignored: the distribution enforces acme/coder",
+      "Preference model=acme/general is ignored: the distribution enforces acme/coder; run config unset model",
     ]);
     expect(() =>
       setPreference(
@@ -148,6 +148,90 @@ describe("configuration precedence", () => {
         "acme/general",
       ),
     ).toThrow("enforced");
+  });
+
+  it("lets a stranded preference be unset and says what launch will do with it", () => {
+    const path = join(temp, "config", "preferences.json");
+    mkdirSync(join(temp, "config"), { recursive: true });
+    // Values stored before the administrator enforced theme and dropped the model.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: "piship-preferences/v1",
+        values: { theme: "light", model: "openai/gpt-5" },
+      }),
+    );
+    const stale = resolveEffectiveConfig(
+      access,
+      undefined,
+      readPreferences(path),
+    );
+    expect(stale.notices).toContain(
+      "Preference model=openai/gpt-5 is not allowed by this distribution, so launch refuses it; run config unset model",
+    );
+    expect(stale.entries.find((entry) => entry.key === "model")).toMatchObject({
+      value: "openai/gpt-5",
+      note: expect.stringContaining("launch refuses it"),
+    });
+    // Removing a preference never widens anything, so it always succeeds.
+    setPreference(path, access, undefined, "theme", undefined);
+    setPreference(path, access, undefined, "model", undefined);
+    expect(readPreferences(path).values).toEqual({});
+    // An entitlement that drops the preferred model is named as the sign-in's.
+    expect(
+      resolveEffectiveConfig(
+        access,
+        undefined,
+        { schema: "piship-preferences/v1", values: { model: "acme/general" } },
+        ["acme/coder"],
+      ).notices,
+    ).toContain(
+      "Preference model=acme/general is not allowed for your sign-in, so launch refuses it; run config unset model",
+    );
+  });
+
+  it("names a key that is merely not user-overridable, and notices a value written for it", () => {
+    const narrow = {
+      ...access,
+      config: {
+        ...access.config,
+        defaults: {},
+        userOverridable: ["model" as const],
+      },
+    } as AccessManifest;
+    const path = join(temp, "p.json");
+    expect(() =>
+      setPreference(path, narrow, undefined, "thinkingLevel", "high"),
+    ).toThrow("thinkingLevel is not user-overridable in this distribution");
+    const effective = resolveEffectiveConfig(narrow, undefined, {
+      schema: "piship-preferences/v1",
+      values: { thinkingLevel: "high" },
+    });
+    expect(effective.values.thinkingLevel).toBeUndefined();
+    expect(effective.notices).toContain(
+      "Preference thinkingLevel=high is ignored: thinkingLevel is not user-overridable in this distribution; run config unset thinkingLevel",
+    );
+  });
+
+  it("explains a models.allowed preference that excludes every allowed model", () => {
+    const effective = resolveEffectiveConfig(
+      access,
+      undefined,
+      {
+        schema: "piship-preferences/v1",
+        values: {},
+        modelsAllowed: ["acme/general"],
+      },
+      ["acme/coder"],
+    );
+    expect(effective.allowedModels).toEqual([]);
+    expect(effective.notices).toContain(
+      "Your models.allowed preference excludes every model available to you (acme/coder); run config unset models.allowed, or set it to include one of them",
+    );
+    expect(
+      effective.entries.find((entry) => entry.key === "models.allowed")?.note,
+    ).toContain("your preference (acme/general) excludes every one");
+    expect(effective.notices).toHaveLength(1);
   });
 
   it("keeps an enforced model when a user narrows an otherwise open allowlist", () => {
@@ -227,6 +311,37 @@ describe("configuration precedence", () => {
     ).resolves.toMatchObject({
       selectedModel: "openai/gpt-x",
       config: { allowedModels: ["openai/gpt-x"], modelsRestricted: true },
+    });
+  });
+
+  it("points at the user's own models.allowed when it leaves no model", async () => {
+    const personal = parseManifest({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: { pi: "1.5.0" },
+      deployment: { mode: "personal" },
+      config: { enforced: { model: "openai/gpt-x" } },
+    });
+    const distribution = DistributionAccess.open({
+      app: personal.app,
+      mode: "personal",
+      access: personal.access as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: {},
+      secretStore: new MemorySecretStore(),
+    });
+    setPreference(
+      distribution.paths.preferences,
+      personal.access as AccessManifest,
+      undefined,
+      "models.allowed",
+      "anthropic/other",
+    );
+    await expect(distribution.activate()).rejects.toMatchObject({
+      code: "MODEL_DENIED",
+      userAction:
+        "Run mypi config unset models.allowed, or set it to include one of: openai/gpt-x",
     });
   });
 

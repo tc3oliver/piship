@@ -1915,6 +1915,16 @@ export class DistributionAccess {
       const allowed = config.allowedModels.filter((id) =>
         models.some((model) => model.id === id && model.availability.available),
       );
+      const from = config.userNarrowedFrom;
+      if (!config.allowedModels.length && Array.isArray(from) && from.length)
+        throw new PiShipError(
+          "MODEL_DENIED",
+          "Your models.allowed preference excludes every allowed model",
+          {
+            component: "inference",
+            userAction: `Run ${this.options.app.command} config unset models.allowed, or set it to include one of: ${from.join(", ")}`,
+          },
+        );
       if (!allowed.length)
         throw new PiShipError(
           "MODEL_UNAVAILABLE",
@@ -1988,14 +1998,18 @@ export class DistributionAccess {
           from !== undefined && (from === "any" || from.includes(requested));
         const choose = config.allowedModels.length
           ? `Choose one of: ${config.allowedModels.join(", ")}`
-          : `Ask the distribution owner to allow a model; ${command} models lists what is configured`;
+          : Array.isArray(from) && from.length
+            ? `Run ${command} config unset models.allowed, or set it to include one of: ${from.join(", ")}`
+            : `Ask the distribution owner to allow a model; ${command} models lists what is configured`;
         const refusal = byPreference
           ? new PiShipError(
               "MODEL_DENIED",
               `Model ${requested} is not available (excluded by your models.allowed preference)`,
               {
                 component: "inference",
-                userAction: `${choose}, or add it to your preference with ${command} config set models.allowed`,
+                userAction: config.allowedModels.length
+                  ? `${choose}, or add it to your preference with ${command} config set models.allowed`
+                  : choose,
               },
             )
           : new PiShipError(

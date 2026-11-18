@@ -210,6 +210,8 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 
 #### For employees and administrators
 
+- `config unset <key>` always succeeds, so a preference stranded by a later enforced key no longer leaves a permanent notice; that notice and the one for a key that is not user-overridable (now also shown when the key has no default) name the `config unset` to run. Setting such a key says "not user-overridable in this distribution" instead of "enforced".
+- A preferred model the distribution or sign-in no longer allows is marked in `config explain` as refused at launch, with a notice to `config unset model`; a `models.allowed` preference that leaves no model says so in `config explain` and at launch (`MODEL_DENIED`, with `config unset models.allowed`) instead of asking the distribution owner.
 - Returning from another channel: `update --channel <name>` says to `rollback` first when the old channel may be behind; a refused downgrade gives an `Action:` with the rollback and switch steps instead of none; a `rollback` to a release built for another channel says the installation still follows the newer one and how to switch.
 - Update source refusals give an action: a source answering with an HTML page (captive portal, proxy sign-in, a host that serves a page for missing files) says so instead of only "not valid JSON"; a replayed (older) channel file says nothing changed and to retry or report it; a bad `updates.source` names the variable it came from (`ACMECODE_UPDATE_SOURCE`), gives a valid example, and states the real plain-http rule.
 - `doctor` labels the update rows `last success` and `last failure` instead of two `last check` rows.

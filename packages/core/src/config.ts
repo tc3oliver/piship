@@ -252,13 +252,18 @@ export function setPreference(
       },
     );
   const configKey = key as ConfigKey;
+  const enforced = policy.enforced[configKey] !== undefined;
+  // Removing a preference never widens anything, so unset always succeeds:
+  // it clears a value a later policy change left stranded.
   if (
-    policy.enforced[configKey] !== undefined ||
-    !policy.userOverridable.includes(configKey)
+    value !== undefined &&
+    (enforced || !policy.userOverridable.includes(configKey))
   )
     throw new PiShipError(
       "POLICY_DENIED",
-      `${key} is enforced by the distribution and cannot be overridden`,
+      enforced
+        ? `${key} is enforced by the distribution and cannot be overridden`
+        : `${key} is not user-overridable in this distribution`,
       {
         component: "config",
         userAction: personal
@@ -355,11 +360,15 @@ export function resolveEffectiveConfig(
     const user = preferences.values[key];
     const permitted =
       policy.userOverridable.includes(key) && enforced === undefined;
+    if (user !== undefined && enforced === undefined && !permitted)
+      notices.push(
+        `Preference ${key}=${user} is ignored: ${key} is not user-overridable in this distribution; run config unset ${key}`,
+      );
     if (enforced !== undefined) {
       values[key] = enforced;
       if (user !== undefined && user !== enforced)
         notices.push(
-          `Preference ${key}=${user} is ignored: the distribution enforces ${enforced}`,
+          `Preference ${key}=${user} is ignored: the distribution enforces ${enforced}; run config unset ${key}`,
         );
       entries.push({
         key,
@@ -376,10 +385,6 @@ export function resolveEffectiveConfig(
         overridable: true,
       });
     } else if (policy.defaults[key] !== undefined) {
-      if (user !== undefined)
-        notices.push(
-          `Preference ${key}=${user} is ignored: ${key} is not user-overridable`,
-        );
       values[key] = policy.defaults[key];
       entries.push({
         key,
@@ -420,6 +425,7 @@ export function resolveEffectiveConfig(
     );
     sources.push("credential entitlement");
   }
+  const model = values.model;
   let userNarrowedFrom: readonly string[] | "any" | undefined;
   if (preferences.modelsAllowed) {
     // Users only narrow: without any other restriction their list is the
@@ -430,9 +436,10 @@ export function resolveEffectiveConfig(
       ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
       : [...preferences.modelsAllowed];
     sources.push("user narrowing");
-    const model = values.model;
+    // An emptied list gets its own notice below.
     if (
       model !== undefined &&
+      allowed.length > 0 &&
       !allowed.includes(model) &&
       (userNarrowedFrom === "any" || userNarrowedFrom.includes(model))
     )
@@ -441,13 +448,42 @@ export function resolveEffectiveConfig(
       );
   }
   const modelsRestricted = policy.allowed.length > 0 || sources.length > 1;
+  const modelIndex = entries.findIndex((entry) => entry.key === "model");
+  const modelEntry = entries[modelIndex];
+  if (
+    modelEntry?.source === "user-preference" &&
+    model !== undefined &&
+    modelsRestricted &&
+    !allowed.includes(model)
+  ) {
+    // Launch refuses a preferred model it cannot select; never present it as usable.
+    const byUser =
+      userNarrowedFrom !== undefined &&
+      (userNarrowedFrom === "any" || userNarrowedFrom.includes(model));
+    if (!byUser)
+      notices.push(
+        `Preference model=${model} is not allowed ${policy.allowed.length && !policy.allowed.includes(model) ? "by this distribution" : "for your sign-in"}, so launch refuses it; run config unset model`,
+      );
+    entries[modelIndex] = {
+      ...modelEntry,
+      note: "not selectable: launch refuses it until you run config unset model",
+    };
+  }
+  // The user's own narrowing left nothing: say so, since the fix is theirs.
+  const narrowedFrom =
+    !allowed.length && Array.isArray(userNarrowedFrom) ? userNarrowedFrom : [];
+  const narrowedToNothing = narrowedFrom.length > 0;
+  if (narrowedToNothing)
+    notices.push(
+      `Your models.allowed preference excludes every model available to you (${narrowedFrom.join(", ")}); run config unset models.allowed, or set it to include one of them`,
+    );
   entries.push({
     key: "models.allowed",
     // An empty list is "none" only when something restricts models.
     value: modelsRestricted ? allowed : "any",
     source: sources.length > 1 ? "intersection" : "distribution-enforced",
     overridable: false,
-    note: `${sources.join(" ∩ ")}; users may only narrow`,
+    note: `${sources.join(" ∩ ")}; users may only narrow${narrowedToNothing ? `; your preference (${preferences.modelsAllowed?.join(", ")}) excludes every one` : ""}`,
   });
   return {
     values,
