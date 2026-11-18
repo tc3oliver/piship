@@ -286,6 +286,9 @@ describe("channel trust root", () => {
       message: expect.stringMatching(
         /sequence 3 is older than the 4 already seen; refusing a replayed channel/,
       ),
+      userAction: expect.stringMatching(
+        /^Nothing was changed\. .*stale cache or mirror.*tell the distribution owner if it persists$/,
+      ),
     });
     // Rotating the signing key does not reset the floor.
     publish(dir, NEW, 3);

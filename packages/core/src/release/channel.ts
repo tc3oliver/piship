@@ -35,6 +35,7 @@ import {
 import { pishipCommand } from "../invocation.js";
 import { CHANNEL_SCHEMA } from "./metadata.js";
 import {
+  notJson,
   parseHostedRoot,
   refreshRoot,
   roleTrust,
@@ -884,10 +885,7 @@ export async function readChannel(
   try {
     envelope = JSON.parse(signature.toString("utf8")) as SignatureEnvelope;
   } catch {
-    throw new PiShipError(
-      "INTEGRITY_FAILED",
-      "Channel signature is not valid JSON",
-    );
+    throw notJson("Channel signature", signature);
   }
   const retired = new Map(
     (options.retired ?? []).map((key) => [key.fingerprint, key]),
@@ -995,6 +993,10 @@ export async function readChannel(
     throw new PiShipError(
       "INTEGRITY_FAILED",
       `Channel metadata sequence ${metadata.sequence} is older than the ${options.minSequence} already seen; refusing a replayed channel`,
+      {
+        userAction:
+          "Nothing was changed. The update source served an older channel file than this computer has already seen, from a stale cache or mirror or because it was tampered with; try again later, and tell the distribution owner if it persists",
+      },
     );
   return { metadata, keyId, keyIds };
 }

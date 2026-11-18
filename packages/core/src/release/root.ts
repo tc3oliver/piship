@@ -28,6 +28,17 @@ function integrity(message: string, userAction?: string): PiShipError {
   });
 }
 
+/** A JSON parse failure; a web page in place of metadata is named as one. */
+export function notJson(name: string, bytes: Uint8Array): PiShipError {
+  const page = Buffer.from(bytes).toString("utf8").trimStart().startsWith("<");
+  return integrity(
+    page
+      ? `${name} is an HTML page, not PiShip metadata`
+      : `${name} is not valid JSON`,
+    "The update source returned a web page or other non-metadata content, as a captive portal, a proxy sign-in page, or a host that answers missing files with a page does; check the network connection and try again. An update host must answer 404 for a missing file. Nothing installed was changed",
+  );
+}
+
 /** Path of root version `version` under an update source. */
 export function rootFileName(version: number): string {
   return `root/${version}.json`;
@@ -78,7 +89,7 @@ export function parseHostedRoot(
   try {
     value = JSON.parse(Buffer.from(bytes).toString("utf8"));
   } catch {
-    throw integrity(`${name} is not valid JSON`);
+    throw notJson(name, bytes);
   }
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw integrity(`${name} is not an object`);
@@ -192,7 +203,7 @@ export async function refreshRoot(options: {
     try {
       envelope = JSON.parse(signature.toString("utf8"));
     } catch {
-      throw integrity(`${name}.sig is not valid JSON`);
+      throw notJson(`${name}.sig`, signature);
     }
     const next = parseHostedRoot(bytes, options.distribution, name);
     if (next.version !== version)

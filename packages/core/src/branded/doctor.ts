@@ -235,7 +235,7 @@ function updateDoctor(
     else ok("disk", text);
   }
   if (status.lastCheck)
-    ok("last check", `${status.lastCheck.result} (${status.lastCheck.time})`);
+    ok("last success", `${status.lastCheck.result} (${status.lastCheck.time})`);
   const failed = readFailedAttempt(ctx.stateDir);
   if (
     failed &&
@@ -243,7 +243,7 @@ function updateDoctor(
       Date.parse(failed.time) > Date.parse(status.lastCheck.time))
   )
     warn(
-      "last check",
+      "last failure",
       `${failed.kind} failed at ${failed.time}: ${failed.reason}`,
     );
   if (status.leftovers.length)

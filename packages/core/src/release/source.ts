@@ -361,7 +361,13 @@ export function checkUpdateSource(
   source: string,
   origin: "updates.source" | "--from",
   transport?: UpdateTransport,
+  variables: readonly string[] = [],
 ): string {
+  // Name what the person actually set: the variable updates.source reads.
+  const set = variables.length
+    ? `${variables.join(", ")} (updates.source)`
+    : origin;
+  const fix = `${origin === "--from" ? "Pass --from" : `Set ${variables.length ? variables.join(", ") : origin} to`} an https URL such as https://updates.example.com/channel, or an absolute local directory`;
   if (isUrlSource(source)) {
     let url: URL;
     try {
@@ -369,21 +375,28 @@ export function checkUpdateSource(
     } catch {
       throw new PiShipError(
         "CONFIG_INVALID",
-        `${origin} is not a valid URL: ${redact(source)}`,
+        `${set} is not a valid URL: ${redact(source)}`,
+        { userAction: fix },
       );
     }
     checkSourceUrl(url, transport);
     if (url.search || url.hash)
       throw new PiShipError(
         "CONFIG_INVALID",
-        `${origin} may not contain a query string or fragment`,
+        `${set} may not contain a query string or fragment`,
+        {
+          userAction: `${fix}, without ?query or #fragment; a token in the URL would be stored and logged with it`,
+        },
       );
     return source;
   }
   if (origin === "updates.source" && !isAbsolute(source))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `updates.source resolved to ${redact(source)}, which is neither an https URL, an http URL on 127.0.0.1, localhost, or [::1], nor an absolute local directory`,
+      `${set} resolved to ${redact(source)}, which is neither a URL nor an absolute local directory`,
+      {
+        userAction: `${fix}. Plain http is accepted only to ${transport === "https" ? "loopback" : PRIVATE_UPDATE_HOSTS}`,
+      },
     );
   const directory = resolve(source);
   if (!existsSync(directory) || !statSync(directory).isDirectory())

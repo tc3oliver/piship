@@ -440,7 +440,17 @@ export async function runUpdate(
   ctx.out(
     `Updated ${app.name} ${result.from} -> ${result.to} (${result.channel}, signed by ${result.keyId}). ${result.from} is kept for ${app.command} rollback; sessions and settings were preserved.`,
   );
-  if (switched) ctx.out(switched);
+  if (switched) {
+    // The old channel may not have reached this version, and an update never
+    // downgrades: returning to it can need a rollback first.
+    const back =
+      readInstallReceipt(app.id).previous === result.from
+        ? `run ${app.command} rollback (back to ${result.from}) and then ${app.command} update --channel ${followed}, or `
+        : "";
+    ctx.out(
+      `Now following ${result.channel} (was ${followed}). To return, ${back}run ${app.command} update --channel ${followed} once ${followed} offers ${result.to} or newer.`,
+    );
+  }
   reportRunningSessions(ctx, result.from, result.to ?? "");
   // Best effort: the update is committed whatever this summary does.
   try {
@@ -492,5 +502,25 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
   ctx.out(
     `Rolled back ${app.name} ${result.from} -> ${result.to}. Sessions and settings were preserved${signIn ? "; your sign-in was left as it is" : ""}.`,
   );
+  // Rollback keeps the followed channel, which can be one the restored
+  // release was not built for. Best effort: the rollback is committed.
+  try {
+    const after = readInstallReceipt(app.id);
+    const updates = activeLock(after).updates;
+    const followed = after.channel ?? updates?.channel;
+    const built = after.releases.find((item) => item.version === result.to)
+      ?.release?.channel;
+    if (
+      followed &&
+      built &&
+      built !== followed &&
+      (updates?.channels as readonly string[] | undefined)?.includes(built)
+    )
+      ctx.out(
+        `${result.to} is a ${built} release, but this installation still follows ${followed}, so ${app.command} update would offer ${followed}'s newest release again. Run ${app.command} update --channel ${built} to follow ${built}.`,
+      );
+  } catch {
+    // No hint.
+  }
   reportRunningSessions(ctx, result.from, result.to);
 }

@@ -135,9 +135,37 @@ describe.runIf(HOST_EVIDENCED)("branded update and rollback messages", () => {
     const updated = await run(runUpdate, ["--channel", "candidate"]);
     expect(updated).toContain("Updated AcmePi 1.0.0 -> 1.1.0 (candidate");
     expect(updated).toContain(
-      "Now following candidate (was stable); run acmepi update --channel stable to return.",
+      "Now following candidate (was stable). To return, run acmepi rollback (back to 1.0.0) and then acmepi update --channel stable, or run acmepi update --channel stable once stable offers 1.1.0 or newer.",
     );
     expect(await run(runUpdate)).not.toContain("Now following");
+  });
+
+  it("explains how to return to a channel that is behind the active release", async () => {
+    const { a, b } = await installed();
+    // A fresh source whose stable channel offers only 1.0.0.
+    const channelDir = mkdtempSync(join(tmpdir(), "piship-behind-"));
+    scratch.push(channelDir);
+    process.env.ACMEPI_UPDATE_SOURCE = channelDir;
+    await sign(channelDir, "stable", a.archive);
+    await sign(channelDir, "candidate", b.archive);
+    await run(runUpdate, ["--channel", "candidate"]);
+    const refused = (await rejection(
+      run(runUpdate, ["--channel", "stable"]),
+    )) as PiShipError;
+    expect(refused.code).toBe("UPDATE_FAILED");
+    expect(refused.message).toContain("downgrades are refused");
+    expect(refused.userAction).toBe(
+      "Nothing was changed; 1.1.0 stays active. To follow stable now, run acmepi rollback (back to 1.0.0), then acmepi update --channel stable",
+    );
+    // The refused switch is not recorded.
+    expect(readInstallReceipt(ID).channel).toBe("candidate");
+    expect(await run(runRollback)).toContain(
+      "1.0.0 is a stable release, but this installation still follows candidate, so acmepi update would offer candidate's newest release again. Run acmepi update --channel stable to follow stable.",
+    );
+    expect(await run(runUpdate, ["--channel", "stable"])).toContain(
+      "AcmePi 1.0.0 is up to date on the stable channel.",
+    );
+    expect(readInstallReceipt(ID).channel).toBe("stable");
   });
 
   it("names the version a check offers as the one rolled back from", async () => {

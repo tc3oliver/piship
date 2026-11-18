@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { PiShipError, stopwatch } from "@piship/contracts";
 import {
   RuntimeReferenceError,
+  referencedVariables,
   resolveTemplate,
   type UpdatesManifest,
 } from "@piship/schema";
@@ -168,7 +169,12 @@ export function resolveSource(
   }
   // The static check sees only the template; the resolved value gets the
   // same URL rules at run time.
-  return checkUpdateSource(resolved, "updates.source", transport);
+  return checkUpdateSource(
+    resolved,
+    "updates.source",
+    transport,
+    referencedVariables(template),
+  );
 }
 
 /** Where a verified download is kept when the update stops after it. */
@@ -686,11 +692,28 @@ async function performUpdate(
         notices,
       };
     }
-    if (compareVersions(entry.version, receipt.active) < 0)
+    if (compareVersions(entry.version, receipt.active) < 0) {
+      const command = lock.app.command;
+      const previous = receipt.previous;
+      // Rollback helps only when the retained release is not newer than the offer.
+      const rollback =
+        previous !== undefined && compareVersions(previous, entry.version) <= 0
+          ? previous
+          : undefined;
+      const switching = channel !== (receipt.channel ?? updates.channel);
       throw new PiShipError(
         "UPDATE_FAILED",
         `Channel ${channel} offers ${entry.version}, older than the active ${receipt.active}; downgrades are refused (use rollback to return to a retained release)`,
+        {
+          component: "update",
+          userAction: `Nothing was changed; ${receipt.active} stays active${switching ? "" : ` and ${channel} is still followed`}. ${
+            switching
+              ? `To follow ${channel} now, ${rollback ? `run ${command} rollback (back to ${rollback}), then ${command} update --channel ${channel}` : `run ${command} update --channel ${channel} again once it offers ${receipt.active} or newer`}`
+              : `Ask the distribution owner whether ${receipt.active} was withdrawn from ${channel}${rollback ? `; if it was, run ${command} rollback to return to ${rollback}` : ""}`
+          }`,
+        },
       );
+    }
     const apps = appDirectory(id);
     const lap = stopwatch();
     const destination = join(apps, entry.version);
