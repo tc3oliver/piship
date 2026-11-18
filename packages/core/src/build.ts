@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
-import { readManifest, releaseOptions } from "@piship/schema";
+import {
+  explicitProjectTrust,
+  readManifest,
+  releaseOptions,
+} from "@piship/schema";
 import { authoringBuildInput } from "./authoring-input.js";
 import { startBackgroundProcess } from "./background-process.js";
 import {
@@ -526,7 +530,10 @@ export function buildDistribution(
       options.progress?.("Assembling and verifying the payload");
       mkdirSync(join(stage, "bin"), { recursive: true });
       mkdirSync(join(stage, "metadata"), { recursive: true });
-      copyFileSync(manifestPath, join(stage, "piship.yaml"));
+      writeFileSync(
+        join(stage, "piship.yaml"),
+        explicitProjectTrust(readFileSync(manifestPath, "utf8")),
+      );
       for (const resource of lock.resources) {
         const target = join(stage, "resources", resource.path);
         mkdirSync(dirname(target), { recursive: true });

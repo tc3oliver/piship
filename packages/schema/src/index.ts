@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { printable, systemError } from "@piship/contracts";
 import { valid as validSemver } from "semver";
-import { type Document, LineCounter, parseDocument } from "yaml";
+import { type Document, isAlias, LineCounter, parseDocument } from "yaml";
 import {
   AccessFieldError,
   type AccessManifest,
@@ -11,13 +11,15 @@ import {
   parseVariables,
 } from "./access.js";
 import { DATA_KEYS, type DataManifest, parseData } from "./data.js";
-import type {
-  CacheWarmingConfig,
-  GovernanceManifest,
-  RuntimeToolsConfig,
-  SearchToolsConfig,
+import {
+  type CacheWarmingConfig,
+  type GovernanceManifest,
+  PROJECT_TRUST_DIMENSIONS,
+  type RuntimeToolsConfig,
+  type SearchToolsConfig,
 } from "./governance.js";
 import {
+  defaultProjectDimensions,
   GOVERNANCE_KEYS,
   parseCacheWarming,
   parseGovernance,
@@ -757,7 +759,7 @@ function plainValue(document: Document): unknown {
     );
   return value;
 }
-function parseManifestSource(
+export function parseManifestSource(
   source: string,
   label: string,
   options: ParseOptions = {},
@@ -772,6 +774,48 @@ function parseManifestSource(
       ? locateErrors(error, document, lineCounter)
       : error;
   }
+}
+/**
+ * Manifest text with every `policy.projectTrust` dimension it leaves to a
+ * default written out with that default (`defaults`, the current ones unless
+ * given), comments kept. A payload carries its manifest this way, so its lock
+ * digest never depends on the defaults of the PiShip that reads it. Text that
+ * declares every dimension, or has no governance, comes back unchanged.
+ */
+export function explicitProjectTrust(
+  source: string,
+  defaults: typeof defaultProjectDimensions = defaultProjectDimensions,
+): string {
+  const manifest = parseManifestSource(source, "piship.yaml", {
+    existing: true,
+  });
+  if (!manifest.governance) return source;
+  const table = defaults(manifest.deployment.mode);
+  const document = parseDocument(source, { uniqueKeys: true });
+  const kinds = ["company", "external", "unknown"] as const;
+  let changed = false;
+  // A YAML alias on the way is replaced by a copy, so filling one class
+  // never writes through to another.
+  for (const at of [
+    ["policy"],
+    ["policy", "projectTrust"],
+    ...kinds.map((kind) => ["policy", "projectTrust", kind]),
+  ]) {
+    const node = document.getIn(at, true);
+    if (!isAlias(node)) continue;
+    document.setIn(at, document.createNode(node.toJS(document)));
+    changed = true;
+  }
+  for (const kind of kinds)
+    for (const dimension of PROJECT_TRUST_DIMENSIONS) {
+      const path = ["policy", "projectTrust", kind, dimension];
+      if (document.getIn(path) !== undefined) continue;
+      document.setIn(path, table[kind][dimension]);
+      changed = true;
+    }
+  return changed
+    ? document.toString({ flowCollectionPadding: false, lineWidth: 0 })
+    : source;
 }
 /**
  * The same problem with the line and column of its field in `source`, for a

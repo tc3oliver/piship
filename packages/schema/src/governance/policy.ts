@@ -254,6 +254,38 @@ export function defaultProjectDimensions(
   };
 }
 
+/**
+ * The `policy.projectTrust` defaults of PiShip 0.3 through 0.13. A lock
+ * written then records the manifest digest under these, so an installed
+ * payload of that age is verified against them. Never edit; when the defaults
+ * above change, existing payloads are unaffected because a payload manifest
+ * declares every dimension (`explicitProjectTrust`).
+ */
+export function legacyProjectDimensions(
+  mode: DeploymentMode,
+): Record<"company" | "external" | "unknown", ProjectDimensions> {
+  if (mode === "managed")
+    return {
+      company: dimensions("deny", {
+        passiveContext: "allow",
+        instructions: "allow",
+        skills: "allow",
+        extensions: "company-approved",
+        mcp: "company-approved",
+      }),
+      external: dimensions("deny", {
+        passiveContext: "allow",
+        instructions: "ask",
+      }),
+      unknown: dimensions("deny", { passiveContext: "allow" }),
+    };
+  return {
+    company: dimensions("allow", { hooks: "deny" }),
+    external: dimensions("allow", { hooks: "deny" }),
+    unknown: dimensions("ask", { passiveContext: "allow", hooks: "deny" }),
+  };
+}
+
 const DIMENSION_EFFECTS: readonly ProjectDimensionEffect[] = [
   "allow",
   "ask",

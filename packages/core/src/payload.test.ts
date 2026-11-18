@@ -12,7 +12,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readManifest } from "@piship/schema";
+import {
+  explicitProjectTrust,
+  legacyProjectDimensions,
+  parseManifestSource,
+  readManifest,
+} from "@piship/schema";
 import { digest, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
 import {
@@ -301,6 +306,59 @@ describe("launch integrity verification", () => {
   afterEach(() => {
     for (const dir of dirOf) rmSync(dir, { recursive: true, force: true });
     dirOf.clear();
+  });
+
+  /**
+   * The payload as PiShip 0.13 wrote it: the manifest leaves projectTrust to
+   * the defaults, and the lock digests it under the 0.13 ones.
+   */
+  function legacyPayload(): string {
+    const dir = buildPayload();
+    const source = readFileSync(join(dir, "piship.yaml"), "utf8");
+    const parse = (text: string) =>
+      parseManifestSource(text, "piship.yaml", { existing: true });
+    const legacy = digest(
+      parse(explicitProjectTrust(source, legacyProjectDimensions)),
+    );
+    // The test means something only while the defaults differ.
+    expect(legacy).not.toBe(digest(parse(source)));
+    const lock = JSON.parse(readFileSync(join(dir, "piship.lock"), "utf8"));
+    lock.manifest.sha256 = legacy;
+    write(dir, "piship.lock", JSON.stringify(lock));
+    write(
+      dir,
+      "metadata/inventory.json",
+      JSON.stringify(payloadInventory(dir)),
+    );
+    return dir;
+  }
+  const verify = (dir: string) => () =>
+    verifyPayloadContents(dir, { requireTarget: true, verifyContents: false });
+
+  it("verifies a payload whose lock digested the manifest under the 0.13 projectTrust defaults", () => {
+    const dir = legacyPayload();
+    expect(() =>
+      verifyPayloadContents(dir, { requireTarget: true, verifyContents: true }),
+    ).not.toThrow();
+  });
+  it("still refuses a one-byte change to a 0.13 payload's manifest", () => {
+    const dir = legacyPayload();
+    const path = join(dir, "piship.yaml");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace('"pi":"1.0.0"', '"pi":"1.0.1"'),
+    );
+    expect(verify(dir)).toThrow(/manifest and lock mismatch/);
+  });
+  it("refuses a 0.13 payload's manifest edited to declare the newer, looser defaults", () => {
+    const dir = legacyPayload();
+    const path = join(dir, "piship.yaml");
+    writeFileSync(path, explicitProjectTrust(readFileSync(path, "utf8")));
+    const manifest = readManifest(path, { existing: true });
+    expect(
+      manifest.governance?.policy.projectTrust.unknown.dimensions.instructions,
+    ).toBe("allow");
+    expect(verify(dir)).toThrow(/manifest and lock mismatch/);
   });
 
   it.each(["aux", "con", "a".repeat(70)])(

@@ -20,7 +20,11 @@ export {
 } from "./governance/capabilities.js";
 export { parseMcp } from "./governance/mcp.js";
 export { parsePackages, parsePackageTrust } from "./governance/packages.js";
-export { defaultProjectDimensions, parsePolicy } from "./governance/policy.js";
+export {
+  defaultProjectDimensions,
+  legacyProjectDimensions,
+  parsePolicy,
+} from "./governance/policy.js";
 export { parseGovernanceResources } from "./governance/resources.js";
 export {
   parseCacheWarming,

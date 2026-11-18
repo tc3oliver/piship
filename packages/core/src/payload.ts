@@ -11,7 +11,14 @@ import {
 import { uptime } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { COMMAND_NAME, readManifest } from "@piship/schema";
+import {
+  COMMAND_NAME,
+  explicitProjectTrust,
+  legacyProjectDimensions,
+  type Manifest,
+  parseManifestSource,
+  readManifestSource,
+} from "@piship/schema";
 import { hash } from "./digest.js";
 import { hashFilesInParallel, workerCount } from "./parallel-files.js";
 import { readInstallReceipt } from "./install/receipt.js";
@@ -243,11 +250,11 @@ export function verifyPayloadContents(
       isRecord(value.runtime),
   );
   // A payload built before a limit on names existed still verifies.
-  const manifest = readManifest(join(root, "piship.yaml"), {
-    existing: true,
-  });
+  const path = join(root, "piship.yaml");
+  const source = readManifestSource(path);
+  const manifest = parseManifestSource(source, path, { existing: true });
   if (
-    manifestDigest(manifest) !== lock.manifest.sha256 ||
+    !manifestMatchesLock(source, manifest, lock.manifest.sha256) ||
     JSON.stringify(manifest.app) !== JSON.stringify(lock.app)
   )
     throw new PiShipError(
@@ -269,6 +276,27 @@ export function verifyPayloadContents(
       `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${fileCount} files${options.verifyContents === false ? ", content hash skipped" : ""})\n`,
     );
   return lock;
+}
+/**
+ * Whether the payload manifest is the one its lock digest records. A lock
+ * written by PiShip 0.13 or earlier digested an undeclared projectTrust
+ * dimension under that release's defaults, so the manifest is also checked
+ * with those defaults written in. Either way the digest is of the manifest's
+ * own content: a change to what it declares fails both.
+ */
+function manifestMatchesLock(
+  source: string,
+  manifest: Manifest,
+  recorded: string,
+): boolean {
+  if (manifestDigest(manifest) === recorded) return true;
+  const legacy = explicitProjectTrust(source, legacyProjectDimensions);
+  return (
+    legacy !== source &&
+    manifestDigest(
+      parseManifestSource(legacy, "piship.yaml", { existing: true }),
+    ) === recorded
+  );
 }
 /**
  * Load the metadata required to boot. By default a launch never walks the
