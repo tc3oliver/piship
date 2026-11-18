@@ -12,6 +12,7 @@ import {
   stripCredentials,
   withApprovedNetwork,
   withCacheEnvironment,
+  withDeniedNetworkEnvironment,
 } from "./environment.js";
 
 describe("filterEnvironment", () => {
@@ -219,5 +220,17 @@ describe("withCacheEnvironment", () => {
     );
     expect(Object.keys(env)).not.toContain("GOMODCACHE");
     expect(env.CARGO_HOME).toBe("/work/cargo");
+  });
+});
+
+describe("withDeniedNetworkEnvironment", () => {
+  it("turns off npm fetch retries unless the environment sets them, whatever the case", () => {
+    expect(withDeniedNetworkEnvironment({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+      npm_config_fetch_retries: "0",
+    });
+    expect(
+      withDeniedNetworkEnvironment({ NPM_CONFIG_FETCH_RETRIES: "4" }),
+    ).toEqual({ NPM_CONFIG_FETCH_RETRIES: "4" });
   });
 });

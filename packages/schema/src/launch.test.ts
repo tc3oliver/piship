@@ -693,6 +693,34 @@ describe("enforced read denies that commands can get around", () => {
   });
 });
 
+describe("a custom sandbox read-deny list that drops default credential paths", () => {
+  const dropped = (sandbox: Json) =>
+    warnings(managed({ sandbox })).filter(
+      (warning) => warning.path === "sandbox.filesystem.read.deny",
+    );
+
+  it("names each default the list leaves readable by shell commands", () => {
+    const [warning, ...rest] = dropped({
+      required: true,
+      filesystem: { read: { deny: ["~/secrets", "~/.ssh", "~/.config"] } },
+    });
+    expect(rest).toEqual([]);
+    expect(warning?.message).toMatch(
+      /^this list replaces the default credential paths, so ~\/\.aws, ~\/\.gnupg, ~\/\.azure, ~\/\.kube, ~\/\.docker, ~\/\.netrc, ~\/\.npmrc, ~\/\.pi are now readable by shell commands; add them back/,
+    );
+  });
+
+  it("is quiet for the default list, a list covering every default, and a sandbox that is not required", () => {
+    expect(dropped({ required: true })).toEqual([]);
+    expect(
+      dropped({ required: true, filesystem: { read: { deny: ["~"] } } }),
+    ).toEqual([]);
+    expect(
+      dropped({ required: false, filesystem: { read: { deny: ["~/x"] } } }),
+    ).toEqual([]);
+  });
+});
+
 describe("filesystem rules that can never match", () => {
   const paths = (
     resource: string,

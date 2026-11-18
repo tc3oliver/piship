@@ -580,6 +580,7 @@ describe("bubblewrapFailureReason", () => {
       "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
     );
     expect(reason).toContain("a mount was refused");
+    expect(reason).toContain("--security-opt systempaths=unconfined");
     expect(reason).not.toContain("user namespaces may be disabled");
     expect(reason).toContain("Can't mount proc");
   });
@@ -589,8 +590,24 @@ describe("bubblewrapFailureReason", () => {
       bubblewrapFailureReason(
         "bwrap: setting up uid map: Permission denied",
         () => undefined,
+        () => false,
       ),
     ).toContain("unprivileged user namespaces may be disabled");
+  });
+
+  it("blames the container's seccomp profile when user namespaces fail inside a container", () => {
+    const reason = bubblewrapFailureReason(
+      "bwrap: No permissions to create new namespace",
+      () => undefined,
+      () => true,
+    );
+    expect(reason).toContain(
+      "this container's seccomp or security profile blocks unprivileged user namespaces",
+    );
+    expect(reason).toContain(
+      "docs/troubleshooting.md#bubblewrap-inside-a-container",
+    );
+    expect(reason).not.toContain("may be disabled");
   });
 
   it("names the kernel setting that turns user namespaces off and the command that allows them", () => {
@@ -616,6 +633,6 @@ describe("bubblewrapFailureReason", () => {
         "bwrap: Can't mount proc on /newroot/proc: Operation not permitted",
         () => "1",
       ),
-    ).toContain("run it on the host or use a remote sandbox backend");
+    ).toContain("a mount was refused");
   });
 });

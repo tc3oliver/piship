@@ -210,6 +210,9 @@ export function networkText(report: ContainmentReport): string {
   return `${report.network} (attested by the backend, not verified${denial.reason ? `: ${denial.reason}` : ""})`;
 }
 
+const PERMANENT_GIT_CONTROL =
+  /^git control is not verified: \S+ cannot guard a protected file that does not exist yet /;
+
 const POWERSHELL_COST =
   "each command the agent runs and each MCP stdio server starts through PowerShell, about 0.9 s slower";
 const FAILED_FIX: Readonly<Record<string, string>> = {
@@ -327,7 +330,11 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
         : "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",
     );
     out.info("summary", inspection.containment);
-    for (const warning of report.warnings) out.warn("sandbox", warning);
+    // Bubblewrap cannot guard a missing .git/commondir or config.worktree in
+    // any repository: permanent and not actionable, so a note.
+    for (const warning of report.warnings)
+      if (PERMANENT_GIT_CONTROL.test(warning)) out.info("sandbox", warning);
+      else out.warn("sandbox", warning);
   }
   if (governance.remote) remoteWorkspaceLines(governance.remote, out);
   if (governance.sandboxCredential)

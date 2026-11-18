@@ -138,6 +138,26 @@ export function withCacheEnvironment(
 }
 
 /**
+ * Defaults for a command in a sandbox that denies the network. npm retries a
+ * failed fetch with backoff, so `npm view` took about 70 s to report a lookup
+ * failure that curl reports at once.
+ */
+export const DENIED_NETWORK_VARIABLES: Readonly<Record<string, string>> = {
+  npm_config_fetch_retries: "0",
+};
+
+/** Add each `DENIED_NETWORK_VARIABLES` default the environment does not set, whatever its case. */
+export function withDeniedNetworkEnvironment(
+  env: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const set = new Set(Object.keys(env).map((name) => name.toLowerCase()));
+  const output: Record<string, string> = { ...env };
+  for (const [name, value] of Object.entries(DENIED_NETWORK_VARIABLES))
+    if (!set.has(name.toLowerCase())) output[name] = value;
+  return output;
+}
+
+/**
  * Redact and bound child stderr before it can reach logs or model context.
  * Redaction runs first so truncation can never expose part of a secret; the
  * tail is kept because the last lines usually carry the error.

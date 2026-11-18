@@ -71,6 +71,7 @@ export {
 } from "./custom.js";
 export {
   CACHE_VARIABLES,
+  DENIED_NETWORK_VARIABLES,
   filterEnvironment,
   looksLikeSecret,
   STDERR_TRUNCATION_MARKER,
@@ -78,6 +79,7 @@ export {
   stripCredentials,
   withApprovedNetwork,
   withCacheEnvironment,
+  withDeniedNetworkEnvironment,
 } from "./environment.js";
 export { NativeBackend } from "./native.js";
 export {

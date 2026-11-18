@@ -158,12 +158,12 @@ describe("the network environment of sandboxed commands", () => {
     });
   });
 
-  it("gives a local command in a deny-mode sandbox no network setting, even one it allowlisted", async () => {
+  it("gives a local command in a deny-mode sandbox no network setting, even one it allowlisted, and no npm fetch retries", async () => {
     // The fixture allowlists HTTPS_PROXY, and the launch environment holds a
     // proxy URL with credentials: neither may reach a command that has no
     // network to configure.
     const env = await environmentOf("deny", LOCAL, declared());
-    expect(Object.keys(env).sort()).toEqual(["PATH"]);
+    expect(env).toEqual({ PATH: "/usr/bin", npm_config_fetch_retries: "0" });
     expect(JSON.stringify(env)).not.toContain("ambient-pw");
   });
 
