@@ -35,6 +35,7 @@ import {
   readChannel,
   refreshRoot,
   rootDigest,
+  signChannel,
 } from "./release/index.js";
 import {
   buildSignatureEnvelope,
@@ -937,6 +938,29 @@ ${described.yaml.replace("updates:\n", "updates:\n  channel: stable\n  rollback:
     ).toBe(3);
   });
 
+  it("next warns about each channel the new root's channel role refuses, and still writes it", async () => {
+    const project = temp();
+    const path = manifest(project, root(1, [ROOT_A], [CHANNEL_A, CHANNEL_B]));
+    const repository = join(project, "updates");
+    mkdirSync(repository);
+    await signedChannel(repository, "stable", CHANNEL_B);
+    await signedChannel(repository, "candidate", CHANNEL_A);
+    const next = await nextTrustRoot({
+      repository,
+      manifest: path,
+      removeKeys: [CHANNEL_A.id],
+      expiresDays: 90,
+      signers: [signer(ROOT_A)],
+      now: () => NOW,
+    });
+    expect(existsSync(next.path)).toBe(true);
+    expect(next.warnings).toEqual([
+      expect.stringMatching(
+        /candidate\.json is signed by channel-a, which root 2's channel role \(1 of channel-b\) does not accept: once root 2 is published, clients refuse the candidate channel\. Re-sign it .*sign-channel .* --channel candidate/,
+      ),
+    ]);
+  });
+
   it("a failing or faulty signer changes no files", async () => {
     const project = temp();
     const path = manifest(project, root(1, [ROOT_A], [CHANNEL_A]));
@@ -1009,5 +1033,103 @@ describe("channel role threshold", () => {
       ),
     );
     expect((await read(2)).keyIds).toEqual([CHANNEL_A.id, CHANNEL_B.id]);
+  });
+});
+
+/** `<channel>.json` with no releases, signed by `key`, as sign-channel lays it out. */
+async function signedChannel(
+  dir: string,
+  channel: string,
+  key: SigningKeyPair,
+): Promise<void> {
+  const text = Buffer.from(
+    `${JSON.stringify(
+      {
+        schema: "piship-channel/v1",
+        distribution: ID,
+        channel,
+        sequence: 1,
+        expires: "2099-01-01T00:00:00.000Z",
+        releases: [],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(join(dir, `${channel}.json`), text);
+  writeFileSync(
+    join(dir, `${channel}.json.sig`),
+    JSON.stringify(buildSignatureEnvelope([await entry(key, text)])),
+  );
+}
+
+describe("sign-channel names the owner's key mistakes", () => {
+  it("a key file that is not its key id's key, and a key id the root does not list", async () => {
+    const dir = temp();
+    await publishRoot(dir, root(1, [ROOT_A], [CHANNEL_A, CHANNEL_B]), [ROOT_A]);
+    await signedChannel(dir, "stable", CHANNEL_B);
+    const before = readFileSync(join(dir, "stable.json.sig"), "utf8");
+    const resign = (key: SigningKeyPair, keyId: string) =>
+      signChannel({
+        directory: dir,
+        channel: "stable",
+        archives: [],
+        privateKeyPem: key.privateKeyPem,
+        keyId,
+      });
+    const mismatch = await resign(CHANNEL_A, CHANNEL_B.id).catch(
+      (error: Error) => error,
+    );
+    expect(mismatch).toMatchObject({ code: "INTEGRITY_FAILED" });
+    expect((mismatch as Error).message).toBe(
+      `Cannot re-sign ${join(dir, "stable.json")}: the key file passed as channel-b does not match key id channel-b: it has fingerprint ${keyFingerprint(CHANNEL_A.publicKey)}, and the channel role of root/1.json lists channel-b as ${keyFingerprint(CHANNEL_B.publicKey)}; nothing was written`,
+    );
+    await expect(resign(CHANNEL_A, "channel-9")).rejects.toThrow(
+      "key id channel-9 is not in the channel role of root/1.json, which lists channel-a, channel-b",
+    );
+    // A key the root lists that did not sign the published metadata is a
+    // rotation: the --previous-key advice stands.
+    await expect(resign(CHANNEL_A, CHANNEL_A.id)).rejects.toMatchObject({
+      message: expect.stringMatching(
+        /does not verify: Signature key channel-b is not trusted/,
+      ),
+      userAction: expect.stringContaining("--previous-key"),
+    });
+    expect(readFileSync(join(dir, "stable.json.sig"), "utf8")).toBe(before);
+    // With no hosted root, the key the passed id signed with is compared.
+    rmSync(join(dir, "root"), { recursive: true });
+    await expect(resign(CHANNEL_A, CHANNEL_B.id)).rejects.toThrow(
+      `the key file passed as channel-b (fingerprint ${keyFingerprint(CHANNEL_A.publicKey)}) does not verify the channel-b signature of stable.json`,
+    );
+  });
+});
+
+describe("a client names a channel file that does not match its signature", () => {
+  it("separates edited content from an untrusted key", async () => {
+    const dir = temp();
+    await signedChannel(dir, "stable", CHANNEL_A);
+    const read = () =>
+      readChannel(dir, "stable", {
+        distribution: ID,
+        trusted: [pub(CHANNEL_A)],
+        now: () => NOW,
+      });
+    const path = join(dir, "stable.json");
+    const signed = readFileSync(path, "utf8");
+    writeFileSync(path, signed.replace('"sequence": 1', '"sequence": 2'));
+    await expect(read()).rejects.toMatchObject({
+      code: "INTEGRITY_FAILED",
+      message:
+        "stable.json does not match its signature: Signature does not verify with trusted key channel-a",
+      userAction: expect.stringContaining(
+        "Upload stable.json and stable.json.sig together",
+      ),
+    });
+    writeFileSync(path, signed);
+    await signedChannel(dir, "stable", CHANNEL_B);
+    await expect(read()).rejects.toMatchObject({
+      message: expect.stringMatching(/^Signature key channel-b is not trusted/),
+      userAction: expect.stringContaining("--previous-key"),
+    });
   });
 });

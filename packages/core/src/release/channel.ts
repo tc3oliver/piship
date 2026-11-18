@@ -4,6 +4,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -31,8 +32,15 @@ import {
   verifySignature,
   verifyThreshold,
 } from "../signing.js";
+import { pishipCommand } from "../invocation.js";
 import { CHANNEL_SCHEMA } from "./metadata.js";
-import { refreshRoot, roleTrust, rootExpired } from "./root.js";
+import {
+  parseHostedRoot,
+  refreshRoot,
+  roleTrust,
+  rootExpired,
+  rootFileName,
+} from "./root.js";
 import { readSourceFile } from "./source.js";
 import { type VerifiedRelease, verifyRelease } from "./verify.js";
 
@@ -263,6 +271,86 @@ function existingChannel(
     );
   }
   return metadata;
+}
+
+/**
+ * What is wrong with the keys passed to sign with, judged against `keys`
+ * (described by `label`): a key file that is not the key its id names, or an
+ * id `keys` does not list. For messages only; it trusts nothing.
+ */
+function signerProblem(
+  signers: readonly KeyedSigner[],
+  keys: readonly TrustedKey[],
+  label: string,
+): string | undefined {
+  const problems = signers.flatMap((signer) => {
+    const named = keys.filter((key) => key.id === signer.keyId);
+    const passed = keyFingerprint(signer.publicKey);
+    if (!named.length)
+      return [
+        `key id ${signer.keyId} is not in ${label}, which lists ${[...new Set(keys.map((key) => key.id))].join(", ")}`,
+      ];
+    if (named.some((key) => keyFingerprint(key.publicKey) === passed))
+      return [];
+    return [
+      `the key file passed as ${signer.keyId} does not match key id ${signer.keyId}: it has fingerprint ${passed}, and ${label} lists ${signer.keyId} as ${keyFingerprint((named[0] as TrustedKey).publicKey)}`,
+    ];
+  });
+  return problems.length ? problems.join("; ") : undefined;
+}
+
+/**
+ * With no hosted root to compare against: a passed key whose id signed the
+ * published metadata, yet whose key did not verify it. Message only.
+ */
+function sameIdProblem(
+  path: string,
+  signers: readonly KeyedSigner[],
+): string | undefined {
+  let ids: unknown[];
+  try {
+    const envelope = JSON.parse(readFileSync(`${path}.sig`, "utf8")) as {
+      keyId?: unknown;
+      signatures?: { keyId?: unknown }[];
+    };
+    ids = Array.isArray(envelope.signatures)
+      ? envelope.signatures.map((entry) => entry?.keyId)
+      : [envelope.keyId];
+  } catch {
+    return undefined;
+  }
+  const signer = signers.find((item) => ids.includes(item.keyId));
+  return signer
+    ? `the key file passed as ${signer.keyId} (fingerprint ${keyFingerprint(signer.publicKey)}) does not verify the ${signer.keyId} signature of ${basename(path)}: that file is not ${signer.keyId}'s private key, or ${basename(path)} changed after it was signed`
+    : undefined;
+}
+
+/**
+ * The channel role of the newest `root/<N>.json` in a channel directory, read
+ * without verifying the chain: only to explain a refusal, never to trust.
+ */
+function hostedChannelRole(
+  directory: string,
+): { readonly keys: TrustedKey[]; readonly label: string } | undefined {
+  try {
+    const versions = readdirSync(join(directory, "root")).flatMap((name) => {
+      const match = /^([1-9][0-9]*)\.json$/.exec(name);
+      return match ? [Number(match[1])] : [];
+    });
+    if (!versions.length) return undefined;
+    const name = rootFileName(Math.max(...versions));
+    const bytes = readFileSync(join(directory, name));
+    const { distribution } = JSON.parse(bytes.toString("utf8")) as {
+      distribution?: unknown;
+    };
+    const root = parseHostedRoot(bytes, String(distribution), name);
+    return {
+      keys: roleTrust(root, "channel").keys,
+      label: `the channel role of ${name}`,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -536,7 +624,24 @@ export async function signChannel(options: SignChannelOptions): Promise<{
     const resign = !options.archives.length && !options.packs?.length;
     // A forged channel fails here, before any untrusted archive is parsed.
     if (resign && existsSync(path))
-      existingChannel(path, options.channel, ownerKeys, true);
+      try {
+        existingChannel(path, options.channel, ownerKeys, true);
+      } catch (error) {
+        // A key file that is not the key its id names, or an id the root does
+        // not list, is the owner's mistake, not the published file's.
+        const hosted = hostedChannelRole(directory);
+        const problem =
+          (hosted && signerProblem(signers, hosted.keys, hosted.label)) ??
+          sameIdProblem(path, signers);
+        if (!problem) throw error;
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `Cannot re-sign ${path}: ${problem}; nothing was written`,
+          {
+            userAction: `Pass --key with the private key file of a channel key and --key-id with its id (${pishipCommand()} keygen <file> --id <id> --show-public prints a key file's fingerprint; compare it with the key in updates.trust or root/<N>.json). If the key is right, restore the published metadata and its signature together. After a key rotation, also pass the key that signed the published metadata with --previous-key <id>=<public-key>`,
+          },
+        );
+      }
     const listed = resign
       ? listedArchives(path, directory, options.channel)
       : undefined;
@@ -662,9 +767,16 @@ export async function signChannel(options: SignChannelOptions): Promise<{
             trust.threshold,
           );
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        // A v0.7 client checks only the first signer's top-level signature.
+        const problem = signerProblem(
+          trust.legacy ? signers.slice(0, 1) : signers,
+          trust.keys,
+          trust.label,
+        );
         throw new PiShipError(
           "INTEGRITY_FAILED",
-          `The signing keys do not satisfy ${trust.label}: ${error instanceof Error ? error.message : String(error)}; nothing was written`,
+          `The signing keys do not satisfy ${trust.label}: ${problem ? `${problem} (${detail})` : detail}; nothing was written`,
           {
             userAction: trust.legacy
               ? "Sign with a key the release pins in updates.trust.keys as the first --key"
@@ -804,6 +916,17 @@ export async function readChannel(
   } catch (error) {
     // Typically a channel not yet re-signed after a root rotated its key.
     if (!(error instanceof PiShipError)) throw error;
+    // A trusted key whose signature does not match the bytes: the file was
+    // changed after signing, or only part of an upload arrived.
+    if (error.message.startsWith("Signature does not verify with trusted key"))
+      throw new PiShipError(
+        error.code,
+        `${channel}.json does not match its signature: ${error.message}`,
+        {
+          component: "signing",
+          userAction: `Nothing was changed; try again once an upload in progress has finished. If it keeps failing, tell the distribution owner: ${channel}.json was changed after it was signed, or only part of it was uploaded. Upload ${channel}.json and ${channel}.json.sig together, from the same sign-channel run`,
+        },
+      );
     throw new PiShipError(error.code, error.message, {
       component: "signing",
       userAction: `Nothing was changed. Tell the distribution owner: ${channel}.json must be signed with a channel key of the newest published root (piship sign-channel <channel-dir> --channel ${channel} --key <file> --key-id <id> --previous-key <old-id>=<old-public-key> re-signs it without adding an archive), and any new root/<N>.json published before it`,

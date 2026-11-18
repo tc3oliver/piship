@@ -13,6 +13,7 @@ import {
   PiShipError,
   type TemporaryDirectory,
 } from "@piship/contracts";
+import { RELEASE_CHANNELS } from "@piship/schema";
 import { extractArchive, sha256File } from "../archive.js";
 import { verifyPayloadContents, type DistributionLock } from "../index.js";
 import { LEGACY_STATE_SCHEMAS, type StateSchemaSupport } from "../migration.js";
@@ -56,6 +57,26 @@ function extractionFailure(error: Error, path: string): PiShipError {
   const root = /^Archive entry outside root "[^"]*": ([^/]+)\//.exec(
     error.message,
   )?.[1];
+  // zlib and tar wording names neither the file nor what is wrong with it.
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "Z_DATA_ERROR" || error.message === "incorrect header check")
+    return fail(
+      `${basename(path)} is not a gzip release archive (${error.message})`,
+      "Pass a release archive (<id>-<version>-<target>.tar.gz) or a release directory",
+    );
+  if (
+    code === "Z_BUF_ERROR" ||
+    error.message === "unexpected end of file" ||
+    error.message === "Corrupt archive: unexpected end of archive"
+  )
+    return fail(
+      `${basename(path)} is truncated: it ends before the archive does (${error.message})`,
+      "Download or copy the archive again; compare its size and SHA-256 with the published ones",
+    );
+  if (error.message.startsWith("Corrupt archive: "))
+    return fail(
+      `${basename(path)} is damaged or not a release archive (${error.message})`,
+    );
   return root
     ? new PiShipError(
         "CONFIG_INVALID",
@@ -136,6 +157,23 @@ export async function verifyRelease(
       `Run ${pishipCommand()} release <manifest> to build the qualified release`,
     );
   if (!statSync(path).isFile() && !existsSync(join(path, "release.json"))) {
+    // A signed channel directory lists archives; it is not a release.
+    const channels = RELEASE_CHANNELS.filter((name) =>
+      existsSync(join(path, `${name}.json`)),
+    );
+    if (channels.length || existsSync(join(path, "root"))) {
+      const archives = readdirSync(path)
+        .filter((name) => name.endsWith(".tar.gz"))
+        .map((name) => join(path, name));
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${path} is a channel directory (${channels.length ? channels.map((name) => `${name}.json`).join(", ") : "root/"}), not a release: verify-release checks one release archive or release directory`,
+        {
+          component: "release",
+          userAction: `Pass one of the archives it holds${archives.length ? `: ${archives.join(", ")}` : ""}`,
+        },
+      );
+    }
     // A build's output directory or its `releases/` folder holds archives, not
     // one release: say which to pass instead of calling the build tampered.
     const archives = [path, join(path, "releases")].flatMap((folder) =>

@@ -338,6 +338,8 @@ function argumentProblem(
   }
   return undefined;
 }
+/** A malformed or missing option: printed with the command's usage line, exit 2. */
+class UsageProblem extends Error {}
 /** The usage line, led by what was wrong when that is known. */
 function usageError(
   command: string,
@@ -535,7 +537,7 @@ function pairs(values: readonly string[], option: string, value: string) {
   return values.map((item) => {
     const split = item.indexOf("=");
     if (split < 1 || split === item.length - 1)
-      throw new Error(`${option} must be <id>=<${value}>`);
+      throw new UsageProblem(`${option} must be <id>=<${value}>`);
     return { id: item.slice(0, split), value: item.slice(split + 1) };
   });
 }
@@ -543,7 +545,7 @@ function positiveInteger(value: string | undefined, name: string) {
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1)
-    throw new Error(`${name} must be a positive integer`);
+    throw new UsageProblem(`${name} must be a positive integer`);
   return parsed;
 }
 function idList(value: string | undefined) {
@@ -572,7 +574,7 @@ async function pemSigners(
       "Warning: no signing key is encrypted; the passphrase option is ignored.",
     );
   if (input.stdin && encrypted.length > 1)
-    throw new Error(
+    throw new UsageProblem(
       "--passphrase-stdin reads one passphrase; with several encrypted keys, use --passphrase-env or the prompts",
     );
   const signers: KeyedSigner[] = [];
@@ -1323,6 +1325,16 @@ export async function runCli(
       ? runLifecycle(command, parsed, tracked)
       : runSourceCommand(command, args, tracked));
   } catch (error) {
+    if (error instanceof UsageProblem) {
+      output.stderr(
+        usageError(
+          command,
+          lifecycle?.usage ?? simpleUsage[command],
+          error.message,
+        ),
+      );
+      return 2;
+    }
     output.stderr(
       error instanceof ManifestError
         ? redact(error.message)
@@ -2223,11 +2235,11 @@ async function runLifecycle(
     }
   } else if (command === "keygen") {
     const id = options["--id"];
-    if (!id) throw new Error("keygen needs --id <key-id>");
+    if (!id) throw new UsageProblem("keygen needs --id <key-id>");
     const input = passphraseInput(options, flags);
     if (flags.has("--show-public")) {
       if (flags.has("--encrypt") || flags.has("--force-in-worktree"))
-        throw new Error(
+        throw new UsageProblem(
           "--show-public reads an existing key; it takes no --encrypt or --force-in-worktree",
         );
       const [signer] = await pemSigners([{ id, file: first }], input, output);
@@ -2238,7 +2250,9 @@ async function runLifecycle(
       return 0;
     }
     if (!flags.has("--encrypt") && (input.env !== undefined || input.stdin))
-      throw new Error("--passphrase-env and --passphrase-stdin need --encrypt");
+      throw new UsageProblem(
+        "--passphrase-env and --passphrase-stdin need --encrypt",
+      );
     const pair = generateSigningKey(
       id,
       flags.has("--encrypt")
@@ -2265,9 +2279,13 @@ async function runLifecycle(
     const keys = repeated["--key"] ?? [];
     const keyIds = repeated["--key-id"] ?? [];
     if (!channel || !keys.length || !keyIds.length)
-      throw new Error("sign-channel needs --channel, --key, and --key-id");
+      throw new UsageProblem(
+        "sign-channel needs --channel, --key, and --key-id",
+      );
     if (keys.length !== keyIds.length)
-      throw new Error("Give one --key-id for each --key, in the same order");
+      throw new UsageProblem(
+        "Give one --key-id for each --key, in the same order",
+      );
     const sequence = positiveInteger(options["--sequence"], "--sequence");
     const expiresDays = positiveInteger(
       options["--expires-days"],
@@ -2276,7 +2294,7 @@ async function runLifecycle(
     const previous = options["--previous-key"];
     const split = previous?.indexOf("=") ?? -1;
     if (previous !== undefined && split < 1)
-      throw new Error("--previous-key must be <id>=<public-key>");
+      throw new UsageProblem("--previous-key must be <id>=<public-key>");
     const [signer, ...additionalSigners] = await pemSigners(
       keys.map((file, index) => ({ id: keyIds[index] as string, file })),
       passphraseInput(options, flags),
@@ -2371,7 +2389,9 @@ async function runLifecycle(
       }));
     if (first === "init" && positional.length === 1) {
       if (!roles.rootKeyIds || !roles.channelKeyIds)
-        throw new Error("trust-root init needs --root-keys and --channel-keys");
+        throw new UsageProblem(
+          "trust-root init needs --root-keys and --channel-keys",
+        );
       const described = initTrustRoot({
         ...expiry,
         ...roles,
@@ -2386,7 +2406,7 @@ async function runLifecycle(
       );
     } else if (first === "next" && positional.length === 2) {
       const manifest = options["--manifest"];
-      if (!manifest) throw new Error("trust-root next needs --manifest");
+      if (!manifest) throw new UsageProblem("trust-root next needs --manifest");
       const signers = await pemSigners(
         pairs(repeated["--sign"] ?? [], "--sign", "private-key-file").map(
           (item) => ({ id: item.id, file: item.value }),
@@ -2413,6 +2433,8 @@ async function runLifecycle(
           ),
         )}`,
       );
+      for (const warning of result.warnings)
+        output.stderr(`Warning: ${warning}`);
     } else {
       output.stderr(`Usage: piship ${lifecycleCommands["trust-root"]?.usage}`);
       return 2;
