@@ -192,7 +192,7 @@ describe("remote capability reporting", () => {
     ]);
     const line = describeContainment(sandbox.report);
     expect(line).toBe(
-      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny (attested by the backend, not verified). Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
+      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny (attested by the backend, not verified). Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see what the backend's template or image holds, not the files the agent edits; this is not a complete coding-agent workspace.",
     );
     expect(sandbox.report).toMatchObject({
       isolation: "remote",

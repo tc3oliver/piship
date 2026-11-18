@@ -1540,7 +1540,7 @@ export function describeContainment(
       return `${line}${line.endsWith(".") ? "" : "."} ${describeWorkspace(workspace)}`;
     }
     case "unavailable":
-      return `unavailable on ${report.adapter} (${requirement}): ${redact(report.reason ?? "unknown reason")}. Tool subprocesses run with the user's privileges`;
+      return `unavailable on ${report.adapter} (${requirement}): ${redact(report.reason ?? "unknown reason")}. ${report.required ? "Launch is refused, so nothing runs outside the sandbox" : "Tool subprocesses run with the user's privileges"}`;
     default:
       return "not required: no sandbox is active; tool subprocesses run with the user's privileges";
   }

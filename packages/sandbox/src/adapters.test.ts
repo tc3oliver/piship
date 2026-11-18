@@ -533,7 +533,13 @@ describe("unsupported platforms fail closed", () => {
       adapter: "unsupported",
       planes: [],
     });
-    expect(describeContainment(sandbox.report)).toContain("unavailable");
+    expect(describeContainment(sandbox.report)).toContain(
+      "Tool subprocesses run with the user's privileges",
+    );
+    // A required sandbox that is unavailable refuses the launch instead.
+    expect(describeContainment({ ...sandbox.report, required: true })).toMatch(
+      /^unavailable on unsupported \(required\): .*\. Launch is refused, so nothing runs outside the sandbox$/,
+    );
     sandbox.dispose();
   });
 

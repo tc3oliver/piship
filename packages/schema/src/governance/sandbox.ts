@@ -441,6 +441,18 @@ export function parseSandbox(
       "sandbox.network.egress",
       "egress: it delegates egress to IT and cannot be combined with mode: deny",
     );
+  const networkMode = oneOf(
+    networkSection.mode,
+    "sandbox.network.mode",
+    ["deny", "allow"] as const,
+    required && !egress ? "deny" : "allow",
+  );
+  // The adapter cannot verify the warm pool's NetworkPolicy, so deny would refuse every launch.
+  if (backend.provider === "kubernetes-agent-sandbox" && networkMode === "deny")
+    conflict(
+      "sandbox.network.mode",
+      "The kubernetes-agent-sandbox backend cannot enforce network deny (the default for a required sandbox), so every launch would be refused; set sandbox.network.mode: allow",
+    );
   const environment = optionalRecord(
     sandbox.environment,
     "sandbox.environment",
@@ -464,12 +476,7 @@ export function parseSandbox(
       },
     },
     network: {
-      mode: oneOf(
-        networkSection.mode,
-        "sandbox.network.mode",
-        ["deny", "allow"] as const,
-        required && !egress ? "deny" : "allow",
-      ),
+      mode: networkMode,
       ...(egress ? { egress } : {}),
     },
     environment: {

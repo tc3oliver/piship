@@ -1029,7 +1029,7 @@ export function describeWorkspace(report: WorkspaceReport): string {
   switch (report.verification) {
     case "not-required":
       return declared === "snapshot"
-        ? "Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace."
+        ? "Workspace: snapshot. Remote commands see what the backend's template or image holds, not the files the agent edits; this is not a complete coding-agent workspace."
         : "Workspace: shared (commands run on this host's files).";
     case "pending":
       return `Workspace: ${declared} declared, verified before the first sandboxed command.`;

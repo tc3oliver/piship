@@ -1868,6 +1868,7 @@ describe("sandbox backends", () => {
           endpoint: "https://k8s.example.com",
           router: `\${ACME_ROUTER_URL}`,
           template: "python-pool",
+          network: { mode: "allow" },
           credential: "stored",
         }),
       ).sandbox.credential,
@@ -1946,6 +1947,26 @@ describe("sandbox backends", () => {
     ).sandbox;
     expect(e2bDefault).not.toHaveProperty("user");
   });
+  it.each<[Json, string]>([
+    [{}, "the default"],
+    [{ network: { mode: "deny" } }, "explicit deny"],
+  ])(
+    "rejects a kubernetes-agent-sandbox backend with network deny (%#: %s)",
+    (extra) => {
+      rejects(
+        withSandbox({
+          required: true,
+          provider: "kubernetes-agent-sandbox",
+          endpoint: "https://k8s.example.com",
+          router: "https://router.example.com",
+          template: "python-pool",
+          ...extra,
+        }),
+        "sandbox.network.mode",
+        "set sandbox.network.mode: allow",
+      );
+    },
+  );
   it("accepts a kubernetes-agent-sandbox backend and a custom adapter", () => {
     expect(
       governance(
@@ -1956,6 +1977,7 @@ describe("sandbox backends", () => {
           router: `\${ACME_ROUTER_URL}`,
           namespace: "agents",
           template: "python-pool",
+          network: { mode: "allow" },
         }),
       ).sandbox,
     ).toMatchObject({
