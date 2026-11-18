@@ -440,6 +440,15 @@ describe("root refresh", () => {
     );
     writeFileSync(join(dir, "root", "2.json"), "{");
     await expect(refresh(dir, one)).rejects.toThrow(/is not valid JSON/);
+    // A host that answers a missing file with a page (SPA fallback, captive portal).
+    writeFileSync(join(dir, "root", "2.json.sig"), "\n<!doctype html><html>");
+    await expect(refresh(dir, one)).rejects.toMatchObject({
+      code: "INTEGRITY_FAILED",
+      message: "root/2.json.sig is an HTML page, not PiShip metadata",
+      userAction: expect.stringMatching(
+        /captive portal.*must answer 404 for a missing file\. Nothing installed was changed$/,
+      ),
+    });
     // parseUpdateRoot skips schema, so this is the only schema check.
     const old = Buffer.from(
       hostedRootText(ID, root(2, [ROOT_A], [CHANNEL_A])).replace(

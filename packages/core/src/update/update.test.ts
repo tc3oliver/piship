@@ -41,6 +41,49 @@ describe("an update with no update source", () => {
   });
 });
 
+describe("an update source resolved from a variable", () => {
+  function badSource(value: string): PiShipError {
+    const lock = {
+      app: { name: "AcmeCode", command: "acmecode" },
+      deployment: { mode: "managed" },
+      updates: {
+        channel: "stable",
+        channels: ["stable"],
+        source: "${ACMECODE_UPDATE_SOURCE}",
+      },
+      access: { variables: ["ACMECODE_UPDATE_SOURCE"] },
+    } as unknown as DistributionLock;
+    try {
+      resolveSource(lock, undefined, { ACMECODE_UPDATE_SOURCE: value });
+    } catch (error) {
+      return error as PiShipError;
+    }
+    throw new Error("resolveSource did not throw");
+  }
+
+  it("names the variable and gives a valid example for a relative path", () => {
+    const error = badSource("chan");
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toBe(
+      "ACMECODE_UPDATE_SOURCE (updates.source) resolved to chan, which is neither a URL nor an absolute local directory",
+    );
+    expect(error.userAction).toMatch(
+      /^Set ACMECODE_UPDATE_SOURCE to an https URL such as https:\/\/updates\.example\.com\/channel, or an absolute local directory\. Plain http is accepted only to loopback, a private IP address/,
+    );
+  });
+
+  it("names the variable for a URL with a query string", () => {
+    const error = badSource("https://updates.example.com/c?token=x");
+    expect(error.message).toBe(
+      "ACMECODE_UPDATE_SOURCE (updates.source) may not contain a query string or fragment",
+    );
+    expect(error.userAction).toMatch(
+      /^Set ACMECODE_UPDATE_SOURCE to an https URL/,
+    );
+    expect(error.userAction).toMatch(/without \?query or #fragment/);
+  });
+});
+
 describe("an update with no release keys", () => {
   let home: string;
   beforeEach(() => {

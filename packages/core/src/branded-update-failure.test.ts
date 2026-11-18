@@ -54,7 +54,7 @@ function updateGroup(): string[] {
 }
 
 function lastCheck(): string[] {
-  return updateGroup().filter((line) => line.includes(" last check "));
+  return updateGroup().filter((line) => / last (success|failure) /.test(line));
 }
 
 describe.runIf(HOST_EVIDENCED)("doctor last check", () => {
@@ -62,7 +62,7 @@ describe.runIf(HOST_EVIDENCED)("doctor last check", () => {
     await installed();
     await runUpdate(context(), ["--check"]);
     expect(lastCheck()).toEqual([
-      expect.stringMatching(/^ok last check available 1\.1\.0 \(/),
+      expect.stringMatching(/^ok last success available 1\.1\.0 \(/),
     ]);
     const empty = mkdtempSync(join(tmpdir(), "piship-empty-source-"));
     scratch.push(empty);
@@ -70,15 +70,15 @@ describe.runIf(HOST_EVIDENCED)("doctor last check", () => {
     expect(error.code).toBe("UPDATE_FAILED");
     const failed = lastCheck();
     expect(failed).toHaveLength(2);
-    expect(failed[0]).toMatch(/^ok last check available 1\.1\.0 \(/);
+    expect(failed[0]).toMatch(/^ok last success available 1\.1\.0 \(/);
     expect(failed[1]).toMatch(
-      /^! last check update failed at \S+: Update source has no stable\.json$/,
+      /^! last failure update failed at \S+: Update source has no stable\.json$/,
     );
     // The receipt is unchanged by the failure; a later check clears the warning.
     await new Promise((resolve) => setTimeout(resolve, 5));
     await runUpdate(context(), ["--check"]);
     expect(lastCheck()).toEqual([
-      expect.stringMatching(/^ok last check available 1\.1\.0 \(/),
+      expect.stringMatching(/^ok last success available 1\.1\.0 \(/),
     ]);
   });
 
