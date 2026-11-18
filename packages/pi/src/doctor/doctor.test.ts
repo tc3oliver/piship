@@ -2263,7 +2263,7 @@ describe("Audit group", () => {
       `  ! ${"spool siem".padEnd(20)} replayed events the collector refused set aside in logs/audit-spool/fedcba9876543210: 2-b.jsonl.rejected; never sent again; review them, then remove the file`,
     );
     expect(audit).toContain(
-      `  ! ${"spool siem".padEnd(20)} 1 file(s), 300 bytes of undelivered events in logs/audit-spool/fedcba9876543210; 1 not renewed for 10 minutes, replayed by the next launch that reaches the sink`,
+      `  ! ${"spool siem".padEnd(20)} 1 file(s), 300 bytes of undelivered events in logs/audit-spool/fedcba9876543210; no running session holds 1 of them, so the next launch that reaches the sink delivers them`,
     );
   });
 

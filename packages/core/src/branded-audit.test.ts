@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -19,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import {
   AUDIT_SPOOL_DIRECTORY,
   type AuditConfig,
+  AuditLog,
   auditSpoolKey,
 } from "@piship/audit";
 import type { AuditEvent } from "@piship/contracts";
@@ -290,22 +292,99 @@ describe("branded command audit with a required sink", () => {
     return () => auditAccess(ctx, access, "demo-user-1", events);
   };
 
-  it("fails the command when the required sink is unreachable", async () => {
+  it("spools the events while the required sink is unreachable, warns, and the next launch delivers them", async () => {
+    const url = collector.url;
+    await collector.close();
+    const { ctx, errors } = context(sinks(url, true));
+    const record = await signIn(ctx);
+    await expect(record()).resolves.toBeUndefined();
+    expect(errors).toEqual([
+      expect.stringMatching(
+        /^Warning: Audit delivery is pending: 2 audit event\(s\) were not delivered to required audit sink company \(2 pending, 0 dropped; last error: [^)]+\); they are kept in its spool and delivered first at the next launch$/,
+      ),
+    ]);
+    // The collector's path and query are never echoed.
+    expect(errors.join("\n")).not.toContain("route=audit");
+    // The optional file sink and the spool both hold the events.
+    expect(
+      readFileSync(join(ctx.stateDir, "logs", "audit.jsonl"), "utf8"),
+    ).toContain('"event":"identity.login"');
+    const spoolDir = join(
+      ctx.stateDir,
+      AUDIT_SPOOL_DIRECTORY,
+      auditSpoolKey("company"),
+    );
+    const spooled = readdirSync(spoolDir)
+      .map((name) => readFileSync(join(spoolDir, name), "utf8"))
+      .join("");
+    expect(spooled).toContain('"event":"identity.login"');
+    // The next launch (a replaying session) delivers them.
+    const up = await startCollector();
+    try {
+      const log = await AuditLog.open({
+        config: {
+          ...(ctx.metadata.governance?.manifest.audit as AuditConfig),
+          sinks: sinks(up.url, true) as AuditConfig["sinks"],
+        },
+        distribution: "acmecode",
+        stateDir: ctx.stateDir,
+        fetch: (input, init) => fetch(input, init),
+        replaySpool: true,
+      });
+      await log.close();
+      expect(
+        up.batches.flatMap((batch) => batch.events).map((event) => event.event),
+      ).toEqual(expect.arrayContaining(["identity.login"]));
+    } finally {
+      await up.close();
+    }
+  });
+
+  it("fails the command when the required sink dropped events it could not buffer", async () => {
+    await collector.close();
+    const { ctx, errors } = context(sinks(collector.url, true));
+    const governance = ctx.metadata.governance as NonNullable<
+      typeof ctx.metadata.governance
+    >;
+    const tiny: BrandedContext = {
+      ...ctx,
+      metadata: {
+        ...ctx.metadata,
+        governance: {
+          ...governance,
+          manifest: {
+            ...governance.manifest,
+            audit: {
+              ...governance.manifest.audit,
+              buffer: { ...governance.manifest.audit.buffer, maxEvents: 1 },
+            },
+          },
+        },
+      },
+    };
+    const record = await signIn(tiny);
+    await expect(record()).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringMatching(
+        /^The operation completed, but its audit was not recorded: 2 audit event\(s\) were not delivered to required audit sink company \(1 pending, 1 dropped/,
+      ),
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it("fails the command when the required sink's spool cannot keep the events", async () => {
     await collector.close();
     const { ctx, errors } = context(sinks(collector.url, true));
     const record = await signIn(ctx);
-    const error = await record().then(
-      () => undefined,
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
+    // A file where the spool directory belongs: nothing can be spooled.
+    mkdirSync(join(ctx.stateDir, "logs"), { recursive: true });
+    writeFileSync(join(ctx.stateDir, AUDIT_SPOOL_DIRECTORY), "");
+    await expect(record()).rejects.toMatchObject({
       code: "AUDIT_UNAVAILABLE",
       message: expect.stringMatching(
-        /^The operation completed, but its audit was not recorded: Required audit sink company \(http\) is unavailable/,
+        /^The operation completed, but its audit was not recorded: Required audit sink company \(http\) is unavailable: its spool/,
       ),
     });
-    // The collector's path and query are never echoed.
-    expect(JSON.stringify(error)).not.toContain("route=audit");
     expect(errors).toEqual([]);
     await expect(
       auditLifecycle(ctx, "runtime.update", "allowed", { from: "1.0.0" }),
@@ -390,17 +469,15 @@ describe("branded command audit with a required sink", () => {
     });
   });
 
-  it("fails the command when the required sink does not take the events", async () => {
-    const { ctx } = context(sinks(collector.url, true));
+  it("warns when the required sink does not take the events, which stay spooled", async () => {
+    const { ctx, errors } = context(sinks(collector.url, true));
     const record = await signIn(ctx);
-    // Fault injection: the probe succeeds, every delivery fails.
+    // Fault injection: every delivery fails.
     collector.status = 503;
-    await expect(record()).rejects.toMatchObject({
-      code: "AUDIT_UNAVAILABLE",
-      message: expect.stringContaining(
-        "2 audit event(s) were not delivered to required audit sink company (2 pending, 0 dropped; last error: collector answered HTTP 503)",
-      ),
-    });
+    await expect(record()).resolves.toBeUndefined();
+    expect(errors).toEqual([
+      "Warning: Audit delivery is pending: 2 audit event(s) were not delivered to required audit sink company (2 pending, 0 dropped; last error: collector answered HTTP 503); they are kept in its spool and delivered first at the next launch",
+    ]);
     // The optional file sink still recorded them.
     expect(
       readFileSync(join(ctx.stateDir, "logs", "audit.jsonl"), "utf8"),

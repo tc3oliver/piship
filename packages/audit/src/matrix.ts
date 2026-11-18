@@ -93,7 +93,7 @@ export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
       "events are still undelivered at close, or were dropped (full buffer, or emitted after close)",
     sink: "required",
     behavior:
-      "close() retries the sink until its deadline, then aborts; what is left stays in the spool and is delivered first at the next launch; requiredAuditLoss(status) turns what is left into AUDIT_UNAVAILABLE, which ends the governed session or the login, logout, update, or rollback command with an error (the operation itself is not undone); the log is failed when events were dropped",
+      "close() retries the sink until its deadline, then aborts; what is left stays in the spool and is delivered first at the next launch; requiredAuditLoss(status) turns what is left into AUDIT_UNAVAILABLE, which ends the governed session with an error; the login, logout, update, or rollback command, which skips the readiness probe, only warns when every such event is spooled, and fails otherwise (the operation itself is not undone); the log is failed when events were dropped",
     logState: "degraded",
     governedActions: "fail closed",
   },
