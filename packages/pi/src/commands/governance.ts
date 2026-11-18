@@ -1,6 +1,5 @@
 // `policy explain` and `capabilities`: offline governance reports.
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   normalizePolicyAction,
   PiShipError,
@@ -10,7 +9,9 @@ import {
 } from "@piship/contracts";
 import { type GovernedLock, governedLock, usageRefusal } from "@piship/core";
 import {
+  companionRequests,
   decisionToJSON,
+  expandPathTokens,
   formatCapabilities,
   formatDecision,
   projectDimensionEffect,
@@ -70,28 +71,35 @@ export async function runPolicy(
   const inspection = await inspectGovernance(
     governanceOptions(ctx, lock, null, false),
   );
-  // Paths are explained as tools see them: `~` is the home directory and
-  // relative paths are resolved against the working directory.
+  // Paths are explained as rules spell them: a leading `workspace`, `tmp`,
+  // or `~` expands as in a rule pattern, and other relative paths resolve
+  // against the working directory.
   const resource = requested.startsWith("filesystem.")
-    ? target === "~" || target.startsWith("~/")
-      ? join(homedir(), target.slice(2))
-      : resolve(target)
+    ? resolve(expandPathTokens(target, inspection.engine.context))
     : target;
-  const explanation = inspection.engine.explain({
-    action: requested as PolicyAction,
-    resource,
-  });
+  const request = { action: requested as PolicyAction, resource };
+  const explanation = inspection.engine.explain(request);
+  // The session decides some requests twice (an MCP tool by both names, a
+  // command's git push); the strictest answer wins, as it does there.
+  const also = companionRequests(inspection.engine, request).map((item) =>
+    inspection.engine.evaluate(item),
+  );
   // While the user's auto mode is on, an ask from the distribution defaults
   // runs without a prompt, for an action the session resolves through its
   // decisions; any other ask keeps its own handling.
   const format = {
     autoApproved:
       inspection.userAuto.active &&
-      GovernanceSession.AUTO_RESOLVED_ACTIONS.has(requested as PolicyAction) &&
-      !inspection.engine.keepsPrompt({
-        action: requested as PolicyAction,
-        resource,
-      }),
+      [explanation.decision, ...also].every(
+        (decision) =>
+          decision.effect !== "ask" ||
+          (GovernanceSession.AUTO_RESOLVED_ACTIONS.has(decision.action) &&
+            !inspection.engine.keepsPrompt({
+              action: decision.action,
+              resource: decision.resource,
+            })),
+      ),
+    also,
   };
   // Project trust decides whether a project item is offered at all, before
   // these rules; show it so the answer matches doctor.

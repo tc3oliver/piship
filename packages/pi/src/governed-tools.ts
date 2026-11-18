@@ -43,8 +43,7 @@ import {
 } from "@piship/contracts";
 import type { GovernedMcpTool } from "@piship/mcp";
 import {
-  BUILTIN_DEFAULT_RULE,
-  gitPushResources,
+  companionRequests,
   isWithin as isWithinPosix,
   normalizePathResource,
   projectGitControlDirectories,
@@ -834,16 +833,11 @@ export async function gateCommand(
   // `git.push` only narrows: a push no rule covers is left to
   // `shell.execute` without an event. A command `shell.execute` denies is
   // refused there, before any push prompt.
-  const pushes = gitPushResources(command).filter(
-    (resource) =>
-      gov.engine.evaluate({ action: "git.push", resource }).ruleId !==
-      BUILTIN_DEFAULT_RULE,
-  );
-  if (
-    pushes.length &&
-    gov.engine.evaluate({ action: "shell.execute", resource: command })
-      .effect !== "deny"
-  ) {
+  const pushes = companionRequests(gov.engine, {
+    action: "shell.execute",
+    resource: command,
+  }).map((request) => request.resource);
+  if (pushes.length) {
     const push = await gov.decide(
       "git.push",
       pushes,
