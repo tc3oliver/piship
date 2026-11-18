@@ -106,8 +106,8 @@ function rejectedUserSecret(command: string): PiShipError {
 
 /**
  * A refused model selection with the recovery for where the model came from:
- * a stale user preference is removed with `config unset model`; another model
- * is chosen with `--model`. An enforced model has no user recovery.
+ * a stale user preference is removed with `config unset model`; a subagent's
+ * comes from its agent definition; another model is chosen with `--model`. An enforced model has no user recovery.
  */
 function withModelRecovery(
   error: unknown,
@@ -118,6 +118,7 @@ function withModelRecovery(
     !(error instanceof PiShipError) ||
     (error.code !== "MODEL_UNAVAILABLE" && error.code !== "MODEL_DENIED") ||
     !(
+      source === "subagent" ||
       source === "flag" ||
       source === "user-preference" ||
       source === "distribution-default"
@@ -125,9 +126,11 @@ function withModelRecovery(
   )
     return error;
   const recovery =
-    source === "user-preference"
-      ? `Run ${command} config unset model to remove the model preference, or start ${command} --model <model>`
-      : `Start ${command} --model <model>`;
+    source === "subagent"
+      ? "Change or remove model: in the subagent's agent definition"
+      : source === "user-preference"
+        ? `Run ${command} config unset model to remove the model preference, or start ${command} --model <model>`
+        : `Start ${command} --model <model>`;
   return new PiShipError(error.code, error.message, {
     component: error.component ?? "inference",
     userAction: `${error.userAction ? `${error.userAction}. ` : ""}${recovery}; ${command} models lists the models`,
@@ -1758,9 +1761,14 @@ export class DistributionAccess {
    * selection. Fails closed with the error contract when anything required is
    * missing; never falls back to personal providers. `listOnly` (the models
    * listing) leaves an unavailable requested model unselected instead.
+   * `requestedBy: "subagent"` marks a model a subagent's agent definition chose.
    */
   async activate(
-    options: { requestedModel?: string; listOnly?: boolean } = {},
+    options: {
+      requestedModel?: string;
+      requestedBy?: "subagent";
+      listOnly?: boolean;
+    } = {},
   ): Promise<ActivatedAccess> {
     const notices: string[] = [];
     const access = this.options.access;
@@ -1943,7 +1951,7 @@ export class DistributionAccess {
             error,
             this.options.app.command,
             options.requestedModel
-              ? "flag"
+              ? (options.requestedBy ?? "flag")
               : config.entries.find((entry) => entry.key === "model")?.source,
           );
       }
@@ -2001,7 +2009,7 @@ export class DistributionAccess {
             refusal,
             command,
             options.requestedModel
-              ? "flag"
+              ? (options.requestedBy ?? "flag")
               : config.entries.find((entry) => entry.key === "model")?.source,
           );
       } else {

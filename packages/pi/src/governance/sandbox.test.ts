@@ -642,7 +642,7 @@ describe("file-tool denial labels", () => {
         "read",
       ).catch((caught: Error) => caught);
       expect(String(error)).toMatch(
-        /is not allowed by acme@1 rule acme\.secrets\.read: Credentials stay outside the agent\. DENIAL-HINT/,
+        /is not allowed by acme@1 rule acme\.secrets\.read \(Credentials stay outside the agent\)\. DENIAL-HINT/,
       );
       expect(String(error)).not.toMatch(/sandbox\.filesystem\.read\.deny/);
       // The sandbox refusal and its audit event are not recorded as well.

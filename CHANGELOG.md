@@ -226,6 +226,9 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - Session notices carry a level (remote workspace progress as info; conflicts and a mostly withheld project as warnings), the project configuration prompt says the project's code runs with your permissions, and Pi's `/trust` notice says how to trust a project in the distribution. The `/grant` dialog says deny rules still refuse and lists `--run` and `--no-run`. A few withheld files are named. In a personal session, a tool an extension registers after start is info. Pi's `/login` shows the distribution's provider as configured. `logout` with nothing stored says so.
 - The sandbox hint names the right path: Seatbelt redirection errors, relative paths, and Linux `Device or resource busy` on protected git files now name the path or git hint, and a refused connection, or a network command that printed nothing under `network.mode: deny`, gets the network hint ([sandbox](docs/sandbox.md#what-piship-controls)).
 - The `read` tool returns PNG, JPEG, GIF, WebP, and BMP files as images, on the host and in a remote workspace, instead of garbled text. A `bash` result no longer names a full-output file deleted after a late write failure.
+- A policy denial puts the rule's reason in parentheses (`rule no-curl (network tools are blocked)`), as do ignored-allow-rule warnings, so a rule id ending in `secret`, `token`, or `password` no longer has its reason redacted.
+- A subagent whose agent definition names a refused model says to change or remove `model:` there, not to start with `--model`.
+- A 401 with `credential.provider: none` says to check whether the model server needs a key, instead of suggesting `login`, which has nothing to replace.
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (`git log --format=%H`, `HEAD^`).
 
 #### Platform

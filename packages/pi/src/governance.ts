@@ -21,6 +21,8 @@ export interface ManagedEndpointGovernance {
   readonly apiKey: (options: { force: boolean }) => Promise<string>;
   /** The distribution's command, named where Pi asks the user to sign in. */
   readonly command?: string;
+  /** `credential.provider: none`: no key is sent, so `login` cannot fix a 401. */
+  readonly noCredential?: boolean;
 }
 
 export interface PiNativeGovernance {
@@ -681,7 +683,9 @@ export function governModelRuntime(
           ? `In a terminal, ${named[0]?.toLowerCase()}${named.slice(1)}`
           : named;
       } else if (isCredentialRejection(message))
-        action = `Send the message again; if it fails again, run ${command} login in a terminal`;
+        action = managed?.noCredential
+          ? "This distribution sends no credential (credential.provider: none); check whether the model server needs a key, and if it does, set credential.provider in the manifest"
+          : `Send the message again; if it fails again, run ${command} login in a terminal`;
       if (!action) return undefined;
       return {
         ...(message as object),

@@ -275,8 +275,9 @@ export function policyRefusal(
       : `${subject} was declined (${asked}).${gov.denialHint(decision)}`;
   if (decision.approval === "cancelled")
     return `${subject} did not run: the approval prompt was dismissed (${asked}).${gov.denialHint(decision)}${askUser}`;
-  const refused = `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? (gov.options.subagent ? " (a subagent cannot ask for approval, and approvals given in its parent session do not carry over)" : " (approval needs an interactive session)") : ""}`;
-  // A rule's reason may already end the sentence ("No network from the shell.").
+  const refused = `${subject} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? ` (${decision.reason.replace(/\.$/, "")})` : ""}${decision.approval === "unavailable" ? (gov.options.subagent ? " (a subagent cannot ask for approval, and approvals given in its parent session do not carry over)" : " (approval needs an interactive session)") : ""}`;
+  // The reason goes in parentheses, not after a colon: redact() would read
+  // `rule deny.secret: <reason>` as a secret and mask the reason.
   return `${refused}${/[.!?]$/.test(refused) ? "" : "."}${gov.denialHint(decision)}${model ? ` ${NO_RETRY}` : ""}`;
 }
 
