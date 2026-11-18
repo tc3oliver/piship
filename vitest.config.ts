@@ -61,6 +61,10 @@ export default defineConfig({
       // home or race other files to do it; the helper's own live test turns it
       // back on, with a state home of its own.
       PISHIP_WINDOWS_JOB_HELPER: "off",
+      // Long steps announce themselves on stderr when nobody watches a
+      // terminal; across the suite that is hundreds of lines burying the
+      // results. The tests of the announcements pass their own setting.
+      PISHIP_PROGRESS: "0",
     },
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     testTimeout: 15_000,

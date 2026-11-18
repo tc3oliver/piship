@@ -347,7 +347,7 @@ describe("Pi packages in the lock", () => {
     writeFileSync(
       manifest,
       readFileSync(manifest, "utf8").replace(
-        /    - id: pi-review\n(?: {6}.*\n)+/,
+        / {4}- id: pi-review\n(?: {6}.*\n)+/,
         "",
       ),
     );

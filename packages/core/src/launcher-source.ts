@@ -45,6 +45,7 @@ const mark = (name) => { if (timing) timing.marks.push({ name, ms: performance.n
 
 // Names the running version: a Linux distribution's own nodejs package is often older (Ubuntu 24.04: 18).
 const NODE_TOO_OLD =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: spliced into the launcher's template literal, which fills it in at run time
   "Node.js 22.19.0 or newer is required; this is ${process.version}. Install a current Node.js separately (nodejs.org); a Linux distribution's own nodejs package is often older.";
 
 /**

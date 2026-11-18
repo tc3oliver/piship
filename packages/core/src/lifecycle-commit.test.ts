@@ -18,7 +18,6 @@ import {
   HOST_EVIDENCED,
   ID,
   MARKER,
-  fakeRun,
   installed,
   launch,
   markerFile,

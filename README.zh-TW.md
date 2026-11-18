@@ -269,6 +269,7 @@ PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還
 ## 參與貢獻
 
 ```bash
+npm ci
 npm run check
 npm run test:compatibility
 ```

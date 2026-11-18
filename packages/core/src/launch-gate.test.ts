@@ -23,7 +23,6 @@ import {
   age,
   appsDir,
   deadPid,
-  fakeRun,
   installed,
   livePid,
   rejection,

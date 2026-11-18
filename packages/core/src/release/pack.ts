@@ -16,16 +16,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { createTemporaryDirectory, PiShipError } from "@piship/contracts";
+import { createTemporaryDirectory } from "@piship/contracts";
 import {
   readManifest,
   type ReleaseManifest,
   releaseOptions,
   SEARCH_TOOLS,
 } from "@piship/schema";
-import { createArchive, extractArchive } from "../archive.js";
+import { createArchive } from "../archive.js";
 import type { DistributionLock } from "../index.js";
 import { pretranspileClosures } from "../pi-packages/closure.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "../pi-packages/gates.js";

@@ -11,13 +11,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import {
-  createTemporaryDirectory,
-  PiShipError,
-  redact,
-} from "@piship/contracts";
+import { PiShipError, redact } from "@piship/contracts";
 import {
   deleteSecretsVerified,
   metadataFileSecretRefs,
@@ -45,7 +40,6 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import { storageTransitionNotice } from "../storage-transition.js";
-import { reclaimOsTemporaries } from "../temporary-directories.js";
 import { renameWithRetry } from "../rename-retry.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";

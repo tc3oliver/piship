@@ -330,7 +330,6 @@ function argumentProblem(
 class UsageProblem extends Error {}
 /** The usage line, led by what was wrong when that is known. */
 function usageError(
-  command: string,
   usage: string | undefined,
   problem: string | undefined,
 ): string {
@@ -1281,7 +1280,6 @@ export async function runCli(
     if (!parsed) {
       output.stderr(
         usageError(
-          command,
           lifecycle.usage,
           argumentProblem(
             command,
@@ -1315,11 +1313,7 @@ export async function runCli(
   } catch (error) {
     if (error instanceof UsageProblem) {
       output.stderr(
-        usageError(
-          command,
-          lifecycle?.usage ?? simpleUsage[command],
-          error.message,
-        ),
+        usageError(lifecycle?.usage ?? simpleUsage[command], error.message),
       );
       return 2;
     }
@@ -1364,7 +1358,6 @@ async function runSourceCommand(
     ) {
       output.stderr(
         usageError(
-          command,
           simpleUsage.config,
           argumentProblem(command, ["--json"], [], 2, args.slice(1)),
         ),
@@ -1384,7 +1377,6 @@ async function runSourceCommand(
     if (!target || !parseInitOptions(rest)) {
       output.stderr(
         usageError(
-          command,
           simpleUsage.init,
           argumentProblem(
             command,
@@ -1403,7 +1395,6 @@ async function runSourceCommand(
   ) {
     output.stderr(
       usageError(
-        command,
         simpleUsage[command],
         argumentProblem(
           command,

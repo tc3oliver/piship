@@ -19,7 +19,6 @@ import { COMMAND_NAME } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appsDir,
-  fakeRun,
   ID,
   installed,
   stateDir,

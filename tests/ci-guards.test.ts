@@ -86,6 +86,7 @@ describe("the CI check runners", () => {
     for (const target of Object.keys(TARGETS)) {
       const os = `${target}-latest`;
       expect(ciJob(target)).toContain(
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
         "    name: check (${{ matrix.os }}, ${{ matrix.part }}${{",
       );
       expect(
@@ -118,9 +119,11 @@ describe("the CI check runners", () => {
       steps()
         .filter((step) => step.includes(run))
         .map((step) => /^ {6}- if: (.+)$/m.exec(step)?.[1]);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
     expect(condition("run: npm test -- --shard=${{ matrix.shard }}\n")).toEqual(
       ["matrix.part == 'unit' && runner.os != 'Windows'"],
     );
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
     const shard = 'run: cmd /d /c "npm test -- --shard=${{ matrix.shard }}"';
     expect(condition(shard)).toEqual([
       "matrix.part == 'unit' && runner.os == 'Windows'",
@@ -184,9 +187,11 @@ describe("browser evidence tiers", () => {
       /skip-browser:\n(?:[^\n]*\n)*? {8}type: boolean\n {8}default: false/,
     );
     expect(portable).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
       "PISHIP_SKIP_BROWSER: ${{ inputs.skip-browser && '1' || '0' }}",
     );
     expect(portable).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
       "PISHIP_REQUIRE_BROWSER: ${{ inputs.skip-browser && '0' || '1' }}",
     );
     expect(portable).toContain(
@@ -257,6 +262,7 @@ describe("release candidate supply-chain evidence", () => {
     // Verified by the separately built CLI, with its metadata and payload tampering named.
     for (const name of ["reproducibility", "verify"])
       expect(job(name), name).toContain(
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax is the input
         'ls piship-runtime-*-${{ matrix.target }}.tar.gz)" .tar.gz)" >> "$GITHUB_ENV"',
       );
     expect(job("verify")).toContain('node "$PISHIP_CLI" verify-release');

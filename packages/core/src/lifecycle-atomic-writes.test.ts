@@ -16,7 +16,6 @@ import {
   MARKER,
   RECEIPT,
   deadPid,
-  fakeRun,
   installed,
   launch,
   receiptFile,

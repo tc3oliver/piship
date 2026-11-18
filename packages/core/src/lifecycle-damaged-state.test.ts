@@ -11,7 +11,6 @@ import { describe, expect, it } from "vitest";
 import {
   HOST_EVIDENCED,
   ID,
-  fakeRun,
   installed,
   launch,
   rejection,
