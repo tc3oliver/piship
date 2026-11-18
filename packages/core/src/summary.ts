@@ -216,6 +216,7 @@ interface Smoke {
     readonly model?: string;
     readonly stopReason?: string | null;
   };
+  readonly warnings?: readonly string[];
 }
 
 /** Ids of declared MCP servers the smoke JSON reports as failed. */
@@ -337,6 +338,7 @@ export function formatSmokeSummary(
         `${smoke.modelRequest.model ?? "model"} answered (${smoke.modelRequest.stopReason ?? "no stop reason"})`,
       ),
     );
+  if (smoke.warnings?.length) lines.push(...rows("warning", smoke.warnings));
   return lines.join("\n");
 }
 

@@ -136,24 +136,79 @@ export function extensionLoadErrors(
 ): string {
   return sourcePaths(
     errors
-      .map((item) =>
-        item.error.includes(item.path)
+      .map((item) => {
+        const conflict = toolConflict(item, distributionDir);
+        if (conflict)
+          return `Tool "${conflict.tool}" is registered by both ${extensionLabel(conflict.owner, distributionDir)} and ${extensionLabel(item.path, distributionDir)}`;
+        return item.error.includes(item.path)
           ? item.error
-          : `Failed to load extension "${item.path}": ${item.error}`,
-      )
+          : `Failed to load extension "${item.path}": ${item.error}`;
+      })
       .join("; "),
     distributionDir,
   );
 }
 
 /**
+ * Pi's "Tool X conflicts with <path>" for two extensions of which at least
+ * one is a vendored package's, whose built copy no one can fix.
+ */
+function toolConflict(
+  item: { readonly path: string; readonly error: string },
+  distributionDir: string,
+) {
+  const match = /^Tool "(.+)" conflicts with (.+)$/s.exec(item.error);
+  if (!match?.[1] || !match[2]) return;
+  const owner = match[2];
+  const excluded =
+    packageFile(item.path, distributionDir) ??
+    packageFile(owner, distributionDir);
+  return excluded ? { tool: match[1], owner, excluded } : undefined;
+}
+
+/**
+ * A vendored package's file: its id and its path inside the package, which is
+ * what that package's resource filters match.
+ */
+export function packageFile(
+  path: string,
+  distributionDir: string,
+): { readonly id: string; readonly file: string } | undefined {
+  const root = `${distributionDir.replaceAll("\\", "/")}/pi-packages/`;
+  const slashed = path.replaceAll("\\", "/");
+  if (!slashed.startsWith(root)) return;
+  const [id, top, ...rest] = slashed.slice(root.length).split("/");
+  if (!id || !top) return;
+  // pi-packages/<id>/package/... (git, local) or node_modules/<name>/... (npm)
+  if (top === "node_modules") rest.splice(0, rest[0]?.startsWith("@") ? 2 : 1);
+  return { id, file: rest.join("/") };
+}
+
+/** An extension named as its author knows it: package and file, or the declared path. */
+export function extensionLabel(path: string, distributionDir: string): string {
+  const inPackage = packageFile(path, distributionDir);
+  return inPackage
+    ? `package ${inPackage.id} (${inPackage.file})`
+    : sourcePaths(path, distributionDir);
+}
+
+/**
  * What to do about an extension or theme Pi could not load: its author fixes
  * the source and rebuilds; a managed user cannot, so the administrator does.
  */
-export function resourceLoadAction(mode: LaunchContext["mode"]): string {
-  return mode === "managed"
-    ? "Contact your administrator: the distribution ships a resource that does not load"
-    : "Fix the source file named above, run piship build, then install the rebuilt distribution again";
+export function resourceLoadAction(
+  mode: LaunchContext["mode"],
+  errors: readonly { readonly path: string; readonly error: string }[] = [],
+  distributionDir = "",
+): string {
+  if (mode === "managed")
+    return "Contact your administrator: the distribution ships a resource that does not load";
+  const conflict = errors
+    .map((item) => toolConflict(item, distributionDir))
+    .find(Boolean);
+  if (conflict)
+    return `Keep one of the two tools: exclude the other extension with its package's extensions filter in piship.yaml (for example extensions: ["!${conflict.excluded.file}"] on package ${conflict.excluded.id}), then run piship lock and build again`;
+  return "Fix the source file named above, run piship build, then install the rebuilt distribution again";
 }
 
 function resourcePaths(
@@ -504,7 +559,14 @@ async function startRuntime(
           extensionErrors,
           ctx.distributionDir,
         )}`,
-        { component: "extensions", userAction: resourceLoadAction(ctx.mode) },
+        {
+          component: "extensions",
+          userAction: resourceLoadAction(
+            ctx.mode,
+            extensionErrors,
+            ctx.distributionDir,
+          ),
+        },
       );
     if (themeDiagnostics.length)
       throw new PiShipError(

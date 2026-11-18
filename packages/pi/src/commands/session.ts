@@ -24,6 +24,7 @@ import {
   refreshInstalledLauncher,
   sweepDistributionData,
 } from "@piship/core";
+import { doubleAskWarning } from "../doctor/policy.js";
 import { acceptanceFailure, chooseModelAction } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -34,7 +35,11 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { samePath } from "../launch/project-trust.js";
-import { publishContext, startGoverned } from "../launch/runtime.js";
+import {
+  extensionLabel,
+  publishContext,
+  startGoverned,
+} from "../launch/runtime.js";
 import { searchToolsBundledFor } from "../launch/search-tools.js";
 import {
   brandedResumeLine,
@@ -300,6 +305,20 @@ export async function runSmoke(
         ? `${runtime.session.model.provider}/${runtime.session.model.id}`
         : undefined,
     );
+    const { shadowedTools, ...inventory } = registryInventory(
+      runtime.session,
+      resourceLoader.getExtensions().extensions,
+    );
+    const doubleAsk = gov ? doubleAskWarning(gov.manifest) : undefined;
+    const warnings = [
+      ...Object.entries(shadowedTools).flatMap(([tool, paths]) =>
+        paths.map(
+          (path) =>
+            `tool ${tool} of ${extensionLabel(path, ctx.distributionDir)} is shadowed by the governed built-in ${tool} and never runs; rename it or exclude that extension`,
+        ),
+      ),
+      ...(doubleAsk ? [`double ask: ${doubleAsk}`] : []),
+    ];
     ctx.out(
       JSON.stringify({
         initialized: true,
@@ -329,10 +348,8 @@ export async function runSmoke(
         ...(ctx.metadata.packages?.length
           ? { packages: ctx.metadata.packages.map(packageLabel) }
           : {}),
-        ...registryInventory(
-          runtime.session,
-          resourceLoader.getExtensions().extensions,
-        ),
+        ...inventory,
+        ...(warnings.length ? { warnings } : {}),
         ...(searchTools ? { searchTools } : {}),
         ...(access ? { access } : {}),
         ...(gov ? { governance: governanceSummary(gov) } : {}),
@@ -404,10 +421,12 @@ async function checkSearchTools(
 
 /**
  * What the loaded extensions registered: every tool Pi knows with its
- * exposure and source, the tools declared to the model, the commands, and
- * the tool names more than one extension registered (Pi keeps the first and
- * drops the rest silently, so a duplicate is only visible here). Tools an
- * extension registers later, at session_start, are in neither list.
+ * exposure and source, the tools declared to the model, the commands, the
+ * tool names more than one extension registered (Pi reports a clash between
+ * two extensions as a load error, so this is normally empty), and the
+ * extension tools a same-named SDK tool, such as a governed built-in,
+ * replaces without a word. Tools an extension registers later, at
+ * session_start, are in none of these lists.
  */
 function registryInventory(
   session: {
@@ -428,9 +447,9 @@ function registryInventory(
         ...(registrations.get(name) ?? []),
         extension.path,
       ]);
+  const all = session.getAllTools();
   return {
-    tools: session
-      .getAllTools()
+    tools: all
       .map((tool) => ({
         name: tool.name,
         exposure: tool.exposure,
@@ -444,6 +463,13 @@ function registryInventory(
       .sort(),
     duplicateTools: Object.fromEntries(
       [...registrations].filter(([, paths]) => paths.length > 1),
+    ),
+    shadowedTools: Object.fromEntries(
+      [...registrations].filter(([name, paths]) =>
+        all.some(
+          (tool) => tool.name === name && !paths.includes(tool.sourceInfo.path),
+        ),
+      ),
     ),
   };
 }

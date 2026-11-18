@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatError } from "@piship/contracts";
 import {
+  extensionLabel,
   extensionLoadErrors,
   resourceLoadAction,
   verifyBuiltResources,
@@ -158,5 +159,69 @@ describe("extensionLoadErrors", () => {
     ).toBe(
       `Failed to load extension: ./${join("extensions", "bad.ts")}:2:2: oops`,
     );
+  });
+});
+
+describe("package tool conflicts", () => {
+  const dir = join(tmpdir(), "dist");
+  const npmFile = join(
+    dir,
+    "pi-packages",
+    "lp1",
+    "node_modules",
+    "@scope",
+    "tools",
+    "extensions",
+    "a.js",
+  );
+  const gitFile = join(
+    dir,
+    "pi-packages",
+    "lp2",
+    "package",
+    "extensions",
+    "b.js",
+  );
+  const conflict = [
+    { path: gitFile, error: `Tool "dup_tool" conflicts with ${npmFile}` },
+  ];
+
+  it("names both packages, not their built copies", () => {
+    expect(extensionLoadErrors(conflict, dir)).toBe(
+      'Tool "dup_tool" is registered by both package lp1 (extensions/a.js) and package lp2 (extensions/b.js)',
+    );
+  });
+
+  it("says to exclude one through that package's extensions filter", () => {
+    const action = resourceLoadAction("personal", conflict, dir);
+    expect(action).toContain('extensions: ["!extensions/b.js"] on package lp2');
+    expect(action).toContain("piship lock");
+    expect(resourceLoadAction("managed", conflict, dir)).toMatch(
+      /administrator/,
+    );
+  });
+
+  it("names a distribution's own extension by its declared path", () => {
+    const own = join(dir, "resources", "extensions", "x.ts");
+    expect(extensionLabel(own, dir)).toBe(`./${join("extensions", "x.ts")}`);
+    expect(
+      resourceLoadAction(
+        "personal",
+        [{ path: own, error: `Tool "t" conflicts with ${gitFile}` }],
+        dir,
+      ),
+    ).toContain('extensions: ["!extensions/b.js"] on package lp2');
+  });
+
+  it("keeps the generic action for a clash between the distribution's own files", () => {
+    const a = join(dir, "resources", "extensions", "a.ts");
+    const b = join(dir, "resources", "extensions", "b.ts");
+    expect(
+      resourceLoadAction(
+        "personal",
+        [{ path: b, error: `Tool "t" conflicts with ${a}` }],
+        dir,
+      ),
+    ).toMatch(/^Fix the source file/);
   });
 });

@@ -126,6 +126,7 @@ interface Smoke {
   activeTools: string[];
   commands: string[];
   duplicateTools: Record<string, string[]>;
+  warnings?: string[];
   governance: {
     capabilities: { name: string; effective: string }[];
     resources: {
@@ -336,6 +337,8 @@ describe("--smoke", () => {
     );
     expect(new Set(names).size).toBe(names.length);
     expect(first.duplicateTools).toEqual({});
+    // No package tool is shadowed by a governed built-in, and no double ask.
+    expect(first.warnings).toBeUndefined();
     expect(first.activeTools).toEqual(
       expect.arrayContaining(["codemode", "tool_search"]),
     );
