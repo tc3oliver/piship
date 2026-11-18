@@ -285,6 +285,26 @@ export async function runSmoke(
             userAction: chooseModelAction(ctx.metadata.app.command, "--model"),
           },
         );
+      // Pi-native: Pi holds the sign-in, and without one its own error
+      // points into node_modules instead of at the command's /login.
+      const { model, modelRuntime } = runtime.session;
+      if (
+        (!prepared.activated ||
+          prepared.activated.runtime.kind === "pi-native") &&
+        !modelRuntime.hasConfiguredAuth(model.provider)
+      )
+        throw new PiShipError(
+          "MODEL_UNAVAILABLE",
+          modelRuntime
+            .getModels()
+            .some((item) => modelRuntime.hasConfiguredAuth(item.provider))
+            ? `Pi-native inference: ${model.provider}/${model.id} has no provider set up yet`
+            : "Pi-native inference: no model has a provider set up yet",
+          {
+            component: "inference",
+            userAction: `Start ${ctx.metadata.app.command} and use /login to sign in to a provider, then /model to choose a model; ${ctx.metadata.app.command} models lists which models are ready`,
+          },
+        );
       // PiShip's own deadline: a provider that accepts the connection and
       // never answers would otherwise hold the check for many minutes.
       const deadlineMs =

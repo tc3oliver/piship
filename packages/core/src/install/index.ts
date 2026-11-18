@@ -20,6 +20,7 @@ export {
   removeEmptyPiShipDirectories,
   signedInClasses,
   piSignedIn,
+  STORED_API_KEY,
   type PurgeResult,
 } from "./purge.js";
 export {

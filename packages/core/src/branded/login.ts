@@ -294,13 +294,9 @@ function reportLogin(
   const credential =
     result.credential.state === "delegated"
       ? `Credential: ${access.credentialMode} (no stored secret).`
-      : `Credential: ${access.credentialMode} stored in ${access.store?.description ?? "no store"}${result.credential.metadata?.expires_at ? `; expires ${result.credential.metadata.expires_at}` : ""}.`;
+      : `Credential: ${access.credentialMode} stored in ${access.store?.description ?? "no store"}${access.store?.kind === "file" ? ", not platform secure storage" : ""}${result.credential.metadata?.expires_at ? `; expires ${result.credential.metadata.expires_at}` : ""}.`;
   ctx.out(`${identity}${credential}`);
   for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
-  if (access.store?.kind === "file")
-    ctx.err(
-      "Warning: storage.provider: file keeps credentials in an owner-only plaintext file, not platform secure storage.",
-    );
 }
 
 /**
@@ -669,7 +665,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   if (!kept.length) {
     ctx.out(
       Object.values(before).some(Boolean)
-        ? `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; ${sessions}.`
+        ? `Signed out of ${ctx.metadata.app.name}. ${manifest.identity.mode === "none" ? "Stored local credentials were" : "Local runtime and identity credentials were"} cleared; ${sessions}.`
         : `There was no stored sign-in to clear for ${ctx.metadata.app.name}; ${sessions}.`,
     );
     return;

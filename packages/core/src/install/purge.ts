@@ -69,6 +69,8 @@ export interface PurgeResult {
    * identity provider or broker until it expires.
    */
   readonly notRevoked?: readonly string[];
+  /** Present when a local-secret API key was stored: purge deleted it. */
+  readonly deletedApiKey?: true;
 }
 
 export interface PurgeOptions {
@@ -83,11 +85,15 @@ export interface PurgeOptions {
   readonly script?: string;
 }
 
+/** `signedInClasses` name of a local-secret key: nothing remote to revoke. */
+export const STORED_API_KEY = "a stored API key";
+
 /**
  * What in `state` an identity provider, credential broker, or sandbox service
  * could still honor: an identity session, a runtime credential, or a stored
  * sandbox credential. A discarded marker is already signed out, and a file
- * that does not parse names nothing `logout` could revoke.
+ * that does not parse names nothing `logout` could revoke. A local-secret
+ * runtime credential is named STORED_API_KEY: it is only a local secret.
  */
 export function signedInClasses(state: string): string[] {
   const paths = accessStatePaths(state);
@@ -97,18 +103,23 @@ export function signedInClasses(state: string): string[] {
       [paths.credential, "a runtime credential"],
       [paths.sandboxCredential, "a sandbox credential"],
     ] as const
-  )
-    .filter(([path]) => {
-      try {
-        const { schema } = JSON.parse(readFileSync(path, "utf8")) as {
-          schema?: unknown;
-        };
-        return typeof schema === "string" && !schema.includes("-discarded/");
-      } catch {
-        return false;
-      }
-    })
-    .map(([, name]) => name);
+  ).flatMap(([path, name]) => {
+    try {
+      const { schema, mode } = JSON.parse(readFileSync(path, "utf8")) as {
+        schema?: unknown;
+        mode?: unknown;
+      };
+      if (typeof schema !== "string" || schema.includes("-discarded/"))
+        return [];
+      return [
+        path === paths.credential && mode === "local-secret"
+          ? STORED_API_KEY
+          : name,
+      ];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /**
@@ -141,7 +152,8 @@ export function piSignedIn(state: string): boolean {
  * Refuse, before anything is deleted, to purge a distribution that is still
  * signed in: purge revokes nothing, so its credentials would stay live at
  * the broker. `logout` is the way out; `withoutLogout` purges anyway and
- * returns what stays live.
+ * returns what stays live. A stored local-secret API key is not refused:
+ * purge deletes it and there is nothing remote to revoke.
  */
 export function assertSignedOut(
   id: string,
@@ -150,7 +162,7 @@ export function assertSignedOut(
   options: PurgeOptions,
   uninstalling = false,
 ): string[] {
-  const live = signedInClasses(state);
+  const live = signedInClasses(state).filter((name) => name !== STORED_API_KEY);
   // A stored sandbox credential alone is cleared by `sandbox logout`, which
   // also works where sign-in is delegated to Pi and `logout` refuses.
   const step =
@@ -205,6 +217,7 @@ export async function purgeDistributionState(
       "logout with the release's own command (node bin/<command> logout, in the directory that holds the release's piship.mjs)",
     options,
   );
+  const key = signedInClasses(state).includes(STORED_API_KEY);
   const secrets = await deleteReferencedSecrets(id, state, options);
   rmSync(state, { recursive: true, force: true });
   return {
@@ -212,6 +225,7 @@ export async function purgeDistributionState(
     deletedSecrets: secrets.deleted,
     ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
     ...(live.length ? { notRevoked: live } : {}),
+    ...(key ? { deletedApiKey: true } : {}),
   };
 }
 

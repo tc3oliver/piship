@@ -150,7 +150,7 @@ describe("managed distribution (local fixtures)", () => {
     expect(login.status, login.stderr).toBe(0);
     expect(login.stdout).toContain("Signed in as Demo Developer");
     expect(login.stderr).toContain("code_challenge_method=S256");
-    expect(login.stderr).toContain("owner-only plaintext file");
+    expect(login.stdout).toContain("owner-only), not platform secure storage");
 
     const first = await run(["--smoke"]);
     expect(first.status, first.stderr).toBe(0);

@@ -9,6 +9,7 @@ import {
   purgeManager,
   removeEmptyPiShipDirectories,
   piSignedIn,
+  STORED_API_KEY,
   signedInClasses,
 } from "../install/purge.js";
 import { appDirectory } from "../install/receipt.js";
@@ -146,16 +147,13 @@ export async function runUninstall(
       },
     );
   const live = signedInClasses(state);
-  // Pi's own sign-in is not PiShip's to revoke: it stays with the kept state.
-  const piAuth = join(state, "agent", "auth.json");
   // A local-secret key never expires and has no remote side to revoke: only
   // logout deletes it from the secret store.
   if (
     !withoutLogout &&
     !purge &&
     live.length === 1 &&
-    live[0] === "a runtime credential" &&
-    ctx.metadata.access?.credential.provider === "local-secret"
+    live[0] === STORED_API_KEY
   )
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
@@ -164,7 +162,7 @@ export async function runUninstall(
         userAction: `Run ${app.command} logout to delete the stored key, then ${app.command} uninstall again; or add --without-logout to uninstall and keep the key in the secret store`,
       },
     );
-  if (live.length && !withoutLogout && !purge)
+  if (live.some((item) => item !== STORED_API_KEY) && !withoutLogout && !purge)
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
       `${app.name} is still signed in (${live.join(", ")}). Once it is uninstalled there is no ${app.command} left to sign out with, and the sign-in would stay live until it expires`,
@@ -185,10 +183,10 @@ export async function runUninstall(
       },
     );
   }
-  const installed = measure(appDirectory(id));
-  const held = stateSummary(state);
-  const shim = receipt.commandPath;
   if (purge) {
+    const installed = measure(appDirectory(id));
+    const held = stateSummary(state);
+    const shim = receipt.commandPath;
     const purged = await uninstallAndPurgeDistribution(id, {
       withoutLogout,
       removeEditedShim,
@@ -203,12 +201,44 @@ export async function runUninstall(
       [
         `Uninstalled ${app.name} and deleted its data.`,
         `  removed  ${app.command} (${shim}) and the installed releases (${size(installed)})`,
-        `  deleted  ${purged.state} (${held})${count ? `, and ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`,
-      ].join("\n"),
+        `  deleted  ${purged.state}: ${held}${count ? `, and ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`,
+        purged.deletedApiKey
+          ? "  deleted  the stored API key (only stored here: there is nothing to revoke)"
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     );
     removeEmptyPiShipDirectories();
     return;
   }
+  ctx.out(uninstallKeepingState(id, { removeEditedShim, ownSession: true }));
+}
+
+/**
+ * Uninstall `id` and keep its state, returning what was removed and kept,
+ * Pi's own sign-in included. `<command> uninstall` and `piship uninstall`
+ * print it alike. `purge`, asked after the uninstall, names a command that
+ * can still purge it; otherwise the installed release's is named.
+ */
+export function uninstallKeepingState(
+  id: string,
+  options: {
+    readonly removeEditedShim?: boolean;
+    readonly ownSession?: boolean;
+    readonly purge?: () => string | undefined;
+  } = {},
+): string {
+  const receipt = readInstallReceipt(id);
+  const { name, command } = receipt.app;
+  const state = runtimeStateDirectory({ value: id });
+  const signedIn = signedInClasses(state);
+  const live = signedIn.filter((item) => item !== STORED_API_KEY);
+  const key = signedIn.length !== live.length;
+  const piAuth = join(state, "agent", "auth.json");
+  const installed = measure(appDirectory(id));
+  const held = stateSummary(state);
+  const shim = receipt.commandPath;
   // Read before the receipt goes: purge then runs from what was installed.
   const release = receipt.releases.find(
     (item) => item.version === receipt.active,
@@ -221,27 +251,35 @@ export async function runUninstall(
     release?.runtime && manager === "<release>/payload/piship.mjs"
       ? `piship-runtime-${release.runtime.pishipVersion}-${currentTarget()}`
       : undefined;
-  const purgeHint = runtime
-    ? `extract the runtime archive ${runtime}.tar.gz you installed the pack with and run: node <extracted folder>/${runtime}/payload/piship.mjs purge ${id} --yes.`
-    : `run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}.`;
-  uninstallDistribution(id, { removeEditedShim, ownSession: true });
+  uninstallDistribution(id, {
+    ...(options.removeEditedShim ? { removeEditedShim: true } : {}),
+    ...(options.ownSession ? { ownSession: true } : {}),
+  });
   removeEmptyPiShipDirectories();
-  ctx.out(
-    [
-      `Uninstalled ${app.name}.`,
-      `  removed  ${app.command} (${shim}) and the installed releases (${size(installed)})`,
-      `  kept     ${state}: sessions and settings, ${held}`,
-      live.length
-        ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
-        : piSignedIn(state)
-          ? ""
-          : "  signed out: no sign-in is stored",
-      piSignedIn(state)
-        ? `  signed in: Pi's own sign-in (${piAuth}) stays with the kept data; purge deletes it`
-        : "",
-      `A later install of ${app.name} picks the kept data up again. To delete it, ${purgeHint} Next time, ${app.command} uninstall --purge --yes does both.`,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
+  const purge = options.purge?.();
+  const purgeHint = purge
+    ? `run: ${purge} purge ${shellArg(id)} --yes.`
+    : runtime
+      ? `extract the runtime archive ${runtime}.tar.gz you installed the pack with and run: node <extracted folder>/${runtime}/payload/piship.mjs purge ${id} --yes.`
+      : `run purge from the ${fromRelease ? "release" : "build"} you installed: node ${manager} purge ${id} --yes${fromRelease ? "" : " in the directory you built in"}.`;
+  const pi = piSignedIn(state);
+  return [
+    `Uninstalled ${name}.`,
+    `  removed  ${command} (${shim}) and the installed releases (${size(installed)})`,
+    `  kept     ${state}: sessions and settings, ${held}`,
+    live.length
+      ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
+      : pi || key
+        ? ""
+        : "  signed out: no sign-in is stored",
+    key
+      ? "  kept     the stored API key, in the secret store; purge deletes it"
+      : "",
+    pi
+      ? `  signed in: Pi's own sign-in (${piAuth}) stays with the kept data; purge deletes it`
+      : "",
+    `A later install of ${name} picks the kept data up again. To delete it, ${purgeHint} Next time, ${command} uninstall --purge --yes does both.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

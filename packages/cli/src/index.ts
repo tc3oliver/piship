@@ -87,6 +87,7 @@ import {
   unqualifiedBuildNotice,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
+  uninstallKeepingState,
   verifyPack,
   verifyPayload,
   verifyRelease,
@@ -103,6 +104,7 @@ import {
 } from "@piship/core";
 import { errorJson, formatError, PiShipError, redact } from "@piship/contracts";
 import {
+  channelTrustKeys,
   launchWarnings,
   runtimeVariableUse,
   referencedVariables,
@@ -823,7 +825,7 @@ function purgeReport(purged: PurgeResult, output: CliOutput): string {
       `Note: ${purged.droppedSecrets.length} secret reference(s) that an interrupted sign-in left (${purged.droppedSecrets.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`,
     );
   const count = purged.deletedSecrets.length;
-  return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`;
+  return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}${purged.deletedApiKey ? "\nDeleted the stored API key (only stored here: there is nothing to revoke)" : ""}`;
 }
 /**
  * Node reads the payload's package.json before any PiShip code of the payload
@@ -1199,9 +1201,11 @@ export function installNext(
         ? ` An IDE or desktop launcher does not read your shell profile, so set ${variables.join(", ")} there too.`
         : "";
     // Not needed to start, but doctor flags it and update fails without it.
-    const forUpdate = [...new Set(referencedVariables(source))].filter(
-      (name) => !variables.includes(name) && !env[name],
-    );
+    const forUpdate = channelTrustKeys(lock.updates).length
+      ? [...new Set(referencedVariables(source))].filter(
+          (name) => !variables.includes(name) && !env[name],
+        )
+      : [];
     const updates = forUpdate.length
       ? ` ${command} update also needs ${forUpdate.join(", ")}.`
       : "";
@@ -1471,7 +1475,10 @@ async function runAuthoring(
     const missingLaunch = unset(variables.launch).filter(
       (name) => !missingOptional.includes(name),
     );
-    const missingUpdate = unset(variables.update);
+    // With no update keys, update always refuses: its variables are moot.
+    const missingUpdate = channelTrustKeys(manifest.lifecycle?.updates).length
+      ? unset(variables.update)
+      : [];
     const otherLock = lockOwnedByOther(target);
     output.stdout(
       [
@@ -2109,14 +2116,15 @@ async function runLifecycle(
       const live = flags.has("--without-logout")
         ? []
         : signedInClasses(runtimeStateDirectory({ value: first }));
-      const manager = purgeManager(first);
-      const preserved = uninstallDistribution(first, { removeEditedShim });
-      // Run from the installed payload, this piship.mjs is gone now.
+      // Run from the installed payload, this piship.mjs is gone now and the
+      // summary names the release's own; otherwise this one can purge.
       const script = process.argv[1];
-      const purge =
-        script && !existsSync(script) ? `node ${manager}` : pishipCommand();
       output.stdout(
-        `Uninstalled ${first}. State preserved: ${preserved}\nTo delete it: ${purge} purge ${shellArg(first)} --yes`,
+        uninstallKeepingState(first, {
+          removeEditedShim,
+          purge: () =>
+            script && !existsSync(script) ? undefined : pishipCommand(),
+        }),
       );
       if (live.length)
         output.stderr(

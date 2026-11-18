@@ -278,6 +278,13 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
       expect(delegated.status).toBe(1);
       expect(delegated.stderr).toContain("POLICY_DENIED");
     }
+    // With no provider signed in to Pi, a model request fails with PiShip's
+    // code and the command's own /login, not Pi's node_modules docs paths.
+    const unsigned = await s.run(["--smoke-model"]);
+    expect(unsigned.status).toBe(1);
+    expect(unsigned.stderr).toContain("MODEL_UNAVAILABLE: Pi-native inference");
+    expect(unsigned.stderr).toContain("Start mypi and use /login");
+    expect(unsigned.stderr).not.toContain("node_modules");
     const state = join(s.state, "mypi");
     for (const enterprise of [
       "identity",
