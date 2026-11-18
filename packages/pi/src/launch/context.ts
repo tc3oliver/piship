@@ -19,7 +19,7 @@ import type { LocalMetrics } from "@piship/audit";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { chooseModelAction } from "../governance.js";
 import { launchMetrics, saveMetrics } from "../launch-metrics.js";
-import { applyPiEnvironment } from "./pi-defaults.js";
+import { applyPiEnvironment, jitiCacheFor } from "./pi-defaults.js";
 
 export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
@@ -124,7 +124,7 @@ export async function prepareAccess(
     );
   // The managed cleanup above removed Pi's switches with every other PI_*,
   // and the packages' own.
-  applyPiEnvironment(ctx.agentDir, ctx.mode);
+  applyPiEnvironment(ctx.agentDir, ctx.mode, jitiCacheFor(ctx.metadata));
   applyPackageEnvironment(ctx.metadata, ctx.stateDir);
   // Only a managed distribution narrows what child processes inherit; a
   // personal one keeps the environment of the user's shell.

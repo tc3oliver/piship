@@ -39,7 +39,7 @@ import {
 } from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
-import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import { applyPiEnvironment, jitiCacheFor } from "./launch/pi-defaults.js";
 import { forgetPiTrust } from "./launch/project-trust.js";
 import {
   deferredDownloadNotice,
@@ -330,7 +330,11 @@ export async function launchPiDistribution(
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-  applyPiEnvironment(agentDir, metadata.deployment.mode);
+  applyPiEnvironment(
+    agentDir,
+    metadata.deployment.mode,
+    jitiCacheFor(metadata),
+  );
   // What the packages declare for themselves: their environment, and the
   // configuration files they read from the agent directory. A managed launch
   // sets the environment again after it removed the shell's `PI_*` variables.
