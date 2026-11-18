@@ -4001,6 +4001,31 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(readFileSync(commandPath, "utf8")).toBe("someone else's\n");
   });
 
+  it("reports a shim it cannot write without replacing an intact release", async () => {
+    const f = await updated();
+    const { commandPath } = readInstallReceipt(ID);
+    rmSync(commandPath);
+    // Another operation (this live process) holds the command's lock.
+    const lock = `${commandPath}.piship.lock`;
+    writeFileSync(
+      lock,
+      `${JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid: process.pid, instance: "other" })}\n`,
+    );
+    const before = treeHash(appsDir());
+    const error = await rejection(repairDistribution(ID, f.b.archive));
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.message).toContain(`${ID} 1.1.0 is intact`);
+    expect(error.message).toContain(`command shim ${commandPath}`);
+    expect(error.message).toContain("Another operation owns command");
+    expect(error.userAction).toMatch(/piship repair again/);
+    expect(treeHash(appsDir())).toEqual(before);
+    rmSync(lock);
+    expect(await repairDistribution(ID, f.b.archive)).toMatchObject({
+      status: "repaired",
+      problem: `command shim ${commandPath} missing`,
+    });
+  });
+
   it("reports an intact release and changes nothing", async () => {
     const f = await updated();
     const before = treeHash(appsDir());

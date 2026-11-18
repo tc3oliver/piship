@@ -125,40 +125,56 @@ export async function repairDistribution(
           `${source} does not match the ${version} release this installation records: ${problems.join(", ")}`,
           { userAction: `Use the ${version} release that was installed` },
         );
-      let problem: string;
+      // Only payload verification decides whether the release is replaced; a
+      // shim that cannot be written is reported on its own below.
+      let problem: string | undefined;
       try {
         verifyPayload(entry.payload);
-        const shim = restoreShim(receipt);
-        return shim
-          ? { status: "repaired", id, version, problem: shim }
-          : { status: "intact", id, version };
       } catch (error) {
         problem = (error as Error).message;
       }
-      const gate = acquireLaunchGate(id);
-      try {
-        const live = runtimeLeases(id, true).filter(
-          (lease) =>
-            lease.live && (lease.version === version || lease.version === "*"),
-        );
-        if (live.length)
-          throw new PiShipError(
-            "UPDATE_FAILED",
-            `Cannot repair ${id} ${version} while ${live.length} runtime session(s) still use it; close them and retry`,
+      if (problem !== undefined) {
+        const gate = acquireLaunchGate(id);
+        try {
+          const live = runtimeLeases(id, true).filter(
+            (lease) =>
+              lease.live &&
+              (lease.version === version || lease.version === "*"),
           );
-        syncTree(payload);
-        // Two renames in one directory: an interruption between them leaves
-        // the release missing, which fails closed and the next repair
-        // restores.
-        if (existsSync(entry.payload))
-          renameWithRetry(entry.payload, join(temporary.path, "damaged"));
-        renameWithRetry(payload, entry.payload);
-        syncDirectory(apps);
-      } finally {
-        gate.release();
+          if (live.length)
+            throw new PiShipError(
+              "UPDATE_FAILED",
+              `Cannot repair ${id} ${version} while ${live.length} runtime session(s) still use it; close them and retry`,
+            );
+          syncTree(payload);
+          // Two renames in one directory: an interruption between them leaves
+          // the release missing, which fails closed and the next repair
+          // restores.
+          if (existsSync(entry.payload))
+            renameWithRetry(entry.payload, join(temporary.path, "damaged"));
+          renameWithRetry(payload, entry.payload);
+          syncDirectory(apps);
+        } finally {
+          gate.release();
+        }
+        verifyPayload(entry.payload);
       }
-      verifyPayload(entry.payload);
-      const shim = restoreShim(receipt);
+      let shim: string | undefined;
+      try {
+        shim = restoreShim(receipt);
+      } catch (error) {
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `${problem === undefined ? `${id} ${version} is intact` : `Repaired ${id} ${version} (${problem})`}, but could not write the missing command shim ${receipt.commandPath}: ${(error as Error).message}`,
+          {
+            userAction: `Make ${dirname(receipt.commandPath)} writable and let any other piship operation on ${receipt.app.command} finish, then run piship repair again`,
+          },
+        );
+      }
+      if (problem === undefined)
+        return shim
+          ? { status: "repaired", id, version, problem: shim }
+          : { status: "intact", id, version };
       return {
         status: "repaired",
         id,
