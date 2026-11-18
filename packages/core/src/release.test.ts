@@ -1204,6 +1204,9 @@ policy:
     expect(error.message).toMatch(
       /Release gate test: required test offline-smoke failed: smoke failed: boom/,
     );
+    expect(error.userAction).toMatch(
+      /then acmepi --smoke; fix the distribution/,
+    );
     expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
   });
 

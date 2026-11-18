@@ -36,7 +36,26 @@ describe("mustRun", () => {
     expect(error.userAction).toMatch(/needs npm registry access/);
   });
 
-  it("gives no registry action for an unrelated npm failure", () => {
-    expect(failure("npm error code EBADENGINE").userAction).toBeUndefined();
+  it("gives a generic action, not the registry one, for an unrelated npm failure", () => {
+    const error = failure("npm error code EBADENGINE");
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.userAction).toMatch(/Fix what npm's output names/);
+  });
+
+  it("reports a failure the caller explains as a manifest mistake", () => {
+    let thrown: unknown;
+    try {
+      mustRun(
+        () => ({ status: 1, stdout: Buffer.alloc(0), stderr: "E404" }),
+        "pi-code",
+        "npm",
+        ["view", "x@1.0.0"],
+        { cwd: "." },
+        () => "x@1.0.0 is not published",
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as PiShipError).code).toBe("CONFIG_INVALID");
   });
 });

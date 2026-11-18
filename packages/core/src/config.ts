@@ -316,7 +316,7 @@ export function setPreference(
         ? narrowed.filter((item) => policy.allowed.includes(item))
         : narrowed;
       throw new PiShipError(
-        "MODEL_UNAVAILABLE",
+        "MODEL_DENIED",
         `Model ${value} is excluded by your models.allowed preference`,
         {
           component: "config",

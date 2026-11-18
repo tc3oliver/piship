@@ -1991,7 +1991,7 @@ export class DistributionAccess {
           : `Ask the distribution owner to allow a model; ${command} models lists what is configured`;
         const refusal = byPreference
           ? new PiShipError(
-              "MODEL_UNAVAILABLE",
+              "MODEL_DENIED",
               `Model ${requested} is not available (excluded by your models.allowed preference)`,
               {
                 component: "inference",

@@ -51,7 +51,10 @@ export const runCommand: CommandRunner = (command, args, options) => {
   };
 };
 
-/** Run and require exit 0; the failure names the package and npm/git's first lines. */
+/**
+ * Run and require exit 0; the failure names the package and npm/git's first lines.
+ * `explain` recognizes a manifest mistake (a wrong name or version) and reports it as CONFIG_INVALID.
+ */
 export function mustRun(
   run: CommandRunner,
   id: string,
@@ -63,7 +66,7 @@ export function mustRun(
   const result = run(command, args, options);
   const explained =
     result.status !== 0 && explain ? explain(result.stderr) : undefined;
-  if (explained) throw packageError("UPDATE_FAILED", id, explained);
+  if (explained) throw packageError("CONFIG_INVALID", id, explained);
   // The subcommand, past git's leading `-c <name=value>` and `-C <dir>`.
   const subcommand = args.find(
     (arg, index) =>
@@ -85,7 +88,7 @@ export function mustRun(
         .slice(0, 600)}`,
       command === "npm" && NPM_REGISTRY_FAILURE.test(result.stderr)
         ? NPM_REGISTRY_ACTION
-        : undefined,
+        : `Fix what ${command}'s output names (network, credentials in your ${command} configuration, the package's source), then run the command again`,
     );
   return result.stdout;
 }

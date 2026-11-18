@@ -322,7 +322,7 @@ export function governModelRuntime(
       (from === "any" || from.includes(key(model)))
     )
       throw new PiShipError(
-        "MODEL_UNAVAILABLE",
+        "MODEL_DENIED",
         `Model ${key(model)} is not available (excluded by user preference)`,
         {
           component: "inference",
