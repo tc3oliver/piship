@@ -1418,6 +1418,28 @@ describe("Sandbox and Workspace groups", () => {
     );
   });
 
+  it("notes bubblewrap's missing git control files and still warns about other git control gaps", () => {
+    const missing =
+      "git control is not verified: linux-bubblewrap cannot guard a protected file that does not exist yet (.git/config.worktree, .git/commondir), so a sandboxed command could create one";
+    const hooks =
+      "git control is not verified: core.hooksPath names a directory in the working tree";
+    const inspected = inspection({ warnings: [missing, hooks] });
+    const sandbox = group(
+      renderDoctor(
+        doctorData("managed", {
+          governance: governanceData({
+            inspection: inspected,
+            isolation: sandboxIsolation(inspected.sandbox),
+            workspace: workspaceData(inspected),
+          }),
+        }),
+      ).render(),
+      "Sandbox",
+    );
+    expect(sandbox).toContain(`  - ${"sandbox".padEnd(20)} ${missing}`);
+    expect(sandbox).toContain(`  ! ${"sandbox".padEnd(20)} ${hooks}`);
+  });
+
   it("says MCP stdio servers do not start on a backend without local processes", () => {
     const scope = (inspected: GovernanceInspection) =>
       group(

@@ -10,7 +10,10 @@ import {
   type DeploymentMode,
 } from "./access.js";
 import type { GovernanceManifest, PolicyRule } from "./governance.js";
-import { governanceReferences } from "./governance-parse.js";
+import {
+  DEFAULT_SANDBOX_READ_DENY,
+  governanceReferences,
+} from "./governance-parse.js";
 import { spoofableHostName, spoofableHostWarning } from "./http-transport.js";
 import type { Manifest, ValidationDiagnostic } from "./index.js";
 import { lifecycleReferences, updateTrustWarnings } from "./lifecycle.js";
@@ -1093,6 +1096,30 @@ export function droppedCredentialNames(
 }
 
 /**
+ * A custom `sandbox.filesystem.read.deny` replaces the default credential
+ * paths rather than adding to them; name the defaults it leaves readable.
+ */
+export function droppedDefaultReadDenials(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const sandbox = manifest.governance?.sandbox;
+  if (sandbox?.required !== true) return [];
+  const deny = sandbox.filesystem.read.deny;
+  const missing = DEFAULT_SANDBOX_READ_DENY.filter(
+    (path) =>
+      !deny.some((entry) => path === entry || path.startsWith(`${entry}/`)),
+  );
+  return missing.length
+    ? [
+        {
+          path: "sandbox.filesystem.read.deny",
+          message: `this list replaces the default credential paths, so ${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} now readable by shell commands; add ${missing.length > 1 ? "them" : "it"} back to the list to keep ${missing.length > 1 ? "them" : "it"} hidden (docs/sandbox.md#configuration)`,
+        },
+      ]
+    : [];
+}
+
+/**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
  * They never change how the manifest is parsed.
@@ -1106,6 +1133,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...unmatchablePathRules(manifest),
     ...narrowRuleWarnings(manifest),
     ...uncontainedReadDenials(manifest),
+    ...droppedDefaultReadDenials(manifest),
     ...inactivePackRules(manifest),
     ...inertCaptureClasses(manifest),
     ...inertDataPurge(manifest),

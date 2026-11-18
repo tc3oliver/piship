@@ -90,6 +90,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 ### Fixed
 
 #### For distribution authors
+- **Warning:** a declared `sandbox.filesystem.read.deny` replaces the default list, so `deny: [~/secrets]` alone leaves `~/.ssh`, `~/.aws`, and the other default credential paths readable by shell commands. `validate` and `lock` now warn with a required sandbox and name each default the list leaves out; restate them to keep them hidden ([sandbox](docs/sandbox.md#configuration)).
 - `piship doctor <build folder>` marks the state it creates as test state, like `test` and `dev`, so a following `install` adopts it instead of failing with `State already exists ... --use-existing-state`.
 - `piship lock` prints the same rule warnings as `validate`, including a `shell.execute` deny or ask whose `*` stops at `/` and a rule that can never match, which it left out; both name the rule as `policy.<list>[<index>].resource`.
 - MCP messages. A project `.mcp.json` entry that is rejected (`type: sse`, a `${NAME}` url, which a project file never interpolates), ignored in part (`headers`), or shadowed by a declared server of the same id, and a `.mcp.json` that is not JSON, now appear in `--smoke`, `doctor`, and the launch notice with the file and the reason, instead of being dropped silently. `validate` says a variable only optional MCP servers read stops just those servers, not the launch. A Streamable HTTP server's startup timeout names the origin that did not answer instead of an `npx` download, and the action comes first so the 160-character summary keeps it.
@@ -251,6 +252,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - A subagent child stopped by SIGINT (Ctrl-C at the parent's terminal) records `session.end`, as one stopped by SIGTERM already did.
 
 #### Platform
+- Linux: in a sandbox that denies the network, commands get `npm_config_fetch_retries=0` unless it is set, so `npm view` fails at once instead of after about 70 s of retries. A bwrap failure inside a container names the container's seccomp profile, and [bubblewrap inside a container](docs/troubleshooting.md#bubblewrap-inside-a-container) gives the `--security-opt` options that work without `--privileged`. `doctor` shows bubblewrap's permanent missing `.git/commondir` and `.git/config.worktree` as a note, not a warning.
 - On Windows, output redirected to a file or pipe uses ASCII marks even in Windows Terminal, since PowerShell 5.1 re-encodes it in the OEM code page. The `login` waiting hint prints only its English lines, with straight quotes, wherever output is ASCII only (`PISHIP_ASCII=1` or the legacy console).
 
 - Linux: bwrap failures name the kernel setting blocking user namespaces and the `sysctl` that allows them, a refused mount in a container, or the `bwrap` install command; an old Node.js names its version; a Secret Service without a D-Bus session bus gets an action and `login` checks the store before asking for the key; Linux ARM without bundled search tools skips that check in `test`; launch errors lead `test` and `doctor` output ([troubleshooting](docs/troubleshooting.md#prerequisites)).

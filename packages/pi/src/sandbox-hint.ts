@@ -130,7 +130,7 @@ export class SandboxFailureScanner {
           isWithin(path, protectedDirectory),
         )
       )
-        return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees); git runs it outside the sandbox. The user can run this command in their own terminal, outside the sandbox; do not retry it here.]`;
+        return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees), which git reads when it runs outside the sandbox. The user can run this command in their own terminal, outside the sandbox; do not retry it here.]`;
     }
     for (const named of this.#filesystem) {
       const path = real(named);

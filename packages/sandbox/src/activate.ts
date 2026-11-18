@@ -38,10 +38,12 @@ import {
 } from "./backend.js";
 import {
   CACHE_VARIABLES,
+  DENIED_NETWORK_VARIABLES,
   filterEnvironment,
   stripCredentials,
   withApprovedNetwork,
   withCacheEnvironment,
+  withDeniedNetworkEnvironment,
 } from "./environment.js";
 import { NativeBackend } from "./native.js";
 import { type ProbeTarget, probeSandbox } from "./probe.js";
@@ -266,7 +268,10 @@ function sessionEnvironment(
   profile: SandboxProfile,
   approved: Record<string, string>,
 ): Record<string, string> {
-  const env = { ...approved };
+  const env =
+    profile.network === "deny"
+      ? withDeniedNetworkEnvironment(approved)
+      : { ...approved };
   delete env.TMPDIR;
   if (!profile.writeAllow.some((path) => isWithin(profile.tmpDir, path)))
     return env;
@@ -1350,6 +1355,7 @@ export async function activateSandbox(
           injected: [
             ...INJECTED_VARIABLES,
             ...Object.keys(CACHE_VARIABLES),
+            ...Object.keys(DENIED_NETWORK_VARIABLES),
             ...platformInjectedVariables(platform),
           ],
           ...(ctx.probeTimeoutMs ? { timeoutMs: ctx.probeTimeoutMs } : {}),
