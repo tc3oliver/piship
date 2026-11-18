@@ -204,6 +204,26 @@ describe("the declared sandbox backend", () => {
     expect(() => agent("https://49983-sbx1.e2b.internal/")).toThrow(
       /undeclared host/,
     );
+    const declaredFor = async (endpoint: string) => {
+      declared = undefined;
+      await sandboxBackend(
+        options({ provider: "e2b-compatible", endpoint }, {
+          plainHttpFetch,
+        } as Partial<GovernanceOptions>),
+      );
+      return (url: string) => declared?.(new URL(url)) === true;
+    };
+    // An endpoint with a port of its own: the backend's no-domain fallback
+    // puts envd on that port, a returned domain on the default one.
+    const ported = await declaredFor("https://api.cube.corp:8443");
+    expect(ported("https://49983-sbx1.cube.corp:8443/")).toBe(true);
+    expect(ported("https://49983-sbx1.cube.corp/")).toBe(true);
+    expect(ported("https://49983-sbx1.cube.corp:9443/")).toBe(false);
+    expect(ported("http://49983-sbx1.cube.corp:8443/")).toBe(false);
+    // `api.` is dropped only when a domain of two labels remains.
+    const single = await declaredFor("https://api.internal");
+    expect(single("https://49983-sbx1.internal/")).toBe(false);
+    expect(single("https://49983-sbx1.api.internal/")).toBe(true);
     // Only the e2b-compatible backend derives envd hosts.
     declared = undefined;
     await sandboxBackend(

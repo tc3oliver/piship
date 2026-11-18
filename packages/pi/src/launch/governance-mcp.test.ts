@@ -172,3 +172,48 @@ describe("launch MCP options", () => {
     );
   });
 });
+
+describe("launch sandbox fetch", () => {
+  it("forwards declaredHost to the managed fetch, under the launch's private-only policy", async () => {
+    const { createServer } = await import("node:http");
+    const local = createServer((_request, response) => response.end("ok"));
+    await new Promise<void>((done) => local.listen(0, "127.0.0.1", done));
+    try {
+      const { port } = local.address() as { port: number };
+      const url = `http://127.0.0.1:${port}/`;
+      const ctx = {
+        distributionDir: "/nonexistent",
+        stateDir: "/nonexistent",
+        metadata: { app: { id: "acmecode", command: "acmecode" } },
+      } as unknown as LaunchContext;
+      const lock = {
+        app: { id: "acmecode", command: "acmecode" },
+        governance: {
+          manifest: { sandbox: { credential: "none" }, mcp: { servers: [] } },
+        },
+      } as unknown as GovernedLock;
+      const prepared = {
+        access: {
+          network: {
+            inheritProxyEnvironment: false,
+            additionalCA: [],
+            privateOnly: true,
+            allowHosts: [],
+          },
+        },
+        events: {},
+      } as unknown as PreparedAccess;
+      const built = governanceOptions(ctx, lock, prepared, false);
+      const never = () => false;
+      const loopback = (target: URL) => target.hostname === "127.0.0.1";
+      const scoped = built.plainHttpFetch?.(never, loopback);
+      expect(await (await (scoped as typeof fetch)(url)).text()).toBe("ok");
+      await expect(built.plainHttpFetch?.(never)(url)).rejects.toThrow(
+        /undeclared host/,
+      );
+    } finally {
+      local.closeAllConnections();
+      await new Promise((done) => local.close(done));
+    }
+  });
+});

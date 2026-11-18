@@ -333,15 +333,20 @@ function sandboxFetch(
     urls.push(url);
   }
   const exact = plain ? plainHttpOrigins(urls) : undefined;
+  // A leading `api.` is dropped only when a domain of two labels or more
+  // remains: `api.internal` does not put envd under the whole `internal`.
+  const stripped = endpoint?.hostname.replace(/^api\./, "");
   const envdDomain =
-    config.provider === "e2b-compatible" && endpoint
-      ? endpoint.hostname.replace(/^api\./, "")
+    config.provider === "e2b-compatible" && endpoint && stripped
+      ? stripped.includes(".")
+        ? stripped
+        : endpoint.hostname
       : undefined;
   if (!options.plainHttpFetch || (!exact && envdDomain === undefined))
     return options.fetch;
-  // envd is `<envd port>-<sandbox id>.<domain>` on the endpoint's scheme and
-  // its default port, as the backend builds its URL (no port of its own). It
-  // is matched by name: the sandbox ID is known only once the sandbox exists.
+  // envd is `<envd port>-<sandbox id>.<domain>` on the endpoint's scheme, on
+  // the default port (a `domain` the service returns) or the endpoint's own
+  // (the backend's fallback, the endpoint's host). It is matched by name: the sandbox ID is known only once the sandbox exists.
   // An IP-literal endpoint has no domain to put it under (such a name is not
   // a valid URL host), so envd is never admitted then.
   const envd = (target: URL) => {
@@ -349,7 +354,7 @@ function sandboxFetch(
     return (
       envdDomain !== undefined &&
       target.protocol === endpoint?.protocol &&
-      target.port === "" &&
+      (target.port === "" || target.port === endpoint?.port) &&
       label.startsWith(`${ENVD_PORT}-`) &&
       /^[a-z0-9-]+$/i.test(label.slice(`${ENVD_PORT}-`.length)) &&
       domain.join(".") === envdDomain
