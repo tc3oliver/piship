@@ -176,7 +176,7 @@ function sandboxCredential(
         path: "sandbox.credential",
         certain: true,
         message:
-          "sandbox.credential: runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential; use stored or none",
+          "sandbox.credential set to runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential; use stored or none",
       },
     ];
   const findings: Finding[] = [];
@@ -191,7 +191,7 @@ function sandboxCredential(
         path,
         certain: false,
         message:
-          "sandbox.credential: runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or the required sandbox fails",
+          "sandbox.credential set to runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or the required sandbox fails",
       });
       continue;
     }
@@ -200,7 +200,7 @@ function sandboxCredential(
       findings.push({
         path,
         certain: true,
-        message: `sandbox.credential: runtime sends the runtime credential only to the inference gateway origin ${expected}, so the required sandbox fails every launch; serve the sandbox from that origin or use sandbox.credential: stored`,
+        message: `sandbox.credential set to runtime sends the runtime credential only to the inference gateway origin ${expected}, so the required sandbox fails every launch; serve the sandbox from that origin or set sandbox.credential to stored`,
       });
   }
   return findings;
@@ -258,7 +258,7 @@ function mcpServers(
         report(
           "credential",
           true,
-          `credential: runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential, so ${always}; use credential: none`,
+          `credential set to runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential, so ${always}; set credential to none`,
         );
         continue;
       }
@@ -266,7 +266,7 @@ function mcpServers(
         report(
           "url",
           false,
-          `credential: runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or ${otherwise}`,
+          `credential set to runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or ${otherwise}`,
         );
         continue;
       }
@@ -275,7 +275,7 @@ function mcpServers(
         report(
           "url",
           true,
-          `credential: runtime sends the runtime credential only to the inference gateway origin ${expected}, so ${always}; serve the server from that origin or use credential: none`,
+          `credential set to runtime sends the runtime credential only to the inference gateway origin ${expected}, so ${always}; serve the server from that origin or set credential to none`,
         );
         continue;
       }

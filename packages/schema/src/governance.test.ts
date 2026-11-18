@@ -1,3 +1,4 @@
+import { redact } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
@@ -93,6 +94,10 @@ function rejects(input: Json, field: string, message?: string) {
   expect(error).toBeInstanceOf(ManifestError);
   expect((error as ManifestError).field).toBe(field);
   if (message) expect((error as ManifestError).message).toContain(message);
+  // Diagnostic redaction must leave the guidance readable.
+  expect(redact((error as ManifestError).message)).toBe(
+    (error as ManifestError).message,
+  );
 }
 
 describe("piship/v1alpha3 schema", () => {

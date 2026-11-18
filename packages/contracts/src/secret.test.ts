@@ -326,4 +326,15 @@ describe("redaction of common secret forms", () => {
     ])
       expect(redact(text)).toBe(expected);
   });
+
+  it("still masks a value that looks like a manifest keyword or a live key", () => {
+    // Manifest guidance avoids `credential: <word>`; the rule stays strict.
+    for (const [text, expected] of <[string, string][]>[
+      ["credential: runtime", `credential: ${REDACTED}`],
+      ["credential: stored)", `credential: ${REDACTED}`],
+      ["credential: sk-live-4f9a8b7c6d5e", `credential: ${REDACTED}`],
+      ["api_key=tok_9f8e7d6c5b4a rest", `api_key=${REDACTED} rest`],
+    ])
+      expect(redact(text)).toBe(expected);
+  });
 });

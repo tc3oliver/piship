@@ -1,3 +1,4 @@
+import { redact } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
   droppedCredentialNames,
@@ -65,9 +66,15 @@ function rejects(input: Json, field: string, message: string) {
   expect(error).toBeInstanceOf(ManifestError);
   expect((error as ManifestError).field).toBe(field);
   expect((error as ManifestError).message).toContain(message);
+  // Diagnostic redaction must leave the guidance readable.
+  expect(redact((error as ManifestError).message)).toBe(
+    (error as ManifestError).message,
+  );
 }
 function warnings(input: Json) {
-  return launchWarnings(parseManifest(input));
+  const found = launchWarnings(parseManifest(input));
+  for (const { message } of found) expect(redact(message)).toBe(message);
+  return found;
 }
 
 describe("network.tls.additionalCA paths", () => {

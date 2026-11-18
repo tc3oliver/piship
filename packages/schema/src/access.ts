@@ -542,8 +542,8 @@ function parseCredential(
     fail(
       "credential.provider",
       mode === "managed"
-        ? "An openai-compatible endpoint needs a credential: set credential.provider to http-broker or adapter"
-        : "An openai-compatible endpoint needs a credential: set credential.provider to none for a local server without authentication, or local-secret for an API key",
+        ? "An openai-compatible endpoint needs a credential; set credential.provider to http-broker or adapter"
+        : "An openai-compatible endpoint needs a credential; set credential.provider to none for a local server without authentication, or local-secret for an API key",
     );
   if (
     provider !== "http-broker" &&
@@ -563,7 +563,7 @@ function parseCredential(
   )
     fail(
       "credential.provider",
-      "Managed mode requires an organization-issued credential: http-broker or adapter",
+      "Managed mode requires an organization-issued credential (http-broker or adapter)",
     );
   if (provider === "http-broker" && identity.mode === "none")
     conflict(

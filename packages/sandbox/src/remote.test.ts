@@ -1668,7 +1668,7 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
   it.each([
     [
       401,
-      "the Kubernetes API refused the token: store the right one with sandbox login",
+      "the Kubernetes API refused the token; store the right one with sandbox login",
     ],
     [
       403,

@@ -1,3 +1,4 @@
+import { redact } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
   launchWarnings,
@@ -376,11 +377,27 @@ describe("piship/v1alpha2 personal modes", () => {
   });
   it("names provider: none when an endpoint has no credential", () => {
     expect(() => parseManifest(personal(gateway))).toThrow(
-      /needs a credential: set credential\.provider to none for a local server without authentication/,
+      /needs a credential; set credential\.provider to none for a local server without authentication/,
     );
     expect(() =>
       parseManifest(patch(managed, "credential", undefined)),
-    ).toThrow(/needs a credential: set credential\.provider to http-broker/);
+    ).toThrow(/needs a credential; set credential\.provider to http-broker/);
+  });
+  it("keeps credential guidance readable after diagnostic redaction", () => {
+    const messages = [
+      () => parseManifest(personal(gateway)),
+      () => parseManifest(patch(managed, "credential", undefined)),
+      () =>
+        parseManifest(patch(managed, "credential.provider", "local-secret")),
+    ].map((parse) => {
+      try {
+        parse();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error("expected a manifest error");
+    });
+    for (const message of messages) expect(redact(message)).toBe(message);
   });
   it("warns when an endpoint has no default model", () => {
     const warning = (extra: Json) =>

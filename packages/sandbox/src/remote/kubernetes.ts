@@ -147,7 +147,7 @@ function elapsedSince(
 function claimsHint(status: number, namespace: string): string {
   // 403 is RBAC for a valid bearer, not a wrong one (see credentialedFetch).
   if (status === 401)
-    return "; the Kubernetes API refused the token: store the right one with sandbox login";
+    return "; the Kubernetes API refused the token; store the right one with sandbox login";
   if (status === 403)
     return `; grant this identity permission on sandboxclaims in namespace ${namespace}`;
   if (status === 404)
