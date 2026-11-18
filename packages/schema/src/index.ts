@@ -272,6 +272,7 @@ export function parseManifestHeader(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+const MISSING_SECTION = "Expected an object; this required section is missing";
 function record(
   value: unknown,
   path: string,
@@ -283,9 +284,7 @@ function record(
     throw new ManifestError(
       "invalid field",
       path,
-      value === undefined
-        ? "Expected an object; this required section is missing"
-        : "Expected an object",
+      value === undefined ? MISSING_SECTION : "Expected an object",
     );
   const unknown = Object.keys(value)
     .filter((key) => !allowed.includes(key))
@@ -647,6 +646,22 @@ export function parseManifest(
   // One problem can surface twice (the app id is read by the governance
   // parser and again here); report it once.
   const seen = new Set<string>();
+  // A misspelled section (`deploymnt:`) already says "did you mean
+  // deployment?"; that section being missing is the same problem.
+  for (const problem of problems) {
+    const near = /^Unknown field .*; did you mean (.+)\?$/.exec(
+      problem.reason,
+    )?.[1];
+    const parent = problem.field.slice(0, problem.field.lastIndexOf("."));
+    if (near)
+      seen.add(
+        new ManifestError(
+          "invalid field",
+          parent === "manifest" ? near : `${parent}.${near}`,
+          MISSING_SECTION,
+        ).message,
+      );
+  }
   const unique = problems.filter((problem) => {
     if (seen.has(problem.message)) return false;
     seen.add(problem.message);
@@ -775,11 +790,25 @@ export function locateInSource(
 /** Throw every syntax error of a YAML document as one ManifestError. */
 function yamlProblems(document: Document, label: string, source: string): void {
   if (!document.errors.length) return;
+  // A tab sets off a cascade of follow-up errors; the tab is the one to fix.
+  const tabs = document.errors.filter((item) => item.code === "TAB_AS_INDENT");
+  const nested = new Set(
+    document.errors
+      .filter((item) => item.code === "BLOCK_AS_IMPLICIT_KEY")
+      .map((item) => item.pos[0]),
+  );
+  // An over-indented line yields both errors at the same place.
+  const errors = tabs.length
+    ? tabs
+    : document.errors.filter(
+        (item) =>
+          item.code !== "MULTILINE_IMPLICIT_KEY" || !nested.has(item.pos[0]),
+      );
   // A binary or wrong file yields hundreds of errors on huge lines: show the
   // first few, each with a short printable snippet, never the raw content.
-  const hidden = document.errors.length - YAML_ERRORS_SHOWN;
+  const hidden = errors.length - YAML_ERRORS_SHOWN;
   throw ManifestError.combine([
-    ...document.errors.slice(0, YAML_ERRORS_SHOWN).map((item) => {
+    ...errors.slice(0, YAML_ERRORS_SHOWN).map((item) => {
       // A pasted snippet (trust-root init's updates:) often repeats a section.
       const key =
         item.code === "DUPLICATE_KEY"
@@ -790,7 +819,9 @@ function yamlProblems(document: Document, label: string, source: string): void {
         label,
         key
           ? `${key}: appears twice in the same mapping (again at line ${item.linePos?.[0].line}); merge the two ${key}: blocks into one`
-          : shortSnippet(item.message),
+          : item.code === "BLOCK_AS_IMPLICIT_KEY" && item.linePos
+            ? `A line after line ${item.linePos[0].line} is indented further than line ${item.linePos[0].line}; give it the same indentation, or nest it under a key that ends with a colon`
+            : shortSnippet(item.message),
       );
       const start = item.linePos?.[0];
       if (start) problem.position = { line: start.line, column: start.col };

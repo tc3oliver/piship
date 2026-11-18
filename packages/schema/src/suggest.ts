@@ -56,6 +56,9 @@ export function unknownFieldMessage(
   key: string,
   allowed: readonly string[],
 ): string {
+  // YAML 1.2 has no merge key, and an alias of the whole block already works.
+  if (key === "<<")
+    return "Unknown field <<; YAML merge keys are not supported, so repeat the fields, or alias the whole block (key: *name)";
   const near = nearestField(key, allowed);
   if (near) return `Unknown field ${key}; did you mean ${near}?`;
   return allowed.length

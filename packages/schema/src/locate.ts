@@ -77,6 +77,19 @@ function quotedNumber(reason: string, value: Node | null | undefined): string {
   return `${reason}; this is a number, so quote it: "${written}"`;
 }
 
+/** A YAML 1.1 boolean word (yes, on) where true or false is expected: say how to write it. */
+function wordBoolean(reason: string, value: Node | null | undefined): string {
+  if (
+    !isScalar(value) ||
+    typeof value.value !== "string" ||
+    !/^Expected (true or false|a boolean)$/.test(reason) ||
+    !/^(y|yes|n|no|on|off)$/i.test(value.value)
+  )
+    return reason;
+  const word = /^(y|yes|on)$/i.test(value.value) ? "true" : "false";
+  return `${reason}; YAML 1.2 reads ${value.value} as text, so write ${word}`;
+}
+
 /** Give one error the line and column of its field. */
 function locateOne(
   error: ManifestError,
@@ -103,7 +116,7 @@ function locateOne(
     found.exact
       ? unknownField
         ? error.reason
-        : quotedNumber(error.reason, found.value)
+        : wordBoolean(quotedNumber(error.reason, found.value), found.value)
       : missingField(error),
   );
 }
