@@ -2,6 +2,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -10,7 +11,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { applyPiEnvironment, PI_SETTINGS } from "./pi-defaults.js";
+import {
+  applyPiEnvironment,
+  closeJitiCacheToSandbox,
+  jitiCacheDirectory,
+  jitiCacheFor,
+  ownedPrivately,
+  PI_SETTINGS,
+} from "./pi-defaults.js";
 
 const posix = process.platform !== "win32";
 
@@ -75,6 +83,64 @@ describe("Pi defaults", () => {
           nested,
         );
         expect(nested.JITI_FS_CACHE).toBe("false");
+      });
+    },
+  );
+
+  it("turns jiti's cache off for a lock that verifies at launch", () => {
+    expect(jitiCacheFor({ verifyAtLaunch: true })).toBe(false);
+    expect(jitiCacheFor({ verifyAtLaunch: false })).toBe(jitiCacheDirectory());
+    expect(jitiCacheFor({})).toBe(jitiCacheDirectory());
+  });
+
+  it("turns jiti's cache off when the sandbox can write it, not for a per-session temp beside it", () => {
+    const real = realpathSync(tmpdir());
+    const covered: NodeJS.ProcessEnv = {};
+    closeJitiCacheToSandbox([real], covered);
+    expect(covered.JITI_FS_CACHE).toBe("false");
+    const beside: NodeJS.ProcessEnv = {};
+    closeJitiCacheToSandbox(
+      [join(real, "piship-sandbox-x", "tmp"), join(real, "jiti-other")],
+      beside,
+    );
+    expect(beside.JITI_FS_CACHE).toBeUndefined();
+  });
+
+  it.skipIf(!posix)(
+    "refuses a cache directory whose parent its group can write without the sticky bit",
+    () => {
+      withTemp((root) => {
+        const parent = join(root, "group");
+        mkdirSync(parent);
+        chmodSync(parent, 0o770);
+        expect(ownedPrivately(join(parent, "jiti"))).toBe(false);
+        chmodSync(parent, 0o1770);
+        expect(ownedPrivately(join(parent, "jiti"))).toBe(true);
+      });
+    },
+  );
+
+  it.skipIf(posix)(
+    "keeps jiti's cache on Windows only under the user's own profile",
+    () => {
+      withTemp((root) => {
+        const saved = {
+          LOCALAPPDATA: process.env.LOCALAPPDATA,
+          USERPROFILE: process.env.USERPROFILE,
+        };
+        try {
+          process.env.LOCALAPPDATA = join(root, "profile", "AppData", "Local");
+          process.env.USERPROFILE = join(root, "profile");
+          expect(ownedPrivately(join(root, "shared", "jiti"))).toBe(false);
+          mkdirSync(join(root, "profile", "Temp"), { recursive: true });
+          expect(ownedPrivately(join(root, "profile", "Temp", "jiti"))).toBe(
+            true,
+          );
+        } finally {
+          for (const [name, value] of Object.entries(saved))
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        }
       });
     },
   );

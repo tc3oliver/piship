@@ -94,6 +94,7 @@ import { resolveResources } from "./governance/resources.js";
 import { interruptibleBackend, sandboxBackend } from "./governance/sandbox.js";
 import { seedDecision } from "./governed-tools.js";
 import { DEFAULT_GRANT_COMMANDS } from "./grant-command.js";
+import { closeJitiCacheToSandbox } from "./launch/pi-defaults.js";
 import {
   revokePublishedSubagentGrant,
   type SubagentGrantBinding,
@@ -414,6 +415,8 @@ export class GovernanceSession {
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,
       });
+      if (sandbox.report.level === "enforced")
+        closeJitiCacheToSandbox(sandbox.profile.writeAllow);
       // Interrupted after the sandbox was made: the catch below disposes it.
       options.signal?.throwIfAborted();
       startupMark("governance_sandbox_active");

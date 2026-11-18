@@ -12,6 +12,8 @@ const KEYS = [
   "PISHIP_INSTALL_HOME",
   "PISHIP_BIN_HOME",
   "PI_CODING_AGENT_DIR",
+  "JITI_FS_CACHE",
+  "JITI_RESPECT_TMPDIR_ENV",
 ] as const;
 let temp: string;
 let saved: Record<string, string | undefined> = {};
@@ -74,6 +76,20 @@ describe("launch with overlapping PiShip roots (#49)", () => {
     );
     expect(log).not.toHaveBeenCalled();
     expect(existsSync(join(temp, "install", "apps", "acmecode"))).toBe(false);
+  });
+});
+
+describe("jiti's transpile cache at launch", () => {
+  it("is turned off for a lock that verifies at launch", async () => {
+    delete process.env.JITI_FS_CACHE;
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    preparePiEnvironment("acmecode");
+    await launchPiDistribution({
+      distributionDir: temp,
+      metadata: { ...metadata, verifyAtLaunch: true } as DistributionLock,
+      args: ["--version"],
+    });
+    expect(process.env.JITI_FS_CACHE).toBe("false");
   });
 });
 

@@ -1,13 +1,14 @@
 // Pi's own runtime defaults that a branded distribution sets. Pi reads these
 // from its settings and from environment variables, not from the SDK options
 // PiShip passes, so they are applied here for every launch.
-import { lstatSync, mkdirSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import {
   type CacheWarmingMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { isWithin } from "@piship/sandbox";
 
 /**
  * Settings for the in-memory `SettingsManager` of every session. The store is
@@ -77,12 +78,50 @@ export function jitiCacheDirectory(): string {
   return join(tmpdir(), "jiti");
 }
 
+/** The `jitiCache` argument of `applyPiEnvironment` for a distribution's lock. */
+export function jitiCacheFor(metadata: {
+  readonly verifyAtLaunch?: boolean;
+}): string | false {
+  // Like the V8 compile cache: a cache is not verified.
+  return metadata.verifyAtLaunch === true ? false : jitiCacheDirectory();
+}
+
+/**
+ * Turn jiti's cache off when an enforced sandbox lets contained commands
+ * write it: what they plant there would run, uncontained, in the next launch
+ * or subagent child. The default sandbox temp is a per-session directory
+ * beside it, not `<os.tmpdir()>` itself, so it keeps the cache.
+ */
+export function closeJitiCacheToSandbox(
+  writeAllow: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  let dir = jitiCacheDirectory();
+  try {
+    dir = realpathSync(dir);
+  } catch {
+    // Not created (the cache is already off): judge the path as written.
+  }
+  if (writeAllow.some((root) => isWithin(dir, root)))
+    env.JITI_FS_CACHE = "false";
+}
+
 /**
  * Whether `dir` is a directory only this user can write, created 0700 when
  * missing: on Linux it is the shared `/tmp/jiti` another user may have made
- * first. Windows keeps TEMP per user and has no POSIX owner to compare.
+ * first. Windows has no POSIX owner to compare, so there it must be under the
+ * user's own profile (`LOCALAPPDATA` or `USERPROFILE`), as TEMP is by default.
  */
 export function ownedPrivately(dir: string): boolean {
+  if (process.platform === "win32") {
+    const under = (root: string | undefined) => {
+      if (!root) return false;
+      const path = relative(root, dir);
+      return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+    };
+    if (!under(process.env.LOCALAPPDATA) && !under(process.env.USERPROFILE))
+      return false;
+  }
   try {
     mkdirSync(dir, { mode: 0o700 });
   } catch (error) {
@@ -92,12 +131,14 @@ export function ownedPrivately(dir: string): boolean {
   try {
     const own = lstatSync(dir);
     const parent = statSync(dirname(dir));
+    const uid = process.getuid?.();
     return (
       own.isDirectory() &&
-      own.uid === process.getuid?.() &&
+      own.uid === uid &&
       (own.mode & 0o022) === 0 &&
-      // A world-writable parent without the sticky bit lets anyone swap it.
-      ((parent.mode & 0o002) === 0 || (parent.mode & 0o1000) !== 0)
+      // Whoever can write the parent without the sticky bit can swap it.
+      ((parent.mode & 0o022) === 0 || (parent.mode & 0o1000) !== 0) &&
+      (parent.uid === uid || parent.uid === 0)
     );
   } catch {
     return false;

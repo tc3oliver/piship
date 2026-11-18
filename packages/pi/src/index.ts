@@ -39,10 +39,7 @@ import {
 } from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
-import {
-  applyPiEnvironment,
-  jitiCacheDirectory,
-} from "./launch/pi-defaults.js";
+import { applyPiEnvironment, jitiCacheFor } from "./launch/pi-defaults.js";
 import { forgetPiTrust } from "./launch/project-trust.js";
 import {
   deferredDownloadNotice,
@@ -336,7 +333,7 @@ export async function launchPiDistribution(
   applyPiEnvironment(
     agentDir,
     metadata.deployment.mode,
-    metadata.verifyAtLaunch === true ? false : jitiCacheDirectory(),
+    jitiCacheFor(metadata),
   );
   // What the packages declare for themselves: their environment, and the
   // configuration files they read from the agent directory. A managed launch
