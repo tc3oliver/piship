@@ -405,12 +405,64 @@ describe("sandbox pull", () => {
     );
     expect(failed?.message).toMatch(/conflicts in 1 file\(s\): a\.txt/);
     expect(failed?.message).toMatch(/other files are applied and staged/);
-    expect(failed?.userAction).toMatch(/Do not run pull again/);
+    expect(failed?.userAction).toMatch(/will not apply it again/);
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toContain("<<<<<<<");
     expect(readFileSync(join(repo, "b.txt"), "utf8")).toBe("new\n");
     const paths = remoteWorkspacePaths(state, repo);
     expect(existsSync(paths.patch)).toBe(true);
     expect(existsSync(paths.applied)).toBe(false);
+  });
+
+  it("refuses to apply a conflicted patch again, even after the merge is committed, until --discard", async () => {
+    checkpoint();
+    writeFileSync(join(repo, "a.txt"), "one\nmine\n");
+    git(repo, "add", "a.txt");
+    await expect(runSandbox(ctx, ["pull", "--yes"])).rejects.toThrow(
+      /conflicts in 1 file/,
+    );
+    writeFileSync(join(repo, "a.txt"), "one\nresolved\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "resolved");
+    const again = await runSandbox(ctx, ["pull", "--yes"]).then(
+      () => undefined,
+      (error: Error & { userAction?: string }) => error,
+    );
+    expect(again?.message).toMatch(/already applied this patch with conflicts/);
+    expect(again?.userAction).toMatch(/demo sandbox pull --discard/);
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("one\nresolved\n");
+    expect(git(repo, "status", "--porcelain").toString()).toBe("");
+    // A newer session's patch in the same slot is not blocked by the old marker, and clears it.
+    checkpoint("", undefined, { session: "s2", only: "n.txt" });
+    await runSandbox(ctx, ["pull", "--yes"]);
+    expect(readFileSync(join(repo, "n.txt"), "utf8")).toBe("new\n");
+    const paths = remoteWorkspacePaths(state, repo);
+    expect(existsSync(paths.patch)).toBe(false);
+    expect(existsSync(`${paths.patch}.conflicted`)).toBe(false);
+  });
+
+  it("does not quote git's per-file success lines in a failure that changed nothing", async () => {
+    // a.txt's edit is relative to content the host never had; 0.txt is new and fits.
+    const clone = join(temp, "clone-stale");
+    git(temp, "clone", "-q", repo, clone);
+    writeFileSync(join(clone, "a.txt"), "unseen\ntwo\n");
+    git(clone, "commit", "-qam", "seed");
+    writeFileSync(join(clone, "a.txt"), "unseen\nthree\n");
+    writeFileSync(join(clone, "0.txt"), "new\n");
+    git(clone, "add", "-A");
+    writeRemoteWorkspaceCheckpoint(
+      state,
+      repo,
+      git(clone, "diff", "--cached", "--binary", "HEAD"),
+      { session: "stale", baseHead: null, files: 2 },
+    );
+    const failed = await runSandbox(ctx, ["pull", "--yes"]).then(
+      () => undefined,
+      (error: Error) => error,
+    );
+    expect(failed?.message).toMatch(/nothing was changed/);
+    expect(failed?.message).toMatch(/a\.txt: patch does not apply/);
+    expect(failed?.message).not.toMatch(/Applied patch to|Falling back/);
+    expect(existsSync(join(repo, "0.txt"))).toBe(false);
   });
 
   it("keeps the patch and says nothing was applied when git refuses it", async () => {
