@@ -21,6 +21,7 @@ import {
   verifyPayloadContents,
 } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
+import { safeUrl } from "../diff/collector.js";
 import { shellArg } from "../invocation.js";
 import { installedHere, readFailedAttempt } from "./lifecycle.js";
 
@@ -159,8 +160,11 @@ function updateDoctor(
         `${unset} is not set (updates.source ${status.source}); update needs it, or --from <directory|url>`,
       );
     else if (status.source && plainHttpSource(ctx, status.source))
-      warn("source", `http (integrity by signature only): ${status.source}`);
-    else if (status.source) ok("source", status.source);
+      warn(
+        "source",
+        `http (integrity by signature only): ${shownSource(ctx, status.source)}`,
+      );
+    else if (status.source) ok("source", shownSource(ctx, status.source));
     else local("source", "none declared; update needs --from");
     if (metadata.updates.transport === "http-allowed")
       ok(
@@ -297,6 +301,22 @@ function unsetSourceVariable(
     return undefined;
   } catch (error) {
     return error instanceof RuntimeReferenceError ? error.variable : undefined;
+  }
+}
+
+/** A templated source as `${NAME} = <value>`, without credentials or query in a URL. */
+function shownSource(ctx: BrandedContext, template: string): string {
+  if (!template.includes("${")) return template;
+  try {
+    const value = resolveTemplate(
+      "updates.source",
+      template,
+      ctx.metadata.access?.variables ?? [],
+      process.env,
+    );
+    return `${template} = ${/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? safeUrl(value) : value}`;
+  } catch {
+    return template;
   }
 }
 

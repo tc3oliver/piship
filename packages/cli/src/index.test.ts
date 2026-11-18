@@ -1396,7 +1396,7 @@ describe("file system errors", () => {
       "--show-public",
       "--encrypt",
     ]);
-    expect(mixed.status).toBe(1);
+    expect(mixed.status).toBe(2);
     expect(readFileSync(key, "utf8")).toBe(before);
   });
 });
@@ -1544,14 +1544,61 @@ describe("signing key passphrases", () => {
       "--passphrase-env",
       "PISHIP_TEST_SIGNING_PASSPHRASE",
     ]);
-    expect(plain.status).toBe(1);
+    expect(plain.status).toBe(2);
+    expect(plain.stderr).toContain("Usage: piship keygen");
     expect(existsSync(join(temp, "plain.pem"))).toBe(false);
   });
 
   it("pairs each sign-channel --key with a --key-id", async () => {
     const result = await signChannel(join(temp, "a.pem"), "--key", "b.pem");
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.stderr).toContain("Give one --key-id for each --key");
+    expect(result.stderr).toContain("Usage: piship sign-channel");
+  });
+
+  it("prints the usage line, exit 2, for a missing or malformed signing option", async () => {
+    for (const [args, problem] of [
+      [
+        ["sign-channel", join(temp, "channel")],
+        "sign-channel needs --channel, --key, and --key-id",
+      ],
+      [
+        [
+          "trust-root",
+          "init",
+          "--key",
+          "a=b",
+          "--root-keys",
+          "a",
+          "--channel-keys",
+          "a",
+          "--expires-days",
+          "0",
+        ],
+        "--expires-days must be a positive integer",
+      ],
+      [
+        [
+          "trust-root",
+          "init",
+          "--key",
+          "a",
+          "--root-keys",
+          "a",
+          "--channel-keys",
+          "a",
+          "--expires-days",
+          "9",
+        ],
+        "--key must be <id>=<public-key>",
+      ],
+      [["trust-root", "next", temp], "trust-root next needs --manifest"],
+    ] as const) {
+      const result = await run([...args]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(problem);
+      expect(result.stderr).toContain(`Usage: piship ${args[0]}`);
+    }
   });
 
   it("creates a bootstrap root and publishes the next root with an encrypted root key", async () => {

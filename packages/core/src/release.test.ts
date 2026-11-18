@@ -62,7 +62,12 @@ import {
   verifyRelease,
 } from "./release/index.js";
 import { runCommand } from "./release/shared.js";
-import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
+import {
+  generateSigningKey,
+  keyFingerprint,
+  pemSigner,
+  signBytes,
+} from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -3006,6 +3011,19 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       previousKeys: [{ id: next.id, publicKey: next.publicKey }],
     });
     expect(back.metadata.sequence).toBe(4);
+    // A key file that is not the key its id names is called that, with both
+    // fingerprints, instead of an unmet channel role.
+    await expect(
+      signChannel({
+        directory: channelDir,
+        channel: "stable",
+        archives: [first.archive],
+        privateKeyPem: next.privateKeyPem,
+        keyId: KEY.id,
+      }),
+    ).rejects.toThrow(
+      `the key file passed as ${KEY.id} does not match key id ${KEY.id}: it has fingerprint ${keyFingerprint(next.publicKey)}, and the channel role of update root 1 lists ${KEY.id} as ${keyFingerprint(KEY.publicKey)}`,
+    );
     expect((await resign(next)).metadata.sequence).toBe(5);
     // Metadata changed after it was signed, or without its signature.
     const signed = readFileSync(path, "utf8");
@@ -3521,6 +3539,41 @@ describe("release stages", () => {
       expect(error.userAction).toContain(built.archive);
       expect(error.message).not.toMatch(/checksums/);
     }
+  });
+
+  it("names a channel file, a truncated archive, and a channel directory passed to verify-release", async () => {
+    const dir = temp();
+    const channel = join(dir, "channel");
+    mkdirSync(channel);
+    writeFileSync(join(channel, "stable.json"), "{}\n");
+    writeFileSync(join(channel, "acmepi-1.0.0-linux-x64.tar.gz"), "");
+    const notGzip = await rejection(
+      verifyRelease(join(channel, "stable.json")),
+    );
+    expect(notGzip.message).toContain(
+      "stable.json is not a gzip release archive",
+    );
+    const source = join(dir, "acmepi-1.0.0-linux-x64");
+    mkdirSync(source);
+    writeFileSync(
+      join(source, "release.json"),
+      createHash("sha256").update("x").digest("hex").repeat(4000),
+    );
+    const whole = join(dir, "whole.tar.gz");
+    await createArchive(source, "acmepi-1.0.0-linux-x64", whole);
+    const truncated = join(dir, "acmepi-1.0.0-linux-x64.tar.gz");
+    writeFileSync(truncated, readFileSync(whole).subarray(0, 200));
+    const cut = await rejection(verifyRelease(truncated));
+    expect(cut.message).toContain("acmepi-1.0.0-linux-x64.tar.gz is truncated");
+    expect(cut.userAction).toMatch(/Download or copy the archive again/);
+    const folder = await rejection(verifyRelease(channel));
+    expect(folder.code).toBe("CONFIG_INVALID");
+    expect(folder.message).toBe(
+      `${channel} is a channel directory (stable.json), not a release: verify-release checks one release archive or release directory`,
+    );
+    expect(folder.userAction).toContain(
+      join(channel, "acmepi-1.0.0-linux-x64.tar.gz"),
+    );
   });
 
   it("runs a command without blocking and reports every way it can end", async () => {

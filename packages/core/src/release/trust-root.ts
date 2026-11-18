@@ -1,13 +1,14 @@
 // Owner tooling for update roots: the bootstrap a manifest pins, and the
 // next signed root version an update source publishes. Owners never
 // hand-edit signed root JSON.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   AccessFieldError,
   parseUpdateRoot,
   PISHIP_SCHEMA_V1ALPHA5,
+  RELEASE_CHANNELS,
   schemaAtLeast,
   readManifest,
   sharedRoleKeyIds,
@@ -20,11 +21,14 @@ import {
   type SignatureEntry,
   signVerified,
   type TrustedKey,
+  verifyThreshold,
 } from "../signing.js";
+import { pishipCommand, shellArg } from "../invocation.js";
 import { replaceFile } from "./channel.js";
 import {
   hostedRootText,
   refreshRoot,
+  roleTrust,
   rootFileName,
   verifyRootTransition,
 } from "./root.js";
@@ -164,6 +168,8 @@ export interface TrustRootNextResult {
   readonly previous: UpdateRoot;
   readonly root: UpdateRoot;
   readonly signedBy: readonly string[];
+  /** Channels in the directory whose signatures the new root's channel role refuses. */
+  readonly warnings: readonly string[];
 }
 
 /**
@@ -264,5 +270,37 @@ export async function nextTrustRoot(
     previous: current,
     root: next,
     signedBy: signed.map((entry) => entry.keyId),
+    warnings: strandedChannels(repository, next),
   };
+}
+
+/**
+ * A warning for each channel in `directory` whose signature `root`'s channel
+ * role does not accept: once the root is published, its clients refuse it.
+ */
+function strandedChannels(directory: string, root: UpdateRoot): string[] {
+  const role = roleTrust(root, "channel");
+  return RELEASE_CHANNELS.flatMap((channel) => {
+    const path = join(directory, `${channel}.json`);
+    if (!existsSync(path)) return [];
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(readFileSync(`${path}.sig`, "utf8"));
+      verifyThreshold(readFileSync(path), envelope, role.keys, role.threshold);
+      return [];
+    } catch {
+      const value = envelope as {
+        keyId?: unknown;
+        signatures?: { keyId?: unknown }[];
+      };
+      const signers = Array.isArray(value?.signatures)
+        ? value.signatures.map((entry) => String(entry?.keyId))
+        : value?.keyId !== undefined
+          ? [String(value.keyId)]
+          : [];
+      return [
+        `${path} is signed by ${signers.join(", ") || "no readable signature"}, which root ${root.version}'s channel role (${role.threshold} of ${root.roles.channel.keyIds.join(", ")}) does not accept: once root ${root.version} is published, clients refuse the ${channel} channel. Re-sign it with a channel key of root ${root.version} before publishing the root: ${pishipCommand()} sign-channel ${shellArg(directory)} --channel ${channel} --key <private-key-file> --key-id <id> --previous-key <old-id>=<old-public-key>`,
+      ];
+    }
+  });
 }

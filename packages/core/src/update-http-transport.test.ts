@@ -199,9 +199,26 @@ describe.runIf(HOST_EVIDENCED)("updates.transport: http-allowed", () => {
       (label, value) => lines.push(`! ${label} ${value}`),
     );
     expect(lines).toContain(
-      `! source http (integrity by signature only): \${ACMEPI_UPDATE_SOURCE}`,
+      `! source http (integrity by signature only): \${ACMEPI_UPDATE_SOURCE} = ${SOURCE}`,
     );
     expect(lines.join("\n")).toMatch(/ok transport http-allowed/);
+  });
+
+  it("shows the resolved source in doctor, without URL credentials", async () => {
+    await installed(false, "http-allowed");
+    process.env.ACMEPI_UPDATE_SOURCE =
+      "https://deploy:hunter2-pw@updates.corp.internal/acmepi?token=abc";
+    const lines: string[] = [];
+    lifecycleDoctor(
+      context(),
+      "Update",
+      (label, value) => lines.push(`ok ${label} ${value}`),
+      (label, value) => lines.push(`! ${label} ${value}`),
+    );
+    expect(lines).toContain(
+      "ok source ${ACMEPI_UPDATE_SOURCE} = https://updates.corp.internal/acmepi",
+    );
+    expect(lines.join("\n")).not.toMatch(/hunter2|deploy|token/);
   });
 
   it("names an unset source variable in doctor instead of passing the template", async () => {
