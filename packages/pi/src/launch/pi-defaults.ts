@@ -114,10 +114,19 @@ export function closeJitiCacheToSandbox(
  */
 export function ownedPrivately(dir: string): boolean {
   if (process.platform === "win32") {
+    // Real paths: TEMP often holds 8.3 short names (C:\Users\RUNNER~1).
+    const real = (path: string) => {
+      try {
+        return realpathSync.native(path);
+      } catch {
+        return path;
+      }
+    };
+    const parent = real(dirname(dir));
     const under = (root: string | undefined) => {
       if (!root) return false;
-      const path = relative(root, dir);
-      return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+      const path = relative(real(root), parent);
+      return !path.startsWith("..") && !isAbsolute(path);
     };
     if (!under(process.env.LOCALAPPDATA) && !under(process.env.USERPROFILE))
       return false;

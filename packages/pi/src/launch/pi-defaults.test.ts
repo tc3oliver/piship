@@ -48,7 +48,16 @@ describe("Pi defaults", () => {
     withTemp((root) => {
       const cache = join(root, "jiti");
       const env: NodeJS.ProcessEnv = {};
-      applyPiEnvironment("/state/agent", "personal", cache, env);
+      // On Windows the rule is "under the user's profile", which the runner's
+      // temp may not be: make root the profile.
+      const profile = process.env.USERPROFILE;
+      process.env.USERPROFILE = root;
+      try {
+        applyPiEnvironment("/state/agent", "personal", cache, env);
+      } finally {
+        if (profile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = profile;
+      }
       expect(env.JITI_FS_CACHE).toBeUndefined();
       if (posix) expect(statSync(cache).mode & 0o777).toBe(0o700);
     });
