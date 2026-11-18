@@ -47,7 +47,7 @@ function stub(name: string, source: string): void {
 }
 
 /** Run the launcher with `launch` as the body of launchPiDistribution. */
-function run(launch: string) {
+function run(launch: string, args: readonly string[] = []) {
   write(join(temp, "package.json"), JSON.stringify({ type: "module" }));
   write(join(temp, "bin", "acmepi"), launcherSource());
   stub(
@@ -57,7 +57,7 @@ function run(launch: string) {
   // What Pi would see when @piship/pi imports it.
   stub(
     "pi",
-    `const agentDirAtImport = process.env.PI_CODING_AGENT_DIR;\nexport async function launchPiDistribution() {\n${launch}\n}\n`,
+    `import { PiShipError } from "@piship/contracts";\nconst agentDirAtImport = process.env.PI_CODING_AGENT_DIR;\nexport async function launchPiDistribution() {\n${launch}\n}\n`,
   );
   write(
     join(temp, "node_modules", "@piship", "pi", "environment.js"),
@@ -68,7 +68,7 @@ function run(launch: string) {
     join(temp, "node_modules", "@piship", "contracts"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  return spawnSync(process.execPath, [join(temp, "bin", "acmepi")], {
+  return spawnSync(process.execPath, [join(temp, "bin", "acmepi"), ...args], {
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -108,6 +108,41 @@ describe("the generated launcher", () => {
     expect(result.stderr).toContain("callback failure");
     expect(result.stderr).not.toContain(SECRET);
     expect(result.stderr).not.toContain("    at ");
+  });
+});
+
+describe("a --json command the launcher sees fail", () => {
+  it("also prints one error object on stdout, as piship --json does", () => {
+    const result = run(
+      `throw new PiShipError("INTEGRITY_FAILED", "payload changed: ${SECRET}", { userAction: "Reinstall" });`,
+      ["doctor", "--json"],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("payload changed");
+    expect(JSON.parse(result.stdout)).toEqual({
+      error: {
+        code: "INTEGRITY_FAILED",
+        message: "payload changed: [REDACTED]",
+        action: "Reinstall",
+      },
+    });
+    expect(result.stdout).not.toContain(SECRET);
+  });
+
+  it("keeps a report the command already printed as the only stdout", () => {
+    const result = run(
+      'console.log(JSON.stringify({ failed: true }));\nthrow new PiShipError("CONFIG_UNAVAILABLE", "doctor found problems");',
+      ["doctor", "--json"],
+    );
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ failed: true });
+  });
+
+  it("prints nothing on stdout without --json", () => {
+    const result = run('throw new PiShipError("CONFIG_UNAVAILABLE", "x");', [
+      "doctor",
+    ]);
+    expect(result.stdout).toBe("");
   });
 });
 

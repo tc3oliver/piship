@@ -334,12 +334,13 @@ export async function runUpdate(
       index += 1;
     } else if (arg === "--check" || arg === "--accept-review") flags.add(arg);
     else
-      throw usageRefusal("update", usage, args, [
-        "--channel",
-        "--from",
-        "--check",
-        "--accept-review",
-      ]);
+      throw usageRefusal(
+        "update",
+        usage,
+        args,
+        ["--channel", "--from", "--check", "--accept-review"],
+        ["--channel", "--from"],
+      );
   }
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");

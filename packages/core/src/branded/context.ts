@@ -50,23 +50,38 @@ export interface BrandedContext {
 }
 
 /**
- * A refused branded command line, led (as piship's refusals are) by the first
- * option `known` does not hold. Only its name is shown, cut at `=`: a value
- * may be a secret.
+ * What is wrong with option `arg`, which `known` does not hold as written.
+ * Only its name is shown, cut at `=`: a value may be a secret.
+ */
+export function optionProblem(
+  command: string,
+  arg: string,
+  known: readonly string[],
+  valued: readonly string[] = [],
+): string {
+  const name = arg.split("=")[0] ?? arg;
+  if (valued.includes(name))
+    return `Write ${name} <value> with a space, not ${name}=<value>.`;
+  if (known.includes(name)) return `${name} takes no value.`;
+  const near = nearestField(name, known);
+  return `Unknown option ${name} for ${command}.${near ? ` Did you mean ${near}?` : ""}`;
+}
+
+/**
+ * A refused branded command line, led (as piship's refusals are) by what is
+ * wrong with the first option `known` does not hold.
  */
 export function usageRefusal(
   subcommand: string,
   usage: string,
   args: readonly string[],
   known: readonly string[],
+  valued: readonly string[] = [],
 ): PiShipError {
-  const name = args
-    .find((arg) => arg.startsWith("-") && !known.includes(arg))
-    ?.split("=")[0];
-  const near = name && nearestField(name, known);
+  const arg = args.find((arg) => arg.startsWith("-") && !known.includes(arg));
   return new PiShipError(
     "CONFIG_INVALID",
-    `${name ? `Unknown option ${name} for ${subcommand}.${near ? ` Did you mean ${near}?` : ""}\n` : ""}${usage}`,
+    `${arg ? `${optionProblem(subcommand, arg, known, valued)}\n` : ""}${usage}`,
     { usage: true },
   );
 }

@@ -108,6 +108,14 @@ describe("a refused command line", () => {
       "Unknown option --form for update. Did you mean --from?\nUsage: acmecode update ",
     ],
     [
+      ["doctor", "--json=1"],
+      "--json takes no value.\nUsage: acmecode doctor [--json]",
+    ],
+    [
+      ["update", "--channel=beta"],
+      "Write --channel <value> with a space, not --channel=<value>.\nUsage: acmecode update ",
+    ],
+    [
       ["doctr"],
       "Unknown command: doctr. Did you mean doctor? Run acmecode --help",
     ],

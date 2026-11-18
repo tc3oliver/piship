@@ -7,6 +7,7 @@ export {
   type GovernedLock,
   governedLock,
   openAccess,
+  optionProblem,
   usageRefusal,
 } from "./context.js";
 export {
