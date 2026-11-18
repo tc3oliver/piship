@@ -403,7 +403,7 @@ describe("sandbox pull", () => {
       () => undefined,
       (error: Error & { userAction?: string }) => error,
     );
-    expect(failed?.message).toMatch(/conflicts in 1 file\(s\): a\.txt/);
+    expect(failed?.message).toMatch(/conflicts in 1 file: a\.txt/);
     expect(failed?.message).toMatch(/other files are applied and staged/);
     expect(failed?.userAction).toMatch(/will not apply it again/);
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toContain("<<<<<<<");

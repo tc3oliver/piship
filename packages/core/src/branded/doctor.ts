@@ -92,7 +92,7 @@ function stateWritable(ctx: BrandedContext, warn: DoctorLine): void {
   } catch (error) {
     warn(
       "state",
-      `${ctx.stateDir} is not writable (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}), so ${ctx.metadata.app.command} cannot start a session. Give your user write access to that directory, then run doctor again`,
+      `${ctx.stateDir} is not writable (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}), so ${ctx.metadata.app.command} cannot start a session. Give your user write access to that directory, then run ${ctx.metadata.app.command} doctor again`,
     );
   }
 }
@@ -133,7 +133,7 @@ function updateDoctor(
   else if (launcher)
     warn(
       "launcher",
-      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor could not replace it (it is replaced only by the active release, and needs write access to the install directory): run doctor from the installed command, or reinstall`,
+      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor could not replace it (it is replaced only by the active release, and needs write access to the install directory): run ${ctx.metadata.app.command} doctor from the installed command, or reinstall`,
     );
   // A deleted shim leaves the command missing from a new shell while
   // everything else checks out; repair from the installed release writes it.
@@ -164,7 +164,7 @@ function updateDoctor(
     else
       warn(
         "updates",
-        "none can be verified (no update keys); ask the distribution owner for a release that declares updates.trust.bootstrap",
+        "none can be verified (no update keys); ask your administrator for a release that declares updates.trust.bootstrap",
       );
   } else {
     ok(
@@ -265,18 +265,18 @@ function updateDoctor(
   if (status.leftovers.length)
     warn(
       "interrupted",
-      `${status.leftovers.length} leftover item(s) in the install directory (${status.leftovers.slice(0, 3).join(", ")}${status.leftovers.length > 3 ? ", ..." : ""}); update, rollback, and doctor remove obsolete releases once no running session uses them`,
+      `${status.leftovers.length} leftover item${status.leftovers.length === 1 ? "" : "s"} in the install directory (${status.leftovers.slice(0, 3).join(", ")}${status.leftovers.length > 3 ? ", ..." : ""}); update, rollback, and doctor remove obsolete releases once no running session uses them`,
     );
   if (status.runtimeLeases) {
     if (status.runtimeLeases.live)
       ok(
         "runtime leases",
-        `${status.runtimeLeases.live} live session(s)${status.runtimeLeases.held.length ? ` on ${status.runtimeLeases.held.join(", ")}` : ""}`,
+        `${status.runtimeLeases.live} live session${status.runtimeLeases.live === 1 ? "" : "s"}${status.runtimeLeases.held.length ? ` on ${status.runtimeLeases.held.join(", ")}` : ""}`,
       );
     if (status.runtimeLeases.stale)
       info(
         "runtime leases",
-        `${status.runtimeLeases.stale} stale lease record(s) from sessions that ended without cleaning up; they hold nothing back and are removed by uninstall or repair`,
+        `${status.runtimeLeases.stale} stale lease record${status.runtimeLeases.stale === 1 ? "" : "s"} from sessions that ended without cleaning up; they hold nothing back and are removed by uninstall or repair`,
       );
   }
   const counts = LocalMetrics.load(ctx.stateDir).snapshot().lifecycle ?? {};

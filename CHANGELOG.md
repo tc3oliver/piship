@@ -228,6 +228,7 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 
 #### For employees and administrators
 
+- Branded command messages name who to ask the same way: a managed user is told to ask their administrator (no more "distribution owner", `piship lock`, or `piship/v1alpha3` advice to employees), a personal user what to change in `piship.yaml`; they use the distribution's name and command instead of "this distribution", "the command", or a bare `doctor`, and counts are pluralized instead of `file(s)`.
 - `config unset <key>` always succeeds, so a preference stranded by a later enforced key no longer leaves a permanent notice; that notice and the one for a key that is not user-overridable (now also shown when the key has no default) name the `config unset` to run. Setting such a key says "not user-overridable in this distribution" instead of "enforced".
 - A preferred model the distribution or sign-in no longer allows is marked in `config explain` as refused at launch, with a notice to `config unset model`; a `models.allowed` preference that leaves no model says so in `config explain` and at launch (`MODEL_DENIED`, with `config unset models.allowed`) instead of asking the distribution owner.
 - Returning from another channel: `update --channel <name>` says to `rollback` first when the old channel may be behind; a refused downgrade gives an `Action:` with the rollback and switch steps instead of none; a `rollback` to a release built for another channel says the installation still follows the newer one and how to switch.

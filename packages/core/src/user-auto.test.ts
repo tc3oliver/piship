@@ -113,8 +113,7 @@ describe("<command> auto", () => {
       expect(error).toBeInstanceOf(PiShipError);
       expect(error).toMatchObject({
         code: "POLICY_DENIED",
-        message:
-          "This distribution does not allow auto mode (policy.userAuto is off)",
+        message: `${ctx.metadata.app.command} does not allow auto mode (policy.userAuto is off)`,
       });
       expect(existsSync(userAutoPath(ctx.stateDir))).toBe(false);
       expect(events()).toEqual([]);

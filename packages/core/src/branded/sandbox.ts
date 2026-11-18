@@ -31,7 +31,7 @@ function notStored(ctx: BrandedContext): PiShipError {
     `${ctx.metadata.app.name} does not use a stored sandbox credential (its manifest does not set sandbox.credential to stored)`,
     {
       component: "sandbox",
-      userAction: `Nothing to sign in or out of here: start ${ctx.metadata.app.command} as usual; it needs no stored sandbox secret`,
+      userAction: `Start ${ctx.metadata.app.command} as usual`,
     },
   );
 }
@@ -54,7 +54,9 @@ function sandboxTargets(ctx: BrandedContext): string[] {
         component: "sandbox",
         userAction: error.variable
           ? `Set ${error.variable} to the sandbox service's URL, then run ${ctx.metadata.app.command} sandbox login again`
-          : "Fix the sandbox endpoint in piship.yaml",
+          : ctx.mode === "personal"
+            ? "Fix the sandbox endpoint in piship.yaml"
+            : "Ask your administrator to check the sandbox endpoint",
       });
     }
   }
@@ -143,7 +145,9 @@ async function sandboxLogin(ctx: BrandedContext): Promise<void> {
   });
   let saved: Awaited<ReturnType<SandboxCredential["save"]>>;
   try {
-    saved = await slot.save(readSecretInput);
+    saved = await slot.save((prompt) =>
+      readSecretInput(prompt, ctx.metadata.app.command),
+    );
   } catch (error) {
     // The previous credential may already be gone: that is recorded.
     await audit(ctx, network, principal, events).catch((auditError) =>

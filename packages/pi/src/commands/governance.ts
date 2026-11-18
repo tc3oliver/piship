@@ -31,10 +31,12 @@ function requireGovernedLock(
   if (!lock)
     throw new PiShipError(
       "CONFIG_INVALID",
-      `${ctx.metadata.app.command} ${command} needs a piship/v1alpha3 distribution`,
+      `${ctx.metadata.app.name} has no policy to explain`,
       {
         userAction:
-          "This release has no governance to inspect; ask the distribution owner for one built from a piship/v1alpha3 or later manifest",
+          ctx.mode === "personal"
+            ? "Rebuild from a piship/v1alpha3 or later manifest"
+            : "Ask your administrator for a newer release",
       },
     );
   return lock;

@@ -460,7 +460,7 @@ async function checkSearchTools(
   const target = `${process.platform}-${process.arch}`;
   if (!searchToolsBundledFor(ctx.metadata, target)) {
     ctx.err(
-      `Notice: no bundled fd or rg for ${target}, so this check skips Pi's find and grep. List the target in release.targets and run piship lock to bundle them.`,
+      `Notice: no bundled fd or rg for ${target}, so this check skips Pi's find and grep. ${ctx.mode === "personal" ? "List the target in release.targets and run piship lock to bundle them." : `Ask your administrator to add ${target} to release.targets.`}`,
     );
     return undefined;
   }

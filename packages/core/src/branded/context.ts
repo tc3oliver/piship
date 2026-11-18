@@ -193,7 +193,9 @@ export async function recordAudit(
       {
         component: "audit",
         userAction:
-          "Restore the required audit sink and report the unrecorded activity to the distribution administrator",
+          ctx.mode === "personal"
+            ? "Check audit.sinks in piship.yaml, then try again"
+            : "Try again once the audit service is reachable; if it keeps failing, tell your administrator",
       },
     );
   }

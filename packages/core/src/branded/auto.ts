@@ -48,11 +48,11 @@ export function userAutoDenied(
       })
     : new PiShipError(
         "POLICY_DENIED",
-        "This distribution does not allow auto mode (policy.userAuto is off)",
+        `${command} does not allow auto mode (policy.userAuto is off)`,
         {
           component: "policy",
           userAction:
-            "Ask the distribution administrator to allow auto mode, or to allow the actions you need in the policy",
+            "Ask your administrator to allow auto mode, or to allow the actions you need in the policy",
         },
       );
 }
@@ -72,7 +72,7 @@ export function yoloRefusal(
   if (!policy)
     return new PiShipError(
       "CONFIG_INVALID",
-      `--yolo has no meaning for ${command}: it declares no policy (piship/v1alpha3 or later), so nothing asks for approval`,
+      `--yolo has no meaning for ${command}: ${metadata.app.name} declares no policy, so nothing asks for approval`,
       { userAction: `Start ${command} without --yolo` },
     );
   if (
@@ -82,10 +82,10 @@ export function yoloRefusal(
     return undefined;
   return new PiShipError(
     "POLICY_DENIED",
-    "--yolo is not allowed: this distribution does not allow auto-approval (policy.userAuto is off)",
+    `--yolo is not allowed: ${metadata.app.name} does not allow auto-approval (policy.userAuto is off)`,
     {
       component: "policy",
-      userAction: `Start ${command} without --yolo and answer the prompts, or ask the distribution administrator to allow auto-approval (policy.userAuto: allowed) or to allow the actions you need in the policy`,
+      userAction: `Start ${command} without --yolo and answer the prompts, or ask your administrator to allow auto-approval (policy.userAuto: allowed) or to allow the actions you need in the policy`,
     },
   );
 }
