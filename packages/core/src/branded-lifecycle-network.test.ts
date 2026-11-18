@@ -1,12 +1,13 @@
 // The network policy of update and rollback when a runtime variable is unset
 // in the shell that runs them: the manifest's private-only rule and proxy
 // setting still apply, so an undeclared host is never contacted.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUDIT_SPOOL_DIRECTORY, auditSpoolKey } from "@piship/audit";
 import { PiShipError } from "@piship/contracts";
 import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -237,12 +238,15 @@ describe("lifecycle audit with every runtime variable unset", () => {
   });
 
   it("does not send an event to a sink host the manifest does not declare", async () => {
-    const error = await refusal(
-      auditLifecycle(demoContext(), "runtime.update", "allowed", {
-        from: "1.0.0",
-      }),
-    );
-    expect(error.code).toBe("AUDIT_UNAVAILABLE");
+    const ctx = demoContext();
+    // The event is kept in the spool, which only a launch that reaches the
+    // sink under the manifest's policy delivers.
+    await auditLifecycle(ctx, "runtime.update", "allowed", { from: "1.0.0" });
     expect(requests).toEqual([]);
+    expect(
+      readdirSync(
+        join(ctx.stateDir, AUDIT_SPOOL_DIRECTORY, auditSpoolKey("company")),
+      ),
+    ).toHaveLength(1);
   });
 });

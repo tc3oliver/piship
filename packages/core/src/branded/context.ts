@@ -6,6 +6,7 @@ import {
   AuditLog,
   type AuditStatus,
   type LocalMetrics,
+  auditLossSpooled,
   requiredAuditLoss,
 } from "@piship/audit";
 import {
@@ -116,18 +117,23 @@ export function saveMetrics(metrics: LocalMetrics | undefined): void {
  * Record audit events of a command that runs outside a governed session
  * (login, logout, update, rollback). The events describe an operation that
  * has already happened, so recording never undoes it. Optional sinks stay
- * best effort: a failure is a warning. A required sink must take every
- * event: when it cannot be opened or does not take them all, this throws
- * AUDIT_UNAVAILABLE and the command fails. A caller that records before
- * the operation, and does not run it when this throws, passes a `prefix`
- * that says so.
+ * best effort: a failure is a warning. A required HTTP sink that is down
+ * does not stop the events being recorded: they go to its spool (and any
+ * file sink), the next launch delivers them, and a warning says so. When a
+ * required sink cannot be opened or its spool cannot keep every event, this
+ * throws AUDIT_UNAVAILABLE and the command fails. A caller that records
+ * before the operation, and does not run it when this throws, passes a
+ * `prefix` that says so: the sink must then take every event at once.
  */
 export async function recordAudit(
   ctx: BrandedContext,
   network: NetworkPolicy,
   events: readonly AuditEmitInput[],
-  prefix = "The operation completed, but its audit was not recorded",
+  prefix?: string,
 ): Promise<void> {
+  const posthoc = prefix === undefined;
+  const failure =
+    prefix ?? "The operation completed, but its audit was not recorded";
   const lock = governedLock(ctx);
   if (!lock || !events.length) return;
   const config = lock.governance.manifest.audit;
@@ -139,6 +145,7 @@ export async function recordAudit(
       distribution: lock.app.id,
       stateDir: ctx.stateDir,
       rotation: auditRotation(lock),
+      readinessProbe: !posthoc,
       fetch: createManagedFetch(network, "audit"),
       // A sink not set to httpTransport: https: plain HTTP to its own
       // origin only.
@@ -167,7 +174,7 @@ export async function recordAudit(
     }
     throw new PiShipError(
       "AUDIT_UNAVAILABLE",
-      `${prefix}: ${error instanceof PiShipError ? error.message : formatError(error)}`,
+      `${failure}: ${error instanceof PiShipError ? error.message : formatError(error)}`,
       {
         component: "audit",
         userAction:
@@ -175,7 +182,12 @@ export async function recordAudit(
       },
     );
   }
-  const loss = requiredAuditLoss(status, prefix);
+  if (posthoc && auditLossSpooled(status)) {
+    const pending = requiredAuditLoss(status, "Audit delivery is pending");
+    if (pending) ctx.err(`Warning: ${pending.message}`);
+    return;
+  }
+  const loss = requiredAuditLoss(status, failure);
   if (loss) throw loss;
 }
 

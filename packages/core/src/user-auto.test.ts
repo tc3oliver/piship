@@ -235,7 +235,8 @@ describe("<command> auto", () => {
       /^Auto mode is off from the next acmecode start/,
     );
     expect(err).toEqual([
-      expect.stringMatching(/^Warning: AUDIT_UNAVAILABLE: /),
+      // The event is spooled for the next launch.
+      expect.stringMatching(/^Warning: Audit delivery is pending: /),
     ]);
   });
 

@@ -95,6 +95,8 @@ export interface AuditSinkStatus {
   readonly rejected?: number;
   /** The sink's spool directory under the state directory, when either is set. */
   readonly spool?: string;
+  /** Set by `close()`: of `pending`, events kept in the spool for the next launch. */
+  readonly spooled?: number;
 }
 
 export interface AuditStatus {
@@ -144,6 +146,13 @@ export interface AuditLogOptions {
    * leaves them to the next session and never waits behind a backlog.
    */
   readonly replaySpool?: boolean;
+  /**
+   * False skips a required HTTP sink's readiness probe, so the log opens
+   * while the collector is down and every event is spooled for the next
+   * launch: only for a command that records an operation that already
+   * happened. A replaying session always probes.
+   */
+  readonly readinessProbe?: boolean;
 }
 
 /** Size-based retention of the file sink: `audit.jsonl` plus `.1`..`.<files>`. */
@@ -629,7 +638,7 @@ class HttpSpool {
 
   constructor(
     readonly stateDir: string,
-    sinkId: string,
+    readonly sinkId: string,
     readonly maxBytes: number,
   ) {
     this.key = auditSpoolKey(sinkId);
@@ -727,8 +736,13 @@ class HttpSpool {
         .filter((name) => name.endsWith(".corrupt"))
         .sort();
       if (quarantined.length)
-        throw new Error(
-          `${this.directory} holds a spool set aside as corrupt or over the cap, ${quarantined.join(", ")}; its valid events are kept but not sent while it is there; remove it, or repair it and rename it back to .jsonl (one over the cap, ${this.maxBytes} bytes, split into files under it)`,
+        throw new PiShipError(
+          "AUDIT_UNAVAILABLE",
+          `Required audit sink ${this.sinkId} (http) has a spool set aside as corrupt or over the cap in ${join(AUDIT_SPOOL_DIRECTORY, this.key)}: ${quarantined.join(", ")}; its valid events are kept, but none is sent while it is there`,
+          {
+            component: "audit",
+            userAction: `Remove the .corrupt file from ${join(AUDIT_SPOOL_DIRECTORY, this.key)} under the state directory, or repair it (one over the cap, ${this.maxBytes} bytes, split into several files) and rename it back to .jsonl; the next launch then delivers the spooled events`,
+          },
         );
       return events;
     } catch (error) {
@@ -875,7 +889,7 @@ export interface AuditSpoolReport {
   /** Spool files (`*.jsonl`): undelivered events. */
   readonly files: number;
   readonly bytes: number;
-  /** Spool files not touched within AUDIT_SPOOL_LEASE_MS: no live owner. */
+  /** Spool files whose owner is gone (see `spoolAbandoned`): the next launch replays them. */
   readonly stale: number;
   /** Corrupt spools set aside (`*.corrupt`), by name. */
   readonly quarantined: readonly string[];
@@ -910,7 +924,11 @@ export function auditSpools(
       if (!name.endsWith(".jsonl")) continue;
       files += 1;
       bytes += entry.size;
-      if (now - entry.mtimeMs > AUDIT_SPOOL_LEASE_MS) stale += 1;
+      if (
+        !ownedSpools.has(join(root, key, name)) &&
+        spoolAbandoned(name, entry.mtimeMs, now)
+      )
+        stale += 1;
     }
     if (!files && !quarantined.length && !rejected.length) continue;
     const sink = sinks.get(key);
@@ -1070,13 +1088,21 @@ export class HttpSinkWriter implements AuditSink {
   ) {}
 
   async write(batch: AuditBatch, signal: AbortSignal): Promise<void> {
-    const response = await this.fetch(this.url.toString(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(batch),
-      redirect: "manual",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
-    });
+    let response: Response;
+    try {
+      response = await this.fetch(this.url.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(batch),
+        redirect: "manual",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
+      });
+    } catch (error) {
+      if ((error as Error)?.name !== "TimeoutError") throw error;
+      throw new Error(
+        `collector did not answer within ${this.timeoutMs / 1000} s`,
+      );
+    }
     await response.body?.cancel().catch(() => undefined);
     if (response.status < 200 || response.status > 299)
       throw Object.assign(
@@ -1142,6 +1168,8 @@ class Sink {
   refusedId: string | undefined;
   refusals = 0;
   rejected = 0;
+  /** Set at close: undelivered events the spool kept for the next launch. */
+  spooled: number | undefined;
 
   constructor(
     readonly config: AuditSinkConfig,
@@ -1164,6 +1192,7 @@ class Sink {
       ...(this.spool && (this.replayed || this.rejected)
         ? { spool: join(AUDIT_SPOOL_DIRECTORY, this.spool.key) }
         : {}),
+      ...(this.spooled ? { spooled: this.spooled } : {}),
     };
   }
 
@@ -1395,6 +1424,7 @@ export class AuditLog implements AuditEmitter {
       for (const sink of this.#sinks)
         try {
           sink.spool?.release(sink.queue);
+          if (sink.spool) sink.spooled = sink.queue.length;
         } catch {
           // A spool left behind is claimed by the next launch; what did not
           // fit is still counted as pending.
@@ -1610,7 +1640,10 @@ async function openSink(
   );
   const sink = new Sink(config, writer, url.href);
   // Readiness probe: required HTTP sinks must accept an empty batch.
-  if (config.required)
+  if (
+    config.required &&
+    (options.readinessProbe !== false || options.replaySpool === true)
+  )
     try {
       await writer.write(
         { schema: AUDIT_BATCH_SCHEMA, events: [] },
@@ -1635,6 +1668,7 @@ async function openSink(
       for (const event of replayed) sink.queue.push(event);
       sink.replayed = replayed.length;
     } catch (error) {
+      if (error instanceof PiShipError) throw error;
       throw unavailable(
         config,
         `its spool under ${AUDIT_SPOOL_DIRECTORY} cannot be used: ${sink.describeError(error)}`,
@@ -1660,6 +1694,7 @@ export function requiredAuditLoss(
     (sink) => sink.required && (sink.pending > 0 || sink.dropped > 0),
   );
   if (!lost.length) return undefined;
+  const kept = auditLossSpooled(status);
   const sinks = lost
     .map(
       (sink) =>
@@ -1668,11 +1703,12 @@ export function requiredAuditLoss(
     .join(", ");
   return new PiShipError(
     "AUDIT_UNAVAILABLE",
-    `${prefix}: ${lost.reduce((sum, sink) => sum + sink.pending + sink.dropped, 0)} audit event(s) were not delivered to required audit sink ${sinks}`,
+    `${prefix}: ${lost.reduce((sum, sink) => sum + sink.pending + sink.dropped, 0)} audit event(s) were not delivered to required audit sink ${sinks}${kept ? "; they are kept in its spool and delivered first at the next launch" : ""}`,
     {
       component: "audit",
-      userAction:
-        "Restore the required audit sink and report the unrecorded activity to the distribution administrator",
+      userAction: kept
+        ? "Restore the required audit sink; the next launch that reaches it delivers the spooled events"
+        : "Restore the required audit sink and report the unrecorded activity to the distribution administrator",
       sanitizedDetail: {
         sinks: lost.map((sink) => ({
           id: sink.id,
@@ -1681,6 +1717,18 @@ export function requiredAuditLoss(
         })),
       },
     },
+  );
+}
+
+/**
+ * Whether every event a required sink did not take is kept in its spool at
+ * close (none dropped), so the next launch delivers it.
+ */
+export function auditLossSpooled(status: AuditStatus): boolean {
+  return status.sinks.every(
+    (sink) =>
+      !sink.required ||
+      (sink.dropped === 0 && sink.pending === (sink.spooled ?? 0)),
   );
 }
 

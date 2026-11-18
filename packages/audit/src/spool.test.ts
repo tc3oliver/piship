@@ -25,7 +25,9 @@ import {
   type AuditFetch,
   AuditLog,
   type AuditLogOptions,
+  auditLossSpooled,
   auditSpools,
+  requiredAuditLoss,
 } from "./index.js";
 
 // A seam on rename: a test stands in for a second launcher racing this one.
@@ -178,12 +180,15 @@ describe("required HTTP sink spool", () => {
     const first = await open(down);
     down.status = 503;
     emit(first, "kept");
+    // Held by this running log: not stale.
+    expect(auditSpools(temp, ["company"])[0]).toMatchObject({ stale: 0 });
     const status = await first.close(50);
-    expect(status.sinks[0]?.pending).toBe(1);
+    expect(status.sinks[0]).toMatchObject({ pending: 1, spooled: 1 });
     expect(spoolFiles()).toHaveLength(1);
-    // Under another sink ID the directory is an orphan, never replayed.
+    // Once closed no running log holds it, however recent its mtime; under
+    // another sink ID the directory is an orphan, never replayed.
     expect(auditSpools(temp, ["renamed"])).toEqual([
-      expect.objectContaining({ files: 1, stale: 0, quarantined: [] }),
+      expect.objectContaining({ files: 1, stale: 1, quarantined: [] }),
     ]);
     expect(auditSpools(temp, ["renamed"])[0]).not.toHaveProperty("sink");
     expect(auditSpools(temp, ["company"])[0]?.sink).toBe("company");
@@ -192,6 +197,47 @@ describe("required HTTP sink spool", () => {
     await second.close();
     expect(up.received.map((event) => event.resource)).toEqual(["kept"]);
     expect(spoolFiles()).toEqual([]);
+  });
+
+  it("without the readiness probe, opens while the collector is down and spools for the next launch", async () => {
+    const down = collector();
+    down.fetch = async () => new Response(null, { status: 500 });
+    // A replaying session still probes and fails closed.
+    await expect(open(down)).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+    });
+    const log = await open(down, {
+      readinessProbe: false,
+      replaySpool: false,
+    });
+    emit(log, "after-the-fact");
+    const status = await log.close(50);
+    expect(status.sinks[0]).toMatchObject({ pending: 1, spooled: 1 });
+    expect(auditLossSpooled(status)).toBe(true);
+    const loss = requiredAuditLoss(status, "The session ended");
+    expect(loss?.message).toBe(
+      "The session ended: 1 audit event(s) were not delivered to required audit sink company (1 pending, 0 dropped; last error: collector answered HTTP 500); they are kept in its spool and delivered first at the next launch",
+    );
+    expect(loss?.userAction).not.toContain("report the unrecorded activity");
+    const up = collector();
+    await (await open(up)).close();
+    expect(up.received.map((event) => event.resource)).toEqual([
+      "after-the-fact",
+    ]);
+  });
+
+  it("says a collector that does not answer timed out", async () => {
+    const hang = collector();
+    hang.fetch = (_url, init) =>
+      new Promise((_resolve, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason),
+        ),
+      );
+    await expect(open(hang, { requestTimeoutMs: 50 })).rejects.toMatchObject({
+      message:
+        "Required audit sink company (http) is unavailable: collector did not answer within 0.05 s",
+    });
   });
 
   it("delivers an event found in two spools once", async () => {
@@ -245,8 +291,12 @@ describe("required HTTP sink spool", () => {
       const error = await open(target).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PiShipError);
       expect((error as PiShipError).code).toBe("AUDIT_UNAVAILABLE");
-      expect((error as PiShipError).message).toContain(
-        `${dirname(file)} holds a spool set aside as corrupt or over the cap, ${quarantined}`,
+      expect((error as PiShipError).message).toBe(
+        `Required audit sink company (http) has a spool set aside as corrupt or over the cap in ${join(AUDIT_SPOOL_DIRECTORY, basename(dirname(file)))}: ${quarantined}; its valid events are kept, but none is sent while it is there`,
+      );
+      // The remedy names the file, not the sink, and is never cut.
+      expect((error as PiShipError).userAction).toMatch(
+        /^Remove the \.corrupt file from logs[/\\]audit-spool[/\\][0-9a-f]{16} under the state directory, or repair it .* rename it back to \.jsonl; the next launch then delivers the spooled events$/,
       );
     }
     expect(target.received).toEqual([]);

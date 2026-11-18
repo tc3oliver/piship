@@ -875,8 +875,9 @@ describe("branded logout", () => {
     }
     expect(err).toEqual([
       "Warning: revocation: the broker refused the request",
+      // The events are spooled for the next launch.
       expect.stringMatching(
-        /^Error: AUDIT_UNAVAILABLE: .*Required audit sink company \(http\) is unavailable/,
+        /^Warning: Audit delivery is pending: 1 audit event\(s\) were not delivered to required audit sink company .*kept in its spool/,
       ),
     ]);
   });

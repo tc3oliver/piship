@@ -5,7 +5,6 @@
 import { join } from "node:path";
 import {
   AUDIT_LOG_FILE,
-  AUDIT_SPOOL_LEASE_MS,
   AUDIT_SPOOL_MAX_BYTES,
   type AuditStatus,
 } from "@piship/audit";
@@ -107,7 +106,7 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
       else if (spool.stale)
         out.warn(
           label,
-          `${held}; ${spool.stale} not renewed for ${AUDIT_SPOOL_LEASE_MS / 60_000} minutes, replayed by the next launch that reaches the sink`,
+          `${held}; no running session holds ${spool.stale} of them, so the next launch that reaches the sink delivers them`,
         );
       else if (spool.bytes >= AUDIT_SPOOL_MAX_BYTES / 2)
         out.warn(
