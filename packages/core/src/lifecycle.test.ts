@@ -4534,13 +4534,23 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       async () => {
         const { ctx, out } = await installed();
         const auth = join(stateDir(), "agent", "auth.json");
-        write(auth, "{}");
+        write(auth, JSON.stringify({ openai: { type: "api_key", key: "k" } }));
         await runUninstall(ctx, []);
         const text = out.join("\n");
         expect(text).not.toContain("signed out: no sign-in is stored");
         expect(text).toContain(
           `signed in: Pi's own sign-in (${auth}) stays with the kept data; purge deletes it`,
         );
+      },
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "does not count an empty Pi auth.json as signed in",
+      async () => {
+        const { ctx, out } = await installed();
+        write(join(stateDir(), "agent", "auth.json"), "{}");
+        await runUninstall(ctx, []);
+        expect(out.join("\n")).toContain("signed out: no sign-in is stored");
       },
     );
 

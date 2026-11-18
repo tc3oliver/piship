@@ -59,6 +59,7 @@ import {
   purgeManager,
   shellArg,
   signedInClasses,
+  piSignedIn,
   markLocalBuild,
   nextTrustRoot,
   payloadApp,
@@ -1966,9 +1967,7 @@ async function runLifecycle(
         installNext(receipt, [
           ...signedInClasses(state),
           // Pi's own sign-in (an API key or /login) kept in an adopted state.
-          ...(existsSync(join(state, "agent", "auth.json"))
-            ? ["Pi's own sign-in"]
-            : []),
+          ...(piSignedIn(state) ? ["Pi's own sign-in"] : []),
         ]),
       ]
         .filter(Boolean)

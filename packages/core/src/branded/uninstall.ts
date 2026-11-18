@@ -8,6 +8,7 @@ import { readInstallReceipt, runtimeStateDirectory } from "../index.js";
 import {
   purgeManager,
   removeEmptyPiShipDirectories,
+  piSignedIn,
   signedInClasses,
 } from "../install/purge.js";
 import { appDirectory } from "../install/receipt.js";
@@ -232,10 +233,10 @@ export async function runUninstall(
       `  kept     ${state}: sessions and settings, ${held}`,
       live.length
         ? `  signed in: ${live.join(", ")} ${live.length > 1 ? "stay" : "stays"} until ${live.length > 1 ? "they expire" : "it expires"} (uninstalled without logout)`
-        : existsSync(piAuth)
+        : piSignedIn(state)
           ? ""
           : "  signed out: no sign-in is stored",
-      existsSync(piAuth)
+      piSignedIn(state)
         ? `  signed in: Pi's own sign-in (${piAuth}) stays with the kept data; purge deletes it`
         : "",
       `A later install of ${app.name} picks the kept data up again. To delete it, ${purgeHint} Next time, ${app.command} uninstall --purge --yes does both.`,

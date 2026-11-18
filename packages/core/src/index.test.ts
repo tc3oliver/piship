@@ -32,6 +32,7 @@ import {
   unapprovedLoadWarnings,
   certifiedPiWarnings,
   PI_VERSION,
+  piSignedIn,
   resolveLock,
   runtimeStateDirectory,
 } from "./index.js";
@@ -546,6 +547,24 @@ describe("unapproved load warnings", () => {
     expect(unapprovedLoadWarnings(readManifest(path))[0]?.message).toBe(
       './resources/ext: no policy rule allows extension.load company:./resources/ext, so policy.default (ask) asks at every launch and headless runs leave it out; add a policy.defaults allow rule for extension.load on "company:**"',
     );
+  });
+});
+
+describe("Pi's own sign-in", () => {
+  it("counts only a stored API key or OAuth credential", () => {
+    const state = mkdtempSync(join(tmpdir(), "piship-pi-auth-"));
+    roots.push(state);
+    mkdirSync(join(state, "agent"));
+    const auth = join(state, "agent", "auth.json");
+    expect(piSignedIn(state)).toBe(false);
+    for (const empty of ["", "{}", "[]", "not json", '{"x":null}']) {
+      writeFileSync(auth, empty);
+      expect(piSignedIn(state)).toBe(false);
+    }
+    writeFileSync(auth, JSON.stringify({ a: { type: "oauth" } }));
+    expect(piSignedIn(state)).toBe(true);
+    writeFileSync(auth, JSON.stringify({ a: { type: "api_key", key: "k" } }));
+    expect(piSignedIn(state)).toBe(true);
   });
 });
 
