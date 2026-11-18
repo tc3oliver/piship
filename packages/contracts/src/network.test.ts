@@ -8,12 +8,14 @@ import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
 import {
   applyProcessNetworkPolicy,
   approvedNetworkEnvironment,
   checkDestination,
+  createDispatcher,
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   isNetworkEnvironmentName,
@@ -271,6 +273,44 @@ describe("private-only destinations", () => {
     expect(() =>
       checkDestination(new URL("https://203.0.113.7:9/"), policy),
     ).not.toThrow();
+  });
+});
+
+describe("declaredHost (the sandbox backend's envd hosts)", () => {
+  const policy: NetworkPolicy = {
+    ...direct,
+    privateOnly: true,
+    allowHosts: [],
+  };
+  const loopback = (target: URL) => target.hostname === "127.0.0.1";
+
+  async function server(): Promise<string> {
+    const port = await listen(
+      createHttpServer((_request, response) => response.end("ok")),
+    );
+    return `http://127.0.0.1:${port}/`;
+  }
+
+  it("lets the managed fetch reach a host the predicate accepts under private-only, and only that fetch", async () => {
+    const url = await server();
+    const scoped = createManagedFetch(policy, "sandbox", {
+      declaredHost: loopback,
+    });
+    expect(await (await scoped(url)).text()).toBe("ok");
+    await expect(createManagedFetch(policy, "network")(url)).rejects.toThrow(
+      /undeclared host 127\.0\.0\.1/,
+    );
+  });
+
+  it("is honored by the dispatcher's own check", async () => {
+    const url = await server();
+    const admitted = createDispatcher(policy, { declaredHost: loopback });
+    expect(
+      await (await undiciFetch(url, { dispatcher: admitted })).text(),
+    ).toBe("ok");
+    await expect(
+      undiciFetch(url, { dispatcher: createDispatcher(policy) }),
+    ).rejects.toMatchObject({ cause: { code: "NETWORK_DENIED" } });
   });
 });
 

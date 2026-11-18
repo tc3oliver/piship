@@ -113,8 +113,11 @@ export function governanceOptions(
       ? { onYoloEnd: ctx.endProviderAutoApprove }
       : {}),
     fetch: createManagedFetch(network, "governance"),
-    plainHttpFetch: (plainHttp) =>
-      createManagedFetch(network, "governance", { plainHttp }),
+    plainHttpFetch: (plainHttp, declaredHost) =>
+      createManagedFetch(network, "governance", {
+        plainHttp,
+        ...(declaredHost ? { declaredHost } : {}),
+      }),
     // Plain HTTP beyond loopback only for MCP servers not set to
     // httpTransport: https and without the runtime credential, to the
     // origins of their resolved urls on a private or internal host, and only
