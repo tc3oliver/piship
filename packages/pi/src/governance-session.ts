@@ -229,6 +229,10 @@ export class GovernanceSession {
   };
   capabilities: CapabilityState[] = [];
   mcpReports: readonly McpServerReport[] = [];
+  /** Project `.mcp.json` entries that never reach the governor, reported with it. */
+  readonly projectMcpLeftOut: McpServerReport[] = [];
+  /** What was dropped from admitted project servers (ignored headers), by id. */
+  readonly projectMcpWarnings = new Map<string, string[]>();
   mcp: McpGovernor | null = null;
   /** Background tasks of this session (`task_start`); stopped at close(). */
   backgroundTasks: TaskRegistry | undefined;

@@ -479,6 +479,7 @@ describe("external definitions", () => {
           "bad name": { command: "node" },
           leak: { command: "node", args: ["--token=sk-abcdefghijklmnop"] },
           query: { url: "https://example.com/mcp?key=1" },
+          envurl: { type: "http", url: `\${MCP_HOST}/mcp` },
         },
       },
       "project",
@@ -500,8 +501,11 @@ describe("external definitions", () => {
       credential: "none",
     });
     expect(parsed.invalid.map((i) => i.server).sort()).toEqual(
-      ['"bad name"', "leak", "legacy", "pathy", "query"].sort(),
+      ['"bad name"', "envurl", "leak", "legacy", "pathy", "query"].sort(),
     );
+    expect(
+      parsed.invalid.find((i) => i.server === "envurl")?.message,
+    ).toContain(`never interpolates \${NAME} variables`);
     const warnings = JSON.stringify(parsed.warnings);
     expect(warnings).toContain("GITHUB_TOKEN");
     expect(warnings).toContain("API_KEY");

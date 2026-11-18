@@ -511,6 +511,44 @@ describe("runtimeVariableUse", () => {
     expect(runtimeVariableUse(manifest)).toEqual({
       launch: ["ACME_SIEM_URL", "ACME_HOST"],
       update: ["ACME_UPDATES"],
+      optionalMcp: {},
+    });
+  });
+
+  it("names the variables only optional MCP servers read", () => {
+    const manifest = parseManifest(
+      managed({
+        variables: ["ACME_DOCS", "ACME_HOST", "ACME_JIRA"],
+        inference: {
+          provider: "openai-compatible",
+          baseUrl: `https://\${ACME_HOST}/v1`,
+        },
+        mcp: {
+          mode: "allowlist",
+          servers: {
+            docs: {
+              transport: "streamable-http",
+              url: `https://\${ACME_DOCS}/mcp`,
+            },
+            wiki: {
+              transport: "streamable-http",
+              url: `https://\${ACME_DOCS}/wiki`,
+            },
+            host: {
+              transport: "streamable-http",
+              url: `https://\${ACME_HOST}/mcp`,
+            },
+            jira: {
+              transport: "streamable-http",
+              url: `https://\${ACME_JIRA}/mcp`,
+              required: true,
+            },
+          },
+        },
+      }),
+    );
+    expect(runtimeVariableUse(manifest).optionalMcp).toEqual({
+      ACME_DOCS: ["docs", "wiki"],
     });
   });
 });

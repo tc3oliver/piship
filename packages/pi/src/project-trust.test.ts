@@ -99,6 +99,10 @@ async function open(
     /** Launch again in the root (workspace, state, home) of an earlier one. */
     readonly again?: string;
     readonly sandboxRequired?: boolean;
+    /** File contents that replace the placeholder text. */
+    readonly contents?: Readonly<Record<string, string>>;
+    /** Top-level manifest lines, such as an mcp section. */
+    readonly manifest?: readonly string[];
   } = {},
 ) {
   // The project root is resolved through links, as the matcher sees it.
@@ -114,7 +118,7 @@ async function open(
     mkdirSync(dirname(join(workspace, file)), { recursive: true });
     writeFileSync(
       join(workspace, file),
-      file.endsWith(".json") ? "{}\n" : "text\n",
+      options.contents?.[file] ?? (file.endsWith(".json") ? "{}\n" : "text\n"),
     );
   }
   const cwd = options.subdirectory
@@ -160,6 +164,7 @@ async function open(
       "  enabled: true",
       "  sinks:",
       "    - { id: local, type: file, required: false }",
+      ...(options.manifest ?? []),
       "",
     ].join("\n"),
   );
@@ -211,6 +216,87 @@ async function open(
     );
   return { session, workspace, cwd, root, prompts, notices, events, claude };
 }
+
+describe("project .mcp.json entries that do not start", () => {
+  it("reports each left-out or partly ignored entry with the servers", async () => {
+    const { session, notices } = await open({
+      files: [".mcp.json"],
+      contents: {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            remote: {
+              type: "http",
+              url: "https://mcp.unit.example/mcp",
+              headers: { "X-Team": "a" },
+            },
+            env_url: { type: "http", url: `\${UNIT_HOST}/mcp` },
+            legacy: { type: "sse", url: "https://mcp.unit.example/sse" },
+            docs: { command: "node" },
+          },
+        }),
+      },
+      manifest: [
+        "mcp:",
+        "  mode: explicit",
+        "  project: allow",
+        "  servers:",
+        "    docs:",
+        "      transport: streamable-http",
+        "      url: https://docs.unit.example/mcp",
+      ],
+    });
+    const byId = (id: string) =>
+      session.mcpReports.filter((report) => report.id === id);
+    expect(byId("remote")).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: expect.stringContaining(
+          ".mcp.json: headers are ignored; external definitions carry no credentials",
+        ),
+      }),
+    ]);
+    expect(byId("env_url")).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        transport: "streamable-http",
+        reason: expect.stringMatching(
+          /^\.mcp\.json: url is not a valid URL; this file never interpolates/,
+        ),
+      }),
+    ]);
+    expect(byId("legacy")).toEqual([
+      expect.objectContaining({
+        state: "failed",
+        reason: ".mcp.json: legacy HTTP+SSE transport is not supported",
+      }),
+    ]);
+    // The distribution's docs starts; the project's definition is reported.
+    expect(byId("docs").map((report) => report.state)).toEqual([
+      "failed",
+      "denied",
+    ]);
+    expect(byId("docs")[1]?.reason).toBe(
+      ".mcp.json: the distribution declares a server docs, which is used; this definition is ignored",
+    );
+    expect(notices.join("\n")).toContain(
+      "MCP server legacy did not start (.mcp.json: legacy HTTP+SSE transport is not supported)",
+    );
+  });
+
+  it("says a .mcp.json that is not JSON starts none of its servers", async () => {
+    const { session } = await open({
+      files: [".mcp.json"],
+      contents: { ".mcp.json": '{"mcpServers": {"a": ' },
+    });
+    expect(session.mcpReports).toEqual([
+      expect.objectContaining({
+        id: ".mcp.json",
+        state: "failed",
+        reason: ".mcp.json: not valid JSON, so none of its servers start",
+      }),
+    ]);
+  });
+});
 
 describe("personal mode", () => {
   it("admits the Claude Code configuration of a company project without a prompt", async () => {

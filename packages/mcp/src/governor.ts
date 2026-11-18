@@ -314,7 +314,12 @@ export class McpGovernor {
       throw withStderr(
         late
           ? mcpUnhealthy(
-              `MCP server ${config.id} did not start within its startupTimeout of ${config.startupTimeoutMs / 1000}s (a first npx or uvx download is a common cause; raise mcp.servers.${config.id}.startupTimeout in the manifest)`,
+              startupTimeoutMessage(
+                config,
+                config.transport === "stdio"
+                  ? undefined
+                  : new URL(this.#resolveUrl(config)).origin,
+              ),
               {
                 retryable: true,
                 detail: {
@@ -673,6 +678,21 @@ function isTimeout(error: unknown): boolean {
     error.code === "MCP_UNHEALTHY" &&
     typeof error.sanitizedDetail?.timeoutMs === "number"
   );
+}
+
+/**
+ * What to do first, then why: the smoke summary keeps 160 characters. A
+ * Streamable HTTP server downloads nothing, so it gets its own hint.
+ */
+function startupTimeoutMessage(
+  config: McpServerConfig,
+  origin: string | undefined,
+): string {
+  const seconds = config.startupTimeoutMs / 1000;
+  const raise = `raise mcp.servers.${config.id}.startupTimeout`;
+  return origin === undefined
+    ? `MCP server ${config.id} did not start within its startupTimeout of ${seconds}s; ${raise} in the manifest (a first npx or uvx download is a common cause)`
+    : `MCP server ${config.id} did not start: ${origin} did not answer initialize within ${seconds}s; check that it is up, or ${raise}`;
 }
 
 function failureReason(error: unknown): string {
