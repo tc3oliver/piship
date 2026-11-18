@@ -79,6 +79,7 @@ export function sessionTasks(gov: GovernanceSession): TaskRegistry {
     // Only a settled runner proves the process is gone; a stop that is
     // still pending keeps the record for doctor.
     ended: (task) => recorder?.remove(task.id),
+    spawned: (id, pid) => recorder?.spawned(id, pid),
     refused: (task) => record("task.start", task, "denied"),
   });
   gov.backgroundTasks = tasks;
@@ -210,6 +211,7 @@ export function taskTools(
               ).then(() => {
                 const running = gov.sandbox.exec(command, spawn.cwd, {
                   onData: options.onData,
+                  onSpawn: options.onSpawn,
                   signal: options.signal,
                   timeout: options.timeout,
                   // The sandbox narrows an environment it contains; an

@@ -269,10 +269,13 @@ function jobSupervisorLine(
 export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
   const inspection = governance?.inspection;
+  // Windows records no tasks: a Job Object ends them with their owner.
   for (const task of data.orphanedTasks ?? [])
     out.warn(
       `task ${task.id}`,
-      `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
+      task.pid
+        ? `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it still runs as process ${task.pid}. Stop it and its children with: kill -- -${task.pid}; this is reported once`
+        : `started by PiShip process ${task.owner}, which is gone (killed without cleanup); it may still run. Find it with ps and stop it; this is reported once`,
     );
   if (data.jobSupervisor) jobSupervisorLine(data.jobSupervisor, out);
   if (!governance) return;

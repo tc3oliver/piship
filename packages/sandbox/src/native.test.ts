@@ -139,6 +139,24 @@ describe.skipIf(!posix)("the native backend's dispose", () => {
     await instance.dispose();
   });
 
+  it("passes the ID of the process the command runs as", async () => {
+    const instance = await new NativeBackend(
+      identity,
+      process.platform,
+    ).prepare({ profile: profile() });
+    const pids: number[] = [];
+    let output = "";
+    await instance.exec(request("echo $$"), {
+      ...io(new AbortController().signal),
+      onStdout: (chunk) => {
+        output += chunk.toString("utf8");
+      },
+      onSpawn: (pid) => pids.push(pid),
+    });
+    expect(pids).toEqual([Number(output.trim())]);
+    await instance.dispose();
+  });
+
   it("returns at once when nothing is running", async () => {
     const instance = await new NativeBackend(
       identity,

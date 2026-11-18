@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   droppedCredentialNames,
   inertDataPurge,
+  inertTaskGrantHosts,
   inertTempRetention,
   launchWarnings,
   ManifestError,
@@ -940,5 +941,29 @@ describe("allow-listed names the runtime drops as credentials", () => {
       ["mcp.servers.docs.env.allow", "HF_HOME"],
       ["mcp.servers.docs.env.allow", "PI_DEBUG"],
     ]);
+  });
+});
+
+describe("task grant host settings nothing acts on", () => {
+  const manifest = (taskGrants: object | undefined) =>
+    ({ governance: { policy: { taskGrants } } }) as unknown as Parameters<
+      typeof inertTaskGrantHosts
+    >[0];
+  it("warns about wildcardHosts and a web.request action", () => {
+    expect(
+      inertTaskGrantHosts(
+        manifest({
+          mode: "session",
+          wildcardHosts: true,
+          actions: ["web.request", "git.push"],
+        }),
+      ).map((item) => item.path),
+    ).toEqual(["policy.taskGrants.wildcardHosts", "policy.taskGrants.actions"]);
+  });
+  it("is quiet for grants that can take effect", () => {
+    expect(
+      inertTaskGrantHosts(manifest({ mode: "session", actions: ["git.push"] })),
+    ).toEqual([]);
+    expect(inertTaskGrantHosts(manifest(undefined))).toEqual([]);
   });
 });

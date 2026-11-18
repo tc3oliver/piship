@@ -56,6 +56,23 @@ function fake() {
 const tick = () => new Promise((done) => setTimeout(done, 0));
 
 describe("TaskRegistry", () => {
+  it("reports the process a task runs as", async () => {
+    const spawned: [string, number][] = [];
+    const registry = new TaskRegistry({
+      start: () => {},
+      exit: () => {},
+      stop: () => {},
+      refused: () => {},
+      spawned: (id, pid) => spawned.push([id, pid]),
+    });
+    const id = registry.start(async (_command, options) => {
+      options.onSpawn(4242);
+      return { exitCode: 0 };
+    }, "true");
+    await registry.settled(id);
+    expect(spawned).toEqual([[id, 4242]]);
+  });
+
   it("runs a task in the background and reads its output once, in order", async () => {
     const { run, runs, events, registry } = fake();
     const tasks = registry();

@@ -83,7 +83,7 @@ export class NativeBackend implements SandboxBackend {
       request: SandboxExecRequest,
       io: SandboxExecIO,
     ): Promise<SandboxExecResult> => {
-      const exit = await spawnManaged({
+      const child = spawnManaged({
         file: shell.file,
         args: [...shell.flag, request.command],
         cwd: request.cwd,
@@ -96,7 +96,9 @@ export class NativeBackend implements SandboxBackend {
           wrap: (file, args, cwd, env) =>
             wrap({ file, args, cwd, env: env ?? {} }),
         },
-      }).exited;
+      });
+      if (child.pid !== undefined) io.onSpawn?.(child.pid);
+      const exit = await child.exited;
       if (exit.error) throw new Error(exit.error);
       return { exitCode: exit.code, signal: exit.signal };
     };

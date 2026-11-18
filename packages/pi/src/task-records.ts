@@ -3,7 +3,8 @@
 // no cleanup; on Linux bubblewrap's --die-with-parent still ends contained
 // tasks, but macOS and uncontained tasks keep running. A task is removed
 // from the record once its process is gone, and the file with the last one.
-// It holds task ids and the owner's identity only, never a command.
+// It holds task ids, each task's process ID and start, and the owner's
+// identity only, never a command.
 import {
   mkdirSync,
   readdirSync,
@@ -16,6 +17,7 @@ import {
 import { join } from "node:path";
 import { processHostToken } from "@piship/contracts";
 import {
+  processIdentity,
   recordedIdentity,
   recordedProcessGone,
   recordedStart,
@@ -29,6 +31,15 @@ export interface OrphanedTask {
   readonly id: string;
   /** The PiShip process that started it, no longer running. */
   readonly owner: number;
+  /** Its own process (group leader), proven still running as the one started. */
+  readonly pid?: number;
+}
+
+/** A task's process, judged as `recordedProcessGone` judges an owner. */
+interface TaskProcess {
+  pid: number;
+  identity: string | null;
+  started: number;
 }
 
 interface TaskRecord {
@@ -38,6 +49,8 @@ interface TaskRecord {
   host: string;
   started: number;
   tasks: string[];
+  /** By task id; optional, so a record without it stays the same schema. */
+  processes?: Record<string, TaskProcess>;
 }
 
 const directory = (stateDir: string) => join(stateDir, "data", "tasks");
@@ -52,6 +65,7 @@ export class TaskRecorder {
     host: processHostToken(),
     started: recordedStart(),
     tasks: [],
+    processes: {},
   };
 
   constructor(stateDir: string) {
@@ -68,8 +82,25 @@ export class TaskRecorder {
     this.#write();
   }
 
+  /** The task runs as `pid`; its start tells it from a later process with that ID. */
+  spawned(id: string, pid: number): void {
+    if (!this.#record.tasks.includes(id)) return;
+    this.#record.processes = {
+      ...this.#record.processes,
+      [id]: {
+        pid,
+        // Cheap on Linux only; elsewhere the spawn time stands in, as for the owner.
+        identity:
+          process.platform === "linux" ? (processIdentity(pid) ?? null) : null,
+        started: Date.now(),
+      },
+    };
+    this.#write();
+  }
+
   remove(id: string): void {
     this.#record.tasks = this.#record.tasks.filter((task) => task !== id);
+    delete this.#record.processes?.[id];
     this.#write();
   }
 
@@ -156,7 +187,28 @@ export function takeOrphanedTasks(stateDir: string): OrphanedTask[] {
         }) !== true
       )
         continue;
-      for (const id of record.tasks) found.push({ id, owner: record.pid });
+      for (const id of record.tasks) {
+        const task = record.processes?.[id];
+        const gone =
+          task && Number.isSafeInteger(task.pid) && task.pid > 0
+            ? recordedProcessGone({
+                pid: task.pid,
+                identity:
+                  typeof task.identity === "string" ? task.identity : null,
+                host: record.host,
+                started: Number.isSafeInteger(task.started)
+                  ? task.started
+                  : null,
+              })
+            : undefined;
+        // A task proven ended needs nothing; one that cannot be judged is still reported.
+        if (gone === true) continue;
+        found.push({
+          id,
+          owner: record.pid,
+          ...(gone === false && task ? { pid: task.pid } : {}),
+        });
+      }
       rmSync(path, { force: true });
     } catch {
       // An unreadable record is left for the next doctor.

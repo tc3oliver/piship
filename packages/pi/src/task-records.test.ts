@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { processHostToken } from "@piship/contracts";
+import { processIdentity } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskRecorder, takeOrphanedTasks } from "./task-records.js";
 
@@ -111,6 +112,61 @@ describe("task records", () => {
         ]);
       } finally {
         other.kill();
+      }
+    },
+  );
+
+  it("records a task's process, never its command", () => {
+    const dir = state();
+    const recorder = new TaskRecorder(dir);
+    recorder.add("a");
+    recorder.spawned("a", 4242);
+    recorder.spawned("unknown", 4343);
+    const [name] = files(dir);
+    const saved = JSON.parse(
+      readFileSync(join(root(dir), name as string), "utf8"),
+    );
+    expect(Object.keys(saved.processes)).toEqual(["a"]);
+    expect(saved.processes.a).toMatchObject({ pid: 4242 });
+    expect(JSON.stringify(saved)).not.toContain("command");
+    recorder.remove("a");
+    expect(files(dir)).toHaveLength(0);
+  });
+
+  // Needs a `sleep` binary, which Windows does not have (and records no tasks).
+  it.runIf(process.platform !== "win32")(
+    "names a task's pid only while that same process still runs",
+    async () => {
+      const dir = state();
+      const task = spawn("sleep", ["30"], { stdio: "ignore" });
+      try {
+        const pid = task.pid as number;
+        plant(
+          dir,
+          "2147483646-1.json",
+          record(2147483646, {
+            tasks: ["running", "ended", "reused", "unrecorded"],
+            processes: {
+              running: {
+                pid,
+                identity:
+                  process.platform === "linux"
+                    ? (processIdentity(pid) ?? null)
+                    : null,
+                started: Date.now(),
+              },
+              ended: { pid: 2147483645, identity: null, started: Date.now() },
+              // Its ID now belongs to a process started long after the task.
+              reused: { pid, identity: "other-boot:1", started: 1 },
+            },
+          }),
+        );
+        expect(takeOrphanedTasks(dir)).toEqual([
+          { id: "running", owner: 2147483646, pid },
+          { id: "unrecorded", owner: 2147483646 },
+        ]);
+      } finally {
+        task.kill();
       }
     },
   );

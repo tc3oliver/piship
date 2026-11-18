@@ -9,6 +9,8 @@ export type TaskRunner = (
   command: string,
   options: {
     readonly onData: (data: Buffer) => void;
+    /** The ID of the local process the command runs as, when one is started. */
+    readonly onSpawn: (pid: number) => void;
     readonly signal: AbortSignal;
     /** Seconds, as the sandbox and Pi's bash tool take it. */
     readonly timeout: number;
@@ -61,6 +63,8 @@ export interface TaskEvents {
   refused(task: TaskEvent): void;
   /** The runner settled: the task's process is gone. */
   ended?(task: TaskEvent): void;
+  /** The task runs as this local process. */
+  spawned?(id: string, pid: number): void;
 }
 
 /** A task's state and the output it printed since the last read. */
@@ -227,6 +231,7 @@ export class TaskRegistry {
       .then(() =>
         run(command, {
           onData: (data) => task.tail.append(data),
+          onSpawn: (pid) => this.events.spawned?.(task.id, pid),
           signal: task.controller.signal,
           timeout,
         }),

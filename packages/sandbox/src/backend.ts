@@ -212,6 +212,8 @@ export interface SandboxExecIO {
   readonly signal: AbortSignal;
   readonly onStdout: (chunk: Buffer) => void;
   readonly onStderr: (chunk: Buffer) => void;
+  /** A backend that starts a local process passes its ID (a process group leader on POSIX). */
+  readonly onSpawn?: (pid: number) => void;
 }
 
 export interface SandboxExecResult {

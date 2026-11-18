@@ -174,6 +174,8 @@ export interface SandboxExecOptions {
   /** Seconds, as in Pi's bash tool. */
   timeout?: number;
   env?: NodeJS.ProcessEnv;
+  /** Called with the ID of the local process started for the command; a remote backend never calls it. */
+  onSpawn?: (pid: number) => void;
   /** Shell override for uncontained commands only; never bypasses an enforced backend. */
   shell?: {
     shell: string;
@@ -359,6 +361,7 @@ interface GovernedRun {
   readonly signal?: AbortSignal;
   readonly settleMs: number;
   readonly onData: (chunk: Buffer) => void;
+  readonly onSpawn?: (pid: number) => void;
   /** Called when the backend ignored an abort for `settleMs`. */
   readonly retire: () => void;
 }
@@ -417,6 +420,7 @@ async function runGoverned(
       signal: controller.signal,
       onStdout: forward,
       onStderr: forward,
+      ...(run.onSpawn ? { onSpawn: run.onSpawn } : {}),
     }),
   );
   // A late rejection after PiShip stopped waiting must not go unhandled.
@@ -841,6 +845,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
         onStdout: options.onData,
         onStderr: options.onData,
       });
+      if (child.pid !== undefined) options.onSpawn?.(child.pid);
       if (stdin) child.stdin?.end(command);
       const exit = await child.exited;
       if (exit.error) throw new Error(exit.error);
@@ -899,6 +904,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
         ...(options.signal ? { signal: options.signal } : {}),
         settleMs: session.settleMs,
         onData: options.onData,
+        ...(options.onSpawn ? { onSpawn: options.onSpawn } : {}),
         retire,
       },
     );
