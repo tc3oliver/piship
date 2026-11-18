@@ -53,7 +53,7 @@ node packages/cli/dist/bin.js trust-root next ./channel --manifest ./acmecode/pi
 | `policy` | A rule ID appears in both `policy.enforced` and `policy.defaults`; two enforced rules for the same action and resource disagree; a declared resource's class is denied by `policy.resourceTrust`; or an enabled capability's provider class is denied by `policy.providerTrust`; or a managed `deny` or `ask` rule names an action no runtime seam enforces and is not listed in `policy.acknowledgeUnenforced` (`POLICY_UNENFORCEABLE`) |
 | `models` | A virtual model's route is not an allowed physical chat model of the catalog (managed), or its router is not a declared extension (a `package:<id>` router is not resolved yet) |
 | `certification` | A certified resource or capability provider has no certification evidence |
-| `sandbox` | `sandbox.required: true` and the target is not Linux or macOS (there is no Windows sandbox adapter) |
+| `sandbox` | `sandbox.required: true` with no `sandbox.provider` (the native OS sandbox), and the target is not Linux or macOS (there is no Windows sandbox adapter); a remote provider passes on every target |
 
 `piship build` also runs the `source` and `install-script` gates on locks of `piship/v1alpha4` and later, and on each locked Pi package's closure (reported as `Build gate source` or `Build gate install-script`); `dev` and `test` do not. Vendoring fails with `INTEGRITY_FAILED` when a package's version or commit, integrity, tree digest, file count, or resource inventory differs from the lock.
 
@@ -87,7 +87,7 @@ Set `SOURCE_DATE_EPOCH` to record a creation time. Without it the recorded time 
 
 ## Supported platforms
 
-Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64`, the targets that the lifecycle E2E and the Release candidate workflow cover (current results are on the [status page](../status.md#recorded-evidence)), and only when listed in `release.targets` (the default). `linux-arm64` and `darwin-x64` are accepted in the manifest but refused by the `target` gate. Node.js 22.19.0 or newer remains a separate prerequisite. A Windows release of a distribution that requires the OS sandbox is refused.
+Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64`, the targets that the lifecycle E2E and the Release candidate workflow cover (current results are on the [status page](../status.md#recorded-evidence)), and only when listed in `release.targets` (the default). `linux-arm64` and `darwin-x64` are accepted in the manifest but refused by the `target` gate. Node.js 22.19.0 or newer remains a separate prerequisite. A Windows release of a distribution that requires the sandbox without a `sandbox.provider` (the native OS sandbox) is refused; a remote provider does not trigger that refusal.
 
 ## Reviewing a change
 
