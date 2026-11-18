@@ -626,9 +626,28 @@ describe("McpGovernor over stdio", () => {
     const [report] = await governor.start();
     expect(report?.state).toBe("failed");
     expect(report?.reason).toBe(
-      "MCP server hang did not start within its startupTimeout of 0.2s (a first npx or uvx download is a common cause; raise mcp.servers.hang.startupTimeout in the manifest)",
+      "MCP server hang did not start within its startupTimeout of 0.2s; raise mcp.servers.hang.startupTimeout in the manifest (a first npx or uvx download is a common cause)",
     );
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("names the origin, not a download, when an HTTP server never answers", async () => {
+    const { governor } = harness({
+      // Never answers; gives up only when the request is aborted.
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) =>
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        ),
+      servers: [
+        httpServer("slow", "http://127.0.0.1:9/mcp", { startupTimeoutMs: 200 }),
+      ],
+    });
+    const [report] = await governor.start();
+    expect(report?.reason).toBe(
+      "MCP server slow did not start: http://127.0.0.1:9 did not answer initialize within 0.2s; check that it is up, or raise mcp.servers.slow.startupTimeout",
+    );
   });
 
   it("cancels a tool call through its AbortSignal", async () => {

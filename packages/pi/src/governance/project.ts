@@ -490,15 +490,58 @@ async function projectMcp(
       return false;
     }
   }
+  // Said with the server reports (smoke, doctor, the failed-server notice).
+  const leave = (
+    id: string,
+    reason: string,
+    state: "failed" | "denied" = "failed",
+    transport: "stdio" | "streamable-http" = "stdio",
+  ) =>
+    session.projectMcpLeftOut.push({
+      id,
+      state,
+      required: false,
+      reason: `${shown}: ${reason}`,
+      transport,
+      tools: [],
+    });
   let json: unknown;
   try {
     json = JSON.parse(readFileSync(candidate.resolvedPath, "utf8"));
   } catch {
+    // The parser's message can quote the file, so it is not repeated.
+    leave(shown, "not valid JSON, so none of its servers start");
     return false;
   }
   const parsed = parseExternalMcpDefinitions(json, "project");
+  const entries = (json as { mcpServers?: Record<string, unknown> } | null)
+    ?.mcpServers;
+  for (const issue of parsed.invalid) {
+    const entry = issue.server === "*" ? undefined : entries?.[issue.server];
+    leave(
+      issue.server === "*" ? shown : issue.server,
+      issue.message,
+      "failed",
+      typeof entry === "object" && entry !== null && "url" in entry
+        ? "streamable-http"
+        : "stdio",
+    );
+  }
   const declared = new Set(mcp.servers.map((server) => server.id));
   for (const server of parsed.servers)
-    if (!declared.has(server.id)) projectServers.push(server);
+    if (declared.has(server.id))
+      leave(
+        server.id,
+        `the distribution declares a server ${server.id}, which is used; this definition is ignored`,
+        "denied",
+        server.transport,
+      );
+    else projectServers.push(server);
+  for (const warning of parsed.warnings)
+    if (!declared.has(warning.server))
+      session.projectMcpWarnings.set(warning.server, [
+        ...(session.projectMcpWarnings.get(warning.server) ?? []),
+        `${shown}: ${warning.message}`,
+      ]);
   return parsed.servers.length > 0;
 }

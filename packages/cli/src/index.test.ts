@@ -674,6 +674,24 @@ describe("validate", () => {
     );
   });
 
+  it("says an optional MCP server's unset variable stops only that server", async () => {
+    delete process.env.ACME_DOCS_URL;
+    const result = await validate({
+      variables: ["ACME_DOCS_URL"],
+      mcp: {
+        mode: "allowlist",
+        servers: {
+          docs: { transport: "streamable-http", url: `\${ACME_DOCS_URL}/mcp` },
+        },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("CONFIG_UNAVAILABLE");
+    expect(result.stderr).toContain(
+      "Note: ACME_DOCS_URL not set in this shell; only the optional MCP server docs reads it, so it does not start until ACME_DOCS_URL is set",
+    );
+  });
+
   it("shows policy.userAuto when a v1alpha5 manifest declares it", async () => {
     const allowed = await validate({
       schema: "piship/v1alpha5",

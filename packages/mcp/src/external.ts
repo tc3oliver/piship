@@ -166,7 +166,11 @@ function parseUrl(value: unknown): string {
   try {
     url = new URL(value);
   } catch {
-    throw new Error("url is not a valid URL");
+    throw new Error(
+      value.includes(`\${`)
+        ? `url is not a valid URL; this file never interpolates \${NAME} variables, so write the URL out`
+        : "url is not a valid URL",
+    );
   }
   if (url.protocol !== "https:" && url.protocol !== "http:")
     throw new Error("url must use https (or http for loopback)");

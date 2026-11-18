@@ -44,7 +44,10 @@ export async function startMcp(
     ...(mcp.mode === "off" ? [] : mcp.servers),
     ...projectServers,
   ] as McpServerConfig[];
-  if (!servers.length) return;
+  if (!servers.length) {
+    report(session, []);
+    return;
+  }
   const channel = session.startupChannel();
   // Only distribution-declared urls may carry `${NAME}` references; a
   // project file never gets launch environment values interpolated.
@@ -161,17 +164,39 @@ export async function startMcp(
   });
   session.mcp = governor;
   try {
-    session.mcpReports = await governor.start();
-    // A required server that fails stops the launch above. An optional one
-    // only loses its tools, which nothing else in the session would say.
-    for (const notice of failedServerNotices(
-      session.mcpReports,
-      session.options.lock.app.command,
-    ))
-      session.notice(notice);
+    report(session, await governor.start());
   } finally {
     for (const report of governor.health())
       if (report.state !== "denied")
         session.metrics.recordMcpHealth(report.id, report.state);
   }
+}
+
+/**
+ * The server reports, with what the project's `.mcp.json` lost on the way:
+ * entries that never started and parts of admitted ones that were ignored.
+ */
+function report(
+  session: GovernanceSession,
+  reports: readonly McpServerReport[],
+): void {
+  session.mcpReports = [
+    ...reports.map((item) => {
+      const dropped = session.projectMcpWarnings.get(item.id);
+      return dropped
+        ? {
+            ...item,
+            reason: [item.reason, ...dropped].filter(Boolean).join("; "),
+          }
+        : item;
+    }),
+    ...session.projectMcpLeftOut,
+  ];
+  // A required server that fails stops the launch above. An optional one
+  // only loses its tools, which nothing else in the session would say.
+  for (const notice of failedServerNotices(
+    session.mcpReports,
+    session.options.lock.app.command,
+  ))
+    session.notice(notice);
 }

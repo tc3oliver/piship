@@ -1483,7 +1483,11 @@ async function runAuthoring(
     const variables = runtimeVariableUse(manifest);
     const unset = (names: readonly string[]) =>
       names.filter((name) => !process.env[name]);
-    const missingLaunch = unset(variables.launch);
+    // An optional MCP server's variable fails only that server, not the launch.
+    const missingOptional = unset(Object.keys(variables.optionalMcp));
+    const missingLaunch = unset(variables.launch).filter(
+      (name) => !missingOptional.includes(name),
+    );
     const missingUpdate = unset(variables.update);
     const otherLock = lockOwnedByOther(target);
     output.stdout(
@@ -1543,6 +1547,12 @@ async function runAuthoring(
       output.stderr(
         `Note: ${missingLaunch.join(", ")} not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until ${theyAre(missingLaunch)} set in the environment it is started from. An IDE or desktop launcher does not read your shell profile; a plain https URL in piship.yaml needs no variable.`,
       );
+    for (const name of missingOptional) {
+      const servers = variables.optionalMcp[name] ?? [];
+      output.stderr(
+        `Note: ${name} not set in this shell; only the optional MCP server${servers.length > 1 ? "s" : ""} ${servers.join(", ")} read${servers.length > 1 ? "" : "s"} it, so ${servers.length > 1 ? "they do" : "it does"} not start until ${name} is set in the environment the branded command is started from. The command itself still launches.`,
+      );
+    }
     if (missingUpdate.length)
       output.stderr(
         `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,

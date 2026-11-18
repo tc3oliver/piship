@@ -475,13 +475,49 @@ export function assertLaunchable(sections: LaunchSections): void {
 export function runtimeVariableUse(manifest: Manifest): {
   readonly launch: readonly string[];
   readonly update: readonly string[];
+  /** Launch variables only optional MCP server urls read, with those servers. */
+  readonly optionalMcp: Readonly<Record<string, readonly string[]>>;
 } {
   const { launch, update } = variableReferences(manifest);
   const variables = manifest.access?.variables ?? [];
+  const optional = optionalMcpVariables(manifest);
   return {
     launch: variables.filter((name) => launch.has(name)),
     update: variables.filter((name) => !launch.has(name) && update.has(name)),
+    optionalMcp: Object.fromEntries(
+      variables.flatMap((name) => {
+        const servers = optional.get(name);
+        return servers ? [[name, servers]] : [];
+      }),
+    ),
   };
+}
+
+/**
+ * Variables read by optional MCP server urls and nothing else: unset, such a
+ * server is marked failed and the launch goes on.
+ */
+function optionalMcpVariables(manifest: Manifest): Map<string, string[]> {
+  const found = new Map<string, string[]>();
+  const governance = manifest.governance;
+  if (!governance) return found;
+  const servers = governance.mcp.servers;
+  const rest = variableReferences({
+    ...manifest,
+    governance: {
+      ...governance,
+      mcp: {
+        ...governance.mcp,
+        servers: servers.filter((server) => server.required),
+      },
+    },
+  });
+  for (const server of servers)
+    if (!server.required && server.url)
+      for (const name of referencedVariables(server.url))
+        if (!rest.launch.has(name) && !rest.update.has(name))
+          found.set(name, [...(found.get(name) ?? []), server.id]);
+  return found;
 }
 /** The variable names the manifest references, by when they are read. */
 function variableReferences(manifest: Manifest): {
