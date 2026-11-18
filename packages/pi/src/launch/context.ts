@@ -33,6 +33,7 @@ export interface LaunchContext extends BrandedContext {
    */
   readonly subagent?: {
     readonly parentSession: string;
+    readonly workflowMode?: "plan" | "build";
     readonly grant?: import("./subagent-owner.js").SubagentGrantBinding;
     readonly grantActive?: () => boolean;
   };

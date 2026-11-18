@@ -110,6 +110,8 @@ export interface GovernanceOptions {
    */
   readonly subagent?: {
     readonly parentSession: string;
+    /** The parent's Plan/Build mode when it started the child. */
+    readonly workflowMode?: "plan" | "build";
     readonly grant?: import("../launch/subagent-owner.js").SubagentGrantBinding;
     readonly grantActive?: () => boolean;
   };

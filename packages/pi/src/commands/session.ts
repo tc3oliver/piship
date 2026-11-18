@@ -592,6 +592,17 @@ export async function runSubagentChild(
       endSession(ctx, prepared, { dispose: piDispose }, gov, failed, ownership),
     (error) => ctx.err(`Error: ${formatError(error)}`),
   );
+  // Pi's print mode ends the session on SIGTERM and SIGHUP but leaves SIGINT
+  // (a Ctrl-C at the parent's terminal) to Node's default exit, which skips
+  // `session.end`. End it here too; a stuck cleanup cannot hold the exit long.
+  const onInterrupt = () => {
+    process.exitCode = 130;
+    setTimeout(() => process.exit(130), 3_000).unref();
+    void end(false)
+      .catch(() => undefined)
+      .finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onInterrupt);
   try {
     // Extensions read the theme when the session binds them, as in Pi's own
     // print mode; no watcher, no terminal.
@@ -605,6 +616,7 @@ export async function runSubagentChild(
     sessionFailed = true;
     throw error;
   } finally {
+    process.off("SIGINT", onInterrupt);
     await end(sessionFailed);
   }
 }

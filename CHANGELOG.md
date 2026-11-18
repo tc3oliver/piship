@@ -230,6 +230,8 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - A subagent whose agent definition names a refused model says to change or remove `model:` there, not to start with `--model`.
 - A 401 with `credential.provider: none` says to check whether the model server needs a key, instead of suggesting `login`, which has nothing to replace.
 - POSIX shell policy and task-grant matching accept literal `%` and `^` in arguments (`git log --format=%H`, `HEAD^`).
+- A subagent child starts in its parent's Plan/Build mode when the parent started it, never a wider one, instead of always in `defaultMode`; a child started after `/build` could not write and was told to run `/build` ([security](docs/security.md#subagent-child-launch)).
+- A subagent child stopped by SIGINT (Ctrl-C at the parent's terminal) records `session.end`, as one stopped by SIGTERM already did.
 
 #### Platform
 

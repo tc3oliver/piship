@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -595,6 +595,63 @@ describe("headless workload distribution (local fixtures)", () => {
     expect(() =>
       JSON.parse(readFileSync(join(acmeState, "logs", "metrics.json"), "utf8")),
     ).not.toThrow();
+
+    // A child the parent's Ctrl-C (SIGINT) or exit (SIGTERM) stops in the
+    // middle of a model request still records the end of its session.
+    if (process.platform !== "win32")
+      for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        services.knobs.gatewayDelayMs = 60_000;
+        const chats = () =>
+          services.state.requests.filter((item: { path: string }) =>
+            item.path.endsWith("/chat/completions"),
+          ).length;
+        const asked = chats();
+        const running = spawn(
+          command,
+          ["--mode", "json", "-p", "--no-session", `Task: ${signal}`],
+          {
+            cwd: temp,
+            env: { ...env, PI_CODE_SUBAGENT: "1", ...parentEnv },
+            stdio: "ignore",
+          },
+        );
+        const exited = new Promise<number | null>((done) =>
+          running.once("exit", (code) => done(code)),
+        );
+        const waitUntil = Date.now() + 60_000;
+        while (chats() === asked && Date.now() < waitUntil)
+          await new Promise((done) => setTimeout(done, 100));
+        expect(chats(), `${signal}: the child never asked the model`).toBe(
+          asked + 1,
+        );
+        running.kill(signal);
+        const stoppedAt = Date.now();
+        await exited;
+        expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+        services.knobs.gatewayDelayMs = 0;
+        const ended = readFileSync(
+          join(acmeState, "logs", "audit.jsonl"),
+          "utf8",
+        )
+          .trim()
+          .split("\n")
+          .map((line: string) => JSON.parse(line));
+        const started = ended
+          .filter(
+            (event: { event: string; detail?: { subagent?: boolean } }) =>
+              event.event === "session.start" &&
+              event.detail?.subagent === true,
+          )
+          .at(-1);
+        expect(
+          ended.some(
+            (event: { event: string; session: string }) =>
+              event.event === "session.end" &&
+              event.session === started?.session,
+          ),
+          signal,
+        ).toBe(true);
+      }
 
     // Subsequent workload runs may change principal. Do not carry the
     // previous principal's task grant into their renewal fan-out.
