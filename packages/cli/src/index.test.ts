@@ -585,7 +585,7 @@ describe("validate", () => {
     expect(acknowledged.status).toBe(0);
     expect(acknowledged.stdout).toContain("Manifest is valid.");
     expect(acknowledged.stderr).toContain(
-      "Note: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam in this Pi version, so the rule is neither prevented nor recorded (acknowledged in policy.acknowledgeUnenforced)",
+      "Note: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam in this Pi version, so the rule is neither prevented nor recorded (sandbox.required: true with sandbox.network.mode: deny stops commands such as curl, not this action) (acknowledged in policy.acknowledgeUnenforced)",
     );
     const manifest = join(temp, "piship.yaml");
     writeFileSync(

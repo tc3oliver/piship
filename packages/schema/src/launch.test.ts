@@ -582,17 +582,45 @@ describe("enforced read denies that commands can get around", () => {
 
   it("names, in one warning, each deny no sandbox read-deny directory covers", () => {
     expect(
-      uncovered([
-        rule("acme.env", "**/.env"),
-        rule("acme.vault", "/srv/vault/**", { action: "filesystem.*" }),
-        rule("acme.ssh", "~/.ssh/**"),
-      ]),
+      uncovered(
+        [
+          rule("acme.env", "**/.env"),
+          rule("acme.vault", "/srv/vault/**", { action: "filesystem.*" }),
+          rule("acme.ssh", "~/.ssh/**"),
+        ],
+        { required: true },
+      ),
     ).toEqual([
       {
         path: "policy.enforced",
         message: expect.stringMatching(
           /^acme\.env \(\*\*\/\.env\), acme\.vault \(\/srv\/vault\/\*\*\): these filesystem\.read denies refuse the file tools only; a command such as cat .*sandbox\.filesystem\.read\.deny lists their directory/,
         ),
+      },
+    ]);
+  });
+
+  it("counts the sandbox's read-deny list only when the sandbox is required, and checks policy.defaults too", () => {
+    const all = warnings(
+      managed({
+        policy: {
+          default: "ask",
+          enforced: [rule("acme.ssh", "~/.ssh/**")],
+          defaults: [rule("acme.aws", "~/.aws/**")],
+        },
+        sandbox: { required: false },
+      }),
+    ).filter((warning) => warning.path.startsWith("policy."));
+    expect(all).toEqual([
+      {
+        path: "policy.enforced",
+        message: expect.stringMatching(
+          /^acme\.ssh \(~\/\.ssh\/\*\*\): .* unless sandbox\.required is true and sandbox\.filesystem\.read\.deny lists/,
+        ),
+      },
+      {
+        path: "policy.defaults",
+        message: expect.stringMatching(/^acme\.aws \(~\/\.aws\/\*\*\): /),
       },
     ]);
   });
@@ -604,7 +632,7 @@ describe("enforced read denies that commands can get around", () => {
           rule("acme.vault", "/srv/vault/**"),
           rule("acme.key", "/srv/vault/key"),
         ],
-        { filesystem: { read: { deny: ["/srv/vault/"] } } },
+        { required: true, filesystem: { read: { deny: ["/srv/vault/"] } } },
       ),
     ).toEqual([]);
     expect(
