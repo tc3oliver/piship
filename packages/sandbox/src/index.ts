@@ -111,6 +111,7 @@ export {
   connectEnvelope,
   E2bCompatibleBackend,
   type E2bCompatibleOptions,
+  ENVD_PORT,
   EnvelopeReader,
 } from "./remote/e2b.js";
 export type { RemoteBackendOptions } from "./remote/http.js";

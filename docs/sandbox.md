@@ -62,6 +62,8 @@ sandbox:
   workspace: remote               # the project goes into /root/workspace, which PiShip creates empty
 ```
 
+Under a private-only network policy (every managed launch), list the API host in `network.allowHosts`, for example `allowHosts: [api.cube.corp]`; the per-sandbox envd hosts under its domain need no entry ([Credentials](#credentials) describes which names are accepted).
+
 Without `workspace: remote`, the template or image must already hold the code, so set `workdir` to the directory that holds it (for example `/root/repo`). With `workspace: remote` leave `workdir` unset, or point it at a directory the template leaves empty: the seed refuses a project directory that already holds files.
 
 ```yaml
@@ -144,7 +146,7 @@ A custom adapter module may export `sandboxCredential`, a standard `CredentialPr
 
 Without a credential PiShip can send, use `credential: none` with an endpoint that needs no client credential, such as `kubectl proxy` and a port-forwarded router on loopback, or an authenticating proxy.
 
-PiShip calls remote backends through its managed fetch, so the proxy, CA, and `network.privateOnly` settings apply. With `privateOnly`, every host must be listed in `network.allowHosts`; E2B's data plane uses one host per sandbox (`49983-<id>.<domain>`), so an e2b-compatible backend works with `privateOnly` only when that host is known and allowed.
+PiShip calls remote backends through its managed fetch, so the proxy, CA, and `network.privateOnly` settings apply. With `privateOnly` (every managed launch), the endpoint's host must be declared in `network.allowHosts`. E2B's data plane uses one host per sandbox (`49983-<id>.<domain>`), whose name exists only once the sandbox does, so the e2b-compatible backend's own requests also accept exactly that form: `49983-` and a sandbox ID as the first label, then the declared endpoint's host without a leading `api.` (an endpoint of `https://api.cube.corp` admits `49983-<id>.cube.corp`), on the endpoint's scheme and its default port. A `domain` the service returns that differs from that, a nested or lookalike name, another port label, and an IP-literal endpoint are refused. The allowance holds for the sandbox backend only: agent tools, extensions, and every other request still need the host in `allowHosts`.
 
 #### The E2B API an e2b-compatible service must answer
 
@@ -346,7 +348,7 @@ Short version: the sandbox holds the project while the agent works, and you brin
      credential: stored
    ```
 
-   `SANDBOX_ENDPOINT` is read from the environment of the process that starts the command (`export SANDBOX_ENDPOINT=https://...` in a POSIX shell, `$env:SANDBOX_ENDPOINT = "https://..."` in PowerShell, or `setx SANDBOX_ENDPOINT https://...` to keep it for new Windows terminals). An IDE or desktop launcher does not read your shell profile; a plain `https` URL in `endpoint:` needs no variable.
+   `SANDBOX_ENDPOINT` is read from the environment of the process that starts the command (`export SANDBOX_ENDPOINT=https://...` in a POSIX shell, `$env:SANDBOX_ENDPOINT = "https://..."` in PowerShell, or `setx SANDBOX_ENDPOINT https://...` to keep it for new Windows terminals). An IDE or desktop launcher does not read your shell profile; a plain `https` URL in `endpoint:` needs no variable. A managed distribution also lists the endpoint's host in `network.allowHosts`; the per-sandbox envd hosts (`49983-<id>.<domain>`) need no entry.
 
    Store the sandbox key once. It is read from a prompt or from standard input, never from a flag:
 

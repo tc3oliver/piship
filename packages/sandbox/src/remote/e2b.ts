@@ -54,7 +54,8 @@ export interface E2bCompatibleOptions extends RemoteBackendOptions {
   }) => string;
 }
 
-const ENVD_PORT = 49983;
+/** The port of envd, the sandbox's command endpoint, in its host name. */
+export const ENVD_PORT = 49983;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const SANDBOX_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
 const DOMAIN = /^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;

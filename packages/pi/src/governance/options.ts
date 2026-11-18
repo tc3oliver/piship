@@ -36,10 +36,13 @@ export interface GovernanceOptions {
    * The governance fetch that also admits plain HTTP where `plainHttp`
    * accepts (usually `plainHttpOrigins` of one endpoint): for the audit
    * sinks and the sandbox unless set to `httpTransport: https`. Absent,
-   * such an endpoint over plain HTTP is refused.
+   * such an endpoint over plain HTTP is refused. `declaredHost` also counts
+   * the hosts it accepts as declared under a private-only network policy:
+   * only the sandbox backend passes it, for its envd hosts.
    */
   readonly plainHttpFetch?: (
     plainHttp: (target: URL) => boolean,
+    declaredHost?: (target: URL) => boolean,
   ) => ManagedFetch;
   /**
    * The claims of the identity this launch activated, for MCP identity

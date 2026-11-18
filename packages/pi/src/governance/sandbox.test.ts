@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkDestination, type NetworkPolicy } from "@piship/contracts";
 import {
   type ContainmentReport,
   E2bCompatibleBackend,
@@ -153,7 +154,70 @@ describe("the declared sandbox backend", () => {
         credentialOrigins: [endpoint],
       },
     );
-    expect(scoped).toEqual(["true"]);
+    // Forced https: the scoped fetch (for envd) admits no plain HTTP.
+    expect(scoped).toEqual(["true", "false", "false"]);
+  });
+
+  it("counts the envd hosts under the declared endpoint's domain as declared, for the sandbox backend's fetch only", async () => {
+    const policy: NetworkPolicy = {
+      inheritProxyEnvironment: false,
+      additionalCA: [],
+      privateOnly: true,
+      allowHosts: ["api.e2b.internal"],
+    };
+    let declared: ((target: URL) => boolean) | undefined;
+    let plain: ((target: URL) => boolean) | undefined;
+    const plainHttpFetch = (
+      plainHttp: (target: URL) => boolean,
+      declaredHost?: (target: URL) => boolean,
+    ) => {
+      plain = plainHttp;
+      declared = declaredHost;
+      return async () => new Response(null, { status: 204 });
+    };
+    await sandboxBackend(
+      options(
+        { provider: "e2b-compatible", endpoint: "https://api.e2b.internal" },
+        { plainHttpFetch } as Partial<GovernanceOptions>,
+      ),
+    );
+    const backend = (url: string) =>
+      checkDestination(new URL(url), policy, "governance", plain, declared);
+    // Agent tools and web requests go through fetches without the predicate.
+    const agent = (url: string) => checkDestination(new URL(url), policy);
+    expect(() => backend("https://49983-sbx1.e2b.internal/")).not.toThrow();
+    expect(() => backend("https://api.e2b.internal/sandboxes")).not.toThrow();
+    for (const url of [
+      "https://49983-sbx1.e2b.internal.evil/",
+      "https://49983-sbx1.other.internal/",
+      "https://49983-sbx1.nested.e2b.internal/",
+      "https://3000-sbx1.e2b.internal/",
+      "https://49983-.e2b.internal/",
+      "https://49983-sbx1.e2b.internal:8443/",
+      "https://other.e2b.internal/",
+    ])
+      expect(() => backend(url), url).toThrow(/undeclared host/);
+    // Not over plain HTTP to an https endpoint's domain.
+    expect(() => backend("http://49983-sbx1.e2b.internal/")).toThrow(
+      /non-HTTPS/,
+    );
+    expect(() => agent("https://49983-sbx1.e2b.internal/")).toThrow(
+      /undeclared host/,
+    );
+    // Only the e2b-compatible backend derives envd hosts.
+    declared = undefined;
+    await sandboxBackend(
+      options(
+        {
+          provider: "kubernetes-agent-sandbox",
+          endpoint: "https://api.e2b.internal",
+          router: "https://router.e2b.internal",
+          template: "base",
+        },
+        { plainHttpFetch } as Partial<GovernanceOptions>,
+      ),
+    );
+    expect(declared).toBeUndefined();
   });
 
   it("reaches an http-allowed endpoint over plain HTTP through a fetch scoped to it", async () => {

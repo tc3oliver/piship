@@ -461,6 +461,8 @@ export interface DispatcherOptions {
   readonly inactivityTimeouts?: boolean;
   /** Plain HTTP destinations the private-only check also accepts; see checkDestination. */
   readonly plainHttp?: (target: URL) => boolean;
+  /** Hosts the private-only check also accepts; see checkDestination. */
+  readonly declaredHost?: (target: URL) => boolean;
 }
 
 export function createDispatcher(
@@ -632,7 +634,7 @@ function buildDispatcher(
       })
     : new Agent({ connect, ...pooling, ...timeouts, factory });
   const pendingTunnel = (hostPort: string) => tunnels.get(hostPort)?.proxy;
-  const { plainHttp } = options;
+  const { plainHttp, declaredHost } = options;
   if (!policy.privateOnly) {
     if (!plainHttp) return { dispatcher: base, pendingTunnel };
     // Without private-only nothing else is checked here, but a plain-HTTP
@@ -668,7 +670,13 @@ function buildDispatcher(
           ? options.origin
           : options.origin?.toString();
       if (origin)
-        checkDestination(new URL(origin), policy, "network", plainHttp);
+        checkDestination(
+          new URL(origin),
+          policy,
+          "network",
+          plainHttp,
+          declaredHost,
+        );
       return dispatch(options, handler);
     }),
     pendingTunnel,
@@ -924,12 +932,16 @@ function refusePublicProxy(
  * endpoint that opted in passes it (`updates.transport: http-allowed`, or
  * `httpTransport: http-allowed`, usually through `plainHttpOrigins` for its
  * own origin), so every other request keeps the loopback-only rule.
+ * `declaredHost` may count a host as declared under private-only policy: only
+ * the e2b-compatible sandbox backend's fetch passes it, for the envd hosts of
+ * sandboxes under its declared endpoint, whose names exist only once created.
  */
 export function checkDestination(
   target: URL,
   policy: NetworkPolicy,
   component = "network",
   plainHttp?: (target: URL) => boolean,
+  declaredHost?: (target: URL) => boolean,
 ): void {
   if (target.username || target.password)
     throw new PiShipError(
@@ -956,7 +968,8 @@ export function checkDestination(
   if (optedIn) refusePublicProxy(target, policy, component);
   if (
     policy.privateOnly &&
-    !policy.allowHosts.includes(target.hostname.toLowerCase())
+    !policy.allowHosts.includes(target.hostname.toLowerCase()) &&
+    declaredHost?.(target) !== true
   )
     throw new PiShipError(
       "NETWORK_DENIED",
@@ -983,6 +996,11 @@ export function createManagedFetch(
      * fetch of an endpoint that opted in passes it; see checkDestination.
      */
     readonly plainHttp?: (target: URL) => boolean;
+    /**
+     * Count more hosts as declared under private-only policy. Only the
+     * sandbox backend's fetch passes it; see checkDestination.
+     */
+    readonly declaredHost?: (target: URL) => boolean;
   } = {},
 ): ManagedFetch {
   // Platform secret store calls block the process (PowerShell on Windows
@@ -993,10 +1011,13 @@ export function createManagedFetch(
   // and is never retried. Managed requests (identity, broker, gateway probes,
   // the audit sinks and update downloads) are few and small, so each opens its
   // own connection.
-  const plainHttp = options.plainHttp ? { plainHttp: options.plainHttp } : {};
+  const scoped = {
+    ...(options.plainHttp ? { plainHttp: options.plainHttp } : {}),
+    ...(options.declaredHost ? { declaredHost: options.declaredHost } : {}),
+  };
   const { dispatcher, pendingTunnel } = buildDispatcher(policy, {
     keepAlive: false,
-    ...plainHttp,
+    ...scoped,
   });
   // A long-running request has a dispatcher of its own, without undici's
   // header and body timeouts, created on first use.
@@ -1005,14 +1026,20 @@ export function createManagedFetch(
     untimed ??= buildDispatcher(policy, {
       keepAlive: false,
       inactivityTimeouts: false,
-      ...plainHttp,
+      ...scoped,
     });
     return untimed;
   };
   return async (url, { longRunning, ...init } = {}) => {
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());
-    checkDestination(target, policy, component, options.plainHttp);
+    checkDestination(
+      target,
+      policy,
+      component,
+      options.plainHttp,
+      options.declaredHost,
+    );
     try {
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),
