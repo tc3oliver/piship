@@ -13,6 +13,11 @@ What you still provide:
 - **A broker** in front of LiteLLM: it validates the identity access token, calls `POST /key/generate` with the master key, and returns the `http-broker` response; its revoke endpoint calls `POST /key/delete` for the presented key. See [connecting a LiteLLM gateway](../../docs/enterprise-integration.md#connecting-a-litellm-gateway).
 - **HTTPS** for the proxy and broker, and the enterprise CA in `network.tls.additionalCA` if needed.
 - **Accurate `models.catalog` metadata**: LiteLLM's `GET /v1/models` supplies only the IDs.
+- **LiteLLM's environment** (`litellm-config.yaml` reads the first three; LiteLLM reads the salt key itself):
+  - `LITELLM_MASTER_KEY`: the admin key the broker uses; LiteLLM requires it to start with `sk-`.
+  - `DATABASE_URL`: a persistent PostgreSQL. The reference stack keeps it on tmpfs, which loses every key and spend record on restart.
+  - `OPENAI_API_KEY`, or your provider's keys if you change the models' `litellm_params`.
+  - `LITELLM_SALT_KEY`: encrypts the provider credentials LiteLLM stores; it cannot change while the database exists.
 
 Set the runtime variables before `login`:
 
@@ -24,4 +29,4 @@ Set the runtime variables before `login`:
 | `ACMECODE_CREDENTIAL_REVOKE_URL` | Broker revoke endpoint |
 | `ACMECODE_LLM_GATEWAY_URL` | LiteLLM base URL with `/v1`, for example `https://llm.corp.example/v1` |
 
-To build a distribution, copy `piship.yaml` into your distribution repository, add resources and governance as in the [demo company example](../demo-company/README.md), then run `piship lock` and `piship build`.
+To build a distribution, copy `piship.yaml` into your distribution repository, add resources and governance as in the [demo company example](../demo-company/README.md), then run `node <piship>/packages/cli/dist/bin.js lock piship.yaml` and `node <piship>/packages/cli/dist/bin.js build piship.yaml` from a PiShip checkout built with `npm ci && npm run build` ([running the CLI from your own repository](../../docs/enterprise-integration.md#running-the-cli-from-your-own-repository)).

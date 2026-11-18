@@ -551,6 +551,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
   3. Returns `{"credential_type": "api_key", "credential": <key>, "credential_id": <key_alias>, "expires_at": <expiry as ISO 8601 with Z>, "models": [...]}`.
   4. For revocation, accepts the virtual key as the bearer and calls LiteLLM `POST /key/delete` with `{"keys": ["<that key>"]}`; holding the key is the proof.
 - **Keep the master key in the broker.** Never put it or a shared virtual key in `piship.yaml`, a runtime variable, or the user's environment. Budgets, rate limits, and spend tracking are LiteLLM key settings you choose in step 2.
+- **LiteLLM's own environment.** LiteLLM with the example config needs `LITELLM_MASTER_KEY` (must start with `sk-`), `DATABASE_URL` (a persistent PostgreSQL; the reference stack uses tmpfs), `OPENAI_API_KEY` or your provider's keys, and `LITELLM_SALT_KEY`, which cannot change while the database exists.
 
 ## Testing your own broker and audit collector
 
