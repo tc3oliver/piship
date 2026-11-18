@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { activateSandbox } from "./activate.js";
 import { parsePs, spawnManaged, trackDescendants } from "./process.js";
 
@@ -72,6 +72,20 @@ async function heartbeatStopped(file: string): Promise<boolean> {
 }
 
 describe("spawnManaged", () => {
+  // The first governed child of a fresh Windows worker pays PowerShell's cold
+  // start and its first Add-Type compile, which on a busy runner has taken
+  // the whole 10 s timeout below before the child printed anything. Pay it
+  // here, so the timeout test measures the tree kill, not the cold start.
+  beforeAll(async () => {
+    if (process.platform !== "win32") return;
+    await spawnManaged({
+      file: node,
+      args: ["-e", ""],
+      cwd: tmpdir(),
+      env: { PATH: process.env.PATH ?? "" },
+    }).exited;
+  }, 60_000);
+
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "piship-process-"));
