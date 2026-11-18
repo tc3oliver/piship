@@ -11,7 +11,6 @@ import {
   parseManifest,
   readManifestDocument,
 } from "@piship/schema";
-import { Ajv } from "ajv";
 import { afterAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -19,11 +18,40 @@ type Node = {
   type?: string;
   additionalProperties?: boolean;
   properties?: Record<string, Node>;
+  required?: string[];
+  enum?: unknown[];
+  const?: unknown;
 };
 const schema = JSON.parse(
   readFileSync(join(root, "schema/piship-v1.schema.json"), "utf8"),
 ) as Node;
-const validate = new Ajv({ allErrors: true }).compile(schema);
+/**
+ * What the schema says is wrong with `value`, checking only what it
+ * constrains: known and required keys at the root and in each section, and
+ * enum and const values. Dependency-free on purpose; a full JSON Schema
+ * validator would add a devDependency (and an example relock per bump).
+ */
+function problems(value: unknown, node: Node = schema, at = ""): string[] {
+  if (node.const !== undefined && value !== node.const)
+    return [`${at}: expected ${String(node.const)}`];
+  if (node.enum && !node.enum.includes(value))
+    return [`${at}: ${JSON.stringify(value)} is not in the enum`];
+  if (!node.properties || typeof value !== "object" || value === null)
+    return [];
+  const object = value as Record<string, unknown>;
+  const path = (key: string) => (at ? `${at}.${key}` : key);
+  return [
+    ...(node.required ?? [])
+      .filter((key) => !(key in object))
+      .map((key) => `${path(key)}: missing`),
+    ...Object.entries(object).flatMap(([key, child]) => {
+      const childNode = node.properties?.[key];
+      return childNode
+        ? problems(child, childNode, path(key))
+        : [`${path(key)}: unknown`];
+    }),
+  ];
+}
 
 const examples = readdirSync(join(root, "examples"), { recursive: true })
   .map(String)
@@ -58,7 +86,7 @@ describe("schema/piship-v1.schema.json", () => {
   it.each([...fixtures, ...templates])("accepts %s", (path) => {
     const manifest = load(path);
     parseManifest(manifest);
-    expect(validate(manifest), JSON.stringify(validate.errors)).toBe(true);
+    expect(problems(manifest)).toEqual([]);
   });
 
   it("starts piship init templates with the schema modeline", () => {
@@ -68,10 +96,14 @@ describe("schema/piship-v1.schema.json", () => {
       );
   });
 
-  it("rejects an unknown field", () => {
+  it("rejects an unknown field and an unknown enum value", () => {
     const manifest = load(examples[0] as string);
     manifest.app.colour = "blue";
-    expect(validate(manifest)).toBe(false);
+    manifest.deployment.mode = "shared";
+    expect(problems(manifest)).toEqual([
+      "app.colour: unknown",
+      'deployment.mode: "shared" is not in the enum',
+    ]);
   });
 
   // Keys the validator names so it can reject them as secrets.

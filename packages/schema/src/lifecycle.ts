@@ -503,7 +503,7 @@ function parseUpdates(
   if (value === undefined)
     fail(
       "updates",
-      `${bootstrap ? "piship/v1alpha5" : "piship/v1alpha4"} requires an updates section; run piship migrate to add one`,
+      "piship/v1alpha4 and later require an updates section; add updates: {}, which keeps updates disabled",
     );
   const updates = record(value, "updates", [
     "channel",
