@@ -11,7 +11,14 @@ import {
 import { uptime } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { COMMAND_NAME, readManifest } from "@piship/schema";
+import {
+  COMMAND_NAME,
+  explicitProjectTrust,
+  legacyProjectDimensions,
+  type Manifest,
+  parseManifestSource,
+  readManifestSource,
+} from "@piship/schema";
 import { hash } from "./digest.js";
 import { hashFilesInParallel, workerCount } from "./parallel-files.js";
 import { readInstallReceipt } from "./install/receipt.js";
@@ -243,11 +250,11 @@ export function verifyPayloadContents(
       isRecord(value.runtime),
   );
   // A payload built before a limit on names existed still verifies.
-  const manifest = readManifest(join(root, "piship.yaml"), {
-    existing: true,
-  });
+  const path = join(root, "piship.yaml");
+  const source = readManifestSource(path);
+  const manifest = parseManifestSource(source, path, { existing: true });
   if (
-    manifestDigest(manifest) !== lock.manifest.sha256 ||
+    !manifestMatchesLock(source, manifest, lock) ||
     JSON.stringify(manifest.app) !== JSON.stringify(lock.app)
   )
     throw new PiShipError(
@@ -269,6 +276,47 @@ export function verifyPayloadContents(
       `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${fileCount} files${options.verifyContents === false ? ", content hash skipped" : ""})\n`,
     );
   return lock;
+}
+/**
+ * Whether the payload manifest is the one its lock digest records. A lock
+ * written by PiShip 0.13 or earlier digested an undeclared projectTrust
+ * dimension under that release's defaults, so for such a lock the manifest is
+ * also checked with those defaults written in. Either way the digest is of
+ * the manifest's own content: a change to what it declares fails both.
+ */
+function manifestMatchesLock(
+  source: string,
+  manifest: Manifest,
+  lock: DistributionLock,
+): boolean {
+  const recorded = lock.manifest.sha256;
+  if (manifestDigest(manifest) === recorded) return true;
+  if (!writtenBy013(lock)) return false;
+  const legacy = explicitProjectTrust(source, legacyProjectDimensions);
+  return (
+    legacy !== source &&
+    manifestDigest(
+      parseManifestSource(legacy, "piship.yaml", { existing: true }),
+    ) === recorded
+  );
+}
+/**
+ * Whether PiShip 0.13 or earlier wrote this lock. Unreleased builds after it
+ * still report 0.13.0, but they pin Pi 1.5.0, and 0.13 pinned Pi 1.1.0.
+ */
+function writtenBy013(lock: DistributionLock): boolean {
+  const atMost = (version: unknown, limit: string): boolean => {
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version))
+      return false;
+    const left = version.split(".").map(Number);
+    const right = limit.split(".").map(Number);
+    const index = left.findIndex((part, at) => part !== right[at]);
+    return index === -1 || (left[index] as number) < (right[index] as number);
+  };
+  return (
+    atMost(lock.runtime.pishipVersion, "0.13.0") &&
+    atMost(lock.runtime.version, "1.1.0")
+  );
 }
 /**
  * Load the metadata required to boot. By default a launch never walks the

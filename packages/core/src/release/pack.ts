@@ -19,6 +19,7 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createTemporaryDirectory } from "@piship/contracts";
 import {
+  explicitProjectTrust,
   readManifest,
   type ReleaseManifest,
   releaseOptions,
@@ -444,10 +445,12 @@ export async function buildPack(
     for (const file of files) {
       const target = join(root, "pack", file);
       mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(
-        file === "piship.yaml" ? manifestPath : join(base, file),
-        target,
-      );
+      if (file === "piship.yaml")
+        writeFileSync(
+          target,
+          explicitProjectTrust(readFileSync(manifestPath, "utf8")),
+        );
+      else copyFileSync(join(base, file), target);
     }
     // The pure-JavaScript Pi package trees, vendored exactly as a release
     // payload has them, so an install needs no registry.

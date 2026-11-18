@@ -1,0 +1,115 @@
+schema: piship/v1
+
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+  banner: MyPi personal distribution
+  theme: mypi
+
+runtime:
+  pi: "1.1.0"
+  # fd and rg ship in the payload (pinned and digest-checked). Without them Pi
+  # downloads them from GitHub on the first prompt and waits for it.
+  searchTools:
+    mode: bundled
+
+deployment:
+  mode: personal
+
+# The only runtime variable: where `mypi update` reads the signed channel.
+# It is resolved when `update` runs, never at launch.
+variables:
+  - MYPI_UPDATE_SOURCE
+
+# No enterprise identity, broker, or gateway: Pi's own providers and sign-in,
+# kept in the distribution's isolated state instead of ~/.pi.
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+
+resources:
+  instructions:
+    user: [./resources/AGENTS.md]
+  skills:
+    user: [./resources/skills]
+  extensions:
+    user: [./resources/extensions/demo]
+  prompts:
+    user: [./resources/prompts]
+  themes:
+    user: [./resources/themes/mypi.json]
+
+# Personal policy: everything the distribution declares is allowed, and your
+# own projects work. A project's AGENTS.md, skills, and themes load (an
+# unknown origin, such as a repository with no remote, is asked once per
+# launch, on the terminal before Pi starts; a headless run resolves ask to
+# deny). Anything that starts code, project extensions and .mcp.json servers,
+# asks first. Hooks, agents, and providers stay denied.
+policy:
+  default: allow
+  projectTrust:
+    company: &own
+      passiveContext: allow
+      instructions: allow
+      skills: allow
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
+    external: *own
+    unknown:
+      passiveContext: allow
+      instructions: ask
+      skills: ask
+      agents: deny
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
+
+# A user-managed MCP server: a local stdio script shipped with the
+# distribution. It needs no network and no credential.
+mcp:
+  mode: explicit
+  servers:
+    notes:
+      transport: stdio
+      module: ./resources/mcp/notes-server.mjs
+      expectedServerName: mypi-notes
+      timeout: 10s
+      class: user
+      exposure: direct
+
+# Optional for a personal distribution. On Linux or macOS, `required: true`
+# contains bash, `!` commands, and the MCP server.
+sandbox:
+  required: false
+
+audit:
+  enabled: false
+
+# Signed release channels. The example pins no key: add your own
+# updates.trust.bootstrap (piship keygen) before `update` can verify anything.
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${MYPI_UPDATE_SOURCE}
+  rollback: true
+
+release:
+  # Both are on by default in piship/v1 and written out here so the
+  # example shows the choice. Fewer, smaller files to install and scan, and a
+  # faster start; a bundled payload cannot build other distributions
+  # (docs/performance.md). Set either to false for the unbundled layout.
+  strip: true
+  bundle: true
+  targets: [linux-x64, darwin-arm64, win32-x64]
+  sources: [https://registry.npmjs.org, https://github.com]
+  vulnerabilities:
+    failOn: high

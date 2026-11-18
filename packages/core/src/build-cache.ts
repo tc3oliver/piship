@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { canonicalJson, hash } from "./digest.js";
-import { COMMAND_NAME } from "@piship/schema";
+import { COMMAND_NAME, explicitProjectTrust } from "@piship/schema";
 import type { DistributionLock } from "./lock-schema.js";
 
 const SCHEMA = "piship-local-build/v1";
@@ -193,7 +193,9 @@ export function refreshCachedDistribution(
     if (inventory[relative] !== resource.sha256)
       copy(join(base, resource.path), relative, resource.sha256);
   }
-  copy(manifestPath, "piship.yaml");
+  const manifest = explicitProjectTrust(readFileSync(manifestPath, "utf8"));
+  writeFileSync(join(output, "piship.yaml"), manifest);
+  inventory["piship.yaml"] = hash(manifest);
   copy(join(base, "piship.lock"), "piship.lock");
   if (cache.command !== lock.app.command) {
     const previous = `bin/${cache.command}`;

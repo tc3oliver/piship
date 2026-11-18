@@ -1,11 +1,13 @@
 import { redact } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify } from "yaml";
 import {
   BUILTIN_PROVIDER_VERSION,
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
+  explicitProjectTrust,
   launchWarnings,
+  legacyProjectDimensions,
   ManifestError,
   migrateManifestSource,
   PISHIP_SCHEMA_V1ALPHA2,
@@ -13,6 +15,7 @@ import {
   parseGovernance,
   parseManifest,
   parseManifestHeader,
+  parseManifestSource,
   SUPPORTED_SCHEMAS,
 } from "./index.js";
 
@@ -2413,3 +2416,77 @@ describe("migration to piship/v1alpha3", () => {
 function yamlToJs(source: string): Json {
   return parseYaml(source) as Json;
 }
+
+describe("explicitProjectTrust", () => {
+  const source = `# kept\n${stringify(
+    managed({
+      policy: { projectTrust: { external: { instructions: "deny" } } },
+    }),
+  )}`;
+  const parsed = (text: string) =>
+    parseManifestSource(text, "piship.yaml", { existing: true });
+
+  it("writes out every defaulted dimension without changing what the manifest means", () => {
+    const explicit = explicitProjectTrust(source);
+    expect(explicit).toContain("# kept");
+    expect(parsed(explicit)).toEqual(parsed(source));
+    const trust = parseYaml(explicit).policy.projectTrust;
+    expect(trust.external.instructions).toBe("deny");
+    for (const kind of ["company", "external", "unknown"])
+      expect(Object.keys(trust[kind])).toHaveLength(8);
+  });
+
+  it("makes the parsed manifest independent of the defaults of whoever reads it", () => {
+    const explicit = explicitProjectTrust(source);
+    // Another default table (here the 0.13 one, as a future change would be) adds nothing.
+    expect(explicitProjectTrust(explicit, legacyProjectDimensions)).toBe(
+      explicit,
+    );
+    expect(
+      parsed(explicitProjectTrust(source, legacyProjectDimensions)),
+    ).not.toEqual(parsed(source));
+  });
+
+  it("copies a class that is a YAML alias of another before filling it", () => {
+    const aliased = stringify(
+      managed({ policy: { projectTrust: { external: { mcp: "ask" } } } }),
+    ).replace(
+      /external:\n {6}mcp: ask\n/,
+      "external: &e\n      mcp: ask\n    unknown: *e\n",
+    );
+    expect(aliased).toContain("*e");
+    expect(parsed(explicitProjectTrust(aliased))).toEqual(parsed(aliased));
+  });
+
+  it("fills an anchored class without writing through to its alias", () => {
+    // Personal external and unknown defaults differ, so a write-through shows.
+    const aliased = `${stringify({
+      schema: "piship/v1",
+      app,
+      runtime: {},
+      deployment: { mode: "personal" },
+      updates: {},
+    })}policy:
+  projectTrust:
+    external: &e
+      mcp: deny
+    unknown: *e
+`;
+    const explicit = explicitProjectTrust(aliased);
+    expect(parsed(explicit)).toEqual(parsed(aliased));
+    const trust = parseYaml(explicit).policy.projectTrust;
+    expect(trust.external.agents).toBe("allow");
+    expect(trust.unknown.agents).toBe("ask");
+    expect(trust.unknown.mcp).toBe("deny");
+  });
+
+  it("returns a manifest without governance unchanged", () => {
+    const plain = stringify({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app,
+      runtime: { pi: "1.5.0" },
+      deployment: { mode: "personal" },
+    });
+    expect(explicitProjectTrust(plain)).toBe(plain);
+  });
+});
