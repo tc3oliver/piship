@@ -1683,18 +1683,22 @@ async function openSink(
  * AUDIT_UNAVAILABLE when a required sink ended with events it did not take
  * (still pending, or dropped because its buffer was full or the log was
  * closed); otherwise undefined. `prefix` says what happened to the operation
- * those events describe. The message holds counts, sink IDs, and the
+ * those events describe; with `describeSpool` (the default) a loss the spool
+ * fully kept says so. The message holds counts, sink IDs, and the
  * already-redacted last error only.
  */
 export function requiredAuditLoss(
   status: AuditStatus,
   prefix = "Audit events were lost",
+  // False for an operation refused because of the loss: "kept and delivered"
+  // would read as if it happened.
+  describeSpool = true,
 ): PiShipError | undefined {
   const lost = status.sinks.filter(
     (sink) => sink.required && (sink.pending > 0 || sink.dropped > 0),
   );
   if (!lost.length) return undefined;
-  const kept = auditLossSpooled(status);
+  const kept = describeSpool && auditLossSpooled(status);
   const sinks = lost
     .map(
       (sink) =>

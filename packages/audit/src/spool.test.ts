@@ -206,6 +206,9 @@ describe("required HTTP sink spool", () => {
     await expect(open(down)).rejects.toMatchObject({
       code: "AUDIT_UNAVAILABLE",
     });
+    await expect(
+      open(down, { readinessProbe: false, replaySpool: true }),
+    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
     const log = await open(down, {
       readinessProbe: false,
       replaySpool: false,
@@ -219,11 +222,34 @@ describe("required HTTP sink spool", () => {
       "The session ended: 1 audit event(s) were not delivered to required audit sink company (1 pending, 0 dropped; last error: collector answered HTTP 500); they are kept in its spool and delivered first at the next launch",
     );
     expect(loss?.userAction).not.toContain("report the unrecorded activity");
+    // An operation refused because of the loss never reads as kept.
+    expect(
+      requiredAuditLoss(status, "Auto mode was not switched on", false)
+        ?.message,
+    ).not.toContain("kept in its spool");
     const up = collector();
     await (await open(up)).close();
     expect(up.received.map((event) => event.resource)).toEqual([
       "after-the-fact",
     ]);
+  });
+
+  it("without the readiness probe, reports a loss the spool could not keep as unrecorded", async () => {
+    const down = collector();
+    down.fetch = async () => new Response(null, { status: 500 });
+    const log = await open(down, {
+      readinessProbe: false,
+      replaySpool: false,
+      spoolMaxBytes: 10,
+    });
+    emit(log, "too-big");
+    const status = await log.close(50);
+    expect(status.sinks[0]?.spooled).toBeUndefined();
+    expect(auditLossSpooled(status)).toBe(false);
+    const loss = requiredAuditLoss(status);
+    expect(loss?.code).toBe("AUDIT_UNAVAILABLE");
+    expect(loss?.message).not.toContain("kept in its spool");
+    expect(loss?.userAction).toContain("report the unrecorded activity");
   });
 
   it("says a collector that does not answer timed out", async () => {

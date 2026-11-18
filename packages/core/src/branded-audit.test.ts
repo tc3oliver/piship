@@ -340,6 +340,38 @@ describe("branded command audit with a required sink", () => {
     }
   });
 
+  it("fails the command when the required sink dropped events it could not buffer", async () => {
+    await collector.close();
+    const { ctx, errors } = context(sinks(collector.url, true));
+    const governance = ctx.metadata.governance as NonNullable<
+      typeof ctx.metadata.governance
+    >;
+    const tiny: BrandedContext = {
+      ...ctx,
+      metadata: {
+        ...ctx.metadata,
+        governance: {
+          ...governance,
+          manifest: {
+            ...governance.manifest,
+            audit: {
+              ...governance.manifest.audit,
+              buffer: { ...governance.manifest.audit.buffer, maxEvents: 1 },
+            },
+          },
+        },
+      },
+    };
+    const record = await signIn(tiny);
+    await expect(record()).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringMatching(
+        /^The operation completed, but its audit was not recorded: 2 audit event\(s\) were not delivered to required audit sink company \(1 pending, 1 dropped/,
+      ),
+    });
+    expect(errors).toEqual([]);
+  });
+
   it("fails the command when the required sink's spool cannot keep the events", async () => {
     await collector.close();
     const { ctx, errors } = context(sinks(collector.url, true));

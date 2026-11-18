@@ -187,7 +187,7 @@ export async function recordAudit(
     if (pending) ctx.err(`Warning: ${pending.message}`);
     return;
   }
-  const loss = requiredAuditLoss(status, failure);
+  const loss = requiredAuditLoss(status, failure, false);
   if (loss) throw loss;
 }
 

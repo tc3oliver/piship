@@ -80,9 +80,9 @@ function credentialRevoker(ctx: BrandedContext) {
     try {
       return await access.revokeCredential();
     } finally {
-      // Reported, not thrown: the switch is under way. A required sink that
-      // is still down also fails the runtime.update or runtime.rollback
-      // record at the end of the command.
+      // Reported, not thrown: the switch is under way. With a required sink
+      // down the events are spooled for the next launch and a warning says
+      // so; only a spool that cannot keep them is an error.
       await auditAccess(ctx, access, null, events).catch((error) =>
         ctx.err(`Error: ${formatError(error)}`),
       );
