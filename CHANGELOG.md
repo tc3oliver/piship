@@ -90,6 +90,11 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 
 ### Fixed
 
+- `<command> uninstall --purge --yes` deletes a stored local-secret API key instead of refusing as if a broker held it; a broker-issued credential is still refused until logout.
+- `piship uninstall <id>` prints the same removed/kept summary as `<command> uninstall`, including Pi's own sign-in.
+- Without update keys, `doctor` shows one `updates` row (rebuild and reinstall) with no source, key, or failure rows, and `validate` and `install` no longer say update needs the source variable.
+- Pi-native `--smoke-model` with no provider signed in fails with `MODEL_UNAVAILABLE` and the command's `/login`, not Pi's raw message with `node_modules` paths.
+- Logout in an `identity: none` distribution no longer mentions identity credentials; the purge summary drops nested parentheses; login's plaintext-store warning is part of its `Credential:` line.
 - **Upgrade from v0.13:** a distribution installed or built with v0.13 or earlier whose manifest leaves any `policy.projectTrust` dimension to the default (every managed example) now verifies under this PiShip, and a release this PiShip builds passes the v0.13 command's own `update` check. Before, `piship update`, `inspect`, `doctor`, and `diff` refused the healthy install as tampered (`LOCK_INVALID ... Installed manifest and lock mismatch ... Restore it from a trusted release`), and the v0.13 `<command> update` refused the new release (`INTEGRITY_FAILED: Release verification: Installed manifest and lock mismatch`), because the changed project trust defaults gave the same manifest a different lock digest. Verification still covers the manifest's whole content: an installed manifest is also checked against the v0.13 defaults it was locked with, and a changed declaration fails either way. A built payload or pack now writes every project trust dimension into its `piship.yaml`, so a later change to the defaults cannot break it again.
 
 #### For distribution authors

@@ -19,6 +19,8 @@ import { removeTrustState } from "./trust-state.js";
 import { inspectInstalledLauncher, ownsCommandShim } from "./launcher.js";
 import {
   assertSignedOut,
+  STORED_API_KEY,
+  signedInClasses,
   deleteReferencedSecrets,
   type PurgeOptions,
   type PurgeResult,
@@ -342,6 +344,7 @@ export async function uninstallAndPurgeDistribution(
       options,
       true,
     );
+    const key = signedInClasses(state).includes(STORED_API_KEY);
     const secrets = await deleteReferencedSecrets(id, state, options);
     // The state goes first: a failure here leaves the install in place, so the
     // branded command can run again; after the install is gone it could not.
@@ -352,6 +355,7 @@ export async function uninstallAndPurgeDistribution(
       deletedSecrets: secrets.deleted,
       ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
       ...(live.length ? { notRevoked: live } : {}),
+      ...(key ? { deletedApiKey: true } : {}),
     };
   } finally {
     hold.release();

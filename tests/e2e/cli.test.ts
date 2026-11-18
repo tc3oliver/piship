@@ -827,7 +827,7 @@ describe("CLI", () => {
     writeFileSync(inventoryPath, originalInventory);
     const uninstalled = command("uninstall", "mypi");
     expect(uninstalled.status).toBe(0);
-    expect(uninstalled.stdout).toMatch(/To delete it: .*purge mypi --yes/);
+    expect(uninstalled.stdout).toMatch(/To delete it, .*purge mypi --yes/);
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(installedCommand)).toBe(false);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);

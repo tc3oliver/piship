@@ -146,8 +146,26 @@ function updateDoctor(
       `${here.commandPath} is missing, so ${metadata.app.command} is not found in a new shell. Restore it with: node ${shellArg(join(payload ?? ctx.distributionDir, "piship.mjs"))} repair ${metadata.app.id} ${shellArg(payload ?? ctx.distributionDir)}`,
     );
   }
+  const keys = status.keys ?? [];
+  const trusted = keys.filter((key) => !key.retiredBy);
+  const retired = keys.filter((key) => key.retiredBy);
+  // With no key, update and update --check always refuse: the source and the
+  // last failed attempt would only point at a command that cannot succeed.
+  const unverifiable =
+    !!metadata.updates && !trusted.length && !status.trustProblem;
   if (!metadata.updates) {
     warn("updates", "not configured by this distribution");
+  } else if (unverifiable) {
+    if (metadata.deployment.mode === "personal")
+      ok(
+        "updates",
+        "come from rebuilding and reinstalling from piship.yaml (no update keys declared)",
+      );
+    else
+      warn(
+        "updates",
+        "none can be verified (no update keys); ask the distribution owner for a release that declares updates.trust.bootstrap",
+      );
   } else {
     ok(
       "channel",
@@ -181,9 +199,6 @@ function updateDoctor(
         "update root",
         `version ${status.updateRoot.version} (${status.updateRoot.origin}), expires ${status.updateRoot.expires}, channel threshold ${status.updateRoot.channelThreshold}`,
       );
-    const keys = status.keys ?? [];
-    const trusted = keys.filter((key) => !key.retiredBy);
-    const retired = keys.filter((key) => key.retiredBy);
     if (trusted.length)
       ok(
         "trusted keys",
@@ -239,6 +254,7 @@ function updateDoctor(
   const failed = readFailedAttempt(ctx.stateDir);
   if (
     failed &&
+    !unverifiable &&
     (!status.lastCheck ||
       Date.parse(failed.time) > Date.parse(status.lastCheck.time))
   )

@@ -116,10 +116,23 @@ network:
 /** `updates.transport`, when the manifest declares one. */
 export type Transport = "https" | "http-allowed";
 
+const TRUST = `  trust:
+    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [${KEY.id}], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`;
+
 function manifestSource(
   version: string,
   access: boolean,
   transport?: Transport,
+  keys = true,
 ): string {
   return `schema: piship/v1alpha5
 app:
@@ -141,28 +154,19 @@ updates:
   channels: [stable, candidate]
   source: \${ACMEPI_UPDATE_SOURCE}
 ${transport ? `  transport: ${transport}\n` : ""}  rollback: true
-  trust:
-    bootstrap:
-      version: 1
-      expires: 2099-01-01T00:00:00Z
-      keys:
-        - id: ${KEY.id}
-          publicKey: ${KEY.publicKey}
-      roles:
-        root: { keyIds: [${KEY.id}], threshold: 1 }
-        channel: { keyIds: [${KEY.id}], threshold: 1 }
-`;
+${keys ? TRUST : ""}`;
 }
 
 function project(
   version: string,
   access: boolean,
   transport?: Transport,
+  keys = true,
 ): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version, access, transport));
+  writeFileSync(path, manifestSource(version, access, transport, keys));
   lockManifest(path);
   return path;
 }
@@ -253,8 +257,13 @@ const signatureAuditor = () => ({
   stderr: "",
 });
 
-async function release(version: string, access = false, transport?: Transport) {
-  const path = project(version, access, transport);
+async function release(
+  version: string,
+  access = false,
+  transport?: Transport,
+  keys = true,
+) {
+  const path = project(version, access, transport, keys);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -290,6 +299,13 @@ export async function installed(access = false, transport?: Transport) {
   process.env.ACMEPI_UPDATE_SOURCE = channelDir;
   const opts: UpdateOptions = { source: channelDir };
   return { a, b, channelDir, opts };
+}
+
+/** 1.0.0 installed from a release that declares no update keys. */
+export async function installedWithoutKeys() {
+  const a = await release("1.0.0", false, undefined, false);
+  await installDistribution(a.archive, true);
+  return { a };
 }
 
 export function stateDir(): string {

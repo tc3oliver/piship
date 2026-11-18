@@ -280,9 +280,7 @@ describe("uninstall --purge", () => {
     expect(existsSync(payload)).toBe(false);
     const text = lines.join("\n");
     expect(text).not.toContain(payload);
-    expect(text).toContain(
-      `To delete it: node dist/${ID}/piship.mjs purge ${ID} --yes`,
-    );
+    expect(text).toContain(`node dist/${ID}/piship.mjs purge ${ID} --yes`);
   });
 
   it("purge accepts --yes and --without-logout in either order, and a second uninstall names it", async () => {
@@ -367,9 +365,21 @@ describe("uninstall --purge", () => {
     let { payload } = installRecorder();
     const state = seedState();
     identity(state);
+    mkdirSync(join(state, "agent"), { recursive: true });
+    writeFileSync(
+      join(state, "agent", "auth.json"),
+      JSON.stringify({ openai: { type: "api_key", key: "placeholder" } }),
+    );
     const warned = await run([]);
     expect(warned.status, warned.err).toBe(0);
-    expect(warned.out).toContain(`Uninstalled ${ID}.`);
+    // The same removed/kept summary as the branded <command> uninstall.
+    expect(warned.out).toMatch(/^Uninstalled \S+\.\n {2}removed {2}/);
+    expect(warned.out).toContain(
+      "signed in: an identity session stays until it expires",
+    );
+    expect(warned.out).toContain(
+      `signed in: Pi's own sign-in (${join(state, "agent", "auth.json")}) stays with the kept data`,
+    );
     expect(warned.err).toBe(
       `Warning: ${ID} is still signed in (an identity session); it stays live until it expires. Sign out with the release's own logout (node bin/<command> logout, in the directory that holds the release's piship.mjs) before purge.`,
     );
@@ -680,7 +690,10 @@ describe("validate", () => {
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;
-    const result = await validate({
+    const publicKey = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "der" })
+      .toString("base64");
+    const manifest = (trust: unknown) => ({
       variables: ["ACME_GATEWAY_URL", "ACME_UPDATE_URL"],
       inference: {
         provider: "openai-compatible",
@@ -690,8 +703,16 @@ describe("validate", () => {
         channel: "stable",
         channels: ["stable"],
         source: `\${ACME_UPDATE_URL}`,
+        ...(trust ? { trust } : {}),
       },
     });
+    // With no update keys, update always refuses: its variable is not news.
+    expect((await validate(manifest(undefined))).stderr).not.toContain(
+      "only update reads",
+    );
+    const result = await validate(
+      manifest({ keys: [{ id: "release", publicKey }] }),
+    );
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
       "Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ACME_GATEWAY_URL",
@@ -2330,8 +2351,11 @@ describe("what to do after an install", () => {
           // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
           identity: { oidc: { issuer: "${ACME_ISSUER}/${ACME_SHARED}" } },
         },
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
-        updates: { source: "${ACME_SOURCE}/${ACME_SHARED}" },
+        updates: {
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
+          source: "${ACME_SOURCE}/${ACME_SHARED}",
+          trust: { keys: [{ id: "release", publicKey: "key" }] },
+        },
       }),
     );
     expect(next).toContain("set ACME_ISSUER, ACME_SHARED in the environment");
@@ -2348,6 +2372,16 @@ describe("what to do after an install", () => {
         }),
         [],
         { ACME_SOURCE: "https://updates" },
+      ),
+    ).not.toContain("update also needs");
+    // With no update keys, update always refuses: the variable is moot.
+    expect(
+      installNext(
+        receipt({
+          deployment: { mode: "personal" },
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is the input
+          updates: { source: "${ACME_SOURCE}" },
+        }),
       ),
     ).not.toContain("update also needs");
   });

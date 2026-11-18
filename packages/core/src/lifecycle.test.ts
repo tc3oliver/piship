@@ -4177,6 +4177,30 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(existsSync(stateDir())).toBe(false);
   });
 
+  it("purge deletes a stored local-secret key, but refuses a broker-issued one", async () => {
+    const state = stateDir();
+    const file = join(state, "credentials-metadata", "inference.json");
+    const metadata = (mode: string) =>
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        mode,
+        kind: "api_key",
+        credential_ref: `piship:${ID}:inference#1`,
+      });
+    write(file, metadata("http-broker"));
+    const { store } = testStore();
+    await expect(
+      purgeDistributionState(ID, { secretStore: store }),
+    ).rejects.toThrow(/still signed in \(a runtime credential\)/);
+    expect(existsSync(file)).toBe(true);
+    // A local key has no broker to revoke at: purge only deletes it.
+    write(file, metadata("local-secret"));
+    const result = await purgeDistributionState(ID, { secretStore: store });
+    expect(result.notRevoked).toBeUndefined();
+    expect(result.deletedApiKey).toBe(true);
+    expect(existsSync(state)).toBe(false);
+  });
+
   it("purge deletes the secrets a truncated credential file still names", async () => {
     const state = stateDir();
     write(
@@ -4602,9 +4626,9 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     );
 
     it.skipIf(process.platform === "win32")(
-      "refuses while a local-secret key is stored and says logout deletes it",
+      "refuses while a local-secret key is stored and says logout deletes it, but purge deletes it",
       async () => {
-        const { receipt, ctx } = await installed();
+        const { receipt, ctx, out } = await installed();
         const metadata = {
           ...ctx.metadata,
           access: {
@@ -4616,6 +4640,8 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
           join(stateDir(), "credentials-metadata", "inference.json"),
           JSON.stringify({
             schema: "piship-credential-metadata/v1",
+            mode: "local-secret",
+            secret_store: "file",
             credential_ref: `piship:${ID}:inference#1`,
           }),
         );
@@ -4629,6 +4655,14 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
           /^Run acmepi logout to delete the stored key, then acmepi uninstall again/,
         );
         expect(existsSync(receipt.commandPath)).toBe(true);
+        // No broker holds the key: purge, as the refusal's own hint suggests,
+        // deletes it instead of refusing.
+        await runUninstall({ ...ctx, metadata }, ["--purge", "--yes"]);
+        expect(existsSync(receipt.commandPath)).toBe(false);
+        expect(existsSync(stateDir())).toBe(false);
+        const text = out.join("\n");
+        expect(text).toContain("deleted  the stored API key");
+        expect(text).not.toMatch(/\(\d.*\(/);
       },
     );
 

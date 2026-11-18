@@ -32,5 +32,9 @@ export {
   runLogin,
   runLogout,
 } from "./login.js";
-export { runUninstall, UNINSTALL_OPTIONS } from "./uninstall.js";
+export {
+  runUninstall,
+  UNINSTALL_OPTIONS,
+  uninstallKeepingState,
+} from "./uninstall.js";
 export { runSandbox } from "./sandbox.js";

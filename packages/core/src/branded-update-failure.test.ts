@@ -8,6 +8,7 @@ import {
   HOST_EVIDENCED,
   ID,
   installed,
+  installedWithoutKeys,
   rejection,
   stateDir,
   useLifecycleHomes,
@@ -151,4 +152,22 @@ describe.runIf(HOST_EVIDENCED)("doctor install checks", () => {
       }
     },
   );
+
+  it("says a distribution without update keys updates by rebuilding, without nagging about its source or a failure", async () => {
+    await installedWithoutKeys();
+    delete process.env.ACMEPI_UPDATE_SOURCE;
+    const empty = mkdtempSync(join(tmpdir(), "piship-empty-source-"));
+    scratch.push(empty);
+    const error = await rejection(runUpdate(context(), ["--from", empty]));
+    expect((error as { userAction?: string }).userAction).toContain(
+      "rebuilding and reinstalling",
+    );
+    const lines = updateGroup();
+    expect(lines).toContain(
+      "ok updates come from rebuilding and reinstalling from piship.yaml (no update keys declared)",
+    );
+    const text = lines.join("\n");
+    expect(text).not.toMatch(/ (source|trusted keys|last failure) /);
+    expect(text).not.toContain("update needs");
+  });
 });
