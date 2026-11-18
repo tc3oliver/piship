@@ -28,7 +28,7 @@ import { sandboxPull } from "./sandbox-pull.js";
 function notStored(ctx: BrandedContext): PiShipError {
   return new PiShipError(
     "POLICY_DENIED",
-    `${ctx.metadata.app.name} does not use a stored sandbox credential (sandbox.credential: stored)`,
+    `${ctx.metadata.app.name} does not use a stored sandbox credential (its manifest does not set sandbox.credential to stored)`,
     {
       component: "sandbox",
       userAction: `Nothing to sign in or out of here: start ${ctx.metadata.app.command} as usual; it needs no stored sandbox secret`,

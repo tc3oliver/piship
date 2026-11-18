@@ -285,7 +285,7 @@ function parseBackend(
   if (credential === "stored" && sandbox.endpoint === undefined)
     fail(
       "sandbox.endpoint",
-      "sandbox.credential: stored needs the endpoint the credential is sent to",
+      "sandbox.credential set to stored needs the endpoint the credential is sent to",
     );
   const httpTransport =
     sandbox.httpTransport === undefined
