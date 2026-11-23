@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DistributionLock } from "@piship/core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const seen = vi.hoisted(() => ({
@@ -179,5 +180,65 @@ describe("a child's stdout", () => {
     expect(error).toHaveBeenCalledWith("notice");
     launchOutput(false)("hello");
     expect(log).toHaveBeenCalledWith("hello");
+  });
+});
+
+describe("resuming a session", () => {
+  const sessionDir = () => {
+    const dir = mkdtempSync(join(temp, "sessions-"));
+    chmodSync(dir, 0o700);
+    return dir;
+  };
+  const prepared = (requestedModel?: string) =>
+    ({
+      metrics: undefined,
+      access: null,
+      activated: {
+        selectedModel: "anthropic/claude-sonnet-4-5",
+        runtime: { kind: "pi-native" },
+        config: { values: {}, entries: [] },
+      },
+      removedEnvironment: [],
+      ...(requestedModel ? { requestedModel } : {}),
+    }) as unknown as PreparedAccess;
+  async function resume(requestedModel?: string) {
+    const dir = sessionDir();
+    const first = SessionManager.create(process.cwd(), dir);
+    first.appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    first.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+      api: "openai-completions",
+      provider: "openai",
+      model: "gpt-4o",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    await expect(
+      startGoverned(
+        context(),
+        prepared(requestedModel),
+        { sessionDir: dir, newSession: false, resume: first.getSessionId() },
+        null,
+      ),
+    ).rejects.toThrow("stop-after-createAgentSession");
+  }
+
+  it("leaves the model to the session, so Pi restores the one it ended on", async () => {
+    await resume();
+    expect(seen.session).not.toHaveProperty("model");
+  });
+
+  it("starts on the model --model names", async () => {
+    await resume("anthropic/claude-sonnet-4-5");
+    expect(seen.session).toHaveProperty("model");
   });
 });

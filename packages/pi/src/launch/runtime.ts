@@ -664,8 +664,11 @@ async function startRuntime(
         );
       }
     }
-    // Pi restores the model of a session that already has messages.
+    // Pi restores the model of a session that already has messages, unless
+    // one is passed: only --model overrides it, and a model the session ended
+    // on that is no longer allowed is replaced below.
     const resumed = sessionManager.buildSessionContext().messages.length > 0;
+    const keepSessionModel = resumed && !prepared.requestedModel;
     startupMark("agent_session_start");
     const result = await createAgentSession({
       cwd,
@@ -674,7 +677,7 @@ async function startRuntime(
       modelRuntime,
       resourceLoader,
       sessionManager,
-      ...(model ? { model } : {}),
+      ...(model && !keepSessionModel ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
       // Governed sessions replace Pi's built-in tools with governed ones of
       // the same names; SDK custom tools also win over extension tools.
