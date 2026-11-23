@@ -848,6 +848,16 @@ describe("one owner per session file (#57)", () => {
     a.child.kill("SIGKILL");
     await a.exited;
     expect(ownerRecords()).toHaveLength(1);
+    // Windows hands a freed PID out again at once. A process given A's ID
+    // within START_SKEW_MS of A's recorded start reads as A itself (wrongly
+    // live only starts a new session), so this owner, which ran for a second,
+    // is dated as one that ran for a minute, as a real crashed session has.
+    const record = join(sessionDir, OWNER_DIRECTORY, ownerRecords()[0] ?? "");
+    const owner = JSON.parse(readFileSync(record, "utf8"));
+    writeFileSync(
+      record,
+      JSON.stringify({ ...owner, started: owner.started - 60_000 }),
+    );
     const b = launch();
     expect(await started(b)).toMatchObject({ file, id, notice: null });
     await turn(b, "after the crash");
