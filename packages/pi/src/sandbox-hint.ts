@@ -56,7 +56,7 @@ export function manifestChange(
 ): string {
   return mode === "managed"
     ? `Ask your administrator to change ${key}.`
-    : `Change ${key} in your piship.yaml.`;
+    : `Change ${key} in your piship.yaml and rebuild; the installed command runs the built payload.`;
 }
 
 /** The shell cannot get past the sandbox, so a retry only repeats the failure. */
