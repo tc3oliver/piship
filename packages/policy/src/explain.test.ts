@@ -363,7 +363,7 @@ describe("denialHint", () => {
 
   it("points a personal user at their own piship.yaml for an enforced rule", () => {
     expect(denialHint(at("distribution-enforced"), "personal")).toMatch(
-      /cannot be changed here; it lives in the distribution's piship\.yaml.*policy explain shell\.execute/,
+      /cannot be changed here; it lives in the distribution's piship\.yaml; edit the rule there and rebuild.*policy explain shell\.execute/,
     );
   });
 
