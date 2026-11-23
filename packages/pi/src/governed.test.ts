@@ -943,7 +943,9 @@ describe("governed built-in tools", () => {
       });
       const bash = tool(governedTools(session, workspace), "bash");
       const seen: string[][] = [];
-      const first = { command: "echo safe > first.txt" };
+      // A per-call timeout (seconds) so a stalled command fails with its own
+      // message rather than as an anonymous test timeout (one Windows run hung).
+      const first = { command: "echo safe > first.txt", timeout: 5 };
       await run(bash, first, choosing("Allow for this session", seen));
       expect(readFileSync(join(workspace, "first.txt"), "utf8")).toContain(
         "safe",
@@ -954,7 +956,7 @@ describe("governed built-in tools", () => {
       await expect(
         run(
           bash,
-          { command: "echo unsafe > second.txt" },
+          { command: "echo unsafe > second.txt", timeout: 5 },
           choosing("Deny", seen),
         ),
       ).rejects.toThrow(/declined by the user/);

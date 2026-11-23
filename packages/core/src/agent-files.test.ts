@@ -911,6 +911,18 @@ describe("parallel session launches", () => {
     };
   };
 
+  // The lock held by this test process (a live owner) until the returned
+  // release runs: no timer, so a loaded runner cannot free it mid-test.
+  const holdHere = () => {
+    const guard = join(agentDir, ".piship-agent-files-lock");
+    mkdirSync(guard);
+    writeFileSync(
+      join(guard, "owner.json"),
+      JSON.stringify({ pid: process.pid }),
+    );
+    return () => rmSync(guard, { recursive: true, force: true });
+  };
+
   it("all of 8 concurrent launches succeed", async () => {
     const json = JSON.stringify(lock({ autoApprove: true }));
     // every child waits for the same instant, so they all start together
@@ -960,19 +972,22 @@ describe("parallel session launches", () => {
     await released;
   });
 
-  it("still fails with the busy error once the budget is spent", async () => {
-    const { released } = await holder(1500);
-    expect(() =>
-      applyAgentFiles(lock({ autoApprove: true }), agentDir, {
-        session: true,
-        lockWaitMs: 150,
-      }),
-    ).toThrow("being changed by another launch");
-    await released;
+  it("still fails with the busy error once the budget is spent", () => {
+    const release = holdHere();
+    try {
+      expect(() =>
+        applyAgentFiles(lock({ autoApprove: true }), agentDir, {
+          session: true,
+          lockWaitMs: 150,
+        }),
+      ).toThrow("being changed by another launch");
+    } finally {
+      release();
+    }
   });
 
-  it("keeps its wait inside the budget, even for a budget shorter than one pause", async () => {
-    const { released } = await holder(1500);
+  it("keeps its wait inside the budget, even for a budget shorter than one pause", () => {
+    const release = holdHere();
     // Sum the pauses the wait asks for, not the wall clock: a loaded runner
     // stretches every attempt (309 and 400 ms against a 265 ms bound on macOS
     // CI), but no pause may reach past the budget.
@@ -995,17 +1010,19 @@ describe("parallel session launches", () => {
       }
     } finally {
       wait.mockRestore();
+      release();
     }
-    await released;
   });
 
-  it("reports the busy lock as the same coded error as before", async () => {
-    const { released } = await holder(600);
+  it("reports the busy lock as the same coded error as before", () => {
+    const release = holdHere();
     let error: unknown;
     try {
       applyAgentFiles(lock({ autoApprove: true }), agentDir);
     } catch (caught) {
       error = caught;
+    } finally {
+      release();
     }
     expect(error).toMatchObject({
       name: "PiShipError",
@@ -1013,7 +1030,6 @@ describe("parallel session launches", () => {
       message:
         "Package configuration is being changed by another launch; retry when it finishes",
     });
-    await released;
   });
 
   describe("a lock directory that no launch owns", () => {
@@ -1500,13 +1516,17 @@ describe("parallel session launches", () => {
     }, 60_000);
   });
 
-  it("does not wait for a launch that is not a session", async () => {
-    const { released } = await holder(600);
-    const started = Date.now();
-    expect(() =>
-      applyAgentFiles(lock({ autoApprove: true }), agentDir),
-    ).toThrow("being changed by another launch");
-    expect(Date.now() - started).toBeLessThan(300);
-    await released;
+  it("does not wait for a launch that is not a session", () => {
+    const release = holdHere();
+    const wait = vi.spyOn(Atomics, "wait");
+    try {
+      expect(() =>
+        applyAgentFiles(lock({ autoApprove: true }), agentDir),
+      ).toThrow("being changed by another launch");
+      expect(wait).not.toHaveBeenCalled();
+    } finally {
+      wait.mockRestore();
+      release();
+    }
   });
 });
