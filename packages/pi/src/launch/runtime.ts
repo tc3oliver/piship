@@ -329,10 +329,11 @@ export function replacementModel<T>(
   cause: NoModelCause,
 ): T {
   const replacement = chosen ?? allowed[0];
+  // Pi names a session with no model unknown/unknown; that is not a model to report.
   if (replacement === undefined)
     throw new PiShipError(
       "MODEL_DENIED",
-      `${cause.resumed ? `The resumed session uses ${previous}, which is not allowed, and no` : "No"} allowed model is available: ${cause.userNarrowed ? "no model Pi offers matches your models.allowed preference" : "the distribution allows no model Pi offers"}`,
+      `${cause.resumed && previous !== "unknown/unknown" ? `The resumed session uses ${previous}, which is not allowed, and no` : "No"} allowed model is available: ${cause.userNarrowed ? "no model Pi offers matches your models.allowed preference" : "the distribution allows no model Pi offers"}`,
       {
         userAction: cause.userNarrowed
           ? `Run ${command} config unset models.allowed, or set it to a model ${command} models lists, then start ${command} again`

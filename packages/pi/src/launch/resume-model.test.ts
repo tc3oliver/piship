@@ -65,6 +65,24 @@ describe("replacementModel", () => {
     expect(String((error as Error).message)).not.toContain("resumed");
   });
 
+  it("does not report Pi's unknown/unknown placeholder as the resumed model", () => {
+    let error: unknown;
+    try {
+      replacementModel(undefined, [], "unknown/unknown", "acme", {
+        resumed: true,
+        userNarrowed: true,
+        mode: "personal",
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      message:
+        "No allowed model is available: no model Pi offers matches your models.allowed preference",
+      userAction: expect.stringContaining("acme config unset models.allowed"),
+    });
+  });
+
   it("points a personal owner at piship.yaml when the distribution allows nothing", () => {
     expect(() =>
       replacementModel(undefined, [], "a/b", "acme", {
