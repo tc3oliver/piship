@@ -15,6 +15,23 @@ PiShip packages exactly the file the manifest names, under `resources/` in the p
 
 The payload's SDK is the one built with the PiShip version that built the distribution, so an adapter that imports it always gets the SDK matching the loader. A bundled copy of the SDK also works: the loaders re-wrap an adapter's secrets, so a second `SecretValue` class inside a bundle still redacts. Prefer the import.
 
+Each kind is declared by one key in `piship.yaml` naming the file by a `./` path relative to the manifest ([manifest fields](manifest.md#access-fields-v1alpha2-and-later), [sandbox](manifest.md#sandbox)):
+
+```yaml
+identity:
+  mode: adapter
+  adapter: ./adapters/identity.mjs
+credential:
+  provider: adapter
+  adapter: ./adapters/credential.mjs
+sandbox:
+  required: true
+  provider: custom
+  adapter: ./adapters/sandbox.mjs
+```
+
+`piship validate`, `dev`, and `test` warn about an adapter file that imports anything but `@piship/adapter-sdk` and `node:` built-ins. An identity or credential adapter that still fails to import, or whose factory throws, fails with `CONFIG_INVALID`: `The <kind> adapter <path> failed to load: <message>`.
+
 ## Helpers
 
 | Helper | Default export of | What it does |
@@ -99,6 +116,36 @@ A custom sandbox backend gets its credential through `CustomBackendContext`, fro
 ## Examples
 
 `packages/adapter-sdk/examples/` holds one example of each kind, written against placeholder `*.example.com` services: `identity.mjs` (a device-style sign-in), `credential.mjs` (exchanges the identity for a runtime credential and revokes it with itself), `sandbox.mjs` (a remote execution service), and `audit-sink.mjs` (a collector that stores each event once). Each is a single file that imports only the SDK and `node:` built-ins, which a unit test checks. The examples are loaded through PiShip's real loaders against a local fake of those services (`tests/adapter-sdk-examples.test.ts`); that is loader evidence, not a live integration. The conformance kits below also run against the identity, credential, and sandbox examples (`tests/adapter-kits/examples.test.ts`), which pass every behavior their kit can exercise; the audit sink example is a collector, not a sink that delivers onward, so the audit kit does not apply to it. Replace the placeholder service, declare its host in `network.allowHosts` when the distribution is private-only, and copy the file into the distribution. For an adapter with a real service behind it, see the [reference container sandbox](../examples/enterprise-reference/sandbox/README.md): a sandbox adapter with a `shared` workspace and a stored credential, and the service that runs each command in a container.
+
+## Run a conformance kit
+
+The kits are private and unpublished, so a company runs them from a checkout of this repository. Build the checkout once (`npm ci && npm run build` at its root), then, in the adapter's own project, install the built SDK from it so the adapter's `@piship/adapter-sdk` import resolves, and import the built kit by path:
+
+```sh
+export PISHIP_REPO_ROOT=/path/to/piship
+npm install "$PISHIP_REPO_ROOT/packages/adapter-sdk"
+```
+
+```js
+// test/identity.test.mjs
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { test } from "node:test";
+import { pathToFileURL } from "node:url";
+import adapter from "../identity.mjs";
+
+const kit = join(process.env.PISHIP_REPO_ROOT, "packages/adapter-conformance/dist/index.js");
+const { testIdentityAdapter } = await import(pathToFileURL(kit).href);
+
+test("meets the PiShip identity contract", async () => {
+  const report = await testIdentityAdapter(adapter);
+  assert.deepEqual(report.results.filter((result) => result.status === "failed"), []);
+});
+```
+
+Run it with `node --test`. Against the SDK's `identity.mjs` example this passes in about a minute; an adapter built with a short request timeout, passed as `requestTimeoutMs`, runs faster ([options](#options)). The reference broker runs a service kit the same way (`examples/enterprise-reference/broker/test/conformance-kit.test.mjs`).
+
+A failed check's reason names the error by its `PiShipError` code or class only, never its message, because the message may hold a secret. To see the adapter's own message, call the failing method directly in a test.
 
 ## Audit sink conformance kit
 

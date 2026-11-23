@@ -10,6 +10,7 @@ import {
   callWithDeadline,
   PiShipError,
   type RuntimeCredential,
+  redact,
 } from "@piship/contracts";
 
 // Defined in @piship/contracts so the adapter SDK can name it without core.
@@ -58,10 +59,27 @@ export async function loadAdapter<T>(
       // No caller signal: never called.
       cancelled: () => undefined,
     });
+  // A missing sibling or npm import, a syntax error, or a throwing factory
+  // would otherwise reach the user as bare Node text naming no adapter.
+  const failed = (error: unknown): unknown =>
+    error instanceof PiShipError
+      ? error
+      : new PiShipError(
+          "CONFIG_INVALID",
+          `The ${kind} adapter ${path} failed to load: ${redact(String((error as Error)?.message ?? error))}`,
+          {
+            component: kind,
+            userAction:
+              "Keep the adapter in one file that imports only @piship/adapter-sdk and node: built-ins, or bundle it into one file, then run piship lock again (docs/adapter-sdk.md#an-adapter-is-one-file)",
+            sanitizedDetail: { adapter: path, phase: "load" },
+          },
+        );
   const module = (await bounded(
     () => import(pathToFileURL(absolute).href),
     importTimeoutMs,
-  )) as { default?: unknown };
+  ).catch((error) => {
+    throw failed(error);
+  })) as { default?: unknown };
   if (typeof module.default !== "function")
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -71,7 +89,11 @@ export async function loadAdapter<T>(
       },
     );
   const factory = module.default as (context: AdapterContext) => unknown;
-  const instance = await bounded(async () => factory(context), timeoutMs);
+  const instance = await bounded(async () => factory(context), timeoutMs).catch(
+    (error) => {
+      throw failed(error);
+    },
+  );
   if (!instance || typeof instance !== "object")
     throw new PiShipError(
       "CONFIG_INVALID",

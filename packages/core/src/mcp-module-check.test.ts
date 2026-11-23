@@ -43,3 +43,30 @@ describe("MCP server modules", () => {
     expect(warning?.message).toContain("--bundle --platform=node --format=esm");
   });
 });
+
+describe("adapter modules", () => {
+  it("warns about a sibling import but allows the adapter SDK", () => {
+    const dir = mkdtempSync(join(tmpdir(), "piship-adapter-module-"));
+    roots.push(dir);
+    writeFileSync(
+      join(dir, "identity.mjs"),
+      'import { defineIdentityAdapter } from "@piship/adapter-sdk";\nimport { login } from "./helpers.mjs";\n',
+    );
+    writeFileSync(
+      join(dir, "credential.mjs"),
+      'import { defineCredentialAdapter } from "@piship/adapter-sdk";\n',
+    );
+    const manifest = {
+      access: {
+        identity: { mode: "adapter", adapter: "./identity.mjs" },
+        credential: { provider: "adapter", adapter: "./credential.mjs" },
+      },
+    } as unknown as Manifest;
+    const warnings = mcpModuleWarnings(manifest, join(dir, "piship.yaml"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.path).toBe("identity.adapter");
+    expect(warnings[0]?.message).toMatch(
+      /^\.\/identity\.mjs imports \.\/helpers\.mjs, but/,
+    );
+  });
+});

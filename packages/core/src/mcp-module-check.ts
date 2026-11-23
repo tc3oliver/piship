@@ -16,30 +16,56 @@ function external(specifier: string): boolean {
   return !BUILTIN.has(specifier.split("/")[0] ?? specifier);
 }
 
+/** The sibling-file and npm imports of a module file, if it exists. */
+function externalImports(file: string, allowed?: string): string[] {
+  if (!existsSync(file)) return [];
+  const found = new Set<string>();
+  for (const match of readFileSync(file, "utf8").matchAll(SPECIFIER))
+    if (match[1] && match[1] !== allowed && external(match[1]))
+      found.add(match[1]);
+  return [...found];
+}
+
 /**
- * MCP server modules that import a sibling file or an npm package. Only the
- * module file itself is locked and packaged, so such a server runs from the
- * source tree but fails with ERR_MODULE_NOT_FOUND once installed.
+ * MCP server and adapter modules that import a sibling file or an npm
+ * package. Only the module file itself is locked and packaged, so such a
+ * module runs from the source tree but fails with ERR_MODULE_NOT_FOUND once
+ * installed. An adapter may import `@piship/adapter-sdk`, which the payload
+ * carries.
  * shortcut: a text scan, so an import named in a comment or string also
  * counts; parse the module if that misleads authors.
  */
 export function mcpModuleWarnings(
-  manifest: Pick<Manifest, "governance">,
+  manifest: Pick<Manifest, "governance"> & Partial<Pick<Manifest, "access">>,
   manifestPath: string,
 ): ValidationDiagnostic[] {
   const base = dirname(resolve(manifestPath));
+  const modules: [string, string, string | undefined][] = [];
+  for (const server of manifest.governance?.mcp.servers ?? [])
+    if (server.module)
+      modules.push([
+        `mcp.servers.${server.id}.module`,
+        server.module,
+        undefined,
+      ]);
+  const identity = manifest.access?.identity;
+  for (const [path, module] of [
+    [
+      "identity.adapter",
+      identity?.mode === "adapter" ? identity.adapter : undefined,
+    ],
+    ["credential.adapter", manifest.access?.credential?.adapter],
+    ["sandbox.adapter", manifest.governance?.sandbox?.adapter],
+    ["policy.adapter", manifest.governance?.policy?.adapter],
+  ] as const)
+    if (module) modules.push([path, module, "@piship/adapter-sdk"]);
   const warnings: ValidationDiagnostic[] = [];
-  for (const server of manifest.governance?.mcp.servers ?? []) {
-    if (!server.module) continue;
-    const file = resolve(base, server.module);
-    if (!existsSync(file)) continue;
-    const found = new Set<string>();
-    for (const match of readFileSync(file, "utf8").matchAll(SPECIFIER))
-      if (match[1] && external(match[1])) found.add(match[1]);
-    if (found.size)
+  for (const [path, module, allowed] of modules) {
+    const found = externalImports(resolve(base, module), allowed);
+    if (found.length)
       warnings.push({
-        path: `mcp.servers.${server.id}.module`,
-        message: `${server.module} imports ${[...found].join(", ")}, but only this one file is packaged, so the server fails with ERR_MODULE_NOT_FOUND once installed; bundle it into one file (esbuild ${server.module} --bundle --platform=node --format=esm --outfile=<out>.mjs)`,
+        path,
+        message: `${module} imports ${found.join(", ")}, but only this one file is packaged, so it fails with ERR_MODULE_NOT_FOUND once installed; bundle it into one file (esbuild ${module} --bundle --platform=node --format=esm --outfile=<out>.mjs)`,
       });
   }
   return warnings;
