@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { resolveGit } from "@piship/core";
 import { RESERVED, type SeedResult, type SeedSandbox } from "./seed.js";
 
 const EXEC_TIMEOUT_SECONDS = 120;
@@ -24,7 +25,7 @@ const blobId = (data: Buffer) =>
 function hostGit(root: string, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     execFile(
-      "git",
+      resolveGit(),
       args,
       { cwd: root, encoding: "buffer", maxBuffer: 256 * 1024 * 1024 },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),

@@ -204,7 +204,8 @@ sandbox:
   filesystem:
     read:
       # A declared list replaces PiShip's default list rather than adding to
-      # it, so this one restates every default and then adds its own.
+      # it, so this one restates every default and then adds the credential paths
+      # `piship validate` recommends.
       deny:
         - ~/.ssh
         - ~/.aws
@@ -216,6 +217,15 @@ sandbox:
         - ~/.netrc
         - ~/.npmrc
         - ~/.pi
+        - ~/.git-credentials
+        - ~/.config/git/credentials
+        - ~/.config/gh
+        - ~/.pypirc
+        - ~/.cargo/credentials.toml
+        - ~/.cargo/credentials
+        - ~/.terraform.d
+        - ~/.Xauthority
+        - ~/Library/Keychains
     write:
       allow: [workspace, tmp]
   network:

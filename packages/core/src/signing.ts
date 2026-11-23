@@ -11,6 +11,7 @@ import {
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { PiShipError, systemError } from "@piship/contracts";
+import { resolveGit } from "./git-run.js";
 
 /** A release key a distribution trusts: base64 of the 44-byte Ed25519 SPKI DER. */
 export interface TrustedKey {
@@ -172,7 +173,14 @@ function git(args: readonly string[], cwd: string) {
   // Answer for the directory itself, not an inherited repository.
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"])
     delete env[name];
-  return spawnSync("git", args, {
+  let file: string;
+  try {
+    file = resolveGit();
+  } catch (error) {
+    // No git on PATH: report it as a failed run so the caller fails closed.
+    return { error: error as Error, status: null, stdout: "" };
+  }
+  return spawnSync(file, args, {
     cwd,
     env,
     encoding: "utf8",

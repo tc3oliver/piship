@@ -7,6 +7,7 @@ import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
 import { printable } from "@piship/contracts";
+import { resolveGit } from "@piship/core";
 import type { ActiveSandbox } from "@piship/sandbox";
 import { packTar, type TarEntry } from "./tar.js";
 
@@ -67,7 +68,7 @@ export type SeedSandbox = Pick<ActiveSandbox, "exec"> & {
 function git(root: string, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     execFile(
-      "git",
+      resolveGit(),
       args,
       { cwd: root, encoding: "buffer", maxBuffer: 256 * 1024 * 1024 },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),

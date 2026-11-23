@@ -42,6 +42,9 @@ const DEVICE_WRITES = [
  * Ways to start a process that launchd, not this sandbox, would parent:
  * LaunchServices (`open`, `open -a Terminal`), Apple events (`osascript`
  * telling another app to run a script), and launchd jobs (`launchctl`).
+ * The Keychain is closed the same way: securityd and `security` are denied,
+ * since a secret PiShip stored with `security add-generic-password` trusts
+ * /usr/bin/security and would otherwise be readable from inside.
  * Only these named services are denied; generic mach-lookup stays allowed so
  * ordinary command-line tools keep working.
  */
@@ -53,16 +56,21 @@ const LAUNCH_ESCAPES = [
   (global-name-regex #"^com\\.apple\\.lsd\\.")
   (global-name "com.apple.coreservices.appleevents")
   (global-name "com.apple.appleeventsd")
-  (global-name "com.apple.ScriptingAdditions"))`,
+  (global-name "com.apple.ScriptingAdditions")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd")
+  (global-name-regex #"^com\\.apple\\.securityd"))`,
   // The launch tools themselves may not run, matched by path and by code
   // signature so a copy of the binary is refused too.
   `(deny process-exec
   (literal "/bin/launchctl")
   (literal "/usr/bin/open")
   (literal "/usr/bin/osascript")
+  (literal "/usr/bin/security")
   (signing-identifier "com.apple.xpc.launchctl")
   (signing-identifier "com.apple.open")
-  (signing-identifier "com.apple.osascript"))`,
+  (signing-identifier "com.apple.osascript")
+  (signing-identifier "com.apple.security"))`,
 ];
 
 /**

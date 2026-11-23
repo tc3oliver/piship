@@ -33,6 +33,18 @@ export const DEFAULT_SANDBOX_READ_DENY = [
   "~/.npmrc",
   "~/.pi",
 ] as const;
+/** Credential paths outside the defaults; `validate` warns when a required sandbox leaves one readable. */
+export const RECOMMENDED_SANDBOX_READ_DENY = [
+  "~/.git-credentials",
+  "~/.config/git/credentials",
+  "~/.config/gh",
+  "~/.pypirc",
+  "~/.cargo/credentials.toml",
+  "~/.cargo/credentials",
+  "~/.terraform.d",
+  "~/.Xauthority",
+  "~/Library/Keychains",
+] as const;
 export const DEFAULT_SANDBOX_WRITE_ALLOW = ["workspace", "tmp"] as const;
 export const DEFAULT_SANDBOX_ENVIRONMENT = [
   "PATH",

@@ -88,6 +88,8 @@ Changes on `main` since v0.13.0; not released and not yet qualified. The highlig
 - A malformed or already-passed identity expiry can no longer bypass renewal: stored metadata with a bad expiry is refused before its token is restored, and a refreshed token with an invalid or passed expiry fails with `IDENTITY_EXPIRED` instead of being stored or reused.
 - On an agent directory shared across hosts, one host no longer takes down another host's live lock, override, or provider lease: owner records carry host and start identity, and records from another host are kept. A reused process ID dated after the record, or a creation time in the future, is no longer taken for a dead holder ([security](docs/security.md)).
 - The `e2b-compatible` per-sandbox envd access token is redacted from errors, like the API key.
+- Hardened sandbox credential isolation: the macOS sandbox profile also denies the Keychain services and the `security` tool to contained commands; on Windows `git` is resolved from absolute `PATH` entries only (`.exe`/`.com`, quoted entries accepted), for project file listing, remote workspace seed and refresh, and signing-key location; an MCP server's stderr summary is redacted before it is truncated.
+- `validate` warns when a required sandbox's `sandbox.filesystem.read.deny` lacks common credential paths (`~/.git-credentials`, `~/.config/gh`, `~/.pypirc`, `~/.cargo/credentials*`, `~/.terraform.d`, `~/.Xauthority`, `~/Library/Keychains`, ...). The default list is unchanged, so existing locks stay current; the managed and reference examples now list these paths.
 
 ### Fixed
 

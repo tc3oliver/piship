@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-353d5e067dd43419e528530a8a4b23232325ba4132b5d31872ee986e53ef17a6"
+    "sha256": "sha256-a021ce9a798f1f64dd1f67087e641e88b99c4555bd4f41398613ea59cc14e0db"
   },
   "app": {
     "id": "acmecode",
@@ -3066,7 +3066,16 @@
               "~/.docker",
               "~/.netrc",
               "~/.npmrc",
-              "~/.pi"
+              "~/.pi",
+              "~/.git-credentials",
+              "~/.config/git/credentials",
+              "~/.config/gh",
+              "~/.pypirc",
+              "~/.cargo/credentials.toml",
+              "~/.cargo/credentials",
+              "~/.terraform.d",
+              "~/.Xauthority",
+              "~/Library/Keychains"
             ]
           },
           "write": {
@@ -3171,7 +3180,7 @@
     "policy": "sha256-16f1d5e97a787867b02dd33aedf75bec3d9b93c1e44c2fa2890e0622205a5c08",
     "capabilities": "sha256-e58f540a6cbd7904dda88e887e05f1b02e3b6c8c648b3f81676c6b4b8454c9d2",
     "mcp": "sha256-0a3052edf09f38f5736d9a44c9b8cb4a564fedde6eba06cfb551c9545272a2e6",
-    "sandbox": "sha256-a2e206c220b291bada5380fbf7ce351fd1728ff4505d59c7b159e176c834c26d",
+    "sandbox": "sha256-39b2393d9f815c35ef0ff449b10f9de6e8741ea8dc0f1595670209a36ea9dff2",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
     "access": "sha256-e159279d6e1f4a95e05d02d7422a52ab1ec9a36bd1d860f9e611434212a7af63"
   },

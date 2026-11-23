@@ -418,6 +418,12 @@ describe("seatbelt profile", () => {
     );
     expect(text).toContain('(literal "/bin/launchctl")');
     expect(text).toContain('(signing-identifier "com.apple.xpc.launchctl")');
+    // The Keychain is unreachable: no securityd, no `security` binary.
+    expect(text).toContain('(global-name "com.apple.SecurityServer")');
+    expect(text).toContain('(global-name "com.apple.securityd")');
+    expect(text).toContain('(global-name-regex #"^com\\.apple\\.securityd")');
+    expect(text).toContain('(literal "/usr/bin/security")');
+    expect(text).toContain('(signing-identifier "com.apple.security")');
     // Only named services are denied; tools still look up everything else.
     expect(text).not.toMatch(/\(deny mach-lookup\)/);
     expect(text).not.toContain("(deny process-exec)");

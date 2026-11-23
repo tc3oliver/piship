@@ -36,6 +36,7 @@ export {
   DEFAULT_SANDBOX_READ_DENY,
   DEFAULT_SANDBOX_WRITE_ALLOW,
   parseSandbox,
+  RECOMMENDED_SANDBOX_READ_DENY,
 } from "./governance/sandbox.js";
 
 /** Top-level manifest sections added by piship/v1alpha3. */
