@@ -106,7 +106,7 @@ export function closeJitiCacheToSandbox(
       dir = join(realpathSync(dirname(dir)), basename(dir));
     } catch {}
   }
-  if (writeAllow.some((root) => isWithin(dir, root)))
+  if (writeAllow.some((root) => isWithin(root, dir)))
     env.JITI_FS_CACHE = "false";
 }
 

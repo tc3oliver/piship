@@ -144,7 +144,7 @@ export function bubblewrapArgs(
   const isDir = options.isDir ?? isDirectory;
   const tmpRoot = realpathNearest("/tmp");
   const privateTmp = ![...profile.writeAllow, ...profile.readOnly].some(
-    (path) => isWithin(tmpRoot, path),
+    (path) => isWithin(path, tmpRoot),
   );
   const protect = writableProtected(profile, posix);
   // A directory bound onto itself is a mount point, which cannot be renamed
@@ -157,8 +157,8 @@ export function bubblewrapArgs(
   ]).filter(exists);
   const visible = (path: string) =>
     !privateTmp ||
-    !isWithin(path, tmpRoot) ||
-    binds.some((bind) => isWithin(path, bind));
+    !isWithin(tmpRoot, path) ||
+    binds.some((bind) => isWithin(bind, path));
 
   const args = ["--die-with-parent", "--new-session", "--unshare-all"];
   if (features.disableUserns) args.push("--unshare-user", "--disable-userns");
@@ -193,12 +193,12 @@ export function bubblewrapArgs(
     .map(realpathNearest)
     .filter(
       (path) =>
-        !profile.writeAllow.some((w) => isWithin(w, path) || isWithin(path, w)),
+        !profile.writeAllow.some((w) => isWithin(path, w) || isWithin(w, path)),
     );
   const hidden: string[] = [];
   for (const path of byDepth([...new Set([...profile.readDeny, ...escapes])])) {
     if (!exists(path) || !visible(path)) continue;
-    if (hidden.some((dir) => isWithin(path, dir))) continue;
+    if (hidden.some((dir) => isWithin(dir, path))) continue;
     if (isDir(path)) {
       hidden.push(path);
       if (features.tmpfsPerms) args.push("--perms", "0000");

@@ -7,11 +7,8 @@ import { fileURLToPath } from "node:url";
 import { PiShipError, SecretValue } from "@piship/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startFixtureHttpServer } from "./testing/fixture-http.mjs";
-import {
-  defaultProcessRuntime,
-  McpGovernor,
-  type McpGovernorOptions,
-} from "./index.js";
+import { McpGovernor, type McpGovernorOptions } from "./index.js";
+import { defaultProcessRuntime } from "./process.js";
 import type {
   ChildHandle,
   McpAuditEvent,

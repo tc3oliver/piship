@@ -106,7 +106,7 @@ function outsideLocation(
   const candidates = ["/var/tmp", tmpdir(), profile.homeDir];
   for (const candidate of candidates) {
     const real = realpathNearest(candidate);
-    if (profile.writeAllow.some((path) => isWithin(real, path))) continue;
+    if (profile.writeAllow.some((path) => isWithin(path, real))) continue;
     try {
       // A probe killed before it cleaned up left its directory here. This
       // location is outside the write allowlist (checked above), so no
