@@ -45,7 +45,7 @@ export function effectiveHttpTransport(
  * the owner's to prevent.
  */
 export const PRIVATE_HOSTS =
-  "loopback, a private IP address (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, fe80::/10), a single-label name that is not a public top-level domain, or a name ending in .internal, .local, .lan, .corp, .home.arpa, or .intranet";
+  "loopback, a private IP address (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, fe80::/10), a single-label name that is not a public top-level domain, or a name ending in .internal, .local, .lan, .corp, .home.arpa, .intranet, or .localhost";
 
 /**
  * Why `url` is not acceptable when plain HTTP is permitted, or undefined:

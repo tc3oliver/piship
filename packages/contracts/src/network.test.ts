@@ -336,6 +336,7 @@ describe("plain HTTP beyond loopback (updates.transport: http-allowed)", () => {
       "updates.corp",
       "router.home.arpa",
       "portal.intranet",
+      "49983-sbx-1.localhost",
       "UPDATES.Corp.Internal.",
     ])
       expect(isPrivateNetworkHost(host), host).toBe(true);

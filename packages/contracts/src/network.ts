@@ -127,6 +127,7 @@ const INTERNAL_SUFFIXES = [
   ".corp",
   ".home.arpa",
   ".intranet",
+  ".localhost",
 ];
 
 /**
@@ -168,7 +169,7 @@ const PUBLIC_TLD_LABELS = new Set([
  * 192.168/16, or 100.64/10; an IPv6 literal in fc00::/7 or fe80::/10; a
  * single-label name that is not a public TLD (two letters, or one of
  * `PUBLIC_TLD_LABELS`); or a name ending in .internal, .local, .lan, .corp,
- * .home.arpa, or .intranet. Only the text is judged, never DNS: a single
+ * .home.arpa, .intranet, or .localhost. Only the text is judged, never DNS: a single
  * label is resolved through the machine's search domains, and an internal
  * looking name that resolves to a public address is the owner's to prevent.
  */
