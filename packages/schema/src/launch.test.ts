@@ -10,6 +10,7 @@ import {
   optionalHttpAuditSinks,
   PISHIP_SCHEMA_V1ALPHA4,
   PISHIP_SCHEMA_V1ALPHA6,
+  RECOMMENDED_SANDBOX_READ_DENY,
   parseManifest,
   runtimeVariableUse,
   unknownMcpServerRules,
@@ -72,8 +73,12 @@ function rejects(input: Json, field: string, message: string) {
     (error as ManifestError).message,
   );
 }
+const RECOMMENDED_PREFIX = "recommended credential paths";
 function warnings(input: Json) {
-  const found = launchWarnings(parseManifest(input));
+  // The recommended read-deny warning has its own describe block below.
+  const found = launchWarnings(parseManifest(input)).filter(
+    (item) => !item.message.startsWith(RECOMMENDED_PREFIX),
+  );
   for (const { message } of found) expect(redact(message)).toBe(message);
   return found;
 }
@@ -696,7 +701,9 @@ describe("enforced read denies that commands can get around", () => {
 describe("a custom sandbox read-deny list that drops default credential paths", () => {
   const dropped = (sandbox: Json) =>
     warnings(managed({ sandbox })).filter(
-      (warning) => warning.path === "sandbox.filesystem.read.deny",
+      (warning) =>
+        warning.path === "sandbox.filesystem.read.deny" &&
+        warning.message.startsWith("this list replaces"),
     );
 
   it("names each default the list leaves readable by shell commands", () => {
@@ -718,6 +725,36 @@ describe("a custom sandbox read-deny list that drops default credential paths", 
     expect(
       dropped({ required: false, filesystem: { read: { deny: ["~/x"] } } }),
     ).toEqual([]);
+  });
+});
+
+describe("recommended sandbox read-deny paths", () => {
+  const recommended = (sandbox: Json) =>
+    launchWarnings(parseManifest(managed({ sandbox }))).filter((warning) =>
+      warning.message.startsWith(RECOMMENDED_PREFIX),
+    );
+
+  it("warns, without blocking, when a required sandbox leaves them readable", () => {
+    const [warning, ...rest] = recommended({ required: true });
+    expect(rest).toEqual([]);
+    expect(warning?.message).toMatch(
+      /^recommended credential paths ~\/\.git-credentials, ~\/\.config\/git\/credentials, ~\/\.config\/gh, ~\/\.pypirc, ~\/\.cargo\/credentials\.toml, ~\/\.cargo\/credentials, ~\/\.terraform\.d, ~\/\.Xauthority, ~\/Library\/Keychains are not hidden/,
+    );
+  });
+
+  it("is quiet when a covering parent is denied, or the sandbox is not required", () => {
+    expect(
+      recommended({
+        required: true,
+        filesystem: {
+          read: { deny: ["~/.config", ...RECOMMENDED_SANDBOX_READ_DENY] },
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      recommended({ required: true, filesystem: { read: { deny: ["~"] } } }),
+    ).toEqual([]);
+    expect(recommended({ required: false })).toEqual([]);
   });
 });
 

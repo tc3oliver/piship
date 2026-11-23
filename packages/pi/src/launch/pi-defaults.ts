@@ -3,7 +3,7 @@
 // PiShip passes, so they are applied here for every launch.
 import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   type CacheWarmingMode,
   VERSION,
@@ -100,7 +100,11 @@ export function closeJitiCacheToSandbox(
   try {
     dir = realpathSync(dir);
   } catch {
-    // Not created (the cache is already off): judge the path as written.
+    // Not created yet: judge it by its parent's real path, since jiti creates
+    // it there (macOS's tmpdir is a symlink into /private).
+    try {
+      dir = join(realpathSync(dirname(dir)), basename(dir));
+    } catch {}
   }
   if (writeAllow.some((root) => isWithin(dir, root)))
     env.JITI_FS_CACHE = "false";

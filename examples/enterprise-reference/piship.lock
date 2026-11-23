@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1",
   "manifest": {
     "schema": "piship/v1",
-    "sha256": "sha256-f3ea43044e4668fa964d3cfc9a6da8faf6cfd9ad19891c9e4cfe20f9b0272030"
+    "sha256": "sha256-ebe5c4796b681b65ac7dc84b44178279b47e014effd6b47ec42584ab8aa2c350"
   },
   "app": {
     "id": "acmecode-reference",
@@ -2963,7 +2963,13 @@
               "~/.git-credentials",
               "~/.config/gh",
               "~/.local/share/keyrings",
-              "~/Library/Keychains"
+              "~/Library/Keychains",
+              "~/.config/git/credentials",
+              "~/.pypirc",
+              "~/.cargo/credentials.toml",
+              "~/.cargo/credentials",
+              "~/.terraform.d",
+              "~/.Xauthority"
             ]
           },
           "write": {
@@ -3053,7 +3059,7 @@
     "policy": "sha256-0cfbc862fd27a400e784d19fe39346939a81a385cd594b9dc600bdb0e3c03830",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
-    "sandbox": "sha256-92de7059c6fc8cec514738016f8df98e67cc1f236df82c9f1fb625122c24d385",
+    "sandbox": "sha256-5333810b6c2ddc8eff2c6b6f1633f9b16ff2676d19cdaf640c4ad638b355a1da",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
     "access": "sha256-405e5c72d79b019f8d081fc235d871d5610d1b0476faaf347a94335c8847ab0b",
     "packages": "sha256-3db33f59f00fd6e86e07e47210d556718575a77442401b5f5d2dff28dcc91a65"

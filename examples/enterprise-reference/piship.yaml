@@ -205,6 +205,12 @@ sandbox:
         - ~/.config/gh
         - ~/.local/share/keyrings
         - ~/Library/Keychains
+        - ~/.config/git/credentials
+        - ~/.pypirc
+        - ~/.cargo/credentials.toml
+        - ~/.cargo/credentials
+        - ~/.terraform.d
+        - ~/.Xauthority
     write:
       allow: [workspace, tmp]
   network:

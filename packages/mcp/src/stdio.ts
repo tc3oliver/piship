@@ -2,6 +2,7 @@
 // stdin/stdout. stderr is kept only as a bounded, sanitized tail for
 // diagnostics and is never forwarded.
 
+import { redact } from "@piship/contracts";
 import type { SandboxWrapper } from "@piship/sandbox";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve } from "node:path";
@@ -19,6 +20,9 @@ import type {
 } from "./types.js";
 
 const STDERR_TAIL_BYTES = 8 * 1024;
+// Raw stderr kept for redaction; the cut at its front can split a secret, so
+// the redacted result is trimmed to STDERR_TAIL_BYTES afterwards.
+const STDERR_RAW_BYTES = 4 * STDERR_TAIL_BYTES;
 const STDERR_REPORT_BYTES = 2 * 1024;
 
 export interface StdioTransportOptions {
@@ -130,7 +134,7 @@ export class StdioTransport implements McpTransport {
   /** Sanitized, truncated stderr tail for diagnostics. */
   stderrSummary(): string {
     return this.#options.runtime.sanitizeStderr(
-      this.#stderrTail,
+      redact(this.#stderrTail).slice(-STDERR_TAIL_BYTES),
       STDERR_REPORT_BYTES,
     );
   }
@@ -238,7 +242,14 @@ export class StdioTransport implements McpTransport {
 
   #stderr(chunk: Buffer | string): void {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    this.#stderrTail = (this.#stderrTail + text).slice(-STDERR_TAIL_BYTES);
+    const raw = this.#stderrTail + text;
+    // Once the window is full its front may start inside a secret; drop that
+    // partial line (or, in one long line, the partial word), since a fragment
+    // shorter than a pattern is not redacted.
+    this.#stderrTail =
+      raw.length > STDERR_RAW_BYTES
+        ? raw.slice(-STDERR_RAW_BYTES).replace(/^[^\n]*\n|^\S*/, "")
+        : raw;
   }
 
   #stdout(chunk: string): void {

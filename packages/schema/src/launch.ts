@@ -12,6 +12,7 @@ import {
 import type { GovernanceManifest, PolicyRule } from "./governance.js";
 import {
   DEFAULT_SANDBOX_READ_DENY,
+  RECOMMENDED_SANDBOX_READ_DENY,
   governanceReferences,
 } from "./governance-parse.js";
 import { spoofableHostName, spoofableHostWarning } from "./http-transport.js";
@@ -1137,6 +1138,27 @@ export function droppedDefaultReadDenials(
     : [];
 }
 
+/** A required sandbox whose read-deny list leaves a common credential file readable. */
+export function missingRecommendedReadDenials(
+  manifest: Manifest,
+): ValidationDiagnostic[] {
+  const sandbox = manifest.governance?.sandbox;
+  if (sandbox?.required !== true) return [];
+  const deny = sandbox.filesystem.read.deny;
+  const missing = RECOMMENDED_SANDBOX_READ_DENY.filter(
+    (path) =>
+      !deny.some((entry) => path === entry || path.startsWith(`${entry}/`)),
+  );
+  return missing.length
+    ? [
+        {
+          path: "sandbox.filesystem.read.deny",
+          message: `recommended credential paths ${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} not hidden from shell commands; add ${missing.length > 1 ? "them" : "it"} to the list (docs/sandbox.md#configuration)`,
+        },
+      ]
+    : [];
+}
+
 /**
  * Warnings for settings that parse but fail at launch in some environments
  * or have no effect, plus update trust warnings (`updateTrustWarnings`).
@@ -1153,6 +1175,7 @@ export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
     ...narrowRuleWarnings(manifest),
     ...uncontainedReadDenials(manifest),
     ...droppedDefaultReadDenials(manifest),
+    ...missingRecommendedReadDenials(manifest),
     ...inactivePackRules(manifest),
     ...inertCaptureClasses(manifest),
     ...inertDataPurge(manifest),
