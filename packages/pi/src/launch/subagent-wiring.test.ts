@@ -286,6 +286,17 @@ describe("resuming a session", () => {
     expect(setModel).toHaveBeenCalledOnce();
   });
 
+  it("prints Pi's fallback message when the launch model cannot be set", async () => {
+    const setModel = vi.fn(async () => {
+      throw new Error("No API key");
+    });
+    const notices = await resumeFallback(
+      { model: { provider: "x", id: "y" }, setModel, setThinkingLevel() {} },
+      "Could not restore model openai/gone. Using x/y",
+    );
+    expect(notices.join("\n")).toContain("Could not restore model openai/gone");
+  });
+
   it("leaves the session alone when its model was restored", async () => {
     const setModel = vi.fn(async () => {});
     await resumeFallback({

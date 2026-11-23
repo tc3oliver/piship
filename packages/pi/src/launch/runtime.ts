@@ -668,14 +668,16 @@ async function startRuntime(
     // one is passed: only --model overrides it, and a model the session ended
     // on that is no longer allowed is replaced below.
     const resumed = sessionManager.buildSessionContext().messages.length > 0;
-    // A pi-native model is not checked against the declared capabilities by
-    // Pi, so such a launch keeps the model it verified.
+    // A pi-native model is not checked against capabilities with model
+    // requirements by Pi, so such a launch keeps the model it verified.
     const keepSessionModel =
       resumed &&
       !prepared.requestedModel &&
       !(
         activated?.runtime.kind === "pi-native" &&
-        gov?.manifest.capabilities.length
+        (ctx.metadata.governance?.manifest.capabilities ?? []).some(
+          (item) => item.enabled && item.requirements,
+        )
       );
     startupMark("agent_session_start");
     const result = await createAgentSession({
@@ -714,13 +716,16 @@ async function startRuntime(
     ) {
       // Pi could not restore the model the session ended on, and picked
       // another: the launch's model wins. Without credentials the switch is
-      // refused and Pi's own message stands.
+      // refused; Pi's own message is not shown by the session, so print it.
       try {
         await result.session.setModel(model);
         ctx.err(
           `Notice: the model the resumed session ended on could not be restored; switched to ${model.provider}/${model.id}.`,
         );
-      } catch {}
+      } catch {
+        if (result.modelFallbackMessage)
+          ctx.err(`Notice: ${result.modelFallbackMessage}`);
+      }
     }
     const current = result.session.model;
     if (
