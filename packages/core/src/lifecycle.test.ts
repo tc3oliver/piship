@@ -15,7 +15,6 @@ import {
   utimesSync,
   symlinkSync,
   unlinkSync,
-  watch,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5097,18 +5096,15 @@ describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
   const launch = (launcher: string) =>
     spawnSync(process.execPath, [launcher], { encoding: "utf8" });
   const waitForFile = (path: string): Promise<void> =>
+    // Polled: an fs.watch event raised before the watcher is armed is lost
+    // on a loaded machine, and the wait then never ends.
     new Promise((resolvePromise) => {
-      if (existsSync(path)) return resolvePromise();
-      const watcher = watch(dirname(path), () => {
+      const timer = setInterval(() => {
         if (existsSync(path)) {
-          watcher.close();
+          clearInterval(timer);
           resolvePromise();
         }
-      });
-      if (existsSync(path)) {
-        watcher.close();
-        resolvePromise();
-      }
+      }, 10);
     });
 
   // A release whose command is a long-running session: it reports that it
@@ -5258,16 +5254,14 @@ wait();
     // is the second, and returns at once.
     writeFileSync(
       join(receipt.payload, "bin", receipt.app.command),
-      `import { writeFileSync, watch, existsSync } from "node:fs";
-import { dirname } from "node:path";
+      `import { writeFileSync, existsSync } from "node:fs";
 if (existsSync(${JSON.stringify(ready)})) console.log("second launch ran");
 else {
   writeFileSync(${JSON.stringify(ready)}, "ready");
   await new Promise((resolve) => {
-    const watcher = watch(dirname(${JSON.stringify(release)}), () => {
-      if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
-    });
-    if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+    const timer = setInterval(() => {
+      if (existsSync(${JSON.stringify(release)})) { clearInterval(timer); resolve(); }
+    }, 10);
   });
 }
 `,
