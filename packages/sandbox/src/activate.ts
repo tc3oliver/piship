@@ -273,7 +273,7 @@ function sessionEnvironment(
       ? withDeniedNetworkEnvironment(approved)
       : { ...approved };
   delete env.TMPDIR;
-  if (!profile.writeAllow.some((path) => isWithin(profile.tmpDir, path)))
+  if (!profile.writeAllow.some((path) => isWithin(path, profile.tmpDir)))
     return env;
   env.TMPDIR = profile.tmpDir;
   // The package tools' caches live under the home directory, which a
@@ -284,7 +284,7 @@ function sessionEnvironment(
   if (
     env.CARGO_HOME === undefined &&
     profile.writeAllow.some((path) =>
-      isWithin(realpathNearest(join(profile.homeDir, ".cargo")), path),
+      isWithin(path, realpathNearest(join(profile.homeDir, ".cargo"))),
     )
   )
     delete cached.CARGO_HOME;
@@ -305,7 +305,7 @@ function withNodeReadable(profile: SandboxProfile): SandboxProfile {
   const dir = nodeDirectory();
   if (
     !dir ||
-    profile.writeAllow.some((path) => isWithin(dir, path)) ||
+    profile.writeAllow.some((path) => isWithin(path, dir)) ||
     profile.readOnly.includes(dir)
   )
     return profile;
@@ -346,7 +346,7 @@ export const HOST_BOUND_VARIABLES = [
 /** The working directory relative to the workspace, or undefined outside it. */
 function workspacePath(workspace: string, cwd: string): string | undefined {
   const real = realpathNearest(cwd);
-  if (!isWithin(real, workspace)) return undefined;
+  if (!isWithin(workspace, real)) return undefined;
   const path = relative(workspace, real);
   return path === "" ? "." : path.split(sep).join("/");
 }

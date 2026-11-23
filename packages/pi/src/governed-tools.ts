@@ -72,7 +72,7 @@ import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 import { taskTools } from "./task-tools.js";
 
 /** True when `path` is `root` or below it. */
-const inside = (root: string, path: string) => isWithin(path, root);
+const inside = (root: string, path: string) => isWithin(root, path);
 
 /**
  * The only tools a Plan-mode session may run: the governed `read` and

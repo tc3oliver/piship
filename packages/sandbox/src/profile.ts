@@ -119,7 +119,7 @@ function resolveNearest(absolute: string): string {
 }
 
 /** True when `path` equals `root` or lies below it. Both must be normalized. */
-export function isWithin(path: string, root: string): boolean {
+export function isWithin(root: string, path: string): boolean {
   if (path === root) return true;
   const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
   return path.startsWith(prefix);
@@ -173,7 +173,7 @@ function conflicts(
   const warnings: string[] = [];
   for (const denied of deny)
     for (const path of [workspace, ...writable])
-      if (isWithin(path, denied))
+      if (isWithin(denied, path))
         warnings.push(
           `${path} is inside the read-denied path ${denied}; deny wins and it is hidden in the sandbox`,
         );
@@ -194,7 +194,7 @@ function retargetableLinks(
 ): string | undefined {
   const writable = links.filter((link) => {
     const holder = realpathNearest(dirname(link));
-    return writeAllow.some((allowed) => isWithin(holder, allowed));
+    return writeAllow.some((allowed) => isWithin(allowed, holder));
   });
   if (writable.length === 0) return undefined;
   const named = writable.slice(0, LINKS_NAMED).join(", ");

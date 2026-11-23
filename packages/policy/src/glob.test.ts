@@ -99,6 +99,11 @@ describe("isWithin", () => {
     expect(isWithin("/a/b", "/a/bc")).toBe(false);
     expect(isWithin("/", "/x")).toBe(true);
   });
+
+  it("takes the root first and always joins with a slash", () => {
+    expect(isWithin("/a/b/c", "/a/b")).toBe(false);
+    expect(isWithin("C:\\a", "C:\\a\\b")).toBe(false);
+  });
 });
 
 function trySymlink(

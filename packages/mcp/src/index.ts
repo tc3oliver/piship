@@ -17,7 +17,6 @@ export {
   JsonRpcClient,
   parseIncoming,
 } from "./jsonrpc.js";
-export { defaultProcessRuntime } from "./process.js";
 export {
   ACCEPTED_PROTOCOL_VERSIONS,
   type InitializeResult,

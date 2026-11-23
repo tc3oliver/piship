@@ -153,4 +153,4 @@ export {
   type OutputStagingOptions,
 } from "./temporary-directories.js";
 export * from "./trust.js";
-export { checkToolExposure, lockedTools } from "./tool-exposure.js";
+export { checkToolExposure } from "./tool-exposure.js";

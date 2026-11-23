@@ -144,8 +144,8 @@ export function hooksInWorkingTree(
   return (protectedPaths.gitDirectories ?? protectedPaths.directories).some(
     (directory) =>
       directory !== workspace &&
-      isWithin(directory, workspace) &&
-      !isWithin(directory, dotGit),
+      isWithin(workspace, directory) &&
+      !isWithin(dotGit, directory),
   );
 }
 
@@ -203,19 +203,19 @@ export function missingControlFiles(
     return (
       roots.includes(parent) ||
       protectedAll.some(
-        (path) => path !== file && isWithin(file, path) && deniedWhole(path),
+        (path) => path !== file && isWithin(path, file) && deniedWhole(path),
       ) ||
       protectedAll.some(
         (path) =>
           path !== parent &&
-          isWithin(path, parent) &&
+          isWithin(parent, path) &&
           lstatOrUndefined(path) !== undefined,
       )
     );
   };
   return protectedPaths.files.filter(
     (file) =>
-      roots.some((root) => file !== root && isWithin(file, root)) &&
+      roots.some((root) => file !== root && isWithin(root, file)) &&
       lstatOrUndefined(file) === undefined &&
       !guarded(file),
   );
@@ -272,7 +272,7 @@ export function missingFilesWarning(
 ): string | undefined {
   if (missing.length === 0) return undefined;
   const inside = missing
-    .filter((file) => isWithin(file, workspace))
+    .filter((file) => isWithin(workspace, file))
     .map((file) => relative(workspace, file).split(sep).join("/"));
   const outside = missing.length - inside.length;
   const named = [
@@ -370,7 +370,7 @@ function plainDirectory(
         "a component of the location is a symbolic link or not a directory",
       );
   }
-  if (!isWithin(realpathSync.native(current), realpathSync.native(root)))
+  if (!isWithin(realpathSync.native(root), realpathSync.native(current)))
     throw new LocationError("the location resolves outside the workspace");
   return current;
 }
@@ -554,7 +554,7 @@ function insideWorkspace(
 ): ProtectedTarget[] {
   const targets: ProtectedTarget[] = [];
   for (const path of paths) {
-    if (path === workspace || !isWithin(path, workspace)) continue;
+    if (path === workspace || !isWithin(workspace, path)) continue;
     const rel = relative(workspace, path);
     targets.push({ relative: toPosix(rel), segments: rel.split(sep) });
   }

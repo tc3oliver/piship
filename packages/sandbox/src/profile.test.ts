@@ -7,11 +7,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { duringStartup } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expandPathToken,
+  isWithin,
   protectedAncestors,
   realpathNearest,
   resolveProfile,
@@ -348,5 +349,16 @@ describe("realpathNearest while a session is being set up", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("isWithin", () => {
+  it("takes the root first and joins with the platform separator", () => {
+    const root = `${sep}a${sep}b`;
+    expect(isWithin(root, root)).toBe(true);
+    expect(isWithin(root, `${root}${sep}c`)).toBe(true);
+    expect(isWithin(root, `${root}c`)).toBe(false);
+    expect(isWithin(`${root}${sep}c`, root)).toBe(false);
+    expect(isWithin(sep, `${sep}x`)).toBe(true);
   });
 });
