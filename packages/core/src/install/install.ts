@@ -247,7 +247,7 @@ export async function installDistribution(
   if (checks.runtime !== undefined && !pack)
     throw invalidCheck(
       "--runtime applies to a Company Pack, and this artifact is not one",
-      "Omit --runtime, or install the pack",
+      "Omit --runtime, or install the pack. A pack is recognised by its file name <id>-<version>-pack.tar.gz, so restore it if a download renamed it",
     );
   if (expectedSha256 !== undefined && !isArchive)
     throw invalidCheck(

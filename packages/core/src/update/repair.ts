@@ -68,7 +68,10 @@ export async function repairDistribution(
         throw new PiShipError(
           "CONFIG_INVALID",
           "--runtime applies to a Company Pack, and the repair source is not one",
-          { userAction: "Omit --runtime, or repair from the pack" },
+          {
+            userAction:
+              "Omit --runtime, or repair from the pack. A pack is recognised by its file name <id>-<version>-pack.tar.gz, so restore it if a download renamed it",
+          },
         );
       if (await isPack(path)) {
         // The release was composed from a pack and a runtime archive: both are
