@@ -73,7 +73,7 @@ export async function sweepDistributionData(
         );
       if (entry.unrecorded)
         ctx.err(
-          `Warning: ${entry.class} data past its retention period was kept: the data.swept audit event was not recorded`,
+          `Warning: data past its retention period was kept (${entry.class}): the data.swept audit event was not recorded`,
         );
       else if (entry.failed)
         ctx.err(

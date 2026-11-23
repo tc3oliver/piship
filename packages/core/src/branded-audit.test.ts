@@ -428,7 +428,7 @@ describe("branded command audit with a required sink", () => {
       expect.objectContaining({ class: "sessions", unrecorded: true }),
     ]);
     expect(errors).toEqual([
-      "Warning: sessions data past its retention period was kept: the data.swept audit event was not recorded",
+      "Warning: data past its retention period was kept (sessions): the data.swept audit event was not recorded",
     ]);
   });
 
