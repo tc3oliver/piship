@@ -220,6 +220,10 @@ describe("the declared sandbox backend", () => {
     expect(ported("https://49983-sbx1.cube.corp/")).toBe(true);
     expect(ported("https://49983-sbx1.cube.corp:9443/")).toBe(false);
     expect(ported("http://49983-sbx1.cube.corp:8443/")).toBe(false);
+    // A loopback endpoint puts envd under `*.localhost`, which is private.
+    const local = await declaredFor("http://localhost:18080");
+    expect(local("http://49983-sbx1.localhost:18080/")).toBe(true);
+    expect(local("http://49983-sbx1.example.com:18080/")).toBe(false);
     // `api.` is dropped only when a domain of two labels remains.
     const single = await declaredFor("https://api.internal");
     expect(single("https://49983-sbx1.internal/")).toBe(false);
