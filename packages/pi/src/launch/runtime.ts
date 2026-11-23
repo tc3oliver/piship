@@ -358,6 +358,8 @@ export function launchTheme(input: {
   readonly distributionTheme: string | undefined;
   readonly loaded: readonly (string | undefined)[];
   readonly command: string;
+  /** A theme failed to load, so a declared theme may be missing because of it. */
+  readonly loadFailed?: boolean;
 }): { readonly theme: string | undefined; readonly notice?: string } {
   const names = ["dark", "light", ...input.loaded.filter((name) => !!name)];
   const available = (name: string | undefined) => !name || names.includes(name);
@@ -370,6 +372,11 @@ export function launchTheme(input: {
       notice: `Notice: theme ${input.theme} (your preference) is not available, so ${fallback ?? "Pi's default theme"} is used. Choose one of ${names.join(", ")} with ${input.command} config set theme <name>, or run ${input.command} config unset theme.`,
     };
   }
+  if (!available(input.theme) && input.loadFailed)
+    return {
+      theme: undefined,
+      notice: `Notice: theme ${input.theme} did not load, so Pi's default theme is used.`,
+    };
   if (!available(input.theme))
     throw new Error(`Declared theme is unavailable: ${input.theme}`);
   return { theme: input.theme };
@@ -584,10 +591,9 @@ async function startRuntime(
         },
       );
     if (themeDiagnostics.length)
-      throw new PiShipError(
-        "CONFIG_INVALID",
-        `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
-        { component: "themes", userAction: resourceLoadAction(ctx.mode) },
+      // A broken theme is cosmetic: skip it and launch with the default.
+      ctx.err(
+        `Warning: skipped a Pi theme that failed to load (${themeDiagnostics.map((item) => item.message).join("; ")}). ${resourceLoadAction(ctx.mode)}`,
       );
     // Virtual models are registered here, before the launch model and a
     // resumed session's model are looked up, and again after each /reload;
@@ -628,6 +634,7 @@ async function startRuntime(
       distributionTheme: ctx.metadata.app.theme,
       loaded: resourceLoader.getThemes().themes.map((item) => item.name),
       command: ctx.metadata.app.command,
+      loadFailed: themeDiagnostics.length > 0,
     });
     if (chosen.notice) ctx.err(chosen.notice);
     theme = chosen.theme;

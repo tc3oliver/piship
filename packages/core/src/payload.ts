@@ -209,6 +209,8 @@ export function verifyPayloadContents(
   options: {
     readonly requireTarget?: boolean;
     readonly verifyContents?: boolean;
+    /** Warn about, rather than fail on, files the inventory does not list. */
+    readonly tolerateAdded?: boolean;
   } = {},
 ): DistributionLock {
   const started = process.hrtime.bigint();
@@ -229,7 +231,23 @@ export function verifyPayloadContents(
     const modified = Object.keys(actual).filter(
       (key) => key in expected && expected[key] !== actual[key],
     );
-    if (added.length || missing.length || modified.length)
+    // Only names Node never loads: anything else added (a .js beside a
+    // directory, a nested node_modules) could shadow the release's code.
+    if (
+      added.length &&
+      !missing.length &&
+      !modified.length &&
+      options.tolerateAdded &&
+      added.every((name) =>
+        /^(\.DS_Store|Thumbs\.db|desktop\.ini|\._.*)$/.test(
+          name.slice(name.lastIndexOf("/") + 1),
+        ),
+      )
+    ) {
+      console.error(
+        `Warning: ${root} has files that are not part of the release (${added.slice(0, 5).join(", ")}${added.length > 5 ? `, and ${added.length - 5} more` : ""}); continuing. Remove them or run \`piship doctor\` for details.`,
+      );
+    } else if (added.length || missing.length || modified.length)
       throw payloadIntegrityError(root, { added, modified, missing });
   }
   const target = payloadJson(root, "metadata/target.json", isTarget);
@@ -345,7 +363,12 @@ export function verifyLaunchPayload(directory: string): DistributionLock {
   const bytes = readPayloadFile(root, "piship.lock");
   checkInstalledLock(root, bytes);
   const lock = JSON.parse(bytes.toString("utf8")) as DistributionLock;
-  if (lock.verifyAtLaunch === true) return verifyPayload(root);
+  if (lock.verifyAtLaunch === true)
+    return verifyPayloadContents(root, {
+      requireTarget: true,
+      verifyContents: true,
+      tolerateAdded: true,
+    });
   checkFilesPresent(root);
   return lock;
 }

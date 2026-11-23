@@ -375,9 +375,11 @@ await new Promise((resolve) => {
     renameSync(receipts, `${receipts}.moved`);
     writeFileSync(receipts, "not a directory");
     const launched = runLauncher();
+    // The receipt is unreadable too, so the launch still stops there, but the
+    // gate failure is a warning with the real error, never contention.
     expect(launched.status).toBe(1);
     expect(launched.stderr).toContain(
-      `Could not register a launch of ${ID}: E`,
+      `Warning: could not register a launch of ${ID}: E`,
     );
     expect(launched.stderr).toContain(`.${ID}.launch.lock`);
     expect(launched.stderr).not.toMatch(/registering|retry/i);
@@ -392,13 +394,14 @@ await new Promise((resolve) => {
     rmSync(leases, { recursive: true, force: true });
     writeFileSync(leases, "not a directory");
     const launched = runLauncher();
-    expect(launched.status).toBe(1);
+    // A warning, not a stop: the launch goes on without its leases.
+    expect(launched.status, launched.stderr).toBe(0);
     expect(launched.stderr).toContain(
-      `Could not register a launch of ${ID}: E`,
+      `Warning: could not register a launch of ${ID}: E`,
     );
     expect(launched.stderr).toContain(
       // The launcher names its real path (on macOS /var is a symlink).
-      `${join(ID, ".runtime-leases")} a directory you can write to (move aside any file in its place), then run the command again.`,
+      `${join(ID, ".runtime-leases")} a directory you can write to (move aside any file in its place).`,
     );
     expect(launched.stderr).not.toContain("    at ");
   }, 120_000);
@@ -412,10 +415,10 @@ await new Promise((resolve) => {
       chmodSync(receipts, 0o555);
       try {
         const launched = runLauncher();
-        expect(launched.status).toBe(1);
+        expect(launched.status, launched.stderr).toBe(0);
+        expect(launched.stderr).toContain("Warning: could not register");
         expect(launched.stderr).toContain("EACCES");
-        expect(launched.stderr).toContain(GATE_TAIL);
-        expect(launched.stderr).not.toMatch(/registering|retry/i);
+        expect(launched.stderr).not.toMatch(/is registering|Retry when/i);
         const error = refusal(() => uninstallDistribution(ID));
         expect(error.message).toContain("EACCES");
         expect(error.message).not.toMatch(/registering|retry/i);

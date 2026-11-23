@@ -513,6 +513,25 @@ describe("launch integrity verification", () => {
       /integrity mismatch.*modified: bin\/mypi/,
     );
   });
+  it("verifyLaunchPayload warns about an added file but still fails a modified one", () => {
+    const dir = buildPayload(true);
+    writeFileSync(join(dir, ".DS_Store"), "junk");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(verifyLaunchPayload(dir).app.command).toBe("mypi");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(".DS_Store"));
+      expect(() => verifyPayloadContents(dir)).toThrow(
+        /unexpected.*\.DS_Store/,
+      );
+      writeFileSync(join(dir, "planted.js"), "x");
+      expect(() => verifyLaunchPayload(dir)).toThrow(/planted\.js/);
+      rmSync(join(dir, "planted.js"));
+      writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+      expect(() => verifyLaunchPayload(dir)).toThrow(/modified: bin\/mypi/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
   it("verifyLaunchPayload never hashes contents when the legacy flag is absent", () => {
     const dir = buildPayload();
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");

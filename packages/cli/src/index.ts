@@ -103,7 +103,14 @@ import {
   type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
-import { errorJson, formatError, PiShipError, redact } from "@piship/contracts";
+import {
+  debugStack,
+  errorJson,
+  formatError,
+  isUnexpectedError,
+  PiShipError,
+  redact,
+} from "@piship/contracts";
 import {
   channelTrustKeys,
   launchWarnings,
@@ -1329,9 +1336,14 @@ export async function runCli(
     output.stderr(
       error instanceof ManifestError
         ? redact(error.message)
-        : formatError(error),
+        : `${formatError(error)}${isUnexpectedError(error) ? "\nAction: This looks like a PiShip bug. Re-run with PISHIP_DEBUG=1 and report the output." : ""}`,
     );
-    if (args.includes("--json") && !printed)
+    const stack = debugStack(error);
+    if (stack) output.stderr(stack);
+    if (
+      (parsed ? parsed.flags.has("--json") : args.includes("--json")) &&
+      !printed
+    )
       output.stdout(JSON.stringify({ error: cliErrorJson(error) }, null, 2));
     return 1;
   }

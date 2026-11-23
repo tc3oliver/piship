@@ -1,7 +1,7 @@
 // The installed launcher (`apps/<id>/launch.mjs`): the build it is stamped
 // with, what its timing report prints, and its replacement when an earlier
 // PiShip left a different one on disk.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMMAND_NAME } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,6 +78,60 @@ describe("the launcher when the release's package.json is damaged", () => {
     );
     expect(result.stderr).toContain(`piship repair ${ID}`);
     expect(result.stderr).not.toMatch(/node:internal|^\s+at /m);
+  });
+});
+
+describe("the launcher when its registration records cannot be written", () => {
+  it("warns and keeps launching instead of exiting", async () => {
+    await installed();
+    const { payload, launcher } = readInstallReceipt(ID);
+    // A file where the lease directory belongs: neither lease can be written.
+    writeFileSync(join(dirname(launcher as string), ".runtime-leases"), "x");
+    writeFileSync(join(payload, "package.json"), "{ not json");
+    const result = spawnSync(process.execPath, [launcher as string], {
+      encoding: "utf8",
+    });
+    expect(result.stderr).toMatch(
+      /^Warning: could not register a launch of acmepi/m,
+    );
+    // It got past registration, to the damaged-release report.
+    expect(result.stderr).toMatch(/^INTEGRITY_FAILED/m);
+  });
+});
+
+describe("the launcher when another launch holds the gate", () => {
+  it("waits, says so once, and launches when the holder finishes", async () => {
+    await installed();
+    const { payload, launcher } = readInstallReceipt(ID);
+    writeFileSync(join(payload, "package.json"), "{ not json");
+    const gate = join(
+      dirname(launcher as string),
+      "..",
+      "..",
+      "receipts",
+      `.${ID}.launch.lock`,
+    );
+    // A live holder (this process) that is neither stale nor gone.
+    writeFileSync(
+      gate,
+      JSON.stringify({
+        schema: "piship-lifecycle-lock/v1",
+        instance: "held",
+        pid: process.pid,
+      }) + "\n",
+    );
+    setTimeout(() => rmSync(gate, { force: true }), 1200);
+    const child = spawn(process.execPath, [launcher as string]);
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => (stderr += chunk));
+    const started = Date.now();
+    await new Promise((done) => child.on("close", done));
+    expect(Date.now() - started).toBeGreaterThan(1000);
+    expect(stderr.match(/Waiting for another launch of acmepi/g)).toHaveLength(
+      1,
+    );
+    // Past registration, to the damaged-release report.
+    expect(stderr).toMatch(/^INTEGRITY_FAILED/m);
   });
 });
 
@@ -330,12 +384,12 @@ describe("the command shim", () => {
   it("runs node on the Windows PATH without spawning `where` first", () => {
     const text = commandShimSource(launcher, "win32");
     expect(text).toBe(
-      `@echo off\r\nsetlocal\r\nnode "${launcher}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`,
+      `@echo off\r\nsetlocal\r\nset "NoDefaultCurrentDirectoryInExePath=1"\r\nnode "${launcher}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`,
     );
     // No process is started to find node, and none is pinned: a path written
     // at install time outlives the node the user switches to.
     expect(text).not.toMatch(/where|\.exe|if exist/);
-    expect(text.split("\r\n").filter(Boolean)).toHaveLength(6);
+    expect(text.split("\r\n").filter(Boolean)).toHaveLength(7);
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -383,6 +437,13 @@ describe("the command shim", () => {
     // The shim an earlier PiShip wrote with the literal path is still its own.
     const literal = `@echo off\r\nnode "${under}" %*\r\nif %errorlevel% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\n`;
     expect(ownsCommandShim(file(literal), under, "win32", home)).toBe(true);
+    // The shim before the current-directory guard is still its own too.
+    const guardless = text.replace(
+      'set "NoDefaultCurrentDirectoryInExePath=1"\r\n',
+      "",
+    );
+    expect(guardless).not.toBe(text);
+    expect(ownsCommandShim(file(guardless), under, "win32", home)).toBe(true);
   });
 
   it("fails an install path outside the profile that a shim cannot hold, naming PISHIP_INSTALL_HOME", () => {

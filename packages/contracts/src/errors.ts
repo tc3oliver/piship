@@ -218,6 +218,33 @@ export function formatError(error: unknown): string {
 }
 
 /**
+ * Whether an error is a JavaScript programming error, so likely a PiShip bug.
+ * A plain Error is not: many user-facing refusals are thrown as one.
+ */
+export function isUnexpectedError(error: unknown): error is Error {
+  return (
+    (error instanceof TypeError ||
+      error instanceof ReferenceError ||
+      error instanceof RangeError ||
+      error instanceof SyntaxError) &&
+    !(error instanceof PiShipError) &&
+    !systemError(error)
+  );
+}
+
+/** The redacted stack of any other error when PISHIP_DEBUG=1, else undefined. */
+export function debugStack(error: unknown): string | undefined {
+  if (
+    process.env.PISHIP_DEBUG !== "1" ||
+    !(error instanceof Error) ||
+    error instanceof PiShipError ||
+    systemError(error)
+  )
+    return undefined;
+  return redact(error.stack ?? error.message);
+}
+
+/**
  * Parse an HTTP `Retry-After` value (RFC 9110: delay-seconds or an HTTP-date)
  * into a non-negative wait in milliseconds, or `undefined` when absent or
  * malformed.
