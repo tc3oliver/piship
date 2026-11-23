@@ -24,6 +24,8 @@ PiShip is not published to npm, so there is no `piship` command on your machine.
 piship() { node "$HOME/src/piship/packages/cli/dist/bin.js" "$@"; }
 ```
 
+Paste it into your terminal to try it now, and add the same line to `~/.zshrc` (zsh) or `~/.bashrc` (bash) so new terminals keep it.
+
 The "Next:" lines the CLI prints already name the command that is running, so you can also copy them as they are.
 
 `piship --help` lists the commands, and `piship help <command>` (or `<command> --help`) lists that command's options, one line each. A mistyped option is named in the error before the usage line.

@@ -56,7 +56,7 @@ PiShip does not replace your identity provider, gateway, or sandbox. It connects
 
 ## Try it in two minutes
 
-You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces; macOS has its sandbox built in.
+You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces (Ubuntu 24.04's AppArmor may block them) and `secret-tool` with an unlocked Secret Service, because the demo stores credentials with `storage.provider: system`; macOS has its sandbox and Keychain built in. The first build downloads the runtime packages, so it needs access to the npm registry. Fixes for each are in [troubleshooting](docs/troubleshooting.md#prerequisites).
 
 Building your own instead? [Your first distribution](docs/first-distribution.md) goes from `init` to an installed command in six steps, and a personal distribution needs no identity provider or gateway.
 
@@ -112,7 +112,7 @@ The steps it follows are in [docs/agent-setup.md](docs/agent-setup.md), so you c
 
 ### For a company that serves several operating systems
 
-A [Company Pack](docs/release/owner-workflow.md#building-a-company-pack) is one artifact for every platform, bound to PiShip's official runtime archives, so IT does not build a release on each operating system. Paste this instead:
+A [Company Pack](docs/release/owner-workflow.md#building-a-company-pack) is one artifact for every platform, bound to PiShip's official runtime archives, so IT does not build a release on each operating system. No PiShip release has published a runtime archive yet, so today each target's runtime is built with `piship runtime-release` on that operating system, from a clone (the clone route in the guide below). Once a release lists runtime archives, paste this instead:
 
 ```text
 Set up our company coding agent with PiShip. Read
@@ -126,7 +126,7 @@ tell me instead of changing the policy. At the end, report what you checked and
 what you could not.
 ```
 
-What this supports today: the runtime archive and `piship pack` exist on `main` and are exercised in CI, but **no PiShip release has published a runtime archive yet**, so each target's runtime must be built with `piship runtime-release` on that operating system. Limits (packages with native or per-target files, Windows with a required sandbox) are in [status](docs/status.md#company-packs-on-main-unreleased).
+The runtime archive and `piship pack` exist on `main` and are exercised in CI. Limits (packages with native or per-target files, Windows with a required sandbox) are in [status](docs/status.md#company-packs-on-main-unreleased).
 
 ## One file
 
