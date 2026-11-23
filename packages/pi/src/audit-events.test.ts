@@ -249,7 +249,7 @@ const MCP = [
   "mcp:",
   "  mode: allowlist",
   "  servers:",
-  "    docs: { transport: stdio, module: ./mcp/docs.mjs }",
+  "    docs: { transport: stdio, module: ./mcp/docs.mjs, startupTimeout: 60s }",
   "    blocked: { transport: stdio, module: ./mcp/blocked.mjs }",
 ];
 
