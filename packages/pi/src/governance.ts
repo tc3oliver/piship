@@ -682,7 +682,13 @@ export function governModelRuntime(
         action = named.includes(`${command} login`)
           ? `In a terminal, ${named[0]?.toLowerCase()}${named.slice(1)}`
           : named;
-      } else if (isCredentialRejection(message))
+      } else if (
+        failure.status === undefined &&
+        transportFailures.has(message as object)
+      )
+        action =
+          "Check that the gateway is reachable from this machine, then send the message again";
+      else if (isCredentialRejection(message))
         action = managed?.noCredential
           ? "This distribution sends no credential (credential.provider: none); check whether the model server needs a key, and if it does, set credential.provider in the manifest"
           : `Send the message again; if it fails again, run ${command} login in a terminal`;

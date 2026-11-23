@@ -415,7 +415,7 @@ export async function gatePath(
       detail: { action, path: classOf },
     });
     throw blocked(
-      `Plan mode does not change files. Switch to Build mode (/build) to write ${path}.`,
+      `Plan mode does not change files. Switch to Build mode (/build) to write ${path}. ${PLAN_NO_RETRY}`,
     );
   }
   const builtin = builtinDenial(
@@ -688,7 +688,9 @@ async function openDecided(
         enforcement: "control-plane",
         detail: { action, path: pathClass(gov, decided) },
       });
-      throw blocked(`${path} changed while it was being opened.`);
+      throw blocked(
+        `${path} changed while it was being opened. That is a race, so reading it again is fine.`,
+      );
     }
     return handle;
   } catch (error) {
@@ -771,7 +773,10 @@ export async function listDirectory(
     const current = await stat(path, { bigint: true }).catch(() => undefined);
     return current?.dev === held.dev && current.ino === held.ino;
   };
-  const changed = () => blocked(`${path} changed while it was being listed.`);
+  const changed = () =>
+    blocked(
+      `${path} changed while it was being listed. That is a race, so listing it again is fine.`,
+    );
   // Linux lists the opened directory itself. Node cannot list a directory
   // by descriptor elsewhere (macOS /dev/fd/N is not one), so there the path
   // must name the opened directory before and after it is read.
@@ -1404,7 +1409,7 @@ export function governedTools(
       // which may lie outside the workspace.
       if ((await handle.stat()).nlink > 1)
         throw blocked(
-          `${path} has more than one hard link; tools may not write it.`,
+          `${path} has more than one hard link; tools may not write it. Copy it to a new file and edit the copy. ${NO_RETRY}`,
         );
       await handle.truncate(0);
       await handle.writeFile(content, "utf8");
