@@ -32,6 +32,18 @@ describe("launchTheme", () => {
     ).toBeUndefined();
   });
 
+  it("falls back to Pi's default when the declared theme failed to load", () => {
+    const chosen = launchTheme({
+      ...base,
+      theme: "gone",
+      preferred: false,
+      loaded: [],
+      loadFailed: true,
+    });
+    expect(chosen.theme).toBeUndefined();
+    expect(chosen.notice).toContain("did not load");
+  });
+
   it("still fails a launch whose distribution theme is not available", () => {
     expect(() =>
       launchTheme({ ...base, theme: "gone", preferred: false, loaded: [] }),

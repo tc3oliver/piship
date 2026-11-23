@@ -5315,19 +5315,29 @@ else {
     expect(launched.status, launched.stderr).toBe(0);
     expect(launched.stdout).toContain("payload");
     expect(existsSync(gate)).toBe(false);
-    // A live holder (this process) is waited for, then reported.
+    // A live holder (this process) is waited for, and the launch goes on once
+    // it lets go.
     writeFileSync(gate, holder(process.pid));
-    const started = Date.now();
-    const busy = spawnSync(process.execPath, [receipt.launcher as string], {
-      encoding: "utf8",
-    });
-    expect(busy.status).toBe(1);
-    // The launcher names the gate by its real path, which can differ from
-    // the configured one (/private/var on macOS).
-    expect(busy.stderr).toContain(join("receipts", `.${ID}.launch.lock`));
-    expect(busy.stderr).toContain(`is held by process ${process.pid}. Retry`);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    rmSync(gate);
+    // Released once the launcher says it waits, so a slow runner's startup
+    // cannot outlast the holder (with a safety timeout).
+    const release = () => rmSync(gate, { force: true });
+    const safety = setTimeout(release, 15000);
+    const busy = await new Promise<{ status: number | null; stderr: string }>(
+      (done) => {
+        const child = spawn(process.execPath, [receipt.launcher as string]);
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+          if (stderr.includes("Waiting for another launch")) {
+            clearTimeout(safety);
+            release();
+          }
+        });
+        child.on("close", (status) => done({ status, stderr }));
+      },
+    );
+    expect(busy.status, busy.stderr).toBe(0);
+    expect(busy.stderr).toContain(`Waiting for another launch of ${ID}`);
   }, 120_000);
 
   it("launches a release whose PiShip predates runtime leases", async () => {

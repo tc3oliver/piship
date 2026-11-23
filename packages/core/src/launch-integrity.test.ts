@@ -21,7 +21,11 @@ import {
 import { hash } from "./digest.js";
 import { runtimeStateDirectory } from "./state-paths.js";
 import { installDistribution, readInstallReceipt } from "./install/index.js";
-import { payloadInventory, verifyLaunchPayload } from "./payload.js";
+import {
+  payloadInventory,
+  verifyLaunchPayload,
+  verifyPayload,
+} from "./payload.js";
 
 vi.mock("node:crypto", async (original) => {
   const actual = await original<typeof import("node:crypto")>();
@@ -245,9 +249,30 @@ describe("runtime.verifyAtLaunch", () => {
 
   it("verifies the inventory too: an added file is found", async () => {
     const asked = await declared(true);
-    writeFileSync(join(asked, "bin", "extra.js"), "added\n");
-    expect(() => verifyLaunchPayload(asked)).toThrow(
-      /unexpected \(not in the inventory\): bin\/extra\.js/,
-    );
+    writeFileSync(join(asked, "bin", ".DS_Store"), "added\n");
+    // At launch an added file is a warning naming it; verification stays strict.
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => verifyLaunchPayload(asked)).not.toThrow();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("bin/.DS_Store"),
+      );
+      expect(() => verifyPayload(asked)).toThrow(
+        /unexpected \(not in the inventory\): bin\/\.DS_Store/,
+      );
+      // Anything Node could load is never tolerated.
+      writeFileSync(join(asked, "bin", "extra.js"), "planted\n");
+      expect(() => verifyLaunchPayload(asked)).toThrow(
+        /unexpected \(not in the inventory\).*bin\/extra\.js/,
+      );
+      rmSync(join(asked, "bin", "extra.js"));
+      writeFileSync(
+        join(asked, "resources", firstResource(asked)),
+        "# Edited\n",
+      );
+      expect(() => verifyLaunchPayload(asked)).toThrow(/modified/);
+    } finally {
+      warn.mockRestore();
+    }
   }, 60_000);
 });

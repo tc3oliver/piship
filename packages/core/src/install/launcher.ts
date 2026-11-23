@@ -160,25 +160,41 @@ const describeHolder = (holder) =>
   : holder.raw === "" ? "a holder still writing its record"
   : holder.pid === null ? "an unknown holder"
   : "process " + holder.pid + (holder.host !== null && holder.host !== host ? " on another host" : "");
-const gateDeadline = Date.now() + 500;
+let gateSkipped = false;
+const gateDeadline = Date.now() + 10000;
+let gateNoticed = false;
+let gateWait = 10;
+let gateDenied = 0;
 for (;;) {
   try {
     writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
     break;
   } catch (error) {
-    // Only an existing gate is contention; anything else (EACCES, ENOSPC,
-    // EROFS) is reported as it is, since retrying cannot help.
-    if (error.code !== "EEXIST") {
-      console.error(${JSON.stringify(`Could not register a launch of ${id}: `)} + error.message);
-      process.exit(1);
+    // An existing gate is contention (on Windows a gate being deleted while
+    // held answers EPERM). A directory that cannot be written
+    // (EACCES, ENOSPC, EROFS, or an EPERM that outlasts a short retry with no
+    // gate file, Windows' access denied) cannot be waited out: launch without the gate.
+    const holder = error.code === "EEXIST" || error.code === "EPERM" ? gateHolder() : undefined;
+    if (error.code === "EPERM" && !holder) gateDenied ||= Date.now();
+    else gateDenied = 0;
+    if ((error.code !== "EEXIST" && error.code !== "EPERM") || (gateDenied && Date.now() - gateDenied > 500)) {
+      console.error(${JSON.stringify(`Warning: could not register a launch of ${id}: `)} + error.message + ". Launching anyway; an update running at the same time may not wait for this launch.");
+      gateSkipped = true;
+      break;
     }
-    const holder = gateHolder();
     if (Date.now() > gateDeadline) {
       console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering: `)} + gatePath + " is held by " + (holder ? describeHolder(holder) : "another launcher") + ". Retry when it finishes; if no launcher or PiShip command is running, remove that file.");
       process.exit(1);
     }
     if (holder && gateStale(holder)) breakGate(holder);
-    else if (holder) await new Promise((resolve) => setTimeout(resolve, 25));
+    else {
+      if (holder && !gateNoticed && Date.now() > gateDeadline - 9000) {
+        gateNoticed = true;
+        console.error(${JSON.stringify(`Waiting for another launch of ${id} to finish registering…`)});
+      }
+      await new Promise((resolve) => setTimeout(resolve, gateWait));
+      gateWait = Math.min(gateWait * 2, 500);
+    }
   }
 }
 mark("gate_acquired");
@@ -187,14 +203,16 @@ const clearGate = () => {
 };
 process.on("exit", clearGate);
 // A record that cannot be written (a read-only directory, a file in the way)
-// stops the launch with what to fix rather than a stack trace.
+// is a warning, not a stop: the record only protects this release from an
+// update that runs at the same time.
 const writeRecord = (directory, path, bytes) => {
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+    return true;
   } catch (error) {
-    console.error(${JSON.stringify(`Could not register a launch of ${id}: `)} + error.message + ". Make " + join(home, ".runtime-leases") + " a directory you can write to (move aside any file in its place), then run the command again.");
-    process.exit(1);
+    console.error(${JSON.stringify(`Warning: could not register a launch of ${id}: `)} + error.message + ". Launching anyway; an update running now may remove this release. To fix it, make " + join(home, ".runtime-leases") + " a directory you can write to (move aside any file in its place).");
+    return false;
   }
 };
 const launchingDir = join(home, ".runtime-leases", ".launching");
@@ -246,7 +264,7 @@ mark("receipt_resolved");
 // is written here, under the gate and before the runtime loads, with the
 // record holdRuntimeLease in @piship/core writes, so the gate is held for the
 // milliseconds registration takes, not for the time a cold load of the
-// runtime can (a second launch waits half a second for it, and a lifecycle
+// runtime can (a second launch waits up to ten seconds for it, and a lifecycle
 // operation three seconds). The gate is released as soon as the lease stands
 // in the launching marker's place; until the process exits the lease keeps
 // the release from being removed.
@@ -262,7 +280,7 @@ process.on("exit", () => {
   try { if (readFileSync(leasePath, "utf8") === leaseBytes) rmSync(leasePath, { force: true }); } catch {}
 });
 mark("lease_held");
-if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
+if (!gateSkipped && readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
 clearLaunching();
 process.removeListener("exit", clearLaunching);
 clearGate();
@@ -401,8 +419,13 @@ export function commandShimSource(
   home: string = homedir(),
 ): string {
   return platform === "win32"
-    ? `@echo off\r\nsetlocal\r\nnode "${windowsShimPath(launcher, home)}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`
+    ? `@echo off\r\nsetlocal\r\nset "NoDefaultCurrentDirectoryInExePath=1"\r\nnode "${windowsShimPath(launcher, home)}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`
     : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo '${NODE_REQUIRED}' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
+}
+
+/** The shim before it stopped cmd.exe searching the current directory for node. */
+function setlocalWindowsShimSource(path: string): string {
+  return `@echo off\r\nsetlocal\r\nnode "${path}" %*\r\nset "piship_node_exit=%errorlevel%"\r\nif %piship_node_exit% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nexit /b %piship_node_exit%\r\n`;
 }
 
 /** The Windows shim of an earlier PiShip, still on disk until reinstalled. */
@@ -470,13 +493,16 @@ export function ownsCommandShim(
   if (platform !== "win32")
     return text === commandShimSource(launcher, platform);
   let current: string | undefined;
+  let shimPath: string | undefined;
   try {
+    shimPath = windowsShimPath(launcher, home);
     current = commandShimSource(launcher, platform, home);
   } catch {
     // A path no shim can hold: only a shim an earlier PiShip wrote can match.
   }
   return (
     text === current ||
+    (shimPath !== undefined && text === setlocalWindowsShimSource(shimPath)) ||
     text === literalWindowsShimSource(launcher) ||
     text === legacyWindowsShimSource(launcher)
   );

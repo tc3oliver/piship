@@ -1,8 +1,14 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { PISHIP_ERROR_CODES, PiShipError, UsageError } from "./errors.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  debugStack,
+  isUnexpectedError,
+  PISHIP_ERROR_CODES,
+  PiShipError,
+  UsageError,
+} from "./errors.js";
 
 const packages = fileURLToPath(new URL("../../", import.meta.url));
 const definition = fileURLToPath(new URL("./errors.ts", import.meta.url));
@@ -98,5 +104,25 @@ describe("usage errors", () => {
       new PiShipError("CONFIG_INVALID", "Usage: x", { usage: true }).usage,
     ).toBe(true);
     expect(new PiShipError("CONFIG_INVALID", "bad value").usage).toBe(false);
+  });
+});
+
+describe("unexpected errors", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("gives a stack for a non-PiShip Error only with PISHIP_DEBUG=1", () => {
+    const bug = new TypeError("x is undefined");
+    expect(isUnexpectedError(bug)).toBe(true);
+    expect(isUnexpectedError(new Error("State already exists"))).toBe(false);
+    expect(debugStack(new Error("plain"))).toBeUndefined();
+    vi.stubEnv("PISHIP_DEBUG", "1");
+    expect(debugStack(new Error("plain"))).toContain("Error: plain");
+    vi.unstubAllEnvs();
+    expect(debugStack(bug)).toBeUndefined();
+    vi.stubEnv("PISHIP_DEBUG", "1");
+    expect(debugStack(bug)).toContain("TypeError");
+    expect(
+      debugStack(new PiShipError("CONFIG_INVALID", "bad")),
+    ).toBeUndefined();
   });
 });
