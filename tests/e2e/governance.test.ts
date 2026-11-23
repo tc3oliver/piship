@@ -687,11 +687,14 @@ describe("governed distribution (local fixtures)", () => {
     expect(delivered).not.toContain("echo sandboxed");
     expect(delivered).not.toContain("inside.txt");
 
-    // A required audit sink that cannot be reached fails the launch.
+    // A required audit sink that is briefly unreachable does not lock the
+    // user out: the launch warns and keeps the events in the spool.
     await new Promise<void>((done) => sink.close(() => done()));
     const down = await dist.run(["--smoke"], project);
-    expect(down.status).toBe(1);
-    expect(down.stderr).toContain("AUDIT_UNAVAILABLE");
+    expect(down.status, down.stderr).toBe(0);
+    expect(down.stderr).toContain(
+      "Warning: required audit sink company is unreachable",
+    );
   }, 600000);
 
   it.runIf(windows)(

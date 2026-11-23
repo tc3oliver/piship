@@ -10,7 +10,7 @@ export interface AuditFailureRule {
 export const AUDIT_FAILURE_MATRIX: readonly AuditFailureRule[] = Object.freeze([
   {
     condition:
-      "cannot be opened (file) or reached (http empty-batch probe) at launch",
+      "cannot be opened (file), or its http spool cannot (an unreachable collector at launch opens degraded: events are spooled, a warning is shown, and doctor reports it)",
     sink: "required",
     behavior: "AuditLog.open throws AUDIT_UNAVAILABLE",
     logState: "launch fails",

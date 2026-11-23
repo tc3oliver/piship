@@ -811,17 +811,67 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
       arguments: { path: "notes.txt" },
     }));
 
-  it("fails the launch before the agent does anything when the collector answers the readiness probe with an error", async () => {
+  /** Files under the state directory's audit spool (a required HTTP sink's undelivered events). */
+  const spooled = (state: string) => {
+    const root = join(state, "logs", "audit-spool");
+    return existsSync(root)
+      ? readdirSync(root, { recursive: true, encoding: "utf8" }).filter(
+          (name) => name.endsWith(".jsonl"),
+        )
+      : [];
+  };
+
+  it("launches with a warning and spools the events when the collector answers the readiness probe with an error, then delivers them at the next launch", async () => {
+    const session = fixture.session();
+    await session.login();
+    // The login's own events reached the collector before the outage.
+    const beforeOutage = audit.events.length;
+    audit.control.status = 503;
+    const { result, toolResults } = await session.script(reads(3));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      "Warning: required audit sink company is unreachable",
+    );
+    expect(result.stderr).toContain("delivered at the next launch");
+    // The agent ran, and nothing reached the collector.
+    expect(toolResults).toHaveLength(3);
+    expect(audit.events.slice(beforeOutage)).toEqual([]);
+    expect(spooled(session.state)).not.toEqual([]);
+    // The collector is back: the next launch delivers the spooled events first.
+    audit.control.status = 200;
+    const next = await session.run(["--smoke-model"]);
+    expect(next.status, next.stderr).toBe(0);
+    const delivered = audit.events.map((event) => event.event);
+    expect(delivered).toEqual(
+      expect.arrayContaining(["session.start", "tool.allowed", "session.end"]),
+    );
+    expect(spooled(session.state)).toEqual([]);
+  });
+
+  it("still fails the launch when the collector is down and the audit spool cannot be used", async () => {
     const { services } = fixture;
     const session = fixture.session();
     await session.login();
+    // A file where the spool directory belongs (the login may have made it).
+    mkdirSync(join(session.state, "logs"), { recursive: true });
+    rmSync(join(session.state, "logs", "audit-spool"), {
+      recursive: true,
+      force: true,
+    });
+    writeFileSync(
+      join(session.state, "logs", "audit-spool"),
+      "not a directory",
+    );
     audit.control.status = 503;
-    const { result, toolResults } = await session.script(reads(3));
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("AUDIT_UNAVAILABLE");
-    // Nothing ran, and nothing was sent to the model.
-    expect(toolResults).toEqual([]);
-    expect(chatCalls(services)).toEqual([]);
+    try {
+      const { result, toolResults } = await session.script(reads(3));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("AUDIT_UNAVAILABLE");
+      expect(toolResults).toEqual([]);
+      expect(chatCalls(services)).toEqual([]);
+    } finally {
+      rmSync(join(session.state, "logs", "audit-spool"), { force: true });
+    }
   });
 
   it("stops the agent, its tool calls and its model requests once a sink that stopped taking events has a full buffer", async () => {
@@ -868,17 +918,19 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
     expect(events.lastIndexOf("model.request")).toBeLessThan(denied);
   });
 
-  it("reports the events a required sink did not take when the session ends", async () => {
+  it("warns about the events a required sink did not take when the session ends, and keeps them in the spool", async () => {
     const session = fixture.session();
     await session.login();
     // The sink answers the launch's readiness probe and takes the session's
     // first events, then refuses the batch that closes the session and every
-    // one after it: the session has already run, so this proves the loss is
-    // reported (a failing exit), not that anything stopped.
+    // one after it: the spool kept what was refused, so the exit status is
+    // unaffected and the warning says where the events are.
     audit.control.failOnEvent = "session.end";
     const run = await session.run(["--smoke-model"]);
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain("AUDIT_UNAVAILABLE");
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toContain("were not delivered to company");
+    expect(run.stderr).toContain("kept in the local spool");
+    expect(spooled(session.state)).not.toEqual([]);
     const local = auditEvents(session.state).map((event) => event.event);
     expect(local).toEqual(
       expect.arrayContaining(["session.start", "session.end"]),

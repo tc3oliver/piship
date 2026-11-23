@@ -9,6 +9,7 @@ import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
   type AuditStatus,
+  auditLossSpooled,
   LocalMetrics,
   requiredAuditLoss,
 } from "@piship/audit";
@@ -373,6 +374,10 @@ export class GovernanceSession {
         rotation: auditRotation(options.lock),
         // A session delivers what crashed processes spooled; short commands do not.
         replaySpool: true,
+        onDegraded: (id, reason, backlog) =>
+          process.stderr.write(
+            `Warning: required audit sink ${id} is unreachable (${reason}); ${backlog.events ? `${backlog.events} earlier event(s) are kept in the local spool${backlog.oldest ? `, the oldest from ${backlog.oldest}` : ""}, and ` : ""}this session's events are kept there too and delivered at the next launch that reaches the collector.\n`,
+          ),
         fetch: options.fetch,
         // A sink not set to httpTransport: https: plain HTTP to its own
         // origin only.
@@ -455,6 +460,29 @@ export class GovernanceSession {
         session.#notice(
           `Network denial in the sandbox is attested by the ${adapter} backend, not verified: ${networkDenial.reason}.`,
         );
+      // Switching auto mode on is audited before it applies. A required sink
+      // that was unreachable at launch cannot take that event, so the session
+      // starts with auto mode and --yolo off, not refused.
+      if (
+        (session.#userAuto.active || session.#yolo) &&
+        audit.status().sinks.some((sink) => sink.required && sink.degraded)
+      ) {
+        let overrideKept = false;
+        if (session.#yolo) {
+          session.#yolo = false;
+          try {
+            options.onYoloEnd?.();
+          } catch {
+            overrideKept = true;
+          }
+        }
+        session.#userAuto = { ...session.#userAuto, active: false };
+        session.#notice(
+          overrideKept
+            ? "Auto mode stays off while the audit collector is unreachable, but the provider's own auto-approval could not be switched off: exit and restart without --yolo."
+            : "Auto mode stays off while the audit collector is unreachable: switching it on must be recorded first. Start again once the collector is back.",
+        );
+      }
       const workspace = sandbox.report.workspace;
       session.emit("session.start", {
         detail: {
@@ -1938,8 +1966,20 @@ export class GovernanceSession {
         bestEffort(() => this.metrics.save());
       }
       const loss = requiredAuditLoss(status, "The session ended");
-      // biome-ignore lint/correctness/noUnsafeFinally: undelivered required audit outranks a cleanup error
-      if (loss) throw loss;
+      // Events the spool durably kept are delivered at the next launch: warn,
+      // and keep the exit status. A loss (dropped or unspooled) still fails.
+      if (loss && auditLossSpooled(status)) {
+        const lost = status.sinks.filter(
+          (sink) => sink.required && sink.pending > 0,
+        );
+        for (const sink of lost)
+          process.stderr.write(
+            `Warning: ${sink.pending} audit event(s) were not delivered to ${sink.id}; they are kept in the local spool and delivered at the next launch.\n`,
+          );
+      } else if (loss) {
+        // biome-ignore lint/correctness/noUnsafeFinally: undelivered required audit outranks a cleanup error
+        throw loss;
+      }
     }
     return status;
   }

@@ -72,11 +72,16 @@ export function auditGroup(data: DoctorData, out: DoctorSection): void {
       for (const sink of status.sinks) {
         const where =
           targets.find((item) => item.id === sink.id)?.target ?? "unknown";
-        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.replayed ? `; ${sink.replayed} of them replayed from ${sink.spool}` : ""}${sink.rejected ? `; ${sink.rejected} replayed event(s) the collector refused set aside in ${sink.spool}` : ""}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
+        const detail = `${sink.type}, ${sink.required ? "required" : "optional"}, ${where}: ${STATE_TEXT[sink.state]}; delivered ${sink.delivered}, pending ${sink.pending}, dropped ${sink.dropped}${sink.replayed ? `; ${sink.replayed} of them replayed from ${sink.spool}` : ""}${sink.rejected ? `; ${sink.rejected} replayed event(s) the collector refused set aside in ${sink.spool}` : ""}${sink.degraded ? `; unreachable at launch (${sink.degraded}), events spooled${sink.backlog?.events ? `; ${sink.backlog.events} earlier event(s) wait in the spool${sink.backlog.oldest ? `, the oldest from ${sink.backlog.oldest}` : ""}` : ""}` : ""}${sink.lastError ? `; last error: ${sink.lastError}` : ""}`;
         const label = `sink ${sink.id}`;
         if (sink.required && (sink.pending > 0 || sink.dropped > 0))
           out.bad(label, detail);
-        else if (sink.state !== "ok" || sink.pending > 0 || sink.dropped > 0)
+        else if (
+          sink.degraded ||
+          sink.state !== "ok" ||
+          sink.pending > 0 ||
+          sink.dropped > 0
+        )
           out.warn(label, detail);
         else out.ok(label, detail);
       }

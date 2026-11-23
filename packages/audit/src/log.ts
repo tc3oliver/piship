@@ -97,6 +97,10 @@ export interface AuditSinkStatus {
   readonly spool?: string;
   /** Set by `close()`: of `pending`, events kept in the spool for the next launch. */
   readonly spooled?: number;
+  /** Redacted reason the required sink was unreachable at open: events are spooled, not sent, this session. */
+  readonly degraded?: string;
+  /** With `degraded`: events older spools hold for the next launch, and the oldest file's ISO time. */
+  readonly backlog?: { readonly events: number; readonly oldest?: string };
 }
 
 export interface AuditStatus {
@@ -153,6 +157,16 @@ export interface AuditLogOptions {
    * happened. A replaying session always probes.
    */
   readonly readinessProbe?: boolean;
+  /**
+   * Called when a required HTTP sink's readiness probe failed but its spool
+   * opened: the log opens anyway, events are spooled, and the old spools are
+   * left for the next launch.
+   */
+  readonly onDegraded?: (
+    sinkId: string,
+    reason: string,
+    backlog: { readonly events: number; readonly oldest?: string },
+  ) => void;
 }
 
 /** Size-based retention of the file sink: `audit.jsonl` plus `.1`..`.<files>`. */
@@ -732,18 +746,7 @@ class HttpSpool {
         ownedSpools.delete(path);
       }
       syncDirectory(this.directory);
-      const quarantined = readdirSync(this.directory)
-        .filter((name) => name.endsWith(".corrupt"))
-        .sort();
-      if (quarantined.length)
-        throw new PiShipError(
-          "AUDIT_UNAVAILABLE",
-          `Required audit sink ${this.sinkId} (http) has a spool set aside as corrupt or over the cap in ${join(AUDIT_SPOOL_DIRECTORY, this.key)}: ${quarantined.join(", ")}; its valid events are kept, but none is sent while it is there`,
-          {
-            component: "audit",
-            userAction: `Remove the .corrupt file from ${join(AUDIT_SPOOL_DIRECTORY, this.key)} under the state directory, or repair it (one over the cap, ${this.maxBytes} bytes, split into several files) and rename it back to .jsonl; the next launch then delivers the spooled events`,
-          },
-        );
+      this.assertNoQuarantine();
       return events;
     } catch (error) {
       // Left for the next launch, which fails the same way until it is fixed.
@@ -751,6 +754,22 @@ class HttpSpool {
       for (const { path } of claimed) ownedSpools.delete(path);
       throw error;
     }
+  }
+
+  /** Throws while a spool is set aside as corrupt or over the cap in this sink's directory. */
+  assertNoQuarantine(): void {
+    const quarantined = readdirSync(this.directory)
+      .filter((name) => name.endsWith(".corrupt"))
+      .sort();
+    if (quarantined.length)
+      throw new PiShipError(
+        "AUDIT_UNAVAILABLE",
+        `Required audit sink ${this.sinkId} (http) has a spool set aside as corrupt or over the cap in ${join(AUDIT_SPOOL_DIRECTORY, this.key)}: ${quarantined.join(", ")}; its valid events are kept, but none is sent while it is there`,
+        {
+          component: "audit",
+          userAction: `Remove the .corrupt file from ${join(AUDIT_SPOOL_DIRECTORY, this.key)} under the state directory, or repair it (one over the cap, ${this.maxBytes} bytes, split into several files) and rename it back to .jsonl; the next launch then delivers the spooled events`,
+        },
+      );
   }
 
   append(event: AuditEvent): void {
@@ -867,6 +886,35 @@ class HttpSpool {
     } finally {
       closeSync(fd);
     }
+  }
+
+  /**
+   * Events other processes' spools hold, undelivered, and the oldest such
+   * file's mtime: what a degraded open leaves for the next launch.
+   */
+  backlog(): { events: number; oldest?: Date } {
+    let events = 0;
+    let oldest: number | undefined;
+    try {
+      for (const name of readdirSync(this.directory)) {
+        const path = join(this.directory, name);
+        if (!name.endsWith(".jsonl") || path === this.path) continue;
+        const entry = lstatSync(path, { throwIfNoEntry: false });
+        if (!entry?.isFile()) continue;
+        const lines = readFileSync(path, "utf8")
+          .split("\n")
+          .filter((line) => line.trim()).length;
+        if (!lines) continue;
+        events += lines;
+        oldest = Math.min(oldest ?? entry.mtimeMs, entry.mtimeMs);
+      }
+    } catch {
+      // A count that cannot be read is left out of the warning.
+    }
+    return {
+      events,
+      ...(oldest === undefined ? {} : { oldest: new Date(oldest) }),
+    };
   }
 
   /** At close: delete the spool when `queue` is empty, else leave it holding `queue` for the next launch. */
@@ -1170,6 +1218,9 @@ class Sink {
   rejected = 0;
   /** Set at close: undelivered events the spool kept for the next launch. */
   spooled: number | undefined;
+  /** The readiness probe failed at open; see AuditSinkStatus.degraded. */
+  degraded: string | undefined;
+  backlog: { events: number; oldest?: string } | undefined;
 
   constructor(
     readonly config: AuditSinkConfig,
@@ -1193,6 +1244,8 @@ class Sink {
         ? { spool: join(AUDIT_SPOOL_DIRECTORY, this.spool.key) }
         : {}),
       ...(this.spooled ? { spooled: this.spooled } : {}),
+      ...(this.degraded ? { degraded: this.degraded } : {}),
+      ...(this.backlog ? { backlog: this.backlog } : {}),
     };
   }
 
@@ -1204,6 +1257,22 @@ class Sink {
     if (this.endpoint) message = message.split(this.endpoint).join("<sink>");
     return scrubText(message).slice(0, 300);
   }
+}
+
+/**
+ * Network errors (GATEWAY_UNREACHABLE: refused, reset, timed out, a proxy
+ * that failed), timeouts, and 408/429/5xx answers: worth waiting out with the
+ * spool. A policy denial, a TLS violation, or another refusal is not.
+ */
+export function transientProbeFailure(error: unknown): boolean {
+  if (error instanceof PiShipError) return error.code === "GATEWAY_UNREACHABLE";
+  const status = (error as { status?: unknown } | null)?.status;
+  return (
+    typeof status !== "number" ||
+    status === 408 ||
+    status === 429 ||
+    status >= 500
+  );
 }
 
 function unavailable(sink: AuditSinkConfig, reason: string): PiShipError {
@@ -1650,7 +1719,14 @@ async function openSink(
         new AbortController().signal,
       );
     } catch (error) {
-      throw unavailable(config, sink.describeError(error));
+      // A collector that is briefly unreachable is not a reason to lock the
+      // user out: the spool below keeps every event for the next launch (or
+      // the open fails if it cannot). A sink that can never be reached as
+      // configured (a host the network policy denies, a 4xx answer) still
+      // fails the launch.
+      if (!transientProbeFailure(error))
+        throw unavailable(config, sink.describeError(error));
+      sink.degraded = sink.describeError(error);
     }
   if (config.required) {
     // Only a required sink spools: an optional one drops what it cannot send.
@@ -1662,9 +1738,12 @@ async function openSink(
     try {
       const replayed = spool.open(
         options.config.capture,
-        options.replaySpool === true,
+        // A degraded sink leaves the old spools for the next launch.
+        options.replaySpool === true && !sink.degraded,
       );
       // One at a time: spreading a large replay passes V8's argument limit.
+      // A degraded open does not replay, but a set-aside spool still blocks.
+      if (sink.degraded) spool.assertNoQuarantine();
       for (const event of replayed) sink.queue.push(event);
       sink.replayed = replayed.length;
     } catch (error) {
@@ -1675,6 +1754,14 @@ async function openSink(
       );
     }
     sink.spool = spool;
+    if (sink.degraded) {
+      const { events, oldest } = spool.backlog();
+      sink.backlog = {
+        events,
+        ...(oldest ? { oldest: oldest.toISOString() } : {}),
+      };
+      options.onDegraded?.(config.id, sink.degraded, sink.backlog);
+    }
   }
   return sink;
 }

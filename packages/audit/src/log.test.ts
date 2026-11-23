@@ -618,26 +618,30 @@ describe("AuditLog http sink", () => {
     expect(sent).toHaveLength(2);
   });
 
-  it("fails launch when a required http sink is unreachable at open", async () => {
+  it("opens degraded, spooling, when a required http sink is unreachable at open", async () => {
     const collector = await startCollector();
     collector.status = 503;
-    const error = await AuditLog.open({
+    const reported: string[] = [];
+    const log = await AuditLog.open({
       config: config([
         { id: "company", type: "http", url: collector.url, required: true },
       ]),
       distribution: "acmecode",
       stateDir: temp,
       fetch,
-    }).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(PiShipError);
-    expect(error).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
-    expect((error as Error).message).toContain("HTTP 503");
-    expect((error as Error).message).not.toContain("route=audit");
+      onDegraded: (id, reason) => reported.push(`${id}: ${reason}`),
+    });
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain("HTTP 503");
+    expect(reported[0]).not.toContain("route=audit");
+    expect(log.status().sinks[0]?.degraded).toContain("HTTP 503");
+    await log.close(50);
   });
 
   it("treats redirects as failures and never follows them", async () => {
     const collector = await startCollector();
     collector.status = 302;
+    // A redirect is a misconfigured URL, not an outage: the launch fails.
     await expect(
       AuditLog.open({
         config: config([
