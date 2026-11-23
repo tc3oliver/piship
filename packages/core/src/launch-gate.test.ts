@@ -11,7 +11,6 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-  watch,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -88,17 +87,15 @@ function refusal(action: () => unknown): Error {
 }
 
 const waitForFile = (path: string): Promise<void> =>
+  // Polled: an fs.watch event raised before the watcher is armed is lost on a
+  // loaded machine, and the wait then never ends.
   new Promise((resolvePromise) => {
-    const watcher = watch(dirname(path), () => {
+    const timer = setInterval(() => {
       if (existsSync(path)) {
-        watcher.close();
+        clearInterval(timer);
         resolvePromise();
       }
-    });
-    if (existsSync(path)) {
-      watcher.close();
-      resolvePromise();
-    }
+    }, 10);
   });
 
 describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
@@ -184,14 +181,12 @@ describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
     // A release whose launcher runs until told to stop, as a session does.
     writeFileSync(
       join(payload, "bin", ID),
-      `import { writeFileSync, watch, existsSync } from "node:fs";
-import { dirname } from "node:path";
+      `import { writeFileSync, existsSync } from "node:fs";
 writeFileSync(${JSON.stringify(ready)}, "ready");
 await new Promise((resolve) => {
-  const watcher = watch(dirname(${JSON.stringify(release)}), () => {
-    if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
-  });
-  if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+  const timer = setInterval(() => {
+    if (existsSync(${JSON.stringify(release)})) { clearInterval(timer); resolve(); }
+  }, 10);
 });
 `,
     );
