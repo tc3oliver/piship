@@ -262,6 +262,15 @@ describe("branded logout", () => {
     await signIn(purging);
     await runLogout(purging);
     expect(readdirSync(sessions)).toEqual(["new.jsonl"]);
+    // The sweep is attributed to the user who was signed in when it ran.
+    expect(
+      auditEvents(ctx).find((event) => event.event === "data.swept")?.user,
+    ).toBe(
+      principalId({
+        issuer: services.issuer,
+        subject: services.knobs.subject,
+      }),
+    );
     expect(out).toEqual([
       "Signed out of AcmeCode. Local runtime and identity credentials were cleared; cache files were removed; 2 sessions past the retention were removed and the others were preserved.",
     ]);

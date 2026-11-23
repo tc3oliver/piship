@@ -14,6 +14,7 @@ import {
   formatError,
   PiShipError,
   principalDigest,
+  principalId,
   principalKey,
   redact,
   startupMark,
@@ -172,7 +173,9 @@ async function endSession(
   publishContext(null);
   // Pi has finished booting and running. Keep retention off the cold-start
   // path, while retaining the same audited decisions and session claims.
+  const identity = prepared.activated?.identity;
   await sweepDistributionData(ctx, "launch", {
+    user: identity ? principalId(identity) : null,
     sessionHeld: (file) => liveOwner(file) !== undefined,
     claimSession: (file) => {
       const claim = new SessionOwnership();
