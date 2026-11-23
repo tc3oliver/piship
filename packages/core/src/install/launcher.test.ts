@@ -120,10 +120,19 @@ describe("the launcher when another launch holds the gate", () => {
         pid: process.pid,
       }) + "\n",
     );
-    setTimeout(() => rmSync(gate, { force: true }), 1200);
+    // Release the gate once the launcher says it waits (or after a safety
+    // timeout), so a slow runner's startup cannot outlast the holder.
+    const release = () => rmSync(gate, { force: true });
+    const safety = setTimeout(release, 15000);
     const child = spawn(process.execPath, [launcher as string]);
     let stderr = "";
-    child.stderr?.on("data", (chunk) => (stderr += chunk));
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.includes("Waiting for another launch")) {
+        clearTimeout(safety);
+        release();
+      }
+    });
     const started = Date.now();
     await new Promise((done) => child.on("close", done));
     expect(Date.now() - started).toBeGreaterThan(1000);

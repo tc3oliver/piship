@@ -5318,12 +5318,21 @@ else {
     // A live holder (this process) is waited for, and the launch goes on once
     // it lets go.
     writeFileSync(gate, holder(process.pid));
-    setTimeout(() => rmSync(gate, { force: true }), 1200);
+    // Released once the launcher says it waits, so a slow runner's startup
+    // cannot outlast the holder (with a safety timeout).
+    const release = () => rmSync(gate, { force: true });
+    const safety = setTimeout(release, 15000);
     const busy = await new Promise<{ status: number | null; stderr: string }>(
       (done) => {
         const child = spawn(process.execPath, [receipt.launcher as string]);
         let stderr = "";
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+          if (stderr.includes("Waiting for another launch")) {
+            clearTimeout(safety);
+            release();
+          }
+        });
         child.on("close", (status) => done({ status, stderr }));
       },
     );
