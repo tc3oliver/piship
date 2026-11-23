@@ -106,6 +106,7 @@ async function open(
     readonly metrics?: LocalMetrics;
     /** `policy.userAuto` of a v1alpha5 manifest, set on the v1alpha3 lock. */
     readonly userAuto?: "allowed";
+    readonly yolo?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-audit-events-"));
@@ -177,6 +178,7 @@ async function open(
     resolveTemplate: (_key, template) => template,
     homeDir: join(root, "home"),
     user: "alice",
+    ...(options.yolo ? { yolo: true } : {}),
     ...(options.metrics ? { metrics: options.metrics } : {}),
     // A required sink that stays down is reported after this, not after 5 s.
     auditCloseDeadlineMs: 300,
@@ -520,7 +522,7 @@ describe("GovernanceSession.close with a required sink", () => {
     await expect(session.close()).resolves.toMatchObject({ state: "ok" });
   });
 
-  it("fails with AUDIT_UNAVAILABLE after cleanup when events stay undelivered", async () => {
+  it("warns, and does not fail, after cleanup when the spool kept the undelivered events", async () => {
     const { state, fetch } = collector();
     const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
     roots.push(root);
@@ -534,16 +536,17 @@ describe("GovernanceSession.close with a required sink", () => {
       disposed = true;
       await dispose();
     };
-    const error = await session.close().then(
-      () => undefined,
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      code: "AUDIT_UNAVAILABLE",
-      message: expect.stringContaining(
-        "The session ended: 3 audit event(s) were not delivered to required audit sink company (3 pending, 0 dropped; last error: collector answered HTTP 503)",
-      ),
-    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await expect(session.close()).resolves.toMatchObject({
+        sinks: [{ id: "company", pending: 3, spooled: 3, dropped: 0 }],
+      });
+      expect(stderr).toHaveBeenCalledWith(
+        "Warning: 3 audit event(s) were not delivered to company; they are kept in the local spool and delivered at the next launch.\n",
+      );
+    } finally {
+      stderr.mockRestore();
+    }
     expect(disposed).toBe(true);
     // Metrics were still saved.
     expect(readFileSync(join(root, "logs", "metrics.json"), "utf8")).toContain(
@@ -552,7 +555,7 @@ describe("GovernanceSession.close with a required sink", () => {
     expect(session.audit.status().sinks[0]?.pending).toBe(3);
   }, 15_000);
 
-  it("still flushes audit when a cleanup step fails, and reports the loss first", async () => {
+  it("still flushes audit when a cleanup step fails, and reports the cleanup error when the spool kept the rest", async () => {
     const { state, fetch } = collector();
     const { session } = await open(REQUIRED, { fetch });
     session.sandbox.dispose = async () => {
@@ -563,16 +566,34 @@ describe("GovernanceSession.close with a required sink", () => {
       "session.end",
     );
 
-    // Every delivery fails: the audit loss outranks the cleanup error.
+    // Every delivery fails, but the spool keeps the events: only a warning.
     const down = collector();
     down.state.status = 500;
     const second = await open(REQUIRED, { fetch: down.fetch });
     second.session.sandbox.dispose = async () => {
       throw new Error("dispose failed");
     };
-    await expect(second.session.close()).rejects.toMatchObject({
-      code: "AUDIT_UNAVAILABLE",
-    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await expect(second.session.close()).rejects.toThrow("dispose failed");
+    } finally {
+      stderr.mockRestore();
+    }
+  }, 15_000);
+
+  it("starts with --yolo off, and a warning, when the required sink was unreachable at launch", async () => {
+    const down = new Response(null, { status: 503 });
+    const fetch = (async () => down.clone()) as unknown as ManagedFetch;
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const { session } = await open(REQUIRED, { fetch, yolo: true });
+      expect(session.audit.status().sinks[0]?.degraded).toBeDefined();
+      expect(session.yolo).toBe(false);
+      // The switch was never recorded, so no event claims it was on.
+      expect(session.audit.status().sinks[0]?.pending).toBe(2);
+    } finally {
+      stderr.mockRestore();
+    }
   }, 15_000);
 
   it("records a required-sink loss when a failing launch closes audit", async () => {
@@ -674,16 +695,21 @@ describe("GovernanceSession.close with a required sink", () => {
       expect(metrics.saves).toBe(1);
     }, 15_000);
 
-    it("still fails closed on a required audit loss", async () => {
+    it("keeps the exit status on a spooled required audit loss", async () => {
       const { state, fetch } = collector();
       const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
       roots.push(root);
       const metrics = new FullDiskMetrics(root);
       const { session } = await open(REQUIRED, { fetch, metrics });
       state.status = 503;
-      await expect(session.close()).rejects.toMatchObject({
-        code: "AUDIT_UNAVAILABLE",
-      });
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await expect(session.close()).resolves.toMatchObject({
+          sinks: [{ pending: 3, spooled: 3 }],
+        });
+      } finally {
+        stderr.mockRestore();
+      }
       // A failing launch whose required sink is down keeps its own error.
       const failing = new FullDiskMetrics(root);
       await expect(

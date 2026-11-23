@@ -194,16 +194,53 @@ describe("required HTTP sink spool", () => {
     expect(spoolFiles()).toEqual([]);
   });
 
+  it("a degraded open reports the backlog older spools hold and leaves it for the next launch", async () => {
+    await crashWith(["old-1", "old-2"]);
+    const down = collector();
+    down.fetch = async () => new Response(null, { status: 500 });
+    const reported: { events: number; oldest?: string }[] = [];
+    const log = await open(down, {
+      replaySpool: true,
+      onDegraded: (_id, _reason, backlog) => reported.push(backlog),
+    });
+    expect(reported).toEqual([
+      { events: 2, oldest: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) },
+    ]);
+    expect(log.status().sinks[0]?.backlog).toEqual(reported[0]);
+    await log.close(50);
+    const up = collector();
+    await (await open(up)).close();
+    expect(up.received.map((event) => event.resource)).toEqual([
+      "old-1",
+      "old-2",
+    ]);
+  });
+
+  it("a degraded open still fails while a spool is set aside as corrupt", async () => {
+    const file = await crashWith(["one"]);
+    appendFileSync(join(dirname(file), "1-a.jsonl.corrupt"), "x\n");
+    const down = collector();
+    down.fetch = async () => new Response(null, { status: 500 });
+    await expect(open(down, { replaySpool: true })).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringContaining("set aside as corrupt"),
+    });
+  });
+
   it("without the readiness probe, opens while the collector is down and spools for the next launch", async () => {
     const down = collector();
     down.fetch = async () => new Response(null, { status: 500 });
-    // A replaying session still probes and fails closed.
-    await expect(open(down)).rejects.toMatchObject({
-      code: "AUDIT_UNAVAILABLE",
+    // A replaying session opens degraded: it spools and leaves old spools.
+    const degraded: string[] = [];
+    const replaying = await open(down, {
+      replaySpool: true,
+      onDegraded: (id, reason) => degraded.push(`${id}: ${reason}`),
     });
-    await expect(
-      open(down, { readinessProbe: false, replaySpool: true }),
-    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    expect(degraded).toEqual(["company: collector answered HTTP 500"]);
+    expect(replaying.status().sinks[0]).toMatchObject({
+      degraded: "collector answered HTTP 500",
+    });
+    await replaying.close(50);
     const log = await open(down, {
       readinessProbe: false,
       replaySpool: false,
@@ -247,6 +284,20 @@ describe("required HTTP sink spool", () => {
     expect(loss?.userAction).toContain("report the unrecorded activity");
   });
 
+  it("fails closed when the probe fails and the spool cannot be used", async () => {
+    const down = collector();
+    down.fetch = async () => new Response(null, { status: 500 });
+    mkdirSync(join(temp, "logs"), { recursive: true });
+    writeFileSync(join(temp, "logs", "audit-spool"), "not a directory");
+    try {
+      await expect(open(down)).rejects.toMatchObject({
+        code: "AUDIT_UNAVAILABLE",
+      });
+    } finally {
+      rmSync(join(temp, "logs", "audit-spool"));
+    }
+  });
+
   it("says a collector that does not answer timed out", async () => {
     const hang = collector();
     hang.fetch = (_url, init) =>
@@ -255,10 +306,11 @@ describe("required HTTP sink spool", () => {
           reject(init.signal?.reason),
         ),
       );
-    await expect(open(hang, { requestTimeoutMs: 50 })).rejects.toMatchObject({
-      message:
-        "Required audit sink company (http) is unavailable: collector did not answer within 0.05 s",
-    });
+    const log = await open(hang, { requestTimeoutMs: 50 });
+    expect(log.status().sinks[0]?.degraded).toBe(
+      "collector did not answer within 0.05 s",
+    );
+    await log.close(50);
   });
 
   it("delivers an event found in two spools once", async () => {

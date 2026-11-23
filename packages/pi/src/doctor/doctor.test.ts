@@ -2160,6 +2160,43 @@ describe("Sandbox credential lines", () => {
 });
 
 describe("Audit group", () => {
+  it("reports a required sink that was unreachable at launch as a warning", () => {
+    const status: AuditStatus = {
+      state: "ok",
+      rejected: 0,
+      sinks: [
+        {
+          id: "siem",
+          type: "http",
+          required: true,
+          state: "ok",
+          delivered: 0,
+          pending: 0,
+          dropped: 0,
+          degraded: "collector answered HTTP 503",
+          backlog: { events: 4, oldest: "2026-11-20T08:00:00.000Z" },
+        },
+      ],
+    };
+    const audit = group(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData(),
+          governance: governanceData({
+            audit: {
+              status,
+              targets: [{ id: "siem", target: "host audit.acme.example" }],
+            },
+          }),
+        }),
+      ).render(),
+      "Audit",
+    );
+    expect(audit).toContain(
+      `  ! ${"sink siem".padEnd(20)} http, required, host audit.acme.example: healthy; delivered 0, pending 0, dropped 0; unreachable at launch (collector answered HTTP 503), events spooled; 4 earlier event(s) wait in the spool, the oldest from 2026-11-20T08:00:00.000Z`,
+    );
+  });
+
   it("reports each sink's counts and a failed required delivery at session end without losing the report", () => {
     const status: AuditStatus = {
       state: "failed",
