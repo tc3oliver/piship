@@ -9,11 +9,11 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
-  renameSync,
   rmSync,
   writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./rename-retry.js";
 
 /**
  * The temporary an atomic write of `path` uses: `<path>.p<pid>-<random>.tmp`.
@@ -101,7 +101,7 @@ export function writeFileAtomic(
     } finally {
       closeSync(fd);
     }
-    renameSync(temporary, path);
+    renameWithRetry(temporary, path);
     renamed = true;
   } finally {
     if (!renamed)
