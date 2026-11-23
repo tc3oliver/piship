@@ -56,7 +56,7 @@ export function manifestChange(
 ): string {
   return mode === "managed"
     ? `Ask your administrator to change ${key}.`
-    : `Change ${key} in your piship.yaml.`;
+    : `Change ${key} in your piship.yaml and rebuild; the installed command runs the built payload.`;
 }
 
 /** The shell cannot get past the sandbox, so a retry only repeats the failure. */
@@ -122,12 +122,12 @@ export class SandboxFailureScanner {
     const { files = [], directories = [] } = profile.writeProtect ?? {};
     for (const named of this.#named) {
       const path = real(named);
-      if (profile.readDeny.some((denied) => isWithin(path, denied)))
+      if (profile.readDeny.some((denied) => isWithin(denied, path)))
         return `[PiShip sandbox: ${named} is hidden from shell commands. ${manifestChange(mode, "sandbox.filesystem.read.deny")} ${SANDBOX_NO_RETRY}]`;
       if (
         files.includes(path) ||
         directories.some((protectedDirectory) =>
-          isWithin(path, protectedDirectory),
+          isWithin(protectedDirectory, path),
         )
       )
         return `[PiShip sandbox: ${named} is a protected git control path (the git config, hooks, .git/modules, .git/worktrees), which git reads when it runs outside the sandbox. The user can run this command in their own terminal, outside the sandbox; do not retry it here.]`;
@@ -137,7 +137,7 @@ export class SandboxFailureScanner {
       // A file the launching user cannot read is an ordinary permission
       // error on a read, not a sandbox decision.
       if (existsSync(path) && !readable(path)) continue;
-      if (!profile.writeAllow.some((allowed) => isWithin(path, allowed)))
+      if (!profile.writeAllow.some((allowed) => isWithin(allowed, path)))
         return `[PiShip sandbox: ${named} is outside the directories shell commands can write. ${manifestChange(mode, "sandbox.filesystem.write.allow")} ${SANDBOX_NO_RETRY}]`;
     }
     if (this.#networkSeen && profile.network === "deny")

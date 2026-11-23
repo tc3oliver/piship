@@ -2,11 +2,12 @@ import type { ModelDefinition } from "@piship/contracts";
 import type { CapabilityConfig, CapabilityProviderRef } from "@piship/schema";
 import { describe, expect, it } from "vitest";
 import {
-  computeCapabilityStates,
-  contractsCompatible,
-  formatCapabilities,
   type CapabilityState,
   type CapabilityStateInput,
+  computeCapabilityStates,
+  contractsCompatible,
+  externalPermissionProvider,
+  formatCapabilities,
 } from "./capabilities.js";
 import { makePolicy } from "./fixtures.test-helpers.js";
 import { incompatibleCapabilities } from "./model-requirements.js";
@@ -461,5 +462,34 @@ describe("formatCapabilities", () => {
     expect(text).toContain("  workflow enabled: Not enabled in the manifest");
     expect(lines.at(-1)).toMatch(/^These are PiShip capability contracts/);
     expect(text).not.toContain("abcdef123456");
+  });
+});
+
+describe("externalPermissionProvider", () => {
+  it("names an effective package provider, not PiShip's own or a failed one", () => {
+    const states = computeCapabilityStates(input());
+    expect(externalPermissionProvider(states)).toBeUndefined();
+    const [permissions] = states;
+    if (!permissions) throw new Error("no permissions state");
+    const withProvider = (provider: string, effective: "yes" | "no") => [
+      {
+        ...permissions,
+        provider,
+        axes: {
+          ...permissions.axes,
+          effective: { value: effective, reason: "x" },
+        },
+      },
+    ];
+    expect(
+      externalPermissionProvider(
+        withProvider("certified/pi-permission-system", "yes"),
+      ),
+    ).toBe("certified/pi-permission-system");
+    expect(
+      externalPermissionProvider(
+        withProvider("certified/pi-permission-system", "no"),
+      ),
+    ).toBeUndefined();
   });
 });

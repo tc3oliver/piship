@@ -41,7 +41,7 @@ describe("manifestChange", () => {
       "Ask your administrator to change sandbox.network.mode.",
     );
     expect(manifestChange("personal", "sandbox.network.mode")).toBe(
-      "Change sandbox.network.mode in your piship.yaml.",
+      "Change sandbox.network.mode in your piship.yaml and rebuild; the installed command runs the built payload.",
     );
   });
 });
@@ -129,7 +129,7 @@ describe.skipIf(process.platform === "win32")("SandboxFailureScanner", () => {
       "node fetch.js https://api.example.com",
     ])
       expect(silent(command), command).toMatch(
-        /^\[PiShip sandbox: shell commands have no network access, so a command that needs the network fails here even when it was approved\. Change sandbox\.network\.mode in your piship\.yaml\./,
+        /^\[PiShip sandbox: shell commands have no network access, so a command that needs the network fails here even when it was approved\. Change sandbox\.network\.mode in your piship\.yaml and rebuild/,
       );
     expect(silent("npm test")).toBeUndefined();
     expect(silent("make curlish")).toBeUndefined();

@@ -5,17 +5,17 @@ import { redact } from "@piship/contracts";
 import {
   BUILTIN_PROVIDERS,
   CAPABILITY_CONTRACTS,
-  SUPPORTED_CAPABILITY_CONTRACTS,
   type CapabilityConfig,
   type CapabilityName,
   type CapabilityProviderRef,
   type PolicyConfig,
+  SUPPORTED_CAPABILITY_CONTRACTS,
 } from "@piship/schema";
 import {
-  modelRequirementGaps,
   type ModelEvidence,
+  modelRequirementGaps,
 } from "./model-requirements.js";
-import { providerTrustDecision, type ProviderTrustDecision } from "./trust.js";
+import { type ProviderTrustDecision, providerTrustDecision } from "./trust.js";
 
 export type AxisValue = "yes" | "no" | "n/a";
 
@@ -288,6 +288,21 @@ export function computeCapabilityStates(
 
 function pad(text: string, width: number): string {
   return text.length >= width ? text : text + " ".repeat(width - text.length);
+}
+
+/**
+ * The effective permission provider that is not PiShip's own, if any. It decides
+ * shell commands and other packages' tools at run time, after PiShip's rules.
+ */
+export function externalPermissionProvider(
+  states: readonly CapabilityState[],
+): string | undefined {
+  const state = states.find((item) => item.name === "permissions");
+  return state?.provider &&
+    !state.provider.startsWith("builtin/") &&
+    state.axes.effective.value === "yes"
+    ? state.provider
+    : undefined;
 }
 
 /** Render the capability table with one reason line per `no`. */

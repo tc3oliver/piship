@@ -255,6 +255,17 @@ describe("probeSandbox environment filter", () => {
   });
 });
 
+describe("probeSandbox runtime-set variables", () => {
+  it("accepts UV_USE_IO_URING, which Node sets on some Linux hosts", async () => {
+    const result = await probeSandbox(
+      mutantAdapter("faithful", { UV_USE_IO_URING: "0" }),
+      profile(),
+      options,
+    );
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe("probeSandbox network deny", () => {
   it("refuses a sandbox that lets an external connection through", async () => {
     expect(await refusal("external-connect")).toContain(

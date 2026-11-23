@@ -736,6 +736,18 @@ describe("acceptance request failures without a status (#85)", () => {
     session.dispose();
   });
 
+  it("tells the user to check the gateway after a refused connection", async () => {
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl: await closedPort(),
+    });
+    await session.prompt("hello");
+    expect(last(session)?.errorMessage).toMatch(
+      /\nAction: Check that the gateway is reachable from this machine, then send the message again$/,
+    );
+    session.dispose();
+  });
+
   it("reports a request that ran past its deadline as an unreachable gateway", async () => {
     const { runtime } = await managedSession({
       keys: ["sk-managed-credential-1"],

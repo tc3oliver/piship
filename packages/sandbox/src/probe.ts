@@ -106,7 +106,7 @@ function outsideLocation(
   const candidates = ["/var/tmp", tmpdir(), profile.homeDir];
   for (const candidate of candidates) {
     const real = realpathNearest(candidate);
-    if (profile.writeAllow.some((path) => isWithin(real, path))) continue;
+    if (profile.writeAllow.some((path) => isWithin(path, real))) continue;
     try {
       // A probe killed before it cleaned up left its directory here. This
       // location is outside the write allowlist (checked above), so no
@@ -345,6 +345,9 @@ export async function probeSandbox(
     const allowedNames = new Set([
       ...profile.environmentAllow,
       ...(options.injected ?? []),
+      // Node on some Linux hosts sets this itself at startup, so it shows up
+      // in the probe child's environment although the sandbox never passed it.
+      "UV_USE_IO_URING",
     ]);
     const failures = evaluate(
       report,

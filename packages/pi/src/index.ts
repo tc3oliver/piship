@@ -73,7 +73,6 @@ export {
   GovernanceSession,
   inspectGovernance,
 } from "./governance-session.js";
-export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 // What a session publishes for its subagent children; a test stands in for one.
 export { publishSubagentOwner } from "./launch/subagent-owner.js";
 

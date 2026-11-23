@@ -143,10 +143,10 @@ describe("what the user reads of a refusal", () => {
     ).toBe("Plan mode does not allow write. Switch to Build mode with /build.");
     expect(
       userText(
-        "[PiShip sandbox: shell commands have no network access. Change sandbox.network.mode in your piship.yaml. Do not retry it or work around the sandbox; tell the user what failed.]",
+        "[PiShip sandbox: shell commands have no network access. Change sandbox.network.mode in your piship.yaml and rebuild; the installed command runs the built payload. Do not retry it or work around the sandbox; tell the user what failed.]",
       ),
     ).toBe(
-      "[PiShip sandbox: shell commands have no network access. Change sandbox.network.mode in your piship.yaml.]",
+      "[PiShip sandbox: shell commands have no network access. Change sandbox.network.mode in your piship.yaml and rebuild; the installed command runs the built payload.]",
     );
     expect(userText("Successfully wrote to notes.txt")).toBe(
       "Successfully wrote to notes.txt",

@@ -395,7 +395,7 @@ describe("the notice that a launch skips the tool download", () => {
     const notice = deferredDownloadNotice(["fd", "rg"]);
     expect(notice).not.toContain("\n");
     expect(notice).toContain("fd and rg not found");
-    expect(notice).toContain("PI_OFFLINE=1");
+    expect(notice).not.toContain("PI_OFFLINE");
     expect(notice).toContain("model catalog refresh");
     expect(notice).toContain("PISHIP_ALLOW_TOOL_DOWNLOAD=1");
     expect(notice).toContain("runtime.searchTools");
