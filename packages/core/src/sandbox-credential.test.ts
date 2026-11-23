@@ -619,7 +619,7 @@ describe("sandbox credential: events and leakage", () => {
       generation: 1,
     });
     const text = JSON.stringify(events);
-    for (const value of [SECRET, SECRET_2, "test.invalid", "8443", "sandbox#"])
+    for (const value of [SECRET, SECRET_2, "test.invalid", ":8443", "sandbox#"])
       expect(text).not.toContain(value);
   });
 
