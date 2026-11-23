@@ -261,7 +261,9 @@ describe("resuming a session", () => {
   });
 
   it("starts on the model the user's preference names", async () => {
-    const base = prepared() as unknown as { activated: Record<string, unknown> };
+    const base = prepared() as unknown as {
+      activated: Record<string, unknown>;
+    };
     const dir = sessionDir();
     const first = SessionManager.create(process.cwd(), dir);
     first.appendMessage({ role: "user", content: "hi", timestamp: 1 });
