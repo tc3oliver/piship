@@ -75,4 +75,32 @@ describe("writeFileAtomic", () => {
       expect(readdirSync(dir)).toEqual(["receipt.json"]);
     },
   );
+
+  it("retries a rename Windows blocks with EPERM and then succeeds", () => {
+    const path = seeded();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      injectFault(/receipt\.json$/, { op: "rename", code: "EPERM" }, 1);
+      writeFileAtomic(path, NEXT);
+    } finally {
+      Object.defineProperty(
+        process,
+        "platform",
+        platform as PropertyDescriptor,
+      );
+    }
+    expect(fired).toHaveLength(1);
+    expect(readFileSync(path, "utf8")).toBe(NEXT);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not retry a blocked rename off Windows",
+    () => {
+      const path = seeded();
+      injectFault(/receipt\.json$/, { op: "rename", code: "EPERM" }, 1);
+      expect(() => writeFileAtomic(path, NEXT)).toThrow(/EPERM/);
+      expect(readFileSync(path, "utf8")).toBe(PREVIOUS);
+    },
+  );
 });
