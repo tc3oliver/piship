@@ -350,7 +350,9 @@ export function projectProtection(
 }
 
 /** Policy paths use POSIX separators; native joins use backslashes on Windows.
- * Compare the same spelling without collapsing real target differences.
+ * Compare the same spelling without collapsing real target differences. The
+ * realpath carries the on-disk case (`.Claude`), so compare case-insensitively
+ * where the filesystem is, like `isProtectedDirectoryPath`.
  */
 export function protectedPathRedirected(
   lexical: string,
@@ -358,5 +360,9 @@ export function protectedPathRedirected(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   const separator = platform === "win32" ? "\\" : "/";
-  return toPosixPath(lexical, separator) !== toPosixPath(resolved, separator);
+  const fold =
+    platform === "darwin" || platform === "win32"
+      ? (path: string) => toPosixPath(path, separator).toLowerCase()
+      : (path: string) => toPosixPath(path, separator);
+  return fold(lexical) !== fold(resolved);
 }

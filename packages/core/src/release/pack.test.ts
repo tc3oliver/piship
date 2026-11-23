@@ -178,6 +178,8 @@ describe("piship pack", () => {
     );
     expect(ps1).toContain("[Console]::Error.WriteLine('Node.js");
     expect(ps1).not.toContain("Write-Error");
+    expect(ps1).toContain("Join-Path $env:SystemRoot 'System32\\tar.exe'");
+    expect(ps1).toContain("& $tar -xzf $archive");
   });
 
   it("is deterministic", async () => {
