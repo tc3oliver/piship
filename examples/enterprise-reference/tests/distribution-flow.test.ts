@@ -244,12 +244,21 @@ describe.skipIf(process.platform === "win32")(
         model: "acmecode-reference/acme/general",
         text: "Reference mock reply from gpt-4.1-mini.",
       });
-      // The upstream saw both requests, as streams, after LiteLLM mapped the
-      // gateway model names to its own.
+      // A resumed session keeps the model it ended on, so name the default
+      // model again to leave the session where the later steps expect it.
+      const coder = await acme.run(["--model", "acme/coder", "--smoke-model"]);
+      expect(coder.status, coder.stderr).toBe(0);
+      expect(JSON.parse(coder.stdout).modelRequest).toMatchObject({
+        model: "acmecode-reference/acme/coder",
+        text: "Reference mock reply from gpt-4.1.",
+      });
+      // The upstream saw all three requests, as streams, after LiteLLM mapped
+      // the gateway model names to its own.
       const upstream = await upstreamRequests(stack);
-      expect(upstream.slice(-2)).toMatchObject([
+      expect(upstream.slice(-3)).toMatchObject([
         { model: "gpt-4.1", stream: true, status: 200 },
         { model: "gpt-4.1-mini", stream: true, status: 200 },
+        { model: "gpt-4.1", stream: true, status: 200 },
       ]);
     });
 

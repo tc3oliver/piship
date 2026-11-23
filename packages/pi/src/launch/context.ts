@@ -68,6 +68,8 @@ export interface PreparedAccess {
   readonly access: DistributionAccess | null;
   readonly activated: ActivatedAccess | null;
   readonly removedEnvironment: readonly string[];
+  /** The model named with --model, which beats the model a resumed session ended on. */
+  readonly requestedModel?: string;
   readonly events: AccessEvents;
 }
 
@@ -143,7 +145,14 @@ export async function prepareAccess(
       ...(requestedBy ? { requestedBy } : {}),
       ...(listOnly ? { listOnly } : {}),
     });
-    return { metrics, access, activated, removedEnvironment, events };
+    return {
+      metrics,
+      access,
+      activated,
+      removedEnvironment,
+      ...(requestedModel ? { requestedModel } : {}),
+      events,
+    };
   } finally {
     saveMetrics(metrics);
   }

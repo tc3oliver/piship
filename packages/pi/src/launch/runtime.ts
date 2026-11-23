@@ -664,8 +664,30 @@ async function startRuntime(
         );
       }
     }
-    // Pi restores the model of a session that already has messages.
+    // Pi restores the model of a session that already has messages, unless
+    // one is passed: only --model overrides it, and a model the session ended
+    // on that is no longer allowed is replaced below.
     const resumed = sessionManager.buildSessionContext().messages.length > 0;
+    // A pi-native model is not checked against capabilities with model
+    // requirements by Pi, so such a launch keeps the model it verified.
+    // An explicit choice wins over the session's model: --model, or a model
+    // preference the user set, which the launch resolved to.
+    const preferredModel =
+      activated?.config.values.model === activated?.selectedModel &&
+      (activated?.config.entries.some(
+        (entry) => entry.key === "model" && entry.source === "user-preference",
+      ) ??
+        false);
+    const keepSessionModel =
+      resumed &&
+      !prepared.requestedModel &&
+      !preferredModel &&
+      !(
+        activated?.runtime.kind === "pi-native" &&
+        (ctx.metadata.governance?.manifest.capabilities ?? []).some(
+          (item) => item.enabled && item.requirements,
+        )
+      );
     startupMark("agent_session_start");
     const result = await createAgentSession({
       cwd,
@@ -674,7 +696,7 @@ async function startRuntime(
       modelRuntime,
       resourceLoader,
       sessionManager,
-      ...(model ? { model } : {}),
+      ...(model && !keepSessionModel ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
       // Governed sessions replace Pi's built-in tools with governed ones of
       // the same names; SDK custom tools also win over extension tools.
@@ -696,6 +718,24 @@ async function startRuntime(
     });
     if (child?.thinking) result.session.setThinkingLevel(child.thinking);
     if (table) activateExposure(result.session, table);
+    if (
+      keepSessionModel &&
+      model &&
+      (result.modelFallbackMessage || !result.session.model)
+    ) {
+      // Pi could not restore the model the session ended on, and picked
+      // another: the launch's model wins. Without credentials the switch is
+      // refused; Pi's own message is not shown by the session, so print it.
+      try {
+        await result.session.setModel(model);
+        ctx.err(
+          `Notice: the model the resumed session ended on could not be restored; switched to ${model.provider}/${model.id}.`,
+        );
+      } catch {
+        if (result.modelFallbackMessage)
+          ctx.err(`Notice: ${result.modelFallbackMessage}`);
+      }
+    }
     const current = result.session.model;
     if (
       governed &&
