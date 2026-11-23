@@ -1259,9 +1259,13 @@ class Sink {
   }
 }
 
-/** Network errors, timeouts, and 408/429/5xx answers: worth waiting out with the spool. */
+/**
+ * Network errors (GATEWAY_UNREACHABLE: refused, reset, timed out, a proxy
+ * that failed), timeouts, and 408/429/5xx answers: worth waiting out with the
+ * spool. A policy denial, a TLS violation, or another refusal is not.
+ */
 export function transientProbeFailure(error: unknown): boolean {
-  if (error instanceof PiShipError) return false;
+  if (error instanceof PiShipError) return error.code === "GATEWAY_UNREACHABLE";
   const status = (error as { status?: unknown } | null)?.status;
   return (
     typeof status !== "number" ||

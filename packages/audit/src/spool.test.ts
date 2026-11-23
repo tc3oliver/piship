@@ -314,6 +314,17 @@ describe("required HTTP sink spool", () => {
     await expect(open(denied)).rejects.toMatchObject({
       code: "AUDIT_UNAVAILABLE",
     });
+    // A refused or reset connection is an outage.
+    const refused = collector();
+    refused.fetch = async () => {
+      throw new PiShipError(
+        "GATEWAY_UNREACHABLE",
+        "governance request to 127.0.0.1:1 failed: ECONNREFUSED",
+      );
+    };
+    const offline = await open(refused);
+    expect(offline.status().sinks[0]?.degraded).toContain("ECONNREFUSED");
+    await offline.close(50);
     // Rate limiting is waited out like an outage.
     const busy = collector();
     busy.fetch = async () => new Response(null, { status: 429 });
