@@ -298,6 +298,30 @@ describe("required HTTP sink spool", () => {
     }
   });
 
+  it("still fails the launch when the collector can never be reached as configured", async () => {
+    // A 4xx answer is a wrong URL or a refused client, not an outage.
+    const wrong = collector();
+    wrong.fetch = async () => new Response(null, { status: 404 });
+    await expect(open(wrong)).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringContaining("HTTP 404"),
+    });
+    // A host the network policy denies is a configuration error.
+    const denied = collector();
+    denied.fetch = async () => {
+      throw new PiShipError("NETWORK_DENIED", "denies undeclared host x");
+    };
+    await expect(open(denied)).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+    });
+    // Rate limiting is waited out like an outage.
+    const busy = collector();
+    busy.fetch = async () => new Response(null, { status: 429 });
+    const log = await open(busy);
+    expect(log.status().sinks[0]?.degraded).toBe("collector answered HTTP 429");
+    await log.close(50);
+  });
+
   it("says a collector that does not answer timed out", async () => {
     const hang = collector();
     hang.fetch = (_url, init) =>

@@ -1259,6 +1259,18 @@ class Sink {
   }
 }
 
+/** Network errors, timeouts, and 408/429/5xx answers: worth waiting out with the spool. */
+export function transientProbeFailure(error: unknown): boolean {
+  if (error instanceof PiShipError) return false;
+  const status = (error as { status?: unknown } | null)?.status;
+  return (
+    typeof status !== "number" ||
+    status === 408 ||
+    status === 429 ||
+    status >= 500
+  );
+}
+
 function unavailable(sink: AuditSinkConfig, reason: string): PiShipError {
   return new PiShipError(
     "AUDIT_UNAVAILABLE",
@@ -1703,8 +1715,13 @@ async function openSink(
         new AbortController().signal,
       );
     } catch (error) {
-      // Unreachable now is not a reason to lock the user out: the spool below
-      // keeps every event for the next launch (or the open fails if it cannot).
+      // A collector that is briefly unreachable is not a reason to lock the
+      // user out: the spool below keeps every event for the next launch (or
+      // the open fails if it cannot). A sink that can never be reached as
+      // configured (a host the network policy denies, a 4xx answer) still
+      // fails the launch.
+      if (!transientProbeFailure(error))
+        throw unavailable(config, sink.describeError(error));
       sink.degraded = sink.describeError(error);
     }
   if (config.required) {

@@ -641,17 +641,18 @@ describe("AuditLog http sink", () => {
   it("treats redirects as failures and never follows them", async () => {
     const collector = await startCollector();
     collector.status = 302;
-    const log = await AuditLog.open({
-      config: config([
-        { id: "company", type: "http", url: collector.url, required: true },
-      ]),
-      distribution: "acmecode",
-      stateDir: temp,
-      fetch,
-    });
-    expect(log.status().sinks[0]?.degraded).toBeDefined();
+    // A redirect is a misconfigured URL, not an outage: the launch fails.
+    await expect(
+      AuditLog.open({
+        config: config([
+          { id: "company", type: "http", url: collector.url, required: true },
+        ]),
+        distribution: "acmecode",
+        stateDir: temp,
+        fetch,
+      }),
+    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
     expect(collector.requests).toHaveLength(1);
-    await log.close(50);
   });
 
   it("drops and counts events when an optional sink is down, and keeps working", async () => {

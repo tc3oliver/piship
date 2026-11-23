@@ -824,6 +824,8 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
   it("launches with a warning and spools the events when the collector answers the readiness probe with an error, then delivers them at the next launch", async () => {
     const session = fixture.session();
     await session.login();
+    // The login's own events reached the collector before the outage.
+    const beforeOutage = audit.events.length;
     audit.control.status = 503;
     const { result, toolResults } = await session.script(reads(3));
     expect(result.status, result.stderr).toBe(0);
@@ -833,7 +835,7 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
     expect(result.stderr).toContain("delivered at the next launch");
     // The agent ran, and nothing reached the collector.
     expect(toolResults).toHaveLength(3);
-    expect(audit.events).toEqual([]);
+    expect(audit.events.slice(beforeOutage)).toEqual([]);
     expect(spooled(session.state)).not.toEqual([]);
     // The collector is back: the next launch delivers the spooled events first.
     audit.control.status = 200;
@@ -850,8 +852,12 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
     const { services } = fixture;
     const session = fixture.session();
     await session.login();
-    // A file where the spool directory belongs.
+    // A file where the spool directory belongs (the login may have made it).
     mkdirSync(join(session.state, "logs"), { recursive: true });
+    rmSync(join(session.state, "logs", "audit-spool"), {
+      recursive: true,
+      force: true,
+    });
     writeFileSync(
       join(session.state, "logs", "audit-spool"),
       "not a directory",
