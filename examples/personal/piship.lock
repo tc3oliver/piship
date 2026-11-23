@@ -19,7 +19,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.5.0",
     "pishipVersion": "0.13.0",
-    "npmLockSha256": "c6e78c3188785b69839a468bffe36f9a5eabfa498d8efe9ea6310a53b02797f9",
+    "npmLockSha256": "a39a0ada9fc6718e6674fa9ba4227c07e21158b66165a0e8f866aeb29776fb11",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -805,9 +805,9 @@
       },
       {
         "path": "node_modules/openid-client",
-        "version": "6.8.9",
-        "integrity": "sha512-6mXMRNJxDOf6BflEWLXul1UwzLFz++9Ofz1PYwPwwsJsyXBsbfkO+Jo255SW1qnFNLYz4EJWHz42X4OJJrya/g==",
-        "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.9.tgz"
+        "version": "6.9.0",
+        "integrity": "sha512-2IvamJR8PAnWHngaCsGGA8TYfcLI2egvuqa9cOQYHIISwIUhxJwwwcCnkgVX95fzZ6J0TAna0aVGUMOxnPeRqg==",
+        "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.9.0.tgz"
       },
       {
         "path": "node_modules/p-retry",
