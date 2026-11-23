@@ -271,6 +271,24 @@ describe("--help", () => {
     );
   });
 
+  it("lists every command the parser accepts, with or without governance or access", async () => {
+    // update, rollback, config and --smoke-model dispatch without access or governance.
+    for (const kind of [
+      PERSONAL,
+      { mode: "personal", ungoverned: true } as Kind,
+    ]) {
+      const text = await help(kind);
+      for (const command of [
+        "update [",
+        "rollback",
+        "config explain [--json] | config set <key> <value> | config unset <key>",
+        "[--smoke | --smoke-model]",
+        "--smoke-model also sends one acceptance prompt",
+      ])
+        expect(text).toContain(command);
+    }
+  });
+
   it("describes --smoke", async () => {
     expect(await help(PERSONAL)).toContain(
       "--smoke prints the launch report as JSON and exits",
