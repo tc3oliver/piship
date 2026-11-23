@@ -31,6 +31,7 @@ Deliberately not added, because another package in the set already provides the 
 - Node.js 24.18.0 or newer, required by the included browser package. `piship lock` also needs npm 11 or newer and registry access. Building from the committed lock needs the registry too (it installs each package with `npm ci --ignore-scripts`); installing and the headless commands do not.
 - `git` for the project-trust and review features. The GitHub CLI `gh` is optional: `/review` of a pull request uses it, and the profile lets it read pull requests, issues, and runs without a prompt.
 - A system Chrome for the `browser_*` tools. `pi-browser-use` finds it through `CHROME_PATH` or the usual install locations and downloads no browser. Without Chrome the browser tools are not available and the rest of the session works, but every launch shows `Extension "…pi-browser-use…" error: Chrome executable not found` followed by a stack trace (Pi prints the error the package raises when the session starts). Install Chrome, or set `CHROME_PATH` to a Chrome or Chromium executable, to make it go away; to drop the browser tools instead, remove `pi-browser-use` from `piship.yaml` and run `lock` again.
+- Targets. `release.targets` is `linux-x64`, `darwin-arm64`, and `win32-x64`, and `fd` and `rg` are bundled for those only. On Linux arm64 or Intel macOS every command prints a `no bundled fd or rg` notice and Pi starts offline (no model catalog refresh, no `/bug`) unless `fd` and `rg` are on `PATH`. For a local build, add your target to `release.targets` in a copy and run `lock` again to bundle them (`release` still accepts only the three defaults).
 - Node versions. PiShip itself supports Node 22.19.0, but this distribution requires Node 24.18.0 or newer because `pi-browser-use` declares that minimum. Full Portable E2E and release candidates use Node 24.21; the fast CI gate still checks PiShip on Node 22.19. Node 22 probes only established browser tool registration, not page interaction. Keep npm engine checks enabled and use a supported Node version.
 
 ## Build, install, and run
@@ -49,6 +50,8 @@ node dist/devcode/piship.mjs install dist/devcode
 ~/.local/bin/devcode capabilities
 ~/.local/bin/devcode
 ```
+
+After a rebuild, install again with `--replace` (`node dist/devcode/piship.mjs install dist/devcode --replace`): a plain `install` stops because that version is already installed, and `--replace` keeps the state.
 
 On Windows (PowerShell), `~` is `$HOME` and the installed command is `$HOME\.local\bin\devcode.cmd`: run `devcode` by name once that folder is on `PATH` (`install` prints the line that adds it).
 
@@ -117,6 +120,8 @@ Denials do not change: the provider's deny rules and the enforced policy rules s
 3. **Its configuration** is the `agentFiles` entry of that package: `extensions/pi-permission-system/config.json`, with `mode: seed`. A seed is written once, owner-only, and a copy you edited is kept. A later DevCode release replaces the file only while it is still exactly what DevCode wrote. Edit it by hand or with `/permission-system`; `devcode doctor` shows whether it is seeded, edited, or missing. In `enforce` mode (the managed variant) the file is rewritten at every launch, so an edit does not outlive one.
 
 In the rule maps, the last matching rule wins. A broad rule comes first and its exceptions after it, so the order of keys in the file is part of the policy. The secret denies are last in the `path` map for that reason: the ask for `*.pem` above them cannot outrank the deny for `~/.ssh`, so `~/.ssh/ec2-keypair.pem` stays denied. A bare `path` rule covers both reads and writes; `path_write`, `external_directory_read`, and `external_directory_write` narrow it.
+
+`devcode policy explain` shows this PiShip layer only. For `shell.execute "sudo ls"` or `mcp.tool.call github:create_issue` it prints `ALLOWED` (`policy.default`), although the provider asks for both; the provider's decisions are not shown there.
 
 The two layers are not redundant. PiShip's rules cover its own governed tools only, and the provider covers shell commands and the other packages' tools. `policy.default` is `allow` so that PiShip does not ask a second time for a command the provider already decided.
 
