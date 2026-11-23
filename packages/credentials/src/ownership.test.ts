@@ -20,6 +20,7 @@ import {
   CredentialManager,
   MemorySecretStore,
   metadataFileSecretRefs,
+  metadataFileSecretStore,
   secretRefsFromText,
 } from "./index.js";
 
@@ -131,6 +132,23 @@ describe("secret references named by a metadata file's text", () => {
       "piship:acmecode:identity#4",
       "piship:acmecode:identity#5",
     ]);
+  });
+
+  it("reports a metadata path that cannot be read as a PiShipError that says what to do", () => {
+    mkdirSync(path(), { recursive: true });
+    const error = (() => {
+      try {
+        metadataFileSecretRefs(path(), "acmecode", "inference");
+      } catch (caught) {
+        return caught;
+      }
+    })();
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).message).toContain(path());
+    expect((error as PiShipError).userAction).toMatch(
+      /readable or remove it, then run login again/,
+    );
+    expect(() => metadataFileSecretStore(path())).toThrow(PiShipError);
   });
 
   it("names only its own distribution and class", () => {

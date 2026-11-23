@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { PiShipError } from "@piship/contracts";
 
 /**
  * Which references a metadata file owns: runtime credentials, the stored
@@ -49,6 +50,22 @@ export function secretRefsFromText(
   return [...refs].sort();
 }
 
+/** The text of an existing metadata file; a file that cannot be read is a PiShipError. */
+export function readMetadataText(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    throw new PiShipError(
+      "SECRET_STORE_UNAVAILABLE",
+      `The credential metadata file ${path} cannot be read (${(error as NodeJS.ErrnoException).code ?? "read error"})`,
+      {
+        component: "credential",
+        userAction: `Make ${path} readable or remove it, then run login again`,
+      },
+    );
+  }
+}
+
 /**
  * The references the metadata file at `path` names (see
  * `secretRefsFromText`), whether or not it is still valid JSON; none when
@@ -61,9 +78,5 @@ export function metadataFileSecretRefs(
   refClass: SecretRefClass,
 ): string[] {
   if (!existsSync(path)) return [];
-  return secretRefsFromText(
-    readFileSync(path, "utf8"),
-    distributionId,
-    refClass,
-  );
+  return secretRefsFromText(readMetadataText(path), distributionId, refClass);
 }

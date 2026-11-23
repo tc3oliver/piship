@@ -3,12 +3,12 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { LocalMetrics } from "@piship/audit";
 import {
-  PiShipError,
   applyProcessNetworkPolicy,
   asciiOnly,
   assertTlsVerificationEnabled,
   formatError,
   isLoopbackHost,
+  PiShipError,
   principalId,
   redact,
   sanitizeManagedEnvironment,
@@ -34,25 +34,30 @@ import {
 import type { AccessManifest } from "@piship/schema";
 import {
   type AccessEvent,
-  type DistributionAccess,
   accessStatePaths,
+  type DistributionAccess,
   networkPolicyFor,
   SandboxCredential,
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
 import { removeAccessTemporaries } from "../install/temporaries.js";
-import { sweepDistributionData } from "./data.js";
 import {
-  type BrandedContext,
   auditAccess,
+  type BrandedContext,
   eventDetail,
   openAccess,
   recordAudit,
   saveMetrics,
 } from "./context.js";
+import { sweepDistributionData } from "./data.js";
+
+/** No GUI browser over SSH: it would open on the remote host's own desktop. */
+export function browserOpenAllowed(env: NodeJS.ProcessEnv): boolean {
+  return env.PISHIP_NO_BROWSER !== "1" && !isRemoteShell(env);
+}
 
 function openBrowser(url: string): void {
-  if (process.env.PISHIP_NO_BROWSER === "1") return;
+  if (!browserOpenAllowed(process.env)) return;
   try {
     const child =
       process.platform === "darwin"

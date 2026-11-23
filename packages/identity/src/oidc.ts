@@ -186,7 +186,7 @@ function mapError(
     });
   return new PiShipError("IDENTITY_INVALID", `${action}: ${detail}`, {
     component: "identity",
-    userAction: "Check the configured issuer and client registration",
+    userAction: `Run ${login} again; if it fails again, check the configured issuer and client registration or contact your administrator`,
   });
 }
 

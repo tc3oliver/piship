@@ -2,6 +2,7 @@
 // the wait (#149).
 import { describe, expect, it } from "vitest";
 import {
+  browserOpenAllowed,
   inlineLoginOffered,
   loginWaitingHint,
   pasteFallbackEnabled,
@@ -225,5 +226,16 @@ describe("inline sign-in during a launch", () => {
       inlineLoginOffered("managed", { ...tty, stdoutTTY: false }, {}),
     ).toBe(false);
     expect(inlineLoginOffered("personal", tty, {})).toBe(false);
+  });
+});
+
+describe("opening a browser", () => {
+  it("is skipped over SSH and with PISHIP_NO_BROWSER=1", () => {
+    expect(browserOpenAllowed({})).toBe(true);
+    expect(browserOpenAllowed({ SSH_CONNECTION: "1.2.3.4 1 5.6.7.8 22" })).toBe(
+      false,
+    );
+    expect(browserOpenAllowed({ SSH_TTY: "/dev/pts/0" })).toBe(false);
+    expect(browserOpenAllowed({ PISHIP_NO_BROWSER: "1" })).toBe(false);
   });
 });
