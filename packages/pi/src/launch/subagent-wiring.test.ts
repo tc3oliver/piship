@@ -260,6 +260,26 @@ describe("resuming a session", () => {
     expect(seen.session).not.toHaveProperty("model");
   });
 
+  it("starts on the model the user's preference names", async () => {
+    const base = prepared() as unknown as { activated: Record<string, unknown> };
+    const dir = sessionDir();
+    const first = SessionManager.create(process.cwd(), dir);
+    first.appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    base.activated.config = {
+      values: { model: "anthropic/claude-sonnet-4-5" },
+      entries: [{ key: "model", source: "user-preference" }],
+    };
+    await expect(
+      startGoverned(
+        context(),
+        base as unknown as PreparedAccess,
+        { sessionDir: dir, newSession: false, resume: first.getSessionId() },
+        null,
+      ),
+    ).rejects.toThrow("stop-after-createAgentSession");
+    expect(seen.session).toHaveProperty("model");
+  });
+
   it("starts on the model --model names", async () => {
     await resume("anthropic/claude-sonnet-4-5");
     expect(seen.session).toHaveProperty("model");

@@ -670,9 +670,18 @@ async function startRuntime(
     const resumed = sessionManager.buildSessionContext().messages.length > 0;
     // A pi-native model is not checked against capabilities with model
     // requirements by Pi, so such a launch keeps the model it verified.
+    // An explicit choice wins over the session's model: --model, or a model
+    // preference the user set, which the launch resolved to.
+    const preferredModel =
+      activated?.config.values.model === activated?.selectedModel &&
+      (activated?.config.entries.some(
+        (entry) => entry.key === "model" && entry.source === "user-preference",
+      ) ??
+        false);
     const keepSessionModel =
       resumed &&
       !prepared.requestedModel &&
+      !preferredModel &&
       !(
         activated?.runtime.kind === "pi-native" &&
         (ctx.metadata.governance?.manifest.capabilities ?? []).some(
