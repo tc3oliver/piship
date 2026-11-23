@@ -636,7 +636,9 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   await auditEvents();
   // Retention, and the classes the distribution purges at logout. Sessions a
   // running launch holds are kept.
-  const swept = await sweepDistributionData(ctx, "logout");
+  const swept = await sweepDistributionData(ctx, "logout", {
+    user: signedIn ? principalId(signedIn) : null,
+  });
   // Said from what the sweep did, not what the manifest asks: a class whose
   // data.swept event was not recorded was kept (a class with nothing to
   // remove has no entry), and `temp` is never swept.

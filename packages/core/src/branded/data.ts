@@ -28,6 +28,8 @@ export async function sweepDistributionData(
     /** packages/pi passes its session claim; see `DataSweepOptions`. */
     readonly claimSession?: (sessionFile: string) => (() => void) | undefined;
     readonly now?: number;
+    /** The signed-in user the event is attributed to; logout reads it before sign-out clears it. */
+    readonly user?: string | null;
   } = {},
 ): Promise<DataSweepResult | undefined> {
   const data = ctx.metadata.data?.declared;
@@ -46,7 +48,7 @@ export async function sweepDistributionData(
         recordAudit(
           ctx,
           network,
-          [{ ...event, user: null, session: null }],
+          [{ ...event, user: options.user ?? null, session: null }],
           `The ${event.resource} retention sweep did not run`,
         ),
       // Only the spools of sinks no longer configured are swept.
@@ -71,7 +73,7 @@ export async function sweepDistributionData(
         );
       if (entry.unrecorded)
         ctx.err(
-          `Warning: ${entry.class} past their retention were kept: the data.swept audit event was not recorded`,
+          `Warning: ${entry.class} data past its retention period was kept: the data.swept audit event was not recorded`,
         );
       else if (entry.failed)
         ctx.err(
