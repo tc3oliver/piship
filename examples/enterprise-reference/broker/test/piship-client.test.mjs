@@ -2,7 +2,7 @@
 // from packages/credentials, built in this repository (`npm run build` at the
 // root first). PISHIP_REPO_ROOT may point at another checkout's root.
 //
-//   node --test test/
+//   node --test test/*.test.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {

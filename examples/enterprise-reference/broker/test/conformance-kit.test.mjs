@@ -4,7 +4,7 @@
 // against its own broker. PISHIP_REPO_ROOT may point at another checkout's
 // root.
 //
-//   node --test test/
+//   node --test test/*.test.mjs
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
