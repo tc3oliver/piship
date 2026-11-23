@@ -723,7 +723,7 @@ const checks: Record<IdentityBehavior, Check> = {
     check(outcome.kind !== "hung", "login did not end within the kit's bound");
     check(
       outcome.kind === "resolved",
-      `login failed against a service that signed the user in (${outcome.kind === "rejected" ? codeOf(outcome.error) : ""})`,
+      `login failed against a service that signed the user in${outcome.kind === "rejected" ? ` (${codeOf(outcome.error)})` : ""}`,
     );
     check(
       h.service.requests.length > 0,
@@ -785,7 +785,7 @@ const checks: Record<IdentityBehavior, Check> = {
     );
     check(
       outcome.kind === "resolved" && outcome.value,
-      `refresh failed against a service that refreshed the session (${outcome.kind === "rejected" ? codeOf(outcome.error) : ""})`,
+      `refresh failed against a service that refreshed the session${outcome.kind === "resolved" ? " (it returned no session)" : ""}${outcome.kind === "rejected" ? ` (${codeOf(outcome.error)})` : ""}`,
     );
     check(
       h.service.requests.length > before,
@@ -888,7 +888,7 @@ const checks: Record<IdentityBehavior, Check> = {
     check(outcome.kind !== "hung", "logout did not end within the kit's bound");
     check(
       outcome.kind === "resolved",
-      `logout failed although the service accepted it (${outcome.kind === "rejected" ? codeOf(outcome.error) : ""})`,
+      `logout failed although the service accepted it${outcome.kind === "rejected" ? ` (${codeOf(outcome.error)})` : ""}`,
     );
     const sent = h.service.requests.slice(before);
     check(sent.length > 0, "logout sent no request to the service");

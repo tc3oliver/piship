@@ -1164,8 +1164,7 @@ describe("credential adapters", () => {
       }).activate(),
     ).rejects.toThrow("adapter crashed");
     expect(metrics.snapshot().providerLoadFailures).toEqual({
-      CONFIG_INVALID: 1,
-      UNKNOWN: 1,
+      CONFIG_INVALID: 2,
     });
     expect(metrics.snapshot().resourceLoadFailures).toBeUndefined();
   });
@@ -1273,6 +1272,38 @@ describe("credential adapters", () => {
         50,
       ),
     ).rejects.toMatchObject({ code: "CONFIG_UNAVAILABLE", retryable: true });
+  });
+
+  it("names the adapter whose module or factory fails to load", async () => {
+    const load = (file: string) =>
+      loadAdapter(
+        temp,
+        `./adapters/${file}`,
+        "credential",
+        {} as AdapterContext,
+      );
+    write("sibling.mjs", 'import "./helpers.mjs"; export default () => ({});');
+    await expect(load("sibling.mjs")).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringMatching(
+        /^The credential adapter \.\/adapters\/sibling\.mjs failed to load: .*helpers\.mjs/,
+      ),
+      userAction: expect.stringContaining("adapter-sdk.md"),
+    });
+    write("syntax.mjs", "export default (");
+    await expect(load("syntax.mjs")).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining(
+        "The credential adapter ./adapters/syntax.mjs failed to load:",
+      ),
+    });
+    write(
+      "throws.mjs",
+      'export default () => { throw new Error("token sk-live-0123456789abcdef0123456789 rejected"); };',
+    );
+    const error = await load("throws.mjs").catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "CONFIG_INVALID" });
+    expect((error as Error).message).not.toContain("sk-live-0123456789");
   });
 });
 

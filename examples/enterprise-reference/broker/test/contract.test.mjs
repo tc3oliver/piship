@@ -2,7 +2,7 @@
 // (http-broker: acquire, status table, idempotency, revoke) and the token
 // rules in the broker README. No Docker: Keycloak and LiteLLM are fakes.
 //
-//   node --test test/
+//   node --test test/*.test.mjs
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { after, before, describe, it } from "node:test";

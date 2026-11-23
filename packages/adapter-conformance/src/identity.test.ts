@@ -579,6 +579,17 @@ describe("identity conformance kit", () => {
     );
   });
 
+  it.concurrent("says a refresh returned no session instead of an empty ()", async () => {
+    const reference = referenceAdapter();
+    const report = await run((context: AdapterContext) => ({
+      ...reference(context),
+      refresh: async () => undefined as unknown as IdentitySession,
+    }));
+    expect(reasonOf(report, "refresh")).toBe(
+      "refresh failed against a service that refreshed the session (it returned no session)",
+    );
+  });
+
   it.concurrent("passes an adapter for another protocol through the respond hook", async () => {
     const respond = (_request: unknown, answer: IdentityServiceAnswer) => {
       switch (answer.kind) {
