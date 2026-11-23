@@ -3699,6 +3699,7 @@ describe("committed example locks", () => {
   it.each([
     "demo-company",
     "personal",
+    "personal/local-model",
     "developer",
     "enterprise-reference",
     "enterprise-reference/sandbox",
