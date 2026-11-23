@@ -12,6 +12,7 @@ import {
   companionRequests,
   decisionToJSON,
   expandPathTokens,
+  externalPermissionProvider,
   formatCapabilities,
   formatDecision,
   projectDimensionEffect,
@@ -120,12 +121,23 @@ export async function runPolicy(
         ),
       }
     : undefined;
+  // A deny is final; any other answer is only PiShip's layer.
+  const provider =
+    explanation.decision.effect === "deny"
+      ? undefined
+      : externalPermissionProvider(inspection.capabilities);
+  const providerNote = provider
+    ? `${provider} also decides this at run time and may ask or deny; its decision is not shown here`
+    : undefined;
   ctx.out(
     json
       ? redact(
           JSON.stringify(
             {
               ...decisionToJSON(explanation, format),
+              ...(providerNote
+                ? { permissionProvider: { provider, note: providerNote } }
+                : {}),
               ...(trust ? { projectTrust: trust } : {}),
             },
             null,
@@ -136,7 +148,8 @@ export async function runPolicy(
           formatDecision(explanation, format) +
             (trust
               ? `\n\nProject trust:\n  ${trust.effect}: ${projectEffectReason(trust.origin, trust.dimension, trust.effect)} (policy.projectTrust.${trust.origin}.${trust.dimension})`
-              : ""),
+              : "") +
+            (providerNote ? `\n\nPermission provider:\n  ${providerNote}` : ""),
         ),
   );
 }
