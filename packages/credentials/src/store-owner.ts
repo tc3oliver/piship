@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import type { SecretStore } from "@piship/contracts";
+import { readMetadataText } from "./ownership.js";
 
 /**
  * Which configured secret store holds a reference, as
@@ -55,7 +56,7 @@ export function metadataFileSecretStore(
   path: string,
 ): SecretStoreProvider | undefined {
   if (!existsSync(path)) return undefined;
-  return recordedSecretStore(readFileSync(path, "utf8"));
+  return recordedSecretStore(readMetadataText(path));
 }
 
 /**
