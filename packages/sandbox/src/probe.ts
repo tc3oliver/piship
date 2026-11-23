@@ -345,6 +345,9 @@ export async function probeSandbox(
     const allowedNames = new Set([
       ...profile.environmentAllow,
       ...(options.injected ?? []),
+      // Node on some Linux hosts sets this itself at startup, so it shows up
+      // in the probe child's environment although the sandbox never passed it.
+      "UV_USE_IO_URING",
     ]);
     const failures = evaluate(
       report,
