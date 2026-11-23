@@ -17,11 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const seen = vi.hoisted(() => ({
   session: undefined as Record<string, unknown> | undefined,
   access: [] as unknown[][],
+  result: undefined as Record<string, unknown> | undefined,
 }));
 vi.mock("@earendil-works/pi-coding-agent", async (original) => ({
   ...(await original<typeof import("@earendil-works/pi-coding-agent")>()),
   createAgentSession: async (options: Record<string, unknown>) => {
     seen.session = options;
+    if (seen.result) return seen.result;
     throw new Error("stop-after-createAgentSession");
   },
 }));
@@ -46,6 +48,7 @@ beforeEach(() => {
   process.env.PISHIP_STATE_HOME = join(temp, "state");
   seen.session = undefined;
   seen.access = [];
+  seen.result = undefined;
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -231,6 +234,26 @@ describe("resuming a session", () => {
       ),
     ).rejects.toThrow("stop-after-createAgentSession");
   }
+  // Pi returns a session on its own first model when it cannot restore the
+  // one the session ended on; the launch's model must replace it.
+  async function resumeFallback(
+    session: Record<string, unknown>,
+    modelFallbackMessage?: string,
+  ) {
+    seen.result = { session, modelFallbackMessage };
+    const notices: string[] = [];
+    const ctx = { ...context(), err: (line: string) => notices.push(line) };
+    const dir = sessionDir();
+    const first = SessionManager.create(process.cwd(), dir);
+    first.appendMessage({ role: "user", content: "hi", timestamp: 1 });
+    await startGoverned(
+      ctx as unknown as LaunchContext,
+      prepared(),
+      { sessionDir: dir, newSession: false, resume: first.getSessionId() },
+      null,
+    ).catch(() => {});
+    return notices;
+  }
 
   it("leaves the model to the session, so Pi restores the one it ended on", async () => {
     await resume();
@@ -240,5 +263,36 @@ describe("resuming a session", () => {
   it("starts on the model --model names", async () => {
     await resume("anthropic/claude-sonnet-4-5");
     expect(seen.session).toHaveProperty("model");
+  });
+
+  it("switches to the launch model when Pi could not restore the session's", async () => {
+    const setModel = vi.fn(async () => {});
+    const notices = await resumeFallback(
+      { model: { provider: "x", id: "y" }, setModel, setThinkingLevel() {} },
+      "Could not restore model openai/gone. Using x/y",
+    );
+    expect(setModel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "claude-sonnet-4-5" }),
+    );
+    expect(notices.join("\n")).toContain("could not be restored");
+  });
+
+  it("sets the launch model when the resumed session has none", async () => {
+    const setModel = vi.fn(async () => {});
+    await resumeFallback(
+      { model: undefined, setModel, setThinkingLevel() {} },
+      "No models available",
+    );
+    expect(setModel).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the session alone when its model was restored", async () => {
+    const setModel = vi.fn(async () => {});
+    await resumeFallback({
+      model: { provider: "openai", id: "gpt-4o" },
+      setModel,
+      setThinkingLevel() {},
+    });
+    expect(setModel).not.toHaveBeenCalled();
   });
 });
