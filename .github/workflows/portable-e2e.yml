@@ -139,6 +139,18 @@ jobs:
           if (!page.includes('<html')) throw new Error('Headless Chrome did not render the blank page');
           appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${chrome}\n`);
           NODE
+      # Each shard locks and builds the examples many times, and every lock
+      # fetches the pinned fd and rg archives from GitHub into the search-tool
+      # cache unless they are already there (one failed lookup lost a whole
+      # shard). A restored archive is used only when its digest matches the
+      # lock. runtime-release.test.ts still downloads them fresh every run.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/piship/search-tools
+            ~/AppData/Local/piship/search-tools
+          key: piship-search-tools-${{ runner.os }}-${{ hashFiles('examples/**/piship.lock') }}
+          restore-keys: piship-search-tools-${{ runner.os }}-
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code
@@ -253,9 +265,16 @@ jobs:
         run: |
           npm install -g npm@11.21.0
           node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
+      # The measurement seeds its search-tool cache from GitHub once per run;
+      # a fixed --out keeps that seed where the cache can restore it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/budgets/budgets/seed-cache/search-tools
+          key: piship-search-tools-footprint-${{ runner.os }}-${{ hashFiles('examples/**/piship.lock') }}
+          restore-keys: piship-search-tools-footprint-${{ runner.os }}-
       - run: npm ci
       - run: npm run build
-      - run: npm run check:budgets -- --developer
+      - run: npm run check:budgets -- --developer --out "$RUNNER_TEMP/budgets"
 
   # A scheduled failure opens (or comments on) one tracking issue, so a
   # nightly regression becomes a visible follow-up without blocking pull

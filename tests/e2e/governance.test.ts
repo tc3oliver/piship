@@ -73,6 +73,12 @@ function build(
       "provider: file\n    acknowledgePlaintext: true",
     )
     .replace("127.0.0.1:8765", "127.0.0.1")
+    // A busy Windows runner can take longer than the 10 s default to start
+    // the stdio docs server.
+    .replace(
+      "expectedServerName: acme-docs",
+      "expectedServerName: acme-docs\n      startupTimeout: 60s",
+    )
     // The demo's company matcher requires a checkout under /srv/src; the
     // test's company project lives in this temporary directory instead.
     .replace(
