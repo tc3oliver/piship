@@ -49,6 +49,7 @@ This window is a policy decision taken in v0.11.0 and is part of the contract fr
 
 - Additive, backward-compatible changes keep `piship/v1`: a new optional field, a new enum value for an existing field, a new optional lock key, and a new `piship.capability` contract. A manifest that does not use the addition must still parse, lock to the same bytes, and mean the same.
 - A change that removes a field or value, makes one required, narrows what one accepts, changes a default, or gives an existing field another meaning is breaking and needs `piship/v2`. A release does not make it silently, and it does not reinterpret an old manifest.
+- One exception covers a changed default: it may stay on `piship/v1` when every lock an earlier release wrote keeps its old meaning (it is read with the earlier default, proven by a fixture locked by that release), the changelog lists it under Behavior changes, and only relocking with the new release adopts it ([decision 34](decisions.md)).
 - A security fix may reject an input that was accepted and unsafe. It is listed as a behavior change in the changelog, and `validate` names the field. That is the only reason a `piship/v1` manifest may stop validating without a new schema.
 - A release that uses an addition installs by update only from a release that knows it: the installed runtime does the update, and an older runtime reads only what it knows ([decision 27](decisions.md), restated for v1 in decision 34).
 
