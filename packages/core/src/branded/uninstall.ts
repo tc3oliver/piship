@@ -196,6 +196,10 @@ export async function runUninstall(
       ctx.err(
         `Warning: ${purged.notRevoked.join(", ")} ${purged.notRevoked.length > 1 ? "were" : "was"} deleted locally but not revoked, and stays live at the identity provider or broker until it expires`,
       );
+    if (purged.undeliveredAudit)
+      ctx.err(
+        `Warning: ${purged.undeliveredAudit} audit event(s) were still waiting in the local spool for the collector and were deleted with the state; they were never delivered`,
+      );
     const count = purged.deletedSecrets.length;
     ctx.out(
       [

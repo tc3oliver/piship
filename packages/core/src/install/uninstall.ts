@@ -22,6 +22,7 @@ import {
   STORED_API_KEY,
   signedInClasses,
   deleteReferencedSecrets,
+  undeliveredAuditEvents,
   type PurgeOptions,
   type PurgeResult,
 } from "./purge.js";
@@ -346,6 +347,7 @@ export async function uninstallAndPurgeDistribution(
     );
     const key = signedInClasses(state).includes(STORED_API_KEY);
     const secrets = await deleteReferencedSecrets(id, state, options);
+    const undelivered = undeliveredAuditEvents(state);
     // The state goes first: a failure here leaves the install in place, so the
     // branded command can run again; after the install is gone it could not.
     rmSync(state, { recursive: true, force: true });
@@ -356,6 +358,7 @@ export async function uninstallAndPurgeDistribution(
       ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
       ...(live.length ? { notRevoked: live } : {}),
       ...(key ? { deletedApiKey: true } : {}),
+      ...(undelivered ? { undeliveredAudit: undelivered } : {}),
     };
   } finally {
     hold.release();
