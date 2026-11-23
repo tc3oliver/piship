@@ -330,6 +330,16 @@ describe("channel trust root", () => {
     ).rejects.toThrow(/exceeds 44 bytes/);
   });
 
+  it("names a listed archive that the directory source does not have", async () => {
+    const out = temp();
+    await expect(
+      downloadArchive(temp(), entry, join(out, "missing.tar.gz")),
+    ).rejects.toMatchObject({
+      code: "UPDATE_FAILED",
+      message: expect.stringContaining(`has no ${entry.archive}`),
+    });
+  });
+
   describe("a download that does not complete", () => {
     const url = "https://updates.example.test/acmepi";
     const bodyOf = (

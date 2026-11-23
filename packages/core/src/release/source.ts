@@ -491,6 +491,15 @@ export async function downloadArchive(
     );
   } else {
     const path = join(resolve(source), entry.archive);
+    if (!existsSync(path))
+      throw new PiShipError(
+        "UPDATE_FAILED",
+        `Update source has no ${entry.archive}, which the signed channel lists`,
+        {
+          userAction:
+            "Tell the distribution owner: the archive was not uploaded (upload archives before stable.json and stable.json.sig), or --from or updates.source names the wrong directory",
+        },
+      );
     if (statSync(path).size > entry.bytes)
       throw tooLarge(entry.archive, entry.bytes);
     cpSync(path, destination);
