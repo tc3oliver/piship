@@ -1340,7 +1340,7 @@ export async function runCli(
     output.stderr(
       error instanceof ManifestError
         ? redact(error.message)
-        : `${formatError(error)}${isUnexpectedError(error) ? "\nAction: This looks like a PiShip bug. Re-run with PISHIP_DEBUG=1 and report the output." : ""}`,
+        : `${formatError(error)}${isUnexpectedError(error) ? `\nAction: This looks like a PiShip bug. Re-run with ${process.platform === "win32" ? 'PISHIP_DEBUG set to 1 ($env:PISHIP_DEBUG="1" in PowerShell, set PISHIP_DEBUG=1 in cmd.exe)' : "PISHIP_DEBUG=1"} and report the output.` : ""}`,
     );
     const stack = debugStack(error);
     if (stack) output.stderr(stack);

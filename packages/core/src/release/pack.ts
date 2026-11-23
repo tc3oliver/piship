@@ -288,6 +288,9 @@ PISHIP_RUNTIME_ARCHIVE="$archive" node "\${root}payload/piship.mjs" install "$he
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js 22.19.0 or newer is required. Install Node separately.'); exit 1 }
+# The tar Windows ships; a GNU tar from Git for Windows on PATH reads C:\\ as a remote host.
+$tar = Join-Path $env:SystemRoot 'System32\\tar.exe'
+if (-not (Test-Path -LiteralPath $tar)) { [Console]::Error.WriteLine('System32\\tar.exe is required: Windows 10 version 1803 or Windows Server 2019 or newer.'); exit 1 }
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $encoding = [Console]::OutputEncoding
@@ -301,7 +304,7 @@ ${FIND_RUNTIME}'@
   $archive = node (Join-Path $tmp 'find-runtime.mjs') $here
   [Console]::OutputEncoding = $encoding
   if ($LASTEXITCODE -ne 0) { exit 1 }
-  tar -xzf $archive -C $tmp
+  & $tar -xzf $archive -C $tmp
   if ($LASTEXITCODE -ne 0) { exit 1 }
   # The archive's one folder, whatever the file was renamed to: its digest is pinned.
   $root = (Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1).FullName

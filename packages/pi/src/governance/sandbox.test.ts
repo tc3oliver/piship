@@ -905,6 +905,28 @@ describe("protected configuration path spelling", () => {
       ),
     ).toBe(false);
   });
+  it("ignores the on-disk case where the filesystem does", () => {
+    expect(
+      protectedPathRedirected(
+        "C:\\workspace\\.claude",
+        "c:/Workspace/.Claude",
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      protectedPathRedirected("/ws/.claude", "/ws/.Claude", "darwin"),
+    ).toBe(false);
+    expect(protectedPathRedirected("/ws/.claude", "/ws/.Claude", "linux")).toBe(
+      true,
+    );
+    expect(
+      protectedPathRedirected(
+        "C:\\workspace\\.claude",
+        "C:/other/.Claude",
+        "win32",
+      ),
+    ).toBe(true);
+  });
   it("keeps redirected targets denied, even inside the workspace", () => {
     expect(
       protectedPathRedirected(
