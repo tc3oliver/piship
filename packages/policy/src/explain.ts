@@ -342,7 +342,7 @@ export function denialHint(
     case "distribution-enforced":
       return deployment === "managed"
         ? "This rule is distribution-owned and cannot be changed here; ask your administrator to change it."
-        : `This rule is distribution-owned and cannot be changed here; it lives in the distribution's piship.yaml, which you own in personal mode (${explain}).`;
+        : `This rule is distribution-owned and cannot be changed here; it lives in the distribution's piship.yaml; edit the rule there and rebuild (${explain}).`;
     case "team-project":
       return "This rule comes from the project or team policy; ask its owner to change it.";
     case "user-preference":
