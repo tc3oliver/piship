@@ -116,6 +116,28 @@ describe("Pi defaults", () => {
   });
 
   it.skipIf(!posix)(
+    "turns jiti's cache off before it exists when the temp directory is reached through a symlink",
+    () => {
+      withTemp((root) => {
+        const real = join(root, "real");
+        mkdirSync(real);
+        const link = join(root, "link");
+        symlinkSync(real, link);
+        const saved = process.env.TMPDIR;
+        process.env.TMPDIR = link;
+        try {
+          const env: NodeJS.ProcessEnv = {};
+          closeJitiCacheToSandbox([realpathSync(real)], env);
+          expect(env.JITI_FS_CACHE).toBe("false");
+        } finally {
+          if (saved === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = saved;
+        }
+      });
+    },
+  );
+
+  it.skipIf(!posix)(
     "refuses a cache directory whose parent its group can write without the sticky bit",
     () => {
       withTemp((root) => {
