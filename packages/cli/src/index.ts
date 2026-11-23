@@ -828,6 +828,10 @@ function purgeReport(purged: PurgeResult, output: CliOutput): string {
     output.stderr(
       `Warning: purged without logout: ${purged.notRevoked.join(", ")} ${purged.notRevoked.length > 1 ? "were" : "was"} deleted locally but not revoked, and stays live at the identity provider or broker until it expires`,
     );
+  if (purged.undeliveredAudit)
+    output.stderr(
+      `Warning: ${purged.undeliveredAudit} audit event(s) were still waiting in the local spool for the collector and were deleted with the state; they were never delivered`,
+    );
   if (purged.droppedSecrets)
     output.stderr(
       `Note: ${purged.droppedSecrets.length} secret reference(s) that an interrupted sign-in left (${purged.droppedSecrets.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`,

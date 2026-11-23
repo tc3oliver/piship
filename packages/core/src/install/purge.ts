@@ -71,6 +71,28 @@ export interface PurgeResult {
   readonly notRevoked?: readonly string[];
   /** Present when a local-secret API key was stored: purge deleted it. */
   readonly deletedApiKey?: true;
+  /**
+   * Present when the audit spool held events no collector had acknowledged:
+   * they were deleted with the state, so they are lost to the collector.
+   */
+  readonly undeliveredAudit?: number;
+}
+
+/** Events a required HTTP audit sink spooled and has not delivered: one per line. */
+export function undeliveredAuditEvents(state: string): number {
+  const root = join(state, "logs", "audit-spool");
+  let count = 0;
+  try {
+    for (const key of readdirSync(root))
+      for (const name of readdirSync(join(root, key)))
+        if (name.endsWith(".jsonl"))
+          count += readFileSync(join(root, key, name), "utf8")
+            .split("\n")
+            .filter(Boolean).length;
+  } catch {
+    // No spool, or one that cannot be read: nothing to report.
+  }
+  return count;
 }
 
 export interface PurgeOptions {
@@ -219,6 +241,7 @@ export async function purgeDistributionState(
   );
   const key = signedInClasses(state).includes(STORED_API_KEY);
   const secrets = await deleteReferencedSecrets(id, state, options);
+  const undelivered = undeliveredAuditEvents(state);
   rmSync(state, { recursive: true, force: true });
   return {
     state,
@@ -226,6 +249,7 @@ export async function purgeDistributionState(
     ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
     ...(live.length ? { notRevoked: live } : {}),
     ...(key ? { deletedApiKey: true } : {}),
+    ...(undelivered ? { undeliveredAudit: undelivered } : {}),
   };
 }
 

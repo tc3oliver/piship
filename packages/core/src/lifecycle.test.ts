@@ -4394,6 +4394,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       }),
     );
     write(join(state, "sessions", "s1.jsonl"), '{"type":"message"}\n');
+    write(
+      join(state, "logs", "audit-spool", "k", "1-h-r.jsonl"),
+      '{"id":"a"}\n{"id":"b"}\n',
+    );
     const lock = { on: true };
     const { store, memory } = testStore(
       (ref) => lock.on && ref.endsWith("inference#1"),
@@ -4433,6 +4437,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       withoutLogout: true,
     });
     expect(result.state).toBe(state);
+    expect(result.undeliveredAudit).toBe(2);
     expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
     expect(memory.refs()).toEqual(["piship:other:inference#1"]);
     expect(existsSync(receipt.commandPath)).toBe(false);
