@@ -320,7 +320,7 @@ function manifestMatchesLock(
 }
 /**
  * Whether PiShip 0.13 or earlier wrote this lock. Unreleased builds after it
- * still report 0.13.0, but they pin Pi 1.5.0, and 0.13 pinned Pi 1.1.0.
+ * still report 0.13.0, but they pin Pi 1.5.0 or later, and 0.13 pinned Pi 1.1.0.
  */
 function writtenBy013(lock: DistributionLock): boolean {
   const atMost = (version: unknown, limit: string): boolean => {

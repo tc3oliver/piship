@@ -49,7 +49,7 @@ async function open(evidence: {
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.5.0" }',
+      'runtime: { pi: "1.6.0" }',
       "deployment: { mode: personal }",
       "policy:",
       "  id: unit",
@@ -98,7 +98,7 @@ async function open(evidence: {
                 source: "https://example.org/cite",
                 integrity: evidence.integrity ?? TREE,
                 license: "MIT",
-                pi: evidence.pi ?? ["1.5.0"],
+                pi: evidence.pi ?? ["1.6.0"],
                 platforms: evidence.platforms ?? [],
               },
             },
@@ -114,7 +114,7 @@ async function open(evidence: {
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "1.5.0",
+    piVersion: "1.6.0",
     interactive: false,
     fetch: (() => {
       throw new Error("no network in unit tests");

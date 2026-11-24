@@ -36,7 +36,7 @@ app:
   command: mypi
   version: 1.0.0
 runtime:
-  pi: "1.5.0"
+  pi: "1.6.0"
 deployment:
   mode: personal
 `;

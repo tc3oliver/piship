@@ -62,7 +62,7 @@ function payload(): string {
   );
   pkg(root, "node_modules/beta", {
     name: "beta",
-    version: "1.5.0",
+    version: "1.6.0",
     license: { type: "ISC" },
   });
   pkg(root, "node_modules/.bin/ignored", { name: "ignored", version: "0.0.1" });
@@ -126,7 +126,7 @@ describe("listPayloadPackages", () => {
       },
       {
         name: "beta",
-        version: "1.5.0",
+        version: "1.6.0",
         path: "node_modules/beta",
         license: "ISC",
         licenseFiles: [],
