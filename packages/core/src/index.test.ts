@@ -148,7 +148,7 @@ describe("distribution core", () => {
       readFileSync(path, "utf8").replace('"1.6.0"', '"0.9.9"'),
     );
     expect(() => checkPiVersion(readManifest(path))).toThrow(
-      /Pi 0\.9\.9 is not available.*Remove the runtime\.pi line.*set it to "1\.5\.0"/,
+      /Pi 0\.9\.9 is not available.*Remove the runtime\.pi line.*set it to "1\.6\.0"/,
     );
   });
   it("rejects resource roots and nested symlinks during locking", () => {
