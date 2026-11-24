@@ -257,3 +257,47 @@ describe("secret-named unknown fields", () => {
     expect(message).not.toContain("plain-value-123");
   });
 });
+
+describe("app.tui and app.session (piship/v1alpha6 and later)", () => {
+  const withApp = (
+    base: { app: typeof valid.app } & Record<string, unknown>,
+    extra: Record<string, unknown>,
+  ) => ({
+    ...base,
+    app: { ...base.app, ...extra },
+  });
+  it.each([PISHIP_SCHEMA_V1ALPHA6, PISHIP_SCHEMA_V1])(
+    "are read in %s",
+    (schema) => {
+      const app = parseManifest(
+        withApp(
+          { ...validV6, schema },
+          { tui: { mode: "fullscreen", startup: "full" }, session: "new" },
+        ),
+      ).app;
+      expect(app.tui).toEqual({ mode: "fullscreen", startup: "full" });
+      expect(app.session).toBe("new");
+    },
+  );
+  it("are absent from the parsed app when not declared, so locks do not change", () => {
+    const app = parseManifest(validV6).app;
+    expect(app).not.toHaveProperty("tui");
+    expect(app).not.toHaveProperty("session");
+  });
+  it("are unknown fields before piship/v1alpha6", () => {
+    expect(() => parseManifest(withApp(valid, { session: "new" }))).toThrow(
+      /app\.session.*Unknown field|Unknown field session/,
+    );
+  });
+  it.each([
+    [
+      { tui: { mode: "full-screen" } },
+      /app\.tui\.mode.*did you mean fullscreen/,
+    ],
+    [{ tui: { startup: "loud" } }, /app\.tui\.startup.*quiet, header, full/],
+    [{ tui: { layout: "x" } }, /app\.tui.*Unknown field layout/],
+    [{ session: "resume" }, /app\.session.*continue, new/],
+  ])("rejects %j", (extra, message) => {
+    expect(() => parseManifest(withApp(validV6, extra))).toThrow(message);
+  });
+});

@@ -26,6 +26,21 @@ export function distribution(out: Collector, b: AnyLock, a: AnyLock): void {
     "low",
     "Default theme change.",
   ]);
+  out.scalar("distribution", "tui mode", b.app?.tui?.mode, a.app?.tui?.mode, [
+    "low",
+    "Terminal layout change (fullscreen fixes the editor at the bottom).",
+  ]);
+  out.scalar(
+    "distribution",
+    "tui startup",
+    b.app?.tui?.startup,
+    a.app?.tui?.startup,
+    ["low", "Startup screen change."],
+  );
+  out.scalar("distribution", "session", b.app?.session, a.app?.session, [
+    "low",
+    "A plain launch now continues or starts sessions differently.",
+  ]);
   out.scalar(
     "distribution",
     "deployment mode",

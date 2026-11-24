@@ -42,7 +42,7 @@ import {
 } from "./lifecycle.js";
 import { locateErrors } from "./locate.js";
 import { migrationPath } from "./migrations/index.js";
-import { nearestField, unknownFieldMessage } from "./suggest.js";
+import { expectedOneOf, nearestField, unknownFieldMessage } from "./suggest.js";
 import {
   LATEST_SCHEMA,
   PISHIP_SCHEMA_V1,
@@ -93,6 +93,10 @@ export interface Manifest {
     readonly version: string;
     readonly banner?: string;
     readonly theme?: string;
+    /** piship/v1alpha6: Pi's terminal UI as the distribution sets it. */
+    readonly tui?: AppTui;
+    /** piship/v1alpha6: what a plain launch opens; absent means `continue`. */
+    readonly session?: SessionStart;
   };
   readonly runtime: {
     /**
@@ -140,6 +144,20 @@ export interface SourcePosition {
   readonly line: number;
   readonly column: number;
 }
+/** `app.tui.mode`: Pi's `tuiMode`. Absent means `regular`. */
+export const TUI_MODES = ["regular", "fullscreen"] as const;
+export type TuiMode = (typeof TUI_MODES)[number];
+/** `app.tui.startup`: Pi's `quietStartup` (`true`, `"header"`, `false`). Absent means `quiet`. */
+export const TUI_STARTUPS = ["quiet", "header", "full"] as const;
+export type TuiStartup = (typeof TUI_STARTUPS)[number];
+/** `app.session`: a plain launch continues the project's most recent session or starts a new one. */
+export const SESSION_STARTS = ["continue", "new"] as const;
+export type SessionStart = (typeof SESSION_STARTS)[number];
+export interface AppTui {
+  readonly mode?: TuiMode;
+  readonly startup?: TuiStartup;
+}
+
 export class ManifestError extends Error {
   /**
    * Every problem found in one pass, this one first. A parse reports all it
@@ -326,6 +344,33 @@ function string(value: unknown, path: string): string {
 }
 /** The one command-name rule: the manifest, the lock and every launcher agree. */
 export const COMMAND_NAME = /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/;
+function oneOf<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  path: string,
+): T {
+  if (
+    typeof value !== "string" ||
+    !(allowed as readonly string[]).includes(value)
+  )
+    throw new ManifestError(
+      "invalid field",
+      path,
+      expectedOneOf(value, allowed),
+    );
+  return value as T;
+}
+function appTui(value: unknown): AppTui {
+  const tui = record(value, "app.tui", ["mode", "startup"]);
+  return {
+    ...(tui.mode === undefined
+      ? {}
+      : { mode: oneOf(tui.mode, TUI_MODES, "app.tui.mode") }),
+    ...(tui.startup === undefined
+      ? {}
+      : { startup: oneOf(tui.startup, TUI_STARTUPS, "app.tui.startup") }),
+  };
+}
 function name(value: unknown, path: string): string {
   const result = string(value, path);
   if (
@@ -508,7 +553,15 @@ export function parseManifest(
     record(
       root.app,
       "app",
-      ["id", "name", "command", "version", "banner", "theme"],
+      [
+        "id",
+        "name",
+        "command",
+        "version",
+        "banner",
+        "theme",
+        ...(v6 ? ["tui", "session"] : []),
+      ],
       problems,
     ),
   );
@@ -642,6 +695,11 @@ export function parseManifest(
           app.theme === undefined
             ? undefined
             : attempt(() => name(app.theme, "app.theme")),
+        tui: app.tui === undefined ? undefined : attempt(() => appTui(app.tui)),
+        session:
+          app.session === undefined
+            ? undefined
+            : attempt(() => oneOf(app.session, SESSION_STARTS, "app.session")),
       }
     : undefined;
   const declared = resources
@@ -701,6 +759,8 @@ export function parseManifest(
       version: fields.version as string,
       ...(fields.banner === undefined ? {} : { banner: fields.banner }),
       ...(fields.theme === undefined ? {} : { theme: fields.theme }),
+      ...(fields.tui === undefined ? {} : { tui: fields.tui }),
+      ...(fields.session === undefined ? {} : { session: fields.session }),
     },
     runtime: { ...(pi === undefined ? {} : { pi }), ...v6Runtime },
     deployment: { mode: mode as DeploymentMode },

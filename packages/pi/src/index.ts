@@ -129,6 +129,7 @@ const BRANDED_COMMANDS = [
 const SESSION_OPTIONS = new Set([
   "--model",
   "--new-session",
+  "--continue",
   "--task-grant",
   "--yolo",
   "--session",
@@ -189,6 +190,9 @@ export async function launchPiDistribution(
   // A child's model is passed to the access check from `child` itself.
   let requestedModel: string | undefined;
   let newSession = false;
+  // `--continue` resumes the most recent session where `app.session: new`
+  // would otherwise start a fresh one.
+  let continueRecent = false;
   let yolo = false;
   let taskGrantId: string | undefined;
   // `--session <id>` (and Pi's resume hint's `--session-dir <dir>`, which
@@ -205,6 +209,9 @@ export async function launchPiDistribution(
       args = args.slice(2);
     } else if (args[0] === "--new-session" && !newSession) {
       newSession = true;
+      args = args.slice(1);
+    } else if (args[0] === "--continue" && !continueRecent) {
+      continueRecent = true;
       args = args.slice(1);
     } else if (args[0] === "--task-grant" && !taskGrantId) {
       taskGrantId = args[1];
@@ -252,7 +259,13 @@ export async function launchPiDistribution(
       args = [...args.slice(1), args[0]];
     else break;
   }
-  if (resume && (!resume.id || newSession || args.length > 0))
+  if (newSession && continueRecent)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "--new-session and --continue cannot be combined",
+      { usage: true },
+    );
+  if (resume && (!resume.id || newSession || continueRecent || args.length > 0))
     throw new PiShipError(
       "CONFIG_INVALID",
       "--session resumes one session: it needs a session ID and cannot be combined with --new-session or a subcommand",
@@ -262,7 +275,16 @@ export async function launchPiDistribution(
       },
     );
   const sessionOption =
-    !!requestedModel || newSession || yolo || !!taskGrantId || !!resume;
+    !!requestedModel ||
+    newSession ||
+    continueRecent ||
+    yolo ||
+    !!taskGrantId ||
+    !!resume;
+  // A plain interactive launch follows `app.session`; `--smoke` keeps
+  // continuing unless told otherwise, so acceptance checks stay comparable.
+  const interactiveNewSession =
+    newSession || (metadata.app.session === "new" && !continueRecent);
   if (taskGrantId && (yolo || !metadata.governance))
     throw new PiShipError(
       "CONFIG_INVALID",
@@ -473,7 +495,7 @@ export async function launchPiDistribution(
         ? `\n\nCommands:\n  doctor [--json] | models [--json] | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--new-session] [--task-grant <id>]${yoloOption} [--smoke | --smoke-model]${smokeModelHelp}${yoloHelp}`
         : `\n\nCommands:\n  doctor [--json] | models [--json] | version | update ${UPDATE_OPTIONS} | rollback | uninstall ${UNINSTALL_OPTIONS}\n  config explain [--json] | config set <key> <value> | config unset <key>\n  [--smoke | --smoke-model]${smokeModelHelp}`;
     ctx.out(
-      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
+      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session | --continue | --session <id>]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
     return;
   }
@@ -523,7 +545,7 @@ export async function launchPiDistribution(
       await runLogin(ctx);
       if (!loginContinues) return;
       ctx.err(`Signed in. Starting ${metadata.app.command}...`);
-      return runInteractive(ctx, requestedModel, newSession);
+      return runInteractive(ctx, requestedModel, interactiveNewSession);
     }
     if (args.length === 1 && command === "logout") return runLogout(ctx);
     if (command === "doctor") return runDoctor(ctx, helpArgs(rest));
@@ -563,5 +585,10 @@ export async function launchPiDistribution(
       command === "--smoke-model",
       newSession,
     );
-  return runInteractive(ctx, requestedModel, newSession, resume);
+  return runInteractive(
+    ctx,
+    requestedModel,
+    resume ? false : interactiveNewSession,
+    resume,
+  );
 }

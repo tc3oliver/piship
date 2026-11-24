@@ -517,7 +517,7 @@ async function startRuntime(
       );
     // Pi's project-trust flag is PiShip's decision, not the in-memory default.
     const settingsManager = SettingsManager.inMemory(
-      piSettings(cacheWarming.mode),
+      piSettings(cacheWarming.mode, ctx.metadata.app.tui),
       { projectTrusted: sessionProjectTrust(gov, cwd, ctx.agentDir) },
     );
     governCacheWarming(settingsManager, cacheWarming, gov);

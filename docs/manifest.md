@@ -33,7 +33,27 @@ Add the same line to an existing manifest. The URL follows `main`, which may nam
 
 ## Common fields
 
-Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `deployment.mode`, and `updates` (`updates: {}` keeps updates off). `runtime.pi` is optional: left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest; a manifest that states it must state exactly that pin (`validate` says to remove the line or set the pin). `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (from v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
+Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `deployment.mode`, and `updates` (`updates: {}` keeps updates off). `runtime.pi` is optional: left out, the build uses the Pi version this PiShip pins, so a PiShip upgrade does not break the manifest; a manifest that states it must state exactly that pin (`validate` says to remove the line or set the pin). `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. From piship/v1alpha6, `app.tui` sets Pi's terminal UI and `app.session` what a plain launch opens ([terminal UI and session start](#terminal-ui-and-session-start-v1alpha6)). `resources` can declare instruction files and skill, extension, prompt, or theme roots (from v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
+
+### Terminal UI and session start (v1alpha6)
+
+A distribution owner chooses how its sessions look and start. Every field is optional; an omitted field keeps PiShip's default, and a manifest without them locks exactly as before.
+
+```yaml
+app:
+  tui:
+    mode: fullscreen   # regular (default) | fullscreen
+    startup: full      # quiet (default) | header | full
+  session: new         # continue (default) | new
+```
+
+| Field | Values | Effect |
+| --- | --- | --- |
+| `app.tui.mode` | `regular`, `fullscreen` | Pi's `tuiMode`. `regular` uses the terminal's own scrollback. `fullscreen` is Pi's default layout: the editor and status area stay fixed at the bottom while the transcript scrolls. A user can still switch for one session in `/settings` |
+| `app.tui.startup` | `quiet`, `header`, `full` | Pi's `quietStartup` as `true`, `"header"`, and `false`. `quiet` shows no startup screen; `header` shows Pi's version and key hints; `full` is Pi's own startup screen, with the model scope and the loaded resources |
+| `app.session` | `continue`, `new` | What a plain `<command>` opens: `continue` resumes the project's most recent session; `new` starts a fresh one. `--new-session` and `--continue` override it for one launch, `--session <id>` resumes one session, and `/new` and `/resume` work in either case. `--smoke` keeps continuing, so acceptance checks are unchanged |
+
+On Windows, Pi documents a conhost issue for each mode: `regular` redraws the input line on a new row for each keystroke in the classic console, and switching from `fullscreen` to `regular` (or `Ctrl+G` in `fullscreen`) can end the session in the built-in conhost; Windows Terminal is not affected ([Pi on Windows](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/windows.md#known-issues)). A release that declares these fields needs a runtime built with them: an older runtime refuses the manifest as an unknown field, so install it with the new runtime, as for `pretranspile`. `piship diff` reports each change as low risk.
 
 ## Access fields (v1alpha2 and later)
 
