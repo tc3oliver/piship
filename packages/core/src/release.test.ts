@@ -737,7 +737,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
       for (const surface of Object.keys(known)) known[surface] = "unsupported";
       const error = caught(() => checkReleaseInputs(path));
       expect(error.message).toMatch(/Release gate pi: /);
-      expect(error.message).toMatch(/1\.5\.0/);
+      expect(error.message).toMatch(/1\.6\.0/);
     } finally {
       Object.assign(known, saved);
     }
@@ -1769,7 +1769,7 @@ describe("release Pi compatibility", () => {
         for (const surface of Object.keys(known)) known[surface] = "supported";
         known.governance = "unsupported";
         const error = caught(() => checkReleaseInputs(path));
-        expect(error.message).toMatch(/Release gate pi: Pi 1\.5\.0/);
+        expect(error.message).toMatch(/Release gate pi: Pi 1\.6\.0/);
       } finally {
         Object.assign(known, saved);
       }
@@ -1786,7 +1786,7 @@ describe("release Pi compatibility", () => {
         known.personal = "supported";
         known.lifecycle = "unsupported";
         const error = caught(() => checkReleaseInputs(path));
-        expect(error.message).toMatch(/Release gate pi: Pi 1\.5\.0/);
+        expect(error.message).toMatch(/Release gate pi: Pi 1\.6\.0/);
       } finally {
         Object.assign(known, saved);
       }

@@ -137,7 +137,7 @@ describe("certified Pi packages at launch", () => {
     const record = await open({ pi: ["9.9.9"] });
     expect(record).toMatchObject({ loaded: false });
     expect(record?.reason).toMatch(
-      /certified for Pi 9\.9\.9; running Pi 1\.5\.0/,
+      /certified for Pi 9\.9\.9; running Pi 1\.6\.0/,
     );
   });
 
