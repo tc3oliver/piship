@@ -107,7 +107,7 @@ describe("personal local model variant (loopback model server)", () => {
     expect(smoke.status, smoke.stderr).toBe(0);
     const first = JSON.parse(smoke.stdout) as { sessionId: string };
     expect(first).toMatchObject({
-      piVersion: "1.5.0",
+      piVersion: "1.6.0",
       instructions: [expect.stringContaining("AGENTS.md")],
       access: {
         mode: "personal",

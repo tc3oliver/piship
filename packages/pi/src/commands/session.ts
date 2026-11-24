@@ -338,11 +338,16 @@ export async function runSmoke(
         );
       const messages = runtime.session.messages;
       const last = messages.at(-1) as
-        | { role?: string; stopReason?: string; errorMessage?: string }
+        | {
+            role?: string;
+            stopReason?: string;
+            errorMessage?: string;
+            content?: unknown;
+          }
         | undefined;
       modelRequest = {
         model: `${runtime.session.model.provider}/${runtime.session.model.id}`,
-        text: runtime.session.getLastAssistantText() ?? "",
+        text: replyText(last),
         stopReason: last?.stopReason ?? null,
         ...(last?.errorMessage ? { error: redact(last.errorMessage) } : {}),
         toolResults: messages.filter(
@@ -724,4 +729,26 @@ export async function runSubagentChild(
     process.off("SIGINT", onInterrupt);
     await end(sessionFailed);
   }
+}
+
+/**
+ * The text of the acceptance request's own reply: the last message, when it is
+ * the assistant's. Not Pi's `getLastAssistantText()`, which since Pi 1.6.0
+ * skips a failed reply and returns the previous answer, so a failed request
+ * in a resumed session would report an older reply as its result.
+ */
+export function replyText(
+  last: { role?: string; content?: unknown } | undefined,
+): string {
+  if (last?.role !== "assistant" || !Array.isArray(last.content)) return "";
+  return last.content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "text" &&
+        typeof (part as { text?: unknown }).text === "string",
+    )
+    .map((part) => part.text)
+    .join("");
 }

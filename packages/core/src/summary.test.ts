@@ -12,7 +12,7 @@ import {
 
 const smoke = {
   initialized: true,
-  piVersion: "1.5.0",
+  piVersion: "1.6.0",
   sessionId: "abc",
   resumed: false,
   safeTool: "read",
@@ -47,7 +47,7 @@ describe("formatSmokeSummary", () => {
     const text = formatSmokeSummary(JSON.stringify(smoke));
     expect(text).not.toContain("{");
     expect(text).not.toContain("/state/agent");
-    expect(text).toContain("1.5.0, new acceptance session abc");
+    expect(text).toContain("1.6.0, new acceptance session abc");
     expect(text).toMatch(/resources\s+instructions 1: AGENTS\.md\n/);
     expect(text).toContain("skills 1: review");
     expect(text).toContain("extensions 2: a.ts, b.ts");
@@ -186,7 +186,7 @@ describe("formatInspection", () => {
     const lock = {
       app: { id: "a", name: "A", version: "1.0.0", command: "a" },
       deployment: { mode: "personal" },
-      runtime: { version: "1.5.0", pishipVersion: "0.13.0" },
+      runtime: { version: "1.6.0", pishipVersion: "0.13.0" },
       resources: [
         { kind: "adapters", path: "resources/mcp/clock.mjs", sha256: "x" },
         { kind: "instructions", path: "resources/AGENTS.md", sha256: "x" },

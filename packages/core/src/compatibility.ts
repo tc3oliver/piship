@@ -1,5 +1,5 @@
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
-export const PI_VERSION = "1.5.0";
+export const PI_VERSION = "1.6.0";
 export const PISHIP_VERSION = "0.13.0";
 /** OS/CPU targets with installed lifecycle evidence; others are never advertised. */
 export const EVIDENCED_TARGETS = ["linux-x64", "darwin-arm64", "win32-x64"];
@@ -51,6 +51,12 @@ export const PI_COMPATIBILITY: Readonly<
     governance: "candidate",
     lifecycle: "candidate",
   },
+  "1.6.0": {
+    personal: "supported",
+    managed: "candidate",
+    governance: "candidate",
+    lifecycle: "candidate",
+  },
 };
 /**
  * Production packages whose npm lifecycle scripts were reviewed for the
@@ -60,7 +66,7 @@ export const PI_COMPATIBILITY: Readonly<
 export const REVIEWED_INSTALL_SCRIPTS: readonly string[] = [
   // Pi 1.0.1+ ships no shrinkwrap, so these are hoisted to the top level.
   // preinstall is an echo; prepare does not run for registry installs.
-  "node_modules/@google/genai@2.21.0",
+  "node_modules/@google/genai@2.32.0",
   // Validates the platform binary from its optional @esbuild/* package.
   "node_modules/esbuild@0.28.2",
   // Prints a version compatibility notice for protobufjs CLI users.

@@ -140,7 +140,7 @@ resources:
         source: https://example.org/acme/release-notes
         integrity: sha256-<64 hex characters>
         license: MIT
-        pi: ["1.5.0"]
+        pi: ["1.6.0"]
         platforms: [linux, darwin]   # optional; empty means any
   extensions:
     builtin: [piship-ask-user, piship-workflow]
@@ -466,7 +466,7 @@ Pi's find and grep tools and its `@` file completion run `fd` and `rg` (ripgrep)
 
 ```yaml
 runtime:
-  pi: "1.5.0"
+  pi: "1.6.0"
   searchTools:
     mode: bundled     # the only mode
     fd: "10.5.0"      # optional; PiShip's default when omitted
@@ -882,7 +882,7 @@ After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted
 
 ### Migrating from v1alpha5 to v1alpha6
 
-v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0 and v0.12.0, `1.1.0` for v0.13.0, `1.5.0` on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
+v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` for v0.11.0 and v0.12.0, `1.1.0` for v0.13.0, `1.6.0` on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
 
 1. Run `piship migrate piship.yaml --check`. It prints every change and exits non-zero when one changes an effective decision.
 2. Review the plan, then run `piship migrate piship.yaml --write`.
