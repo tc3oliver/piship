@@ -8,7 +8,7 @@ v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/pishi
 
 These are on `main` after v0.13.0 and in no release; the [changelog](../CHANGELOG.md#unreleased) has the full list.
 
-- **Pi 1.5.0 pin.** `main` pins Pi 1.5.0, with no Release qualification on it yet; v0.13.0 stays on Pi 1.1.0 ([upgrade to Pi 1.5.0](compatibility.md#upgrade-to-pi-150)).
+- **Pi 1.6.0 pin.** `main` pins Pi 1.6.0, with no Release qualification on it yet; v0.13.0 stays on Pi 1.1.0 ([upgrade to Pi 1.6.0](compatibility.md#upgrade-to-pi-160), [upgrade to Pi 1.5.0](compatibility.md#upgrade-to-pi-150)).
 - **Remote workspace** (`sandbox.workspace: remote`, `e2b-compatible` and `custom`): **preview**. The sandbox holds the project, file tools and commands work there, and `sandbox pull` applies the patch ([remote workspace](sandbox.md#remote-workspace)). Evidence is fixtures only: unit tests (`packages/core/src/remote-workspace.test.ts`, `packages/pi/src/remote-workspace/*.test.ts`, fast merge gate) and `tests/e2e/remote-workspace.test.ts` (Portable E2E) against a fake backend. It has never run against a real CubeSandbox or E2B.
 - **Background tasks** (`task_start`, `task_output`, `task_stop`): unit tests in `packages/pi/src/background-tasks.test.ts` (fast merge gate) and `tests/e2e/background-tasks.test.ts` (Portable E2E, and `Windows Containment E2E` on Windows).
 - **Task grants** (`policy.taskGrants`, `/grant`, `--task-grant`): unit tests in `packages/policy/src/grant.test.ts`, `packages/pi/src/task-grant.test.ts`, and `packages/core/src/task-grants.test.ts` (fast merge gate), and `tests/e2e/headless.test.ts` (Portable E2E, and `Task Grant Acceptance` on Ubuntu and Windows) ([security](security.md#policy-precedence)).
@@ -370,7 +370,7 @@ Limits of v0.13.0 as shipped, with earlier releases named where a bullet says so
 
 ## Pi compatibility
 
-[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 1.5.0 it lists four surfaces (the earlier pins 1.1.0, 1.0.3, 1.0.2, 1.0.0, and 0.87.1 are kept so that releases built on them are recognized, and each has the same four with the same statuses):
+[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 1.6.0 it lists four surfaces (the earlier pins 1.1.0, 1.0.3, 1.0.2, 1.0.0, and 0.87.1 are kept so that releases built on them are recognized, and each has the same four with the same statuses):
 
 | Surface | Status | What it covers |
 | --- | --- | --- |

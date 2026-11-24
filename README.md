@@ -14,7 +14,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--release-orange" alt="Status: pre-release">
-  <img src="https://img.shields.io/badge/Pi-1.5.0-blue" alt="Pi 1.5.0">
+  <img src="https://img.shields.io/badge/Pi-1.6.0-blue" alt="Pi 1.6.0">
   <img src="https://img.shields.io/badge/Node-%3E%3D22.19.0-339933?logo=node.js&logoColor=white" alt="Node >=22.19.0">
   <img src="https://img.shields.io/github/license/tc3oliver/piship" alt="License">
 </p>
@@ -145,7 +145,7 @@ app:
   version: 1.0.0
 
 runtime:
-  pi: "1.5.0"
+  pi: "1.6.0"
 
 deployment:
   mode: managed
@@ -247,7 +247,7 @@ The sandbox follows the same split: PiShip decides whether a command may run, th
 PiShip is pre-release and not on npm. What is proven, and what is not:
 
 - **v0.13.0** is the [production-validation baseline](docs/status.md#v0130-production-validation-baseline) on Pi 1.1.0, with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target) on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.13.0). Earlier baselines, each a GitHub pre-release, and what changed in each are in [docs/status.md](docs/status.md) and the [changelog](CHANGELOG.md).
-- `main` pins Pi 1.5.0 (the badge above), unreleased and not yet release-qualified; the remote workspace and Company Packs are also on `main` only ([status](docs/status.md#other-changes-on-main-unreleased)).
+- `main` pins Pi 1.6.0 (the badge above), unreleased and not yet release-qualified; the remote workspace and Company Packs are also on `main` only ([status](docs/status.md#other-changes-on-main-unreleased)).
 - Personal distributions are supported. Managed access, governance, and the release lifecycle are candidates.
 - Managed flows pass on Linux, macOS, and Windows against local fixtures, and on Ubuntu against Keycloak, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack.
 - Not proven yet: a production company identity provider or gateway; live E2B, CubeSandbox, or Kubernetes Agent Sandbox; a native sandbox on Windows (use a remote one there).

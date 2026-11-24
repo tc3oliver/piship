@@ -517,7 +517,7 @@ describe("CLI", () => {
     expect(brandedVersion.status, brandedVersion.stderr).toBe(0);
     expect(brandedVersion.stdout).toContain("MyPi 1.0.0");
     expect(brandedVersion.stdout).toContain(`PiShip ${PISHIP_VERSION}`);
-    expect(brandedVersion.stdout).toContain("Pi 1.5.0 by Earendil Works");
+    expect(brandedVersion.stdout).toContain("Pi 1.6.0 by Earendil Works");
     const brandedHelp =
       process.platform === "win32"
         ? spawnSync("cmd.exe", windowsArgv(installedCommand, ["--help"]), {
@@ -924,7 +924,7 @@ describe("CLI", () => {
         "  command: managedblocked",
         "  version: 1.0.0",
         "runtime:",
-        '  pi: "1.5.0"',
+        '  pi: "1.6.0"',
         "deployment:",
         "  mode: managed",
         "",
@@ -1009,8 +1009,8 @@ describe("CLI", () => {
     cpSync(join(root, "examples/personal"), example, { recursive: true });
     const manifest = join(example, "piship.yaml");
     const original = readFileSync(manifest, "utf8");
-    writeFileSync(manifest, original.replace('"1.5.0"', '"0.88.0"'));
-    expect(cli("validate", manifest).stderr).toContain("Pinned runtime: 1.5.0");
+    writeFileSync(manifest, original.replace('"1.6.0"', '"0.88.0"'));
+    expect(cli("validate", manifest).stderr).toContain("Pinned runtime: 1.6.0");
     writeFileSync(
       manifest,
       original.replace("./resources/AGENTS.md", "./resources/missing.md"),
