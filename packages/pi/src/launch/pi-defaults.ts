@@ -8,6 +8,7 @@ import {
   type CacheWarmingMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
+import type { AppTui } from "@piship/schema";
 import { isWithin } from "@piship/sandbox";
 
 /**
@@ -25,13 +26,23 @@ export const PI_SETTINGS = {
   tuiMode: "regular",
 } as const;
 
+/** `app.tui.startup` as Pi's `quietStartup`: `full` is Pi's own startup screen. */
+const QUIET_STARTUP = { quiet: true, header: "header", full: false } as const;
+
 /**
- * `PI_SETTINGS` with the session's cache warming mode. Pi's own default is
- * `streaming`; PiShip always writes the mode, so an omitted manifest mode
- * means `off`.
+ * `PI_SETTINGS` with the session's cache warming mode and the distribution's
+ * `app.tui`. Pi's own cache warming default is `streaming`; PiShip always
+ * writes the mode, so an omitted manifest mode means `off`. `app.tui.mode:
+ * fullscreen` is Pi's default layout, the editor fixed at the bottom; an
+ * omitted `app.tui` keeps PiShip's quiet, regular-scrollback defaults.
  */
-export function piSettings(cacheWarming: CacheWarmingMode) {
-  return { ...PI_SETTINGS, cacheWarming };
+export function piSettings(cacheWarming: CacheWarmingMode, tui?: AppTui) {
+  return {
+    ...PI_SETTINGS,
+    cacheWarming,
+    ...(tui?.mode ? { tuiMode: tui.mode } : {}),
+    ...(tui?.startup ? { quietStartup: QUIET_STARTUP[tui.startup] } : {}),
+  };
 }
 
 /**

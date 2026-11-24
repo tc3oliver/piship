@@ -180,6 +180,9 @@ describe("--session as a leading option", () => {
     [["--yolo", "--session", "01a1e33e-8a50-72b1"]],
     [["--session-dir", "/tmp/sessions", "--session", "abc"]],
     [["--model", "acme/coder", "--session", "abc"]],
+    [["--continue"]],
+    [["--continue", "--yolo"]],
+    [["--model", "acme/coder", "--continue"]],
   ])("is accepted as a session option: %j", async (args) => {
     const error = await failure(PERSONAL, args);
     expect(error?.code).toBe("CONFIG_INVALID");
@@ -196,6 +199,7 @@ describe("--session as a leading option", () => {
     [["--new-session", "--session", "abc"]],
     [["--session", "abc", "doctor"]],
     [["--session", "abc", "--smoke"]],
+    [["--session", "abc", "--continue"]],
   ])(
     "is refused without an ID, with --new-session, or with a subcommand: %j",
     async (args) => {
@@ -208,6 +212,22 @@ describe("--session as a leading option", () => {
       expect(stateCreated()).toBe(false);
     },
   );
+});
+
+describe("--continue", () => {
+  it("cannot be combined with --new-session", async () => {
+    for (const args of [
+      ["--continue", "--new-session"],
+      ["--new-session", "--continue"],
+    ]) {
+      const error = await failure(PERSONAL, args);
+      expect(error?.code).toBe("CONFIG_INVALID");
+      expect(error?.message).toBe(
+        "--new-session and --continue cannot be combined",
+      );
+      expect(stateCreated()).toBe(false);
+    }
+  });
 });
 
 describe("--yolo where the distribution does not allow it", () => {

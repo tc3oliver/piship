@@ -37,6 +37,25 @@
         "theme": {
           "description": "Built-in or declared custom theme name.",
           "type": "string"
+        },
+        "tui": {
+          "description": "Pi's terminal UI for this distribution. Omitted keeps PiShip's quiet, regular-scrollback defaults.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "description": "regular: the terminal's own scrollback (PiShip's default). fullscreen: Pi's default layout, the editor fixed at the bottom while the transcript scrolls.",
+              "enum": ["regular", "fullscreen"]
+            },
+            "startup": {
+              "description": "quiet: no startup screen (PiShip's default). header: Pi's version and key hints. full: Pi's own startup screen with the model scope and loaded resources.",
+              "enum": ["quiet", "header", "full"]
+            }
+          }
+        },
+        "session": {
+          "description": "What a plain launch opens: continue (default) resumes the project's most recent session; new starts a fresh one. --continue and --new-session override it.",
+          "enum": ["continue", "new"]
         }
       }
     },

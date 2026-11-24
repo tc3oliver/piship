@@ -18,6 +18,7 @@ import {
   jitiCacheFor,
   ownedPrivately,
   PI_SETTINGS,
+  piSettings,
 } from "./pi-defaults.js";
 
 const posix = process.platform !== "win32";
@@ -194,5 +195,26 @@ describe("Pi defaults", () => {
     );
     expect(settings.getQuietStartup()).toBe(true);
     expect(settings.getTuiMode()).toBe("regular");
+  });
+});
+
+describe("piSettings with app.tui", () => {
+  it("keeps PiShip's quiet, regular defaults when app.tui is absent", () => {
+    const settings = SettingsManager.inMemory(piSettings("off"));
+    expect(settings.getQuietStartup()).toBe(true);
+    expect(settings.getTuiMode()).toBe("regular");
+  });
+  it.each([
+    [{ mode: "fullscreen" as const }, "fullscreen", true],
+    [{ startup: "header" as const }, "regular", "header"],
+    [
+      { mode: "fullscreen" as const, startup: "full" as const },
+      "fullscreen",
+      false,
+    ],
+  ])("applies %j as Pi reads it", (tui, mode, quiet) => {
+    const settings = SettingsManager.inMemory(piSettings("off", tui));
+    expect(settings.getTuiMode()).toBe(mode);
+    expect(settings.getQuietStartup()).toBe(quiet);
   });
 });
